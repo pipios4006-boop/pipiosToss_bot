@@ -6,8 +6,10 @@
 # 3. 텔레그램 /start 메인 메뉴 인라인 키보드 HA 스캔 라우터 추가
 # 4. 12시간 주기 토큰 자동 갱신 스케줄러 및 401 요격 자가 치유 엔진 결속
 # 5. HA 스캔 UI 리빌딩: 최대 10개 캔들 평균체결가 단일 렌더링 락온
-# 6. [NEW] 주문 생성 및 조회 API 래퍼 모듈 결속 (멱등성, 정수형 락온)
-# 7. [NEW] HA 암살자(aVWAP) 3분봉 네이티브 MARKET 주문 무한 루프 데몬 가동
+# 6. 주문 생성 및 조회 API 래퍼 모듈 결속 (멱등성, 정수형 락온)
+# 7. HA 암살자(aVWAP) 3분봉 네이티브 MARKET 주문 무한 루프 데몬 가동
+# 8. [NEW] 시장 운영 달력(US) 인메모리 캐싱 및 비운영 시간 선제 스킵 락온
+# 9. [NEW] 시장가 증거금(3% 버퍼) 부족 시 422 밴 방어용 자본 잠김 컷오프 결속
 # =====================================================================
 
 import asyncio
@@ -53,6 +55,10 @@ class TossApiClient:
         # 토큰 갱신 전역 락 및 타임스탬프 락온 (Thundering Herd 방어용)
         self._auth_lock = None
         self._last_auth_time = 0.0
+        
+        # NEW: 달력 API 인메모리 캐싱 파이프라인 (Case 51)
+        self._calendar_cache = {}
+        self._calendar_lock = None
 
     async def _request(self, method: str, endpoint: str, group_name: str, **kwargs) -> dict:
         url = f"{self.base_url}{endpoint}"
@@ -141,6 +147,52 @@ class TossApiClient:
         else:
             raise ValueError("종합매매 계좌를 찾을 수 없습니다.")
 
+    # NEW: 토스 시장 운영 달력 인메모리 캐싱 및 비운영 시간 스캔 (Case 14, 51)
+    async def is_market_open(self) -> bool:
+        if not self.token:
+            await self.authenticate()
+            
+        if self._calendar_lock is None:
+            self._calendar_lock = asyncio.Lock()
+            
+        async with self._calendar_lock:
+            now_kst = datetime.now(ZoneInfo('Asia/Seoul'))
+            date_str = now_kst.strftime("%Y-%m-%d")
+            
+            if self._calendar_cache.get("date") != date_str:
+                try:
+                    endpoint = f"/api/v1/market-calendar/US?date={date_str}"
+                    # 타임아웃 10초 강제 (Case 14)
+                    data = await asyncio.wait_for(self._request("GET", endpoint, "MARKET_INFO", headers=self._get_headers()), timeout=10.0)
+                    today_cal = data.get("result", {}).get("today", {})
+                    
+                    sessions = []
+                    for session_name in ["dayMarket", "preMarket", "regularMarket", "afterMarket"]:
+                        session_data = today_cal.get(session_name)
+                        if session_data:
+                            start_dt = datetime.fromisoformat(session_data["startTime"])
+                            end_dt = datetime.fromisoformat(session_data["endTime"])
+                            sessions.append((start_dt, end_dt))
+                    
+                    self._calendar_cache = {"date": date_str, "sessions": sessions}
+                    print(f"📅 토스증권 US 시장 달력 캐싱 완료: {date_str} (총 {len(sessions)}개 세션 확보)")
+                except Exception as e:
+                    print(f"⚠️ [달력 API] 통신 지연 또는 파싱 오류. Fail-Open 가동 (무조건 주문 허용): {e}")
+                    return True # 엣지 타임라인 Fail-Safe 구조화
+                    
+            cached_sessions = self._calendar_cache.get("sessions", [])
+            
+            # 모든 세션이 null 이면 휴장일
+            if not cached_sessions:
+                return False
+                
+            # 현재 시각이 어떠한 세션 내에라도 존재하면 True 반환
+            for start_dt, end_dt in cached_sessions:
+                if start_dt <= now_kst <= end_dt:
+                    return True
+                    
+            return False
+
     async def get_usd_buying_power(self) -> float:
         if not self.account_seq:
             await self.fetch_account_seq()
@@ -192,7 +244,7 @@ class TossApiClient:
         
         return data.get("result", {}).get("candles", [])
 
-    # NEW: 대기 주문 조회 (Case 42 - Limit-Trap 방어용 미체결 스캔)
+    # 대기 주문 조회 (Case 42 - Limit-Trap 방어용 미체결 스캔)
     async def get_orders(self, status: str, symbol: str = None) -> list:
         if not self.account_seq:
             await self.fetch_account_seq()
@@ -204,7 +256,7 @@ class TossApiClient:
         data = await self._request("GET", endpoint, "ORDER_HISTORY", headers=self._get_headers(requires_account=True))
         return data.get("result", {}).get("orders", [])
 
-    # NEW: 멱등성 보장 주문 전송 코어 엔진 (Case 60 - 정수형 락온)
+    # 멱등성 보장 주문 전송 코어 엔진 (Case 60 - 정수형 락온)
     async def create_order(self, symbol: str, side: str, order_type: str, quantity: float, price: float = None, time_in_force: str = "DAY", client_order_id: str = None) -> dict:
         if not self.account_seq:
             await self.fetch_account_seq()
@@ -446,7 +498,7 @@ async def process_back_to_main(callback_query: types.CallbackQuery):
     await callback_query.message.edit_text(welcome_text, reply_markup=keyboard, parse_mode="HTML")
 
 
-# NEW: HA 암살자 무한 폴링 루프 (데이마켓 09:00 KST ~ )
+# HA 암살자 무한 폴링 루프 (데이장 ~ 애프터장 상시 가동)
 async def ha_assassin_loop(client: TossApiClient):
     last_action_candle_time = None
     
@@ -457,13 +509,14 @@ async def ha_assassin_loop(client: TossApiClient):
         print(f"🚨 [HA 암살자] 초기 계좌 정보 로드 실패: {e}")
         
     while True:
-        await asyncio.sleep(60) # 1분 주기 감시망 락온 (Case 43)
+        # 1분 주기 스캔: asyncio.sleep(60)을 통해 파이썬 밀림(Drift) 현상을 방어하고, 
+        # 내부 로직에서 3분 캔들 완성을 교차 검증하여 완벽한 '3분 타격망'을 구현 (Case 43)
+        await asyncio.sleep(60)
         
         try:
-            now_kst = datetime.now(ZoneInfo('Asia/Seoul'))
-            
-            # 절대 타임쉴드 (데이장 09:00~09:06 KST) 매수/매도 원천 차단
-            if now_kst.hour == 9 and now_kst.minute < 6:
+            # NEW: 시장 운영 시간 선제적 검증 (휴장일 및 비운영 시간 API 낭비 스킵 락온)
+            is_open = await client.is_market_open()
+            if not is_open:
                 continue
                 
             # 토스 오픈 API 타격 (캔들 스캔)
@@ -478,7 +531,7 @@ async def ha_assassin_loop(client: TossApiClient):
             c2 = ha_df.iloc[-2]
             current_closed_time = c2.name
             
-            # 동일 3분 캔들 구간 내 이중 타격 방어
+            # 동일 3분 캔들 구간 내 이중 타격 원천 차단
             if last_action_candle_time == current_closed_time:
                 continue
                 
@@ -488,11 +541,11 @@ async def ha_assassin_loop(client: TossApiClient):
             is_c1_eum = c1['HA_Close'] < c1['HA_Open']
             is_c2_eum = c2['HA_Close'] < c2['HA_Open']
             
-            # 2연속 양봉 또는 2연속 음봉이 아닌 경우 관망
+            # 2연속 양봉 또는 2연속 음봉이 아닌 경우 캔들 추적만 하고 관망
             if not ((is_c1_yang and is_c2_yang) or (is_c1_eum and is_c2_eum)):
                 continue
 
-            # Limit-Trap 및 이중 결제 대참사 100% 방어망 (미체결 스캔)
+            # Limit-Trap 및 이중 결제 대참사 100% 방어망 (미체결 주문 스캔)
             open_orders = await client.get_orders(status="OPEN", symbol="SOXL")
             if open_orders:
                 print("⚠️ [HA 암살자] 미체결 대기 주문 감지. 이중 결제 방지를 위해 현재 루프 바이패스(Bypass)합니다.")
@@ -504,6 +557,15 @@ async def ha_assassin_loop(client: TossApiClient):
             
             # [타점 1] 2연속 양봉 -> 시장가 매수 1주 격발
             if is_c1_yang and is_c2_yang:
+                # NEW: 자본 잠김(422 Error) 방어망 - 지연 평가를 통한 안전 마진 팩트 체크
+                current_price = await client.get_current_price("SOXL")
+                usd_bp = await client.get_usd_buying_power()
+                
+                # 시장가(MARKET) 3% 가승인 증거금 미달 시 타점 영구 소각
+                if current_price <= 0.0 or usd_bp < (current_price * 1.03):
+                    print(f"⚠️ [HA 암살자] 자본 잠김 컷오프: 매수 가능 금액(${usd_bp:.2f})이 시장가 증거금 버퍼(${current_price * 1.03:.2f})보다 부족합니다. 타점 소각.")
+                    continue
+                    
                 client_order_id = f"HABUY_{now_est_str}"
                 await client.create_order(
                     symbol="SOXL", 
@@ -513,7 +575,7 @@ async def ha_assassin_loop(client: TossApiClient):
                     client_order_id=client_order_id
                 )
                 last_action_candle_time = current_closed_time
-                print(f"🎯 [HA 암살자] 2연속 양봉 포착. 시장가 매수(MARKET) 1주 격발 완료.")
+                print(f"🎯 [HA 암살자] 2연속 양봉 포착 및 자본 검증 통과. 시장가 매수(MARKET) 1주 격발 완료.")
                 
             # [타점 2] 2연속 음봉 + 보유수량 1주 이상 -> 시장가 매도 1주 격발
             elif is_c1_eum and is_c2_eum and soxl_qty >= 1:
