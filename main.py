@@ -10,9 +10,11 @@
 # 7. HA 암살자(aVWAP) 3분봉 네이티브 MARKET 주문 무한 루프 데몬 가동
 # 8. 시장 운영 달력(US) 인메모리 캐싱 및 비운영 시간 선제 스킵 락온
 # 9. 시장가 증거금(3% 버퍼) 부족 시 422 밴 방어용 자본 잠김 컷오프 결속
-# 10. [NEW] 상태 장부(ha_state.json) 원자적 읽기/쓰기 코어(HAStateManager) 결속
-# 11. [NEW] 세션 마감 2분 전 Zero-Overnight 강제 청산 방어막 결속
-# 12. [NEW] 횡보장 휩쏘 방어용 절대 이격도(0.2%) 검증 알고리즘 및 유령 잔고 자가 치유 결속
+# 10. 상태 장부(ha_state.json) 원자적 읽기/쓰기 코어(HAStateManager) 결속
+# 11. 세션 마감 2분 전 Zero-Overnight 강제 청산 방어막 결속
+# 12. 횡보장 휩쏘 방어용 절대 이격도(0.2%) 검증 알고리즘 및 유령 잔고 자가 치유 결속
+# 13. [NEW] 텔레그램 Errno 104 통신 붕괴 방어용 AiohttpSession 주입
+# 14. [NEW] 토스 API 물리적 단절 시 3단 지수 백오프(Exponential Backoff) 무중단 Fallback 결속
 # =====================================================================
 
 import asyncio
@@ -30,6 +32,8 @@ from zoneinfo import ZoneInfo
 from aiogram import Bot, Dispatcher, Router, types, F
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+# NEW: 텔레그램 롱 폴링 TCP 단절(Errno 104) 완화용 세션 임포트
+from aiogram.client.session.aiohttp import AiohttpSession
 
 # 자격증명 및 시스템 상수 락온
 TOSS_CLIENT_ID = os.getenv("TOSS_CLIENT_ID", "tsck_live_QogVVVdZPhhg3sbTo5T7hB")
@@ -49,7 +53,6 @@ class GlobalThrottle:
         async with cls._locks[group_name]:
             await asyncio.sleep(1.5)
 
-    # NEW: 파일 I/O 동시성 붕괴 방어용 비동기 컨텍스트 매니저
     @classmethod
     @contextlib.asynccontextmanager
     async def get_file_lock(cls, filepath: str):
@@ -58,7 +61,7 @@ class GlobalThrottle:
         async with cls._file_locks[filepath]:
             yield
 
-# NEW: 상태 장부 영구 보존 및 원자적 쓰기 엔진
+# 상태 장부 영구 보존 및 원자적 쓰기 엔진
 class HAStateManager:
     FILE_PATH = "ha_state.json"
 
@@ -107,8 +110,10 @@ class TossApiClient:
     async def _request(self, method: str, endpoint: str, group_name: str, **kwargs) -> dict:
         url = f"{self.base_url}{endpoint}"
         max_retries = 3
+        # NEW: 글로벌 타임아웃 10초 강제 락온 (네트워크 데드락 원천 방어)
+        timeout = aiohttp.ClientTimeout(total=10.0)
         
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession(timeout=timeout) as session:
             for attempt in range(max_retries):
                 await GlobalThrottle.wait_api_sync(group_name)
                 
@@ -116,23 +121,32 @@ class TossApiClient:
                 if "headers" in kwargs and "Authorization" in kwargs["headers"]:
                     kwargs["headers"]["Authorization"] = f"Bearer {self.token}"
                 
-                async with session.request(method, url, **kwargs) as response:
-                    if response.status == 200:
-                        return await response.json()
-                    elif response.status == 401 and group_name != "AUTH":
-                        # 401 붕괴 요격 및 토큰 자가 치유 엔진 격발
-                        print("⚠️ 401 Unauthorized 타격. 토큰 자가 치유 엔진 격발...")
-                        await self.authenticate(force=True)
+                try:
+                    # MODIFIED: 물리적 네트워크 단절 및 타임아웃 방어용 try-except 래핑 (Case 32)
+                    async with session.request(method, url, **kwargs) as response:
+                        if response.status == 200:
+                            return await response.json()
+                        elif response.status == 401 and group_name != "AUTH":
+                            # 401 붕괴 요격 및 토큰 자가 치유 엔진 격발
+                            print("⚠️ 401 Unauthorized 타격. 토큰 자가 치유 엔진 격발...")
+                            await self.authenticate(force=True)
+                            continue
+                        elif response.status == 429:
+                            retry_after = int(response.headers.get("Retry-After", 3))
+                            print(f"⚠️ 429 Rate Limit 타격. {retry_after}초 지수 백오프 대기...")
+                            await asyncio.sleep(retry_after)
+                            continue
+                        else:
+                            error_text = await response.text()
+                            raise ConnectionError(f"API 통신 붕괴 ({response.status}): {error_text}")
+                except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+                    # NEW: 3단 지수 백오프(Exponential Backoff) 무중단 Fallback 강제 (Case 32)
+                    if attempt < max_retries - 1:
+                        backoff_time = 2 ** attempt  # 1초, 2초
+                        print(f"⚠️ API 통신 예외 요격 ({e}). {backoff_time}초 지수 백오프 후 재시도...")
+                        await asyncio.sleep(backoff_time)
                         continue
-                    elif response.status == 429:
-                        retry_after = int(response.headers.get("Retry-After", 3))
-                        print(f"⚠️ 429 Rate Limit 타격. {retry_after}초 지수 백오프 대기...")
-                        await asyncio.sleep(retry_after)
-                        continue
-                    else:
-                        error_text = await response.text()
-                        raise ConnectionError(f"API 통신 붕괴 ({response.status}): {error_text}")
-            raise TimeoutError("최대 재시도 횟수 초과로 통신이 즉사했습니다.")
+                    raise TimeoutError(f"최대 재시도 횟수 초과 즉사: {e}")
 
     # 토큰 갱신 전역 락온 및 병목 컷오프 모듈 결속
     async def authenticate(self, force: bool = False) -> None:
@@ -191,7 +205,7 @@ class TossApiClient:
         else:
             raise ValueError("종합매매 계좌를 찾을 수 없습니다.")
 
-    # MODIFIED: 토스 시장 운영 달력 인메모리 캐싱 및 종료 시간 동시 반환
+    # 토스 시장 운영 달력 인메모리 캐싱 및 종료 시간 동시 반환
     async def is_market_open(self) -> tuple[bool, datetime]:
         if not self.token:
             await self.authenticate()
@@ -206,8 +220,7 @@ class TossApiClient:
             if self._calendar_cache.get("date") != date_str:
                 try:
                     endpoint = f"/api/v1/market-calendar/US?date={date_str}"
-                    # 타임아웃 10초 강제 (Case 14)
-                    data = await asyncio.wait_for(self._request("GET", endpoint, "MARKET_INFO", headers=self._get_headers()), timeout=10.0)
+                    data = await self._request("GET", endpoint, "MARKET_INFO", headers=self._get_headers())
                     today_cal = data.get("result", {}).get("today", {})
                     
                     sessions = []
@@ -565,7 +578,7 @@ async def ha_assassin_loop(client: TossApiClient):
                 
             soxl_qty = await client.get_soxl_holdings()
             
-            # NEW: 세션 마감 2분 전(Zero-Overnight) 강제 전량 매도 방어막 격발 (Case 09 & 23)
+            # 세션 마감 2분 전(Zero-Overnight) 강제 전량 매도 방어막 격발 (Case 09 & 23)
             if session_end_time and (session_end_time - now_kst).total_seconds() <= 120:
                 if soxl_qty >= 1:
                     now_est_str = datetime.now(ZoneInfo('America/New_York')).strftime("%Y%m%d%H%M%S")
@@ -620,7 +633,7 @@ async def ha_assassin_loop(client: TossApiClient):
             # 상태 장부에서 1주 매수 단가 동기화
             last_buy_price = await HAStateManager.get_state()
             
-            # NEW: 유령 잔고 자가 치유(Self-Healing) - 실잔고는 있으나 장부 기록이 소실된 엣지 케이스 방어
+            # 유령 잔고 자가 치유(Self-Healing) - 실잔고는 있으나 장부 기록이 소실된 엣지 케이스 방어
             if soxl_qty >= 1 and last_buy_price <= 0.0:
                 last_buy_price = current_price
                 await HAStateManager.save_state(last_buy_price)
@@ -653,7 +666,7 @@ async def ha_assassin_loop(client: TossApiClient):
                 
             # [타점 2] 1주 이상 상태 & 2연속 음봉 -> 절대 이격도 0.2% 검증 후 시장가 매도 1주 격발
             elif is_c1_eum and is_c2_eum and soxl_qty >= 1:
-                # NEW: 횡보장 휩쏘 방어망 (절대 이격도 0.2% 검증 로직)
+                # 횡보장 휩쏘 방어망 (절대 이격도 0.2% 검증 로직)
                 deviation = abs(current_price - last_buy_price) / last_buy_price
                 
                 if deviation >= 0.002: # 0.2% 이상 이탈 확인 시 타격
@@ -679,7 +692,9 @@ async def ha_assassin_loop(client: TossApiClient):
 
 # 시스템 심장부 및 비동기 데몬 격발
 async def main():
-    bot = Bot(token=TELEGRAM_BOT_TOKEN)
+    # NEW: 텔레그램 네트워크 단절(Errno 104) 완화용 세션 타임아웃 주입
+    session = AiohttpSession(timeout=60.0)
+    bot = Bot(token=TELEGRAM_BOT_TOKEN, session=session)
     dp = Dispatcher()
     dp.include_router(router)
     
