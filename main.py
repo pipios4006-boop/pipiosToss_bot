@@ -121,7 +121,7 @@ class TossApiClient:
 router = Router()
 api_client = TossApiClient(client_id=TOSS_CLIENT_ID, client_secret=TOSS_CLIENT_SECRET)
 
-# 텔레그램 시작 및 메인 메뉴 렌더링
+# MODIFIED: 텔레그램 시작 및 메인 메뉴 렌더링
 @router.message(Command("start"))
 async def cmd_start(message: types.Message):
     if message.from_user.id != ADMIN_CHAT_ID:
@@ -142,14 +142,12 @@ async def cmd_start(message: types.Message):
 # NEW: 깃허브 원장 강제 동기화 및 봇 자가 부활 모듈 (Case 15)
 @router.message(Command("update"))
 async def cmd_update(message: types.Message):
-    # 관제탑 하드코딩 락온 방어 (Case 11)
     if message.from_user.id != ADMIN_CHAT_ID:
         return
 
     await message.answer("⏳ <b>깃허브 원장 동기화 및 업데이트 진행 중...</b>", parse_mode="HTML")
     
     try:
-        # 비동기 쉘 서브프로세스 격발 (동기 블로킹 원천 차단)
         process = await asyncio.create_subprocess_shell(
             "git pull origin main",
             stdout=asyncio.subprocess.PIPE,
@@ -160,7 +158,6 @@ async def cmd_update(message: types.Message):
         out_text = stdout.decode('utf-8').strip()
         err_text = stderr.decode('utf-8').strip()
         
-        # 특수기호 HTML 파서 붕괴 사수 (Case 26)
         safe_out = html.escape(out_text) if out_text else "출력 없음"
         safe_err = html.escape(err_text) if err_text else "에러 없음"
         
@@ -171,10 +168,9 @@ async def cmd_update(message: types.Message):
         )
         await message.answer(result_msg, parse_mode="HTML")
         
-        # 플러그인 업데이트 시 파이썬 하드 킬 격발로 systemd 부활 유도 (Case 15)
         if "Already up to date." not in out_text:
             await message.answer("⚠️ <b>시스템 코어 변경 팩트 감지. 데몬을 즉시 재가동(Restart)합니다.</b>", parse_mode="HTML")
-            await asyncio.sleep(1) # 텔레그램 메시지 타전 보장을 위한 최소 지연
+            await asyncio.sleep(1)
             os._exit(0)
             
     except Exception as e:
