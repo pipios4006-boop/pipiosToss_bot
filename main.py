@@ -15,7 +15,8 @@
 # 12. 횡보장 휩쏘 방어용 절대 이격도(0.2%) 검증 알고리즘 및 유령 잔고 자가 치유 결속
 # 13. 텔레그램 Errno 104 통신 붕괴 방어용 AiohttpSession 주입
 # 14. 토스 API 물리적 단절 시 3단 지수 백오프(Exponential Backoff) 무중단 Fallback 결속
-# 15. [NEW] HA 예열(Warm-up) 데이터 결핍에 따른 색상 왜곡 방어용 수집량(count=200) 전격 상향 락온
+# 15. HA 예열(Warm-up) 데이터 결핍에 따른 색상 왜곡 방어용 수집량(count=200) 전격 상향 락온
+# 16. [NEW] US 달력 API 쿼리 파라미터 오염(KST->EST) 교정 및 락온 (제3헌법 및 Case 51)
 # =====================================================================
 
 import asyncio
@@ -214,12 +215,15 @@ class TossApiClient:
             self._calendar_lock = asyncio.Lock()
             
         async with self._calendar_lock:
+            # 텔레그램 표출 및 응답 파싱용 기준 시각 (KST)
             now_kst = datetime.now(ZoneInfo('Asia/Seoul'))
-            date_str = now_kst.strftime("%Y-%m-%d")
             
-            if self._calendar_cache.get("date") != date_str:
+            # MODIFIED: 제3헌법 및 Case 01 준수 - 토스 API 쿼리 파라미터는 반드시 EST 기준 날짜를 전송하여 오염 차단
+            est_today_str = datetime.now(ZoneInfo('America/New_York')).strftime("%Y-%m-%d")
+            
+            if self._calendar_cache.get("date") != est_today_str:
                 try:
-                    endpoint = f"/api/v1/market-calendar/US?date={date_str}"
+                    endpoint = f"/api/v1/market-calendar/US?date={est_today_str}"
                     data = await self._request("GET", endpoint, "MARKET_INFO", headers=self._get_headers())
                     today_cal = data.get("result", {}).get("today", {})
                     
@@ -227,12 +231,13 @@ class TossApiClient:
                     for session_name in ["dayMarket", "preMarket", "regularMarket", "afterMarket"]:
                         session_data = today_cal.get(session_name)
                         if session_data:
+                            # 토스 응답의 startTime/endTime은 KST(+09:00) 기준 ISO 8601 문자열
                             start_dt = datetime.fromisoformat(session_data["startTime"])
                             end_dt = datetime.fromisoformat(session_data["endTime"])
                             sessions.append((start_dt, end_dt))
                     
-                    self._calendar_cache = {"date": date_str, "sessions": sessions}
-                    print(f"📅 토스증권 US 시장 달력 캐싱 완료: {date_str} (총 {len(sessions)}개 세션 확보)")
+                    self._calendar_cache = {"date": est_today_str, "sessions": sessions}
+                    print(f"📅 토스증권 US 시장 달력 캐싱 완료: {est_today_str} (총 {len(sessions)}개 세션 확보)")
                 except Exception as e:
                     print(f"⚠️ [달력 API] 통신 지연 또는 파싱 오류. Fail-Open 가동 (무조건 주문 허용): {e}")
                     return True, None # 엣지 타임라인 Fail-Safe 구조화
@@ -242,7 +247,7 @@ class TossApiClient:
             if not cached_sessions:
                 return False, None
                 
-            # 현재 시각이 어떠한 세션 내에 존재하면 (True, 해당 세션 종료시각) 반환
+            # 현재 KST 시각이 어떠한 세션 내에 존재하면 (True, 해당 세션 종료시각) 반환
             for start_dt, end_dt in cached_sessions:
                 if start_dt <= now_kst <= end_dt:
                     return True, end_dt
