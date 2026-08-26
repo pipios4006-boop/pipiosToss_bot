@@ -4,6 +4,7 @@
 # 1. SOXL 실시간 현재가(GET /prices) 조회 모듈 결속 (MARKET_DATA 통제)
 # 2. 토스 1분봉(GET /candles) 기반 3분봉 하이킨 아시(Heikin-Ashi) 벡터화 엔진 결속
 # 3. 텔레그램 /start 메인 메뉴 인라인 키보드 HA 스캔 라우터 추가
+# 4. [NEW] 12시간 주기 토큰 자동 갱신 스케줄러 및 401 요격 자가 치유 엔진 결속
 # =====================================================================
 
 import asyncio
@@ -11,7 +12,6 @@ import aiohttp
 import os
 import html
 import sys
-# NEW: 하이킨 아시 벡터화 연산을 위한 데이터 분석 코어 주입
 import pandas as pd
 import numpy as np
 from datetime import datetime
@@ -45,6 +45,10 @@ class TossApiClient:
         self.base_url = "https://openapi.tossinvest.com"
         self.token = None
         self.account_seq = None
+        
+        # NEW: 토큰 갱신 전역 락 및 타임스탬프 락온 (Thundering Herd 방어용)
+        self._auth_lock = None
+        self._last_auth_time = 0.0
 
     async def _request(self, method: str, endpoint: str, group_name: str, **kwargs) -> dict:
         url = f"{self.base_url}{endpoint}"
@@ -54,9 +58,18 @@ class TossApiClient:
             for attempt in range(max_retries):
                 await GlobalThrottle.wait_api_sync(group_name)
                 
+                # MODIFIED: 401 요격 후 재시도 시 최신 갱신된 토큰 동적 주입 방어망
+                if "headers" in kwargs and "Authorization" in kwargs["headers"]:
+                    kwargs["headers"]["Authorization"] = f"Bearer {self.token}"
+                
                 async with session.request(method, url, **kwargs) as response:
                     if response.status == 200:
                         return await response.json()
+                    elif response.status == 401 and group_name != "AUTH":
+                        # NEW: 401 붕괴 요격 및 토큰 자가 치유 엔진 격발
+                        print("⚠️ 401 Unauthorized 타격. 토큰 자가 치유 엔진 격발...")
+                        await self.authenticate(force=True)
+                        continue
                     elif response.status == 429:
                         retry_after = int(response.headers.get("Retry-After", 3))
                         print(f"⚠️ 429 Rate Limit 타격. {retry_after}초 지수 백오프 대기...")
@@ -67,14 +80,39 @@ class TossApiClient:
                         raise ConnectionError(f"API 통신 붕괴 ({response.status}): {error_text}")
             raise TimeoutError("최대 재시도 횟수 초과로 통신이 즉사했습니다.")
 
-    async def authenticate(self) -> None:
-        payload = {
-            "grant_type": "client_credentials",
-            "client_id": self.client_id,
-            "client_secret": self.client_secret
-        }
-        data = await self._request("POST", "/oauth2/token", "AUTH", data=payload)
-        self.token = data.get("access_token")
+    # MODIFIED: 토큰 갱신 전역 락온 및 병목 컷오프 모듈 결속
+    async def authenticate(self, force: bool = False) -> None:
+        if self._auth_lock is None:
+            self._auth_lock = asyncio.Lock()
+            
+        async with self._auth_lock:
+            current_time = asyncio.get_event_loop().time()
+            
+            # NEW: Thundering Herd 방어 (10초 이내 중복 갱신 원천 차단)
+            if force and (current_time - self._last_auth_time < 10.0):
+                return
+            if not force and self.token:
+                return
+
+            payload = {
+                "grant_type": "client_credentials",
+                "client_id": self.client_id,
+                "client_secret": self.client_secret
+            }
+            data = await self._request("POST", "/oauth2/token", "AUTH", data=payload)
+            self.token = data.get("access_token")
+            self._last_auth_time = current_time
+            print("♻️ 토스증권 API 액세스 토큰 100% 갱신 락온 완료.")
+
+    # NEW: 12시간 주기 선제 타격 스케줄러 엔진
+    async def token_renewal_loop(self):
+        while True:
+            await asyncio.sleep(43200) # 12시간 대기
+            try:
+                print("⏳ 12시간 주기 토큰 선제 타격 엔진 가동...")
+                await self.authenticate(force=True)
+            except Exception as e:
+                print(f"🚨 토큰 선제 타격 실패 (Fail-Safe 요격망 대기): {e}")
 
     def _get_headers(self, requires_account: bool = False) -> dict:
         headers = {"Authorization": f"Bearer {self.token}"}
@@ -128,7 +166,6 @@ class TossApiClient:
         raw_qty = soxl_item.get("quantity")
         return int(float(raw_qty)) if raw_qty is not None else 0
 
-    # NEW: 실시간 현재가 단일 조회 타격망 (Case 05)
     async def get_current_price(self, symbol: str) -> float:
         if not self.token:
             await self.authenticate()
@@ -143,7 +180,6 @@ class TossApiClient:
         raw_price = results[0].get("lastPrice")
         return float(raw_price) if raw_price is not None else 0.0
 
-    # NEW: 1분봉 캔들 조회 API 타격망 (Case 03)
     async def get_1m_candles(self, symbol: str, count: int = 200) -> list:
         if not self.token:
             await self.authenticate()
@@ -153,7 +189,7 @@ class TossApiClient:
         
         return data.get("result", {}).get("candles", [])
 
-# NEW: 3분봉 하이킨 아시 100% 벡터화 엔진 (내부 이식)
+# 3분봉 하이킨 아시 100% 벡터화 엔진
 class HeikinAshiEngine:
     @staticmethod
     def calculate_3m_ha(candles_json: list) -> pd.DataFrame:
@@ -199,7 +235,6 @@ class HeikinAshiEngine:
 router = Router()
 api_client = TossApiClient(client_id=TOSS_CLIENT_ID, client_secret=TOSS_CLIENT_SECRET)
 
-# MODIFIED: 텔레그램 시작 및 확장 메인 메뉴 렌더링
 @router.message(Command("start"))
 async def cmd_start(message: types.Message):
     if message.from_user.id != ADMIN_CHAT_ID:
@@ -207,7 +242,6 @@ async def cmd_start(message: types.Message):
         
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="💰 잔고 스캔", callback_data="scan_asset")],
-        # NEW: HA 스캔 버튼 병렬 주입
         [InlineKeyboardButton(text="📈 SOXL 실시간 & 3분봉 HA 스캔", callback_data="scan_ha")]
     ])
     
@@ -298,7 +332,7 @@ async def process_scan_asset(callback_query: types.CallbackQuery):
         error_msg = html.escape(str(e))
         await callback_query.message.edit_text(f"🚨 <b>시스템 붕괴 감지</b>\n\n▫️ {error_msg}", parse_mode="HTML")
 
-# NEW: 인라인 버튼: HA 스캔 (동시 격발 파이프라인)
+# 인라인 버튼: HA 스캔 (동시 격발 파이프라인)
 @router.callback_query(F.data == "scan_ha")
 async def process_scan_ha(callback_query: types.CallbackQuery):
     if callback_query.from_user.id != ADMIN_CHAT_ID:
@@ -307,13 +341,11 @@ async def process_scan_ha(callback_query: types.CallbackQuery):
     await callback_query.message.edit_text("⏳ <b>토스증권 시세 타격 및 HA 벡터 엔진 가동 중...</b>", parse_mode="HTML")
     
     try:
-        # 비동기 병렬 타격 (I/O 블로킹 최소화)
         current_price_task = api_client.get_current_price("SOXL")
         candles_task = api_client.get_1m_candles("SOXL", count=200)
         
         current_price, candles_json = await asyncio.gather(current_price_task, candles_task)
         
-        # 벡터 엔진 가동
         ha_df = HeikinAshiEngine.calculate_3m_ha(candles_json)
         
         est_now = datetime.now(ZoneInfo('America/New_York')).strftime("%Y-%m-%d %H:%M:%S")
@@ -322,9 +354,8 @@ async def process_scan_ha(callback_query: types.CallbackQuery):
         if ha_df.empty:
             result_text = f"🚨 <b>캔들 데이터 붕괴 (빈 배열)</b>\n\n🔹 <b>기준 시각</b>: {safe_est} EST\n🔹 <b>실시간 종가</b>: ${current_price:.2f}"
         else:
-            # 최신 완성봉 추출
             latest_ha = ha_df.iloc[-1]
-            ha_avg_price = latest_ha['HA_Close'] # HA 체결 평균가 (O+H+L+C)/4
+            ha_avg_price = latest_ha['HA_Close']
             ha_time = latest_ha.name.strftime("%H:%M")
             
             result_text = (
@@ -371,6 +402,9 @@ async def main():
     bot = Bot(token=TELEGRAM_BOT_TOKEN)
     dp = Dispatcher()
     dp.include_router(router)
+    
+    # NEW: 12시간 선제 타격 토큰 갱신 스케줄러 백그라운드 데몬 격발
+    asyncio.create_task(api_client.token_renewal_loop())
     
     print("시스템 코어 로드 완료. 텔레그램 롱 폴링(Long-Polling) 개시...")
     
