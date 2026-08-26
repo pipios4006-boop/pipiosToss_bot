@@ -13,8 +13,9 @@
 # 10. 상태 장부(ha_state.json) 원자적 읽기/쓰기 코어(HAStateManager) 결속
 # 11. 세션 마감 2분 전 Zero-Overnight 강제 청산 방어막 결속
 # 12. 횡보장 휩쏘 방어용 절대 이격도(0.2%) 검증 알고리즘 및 유령 잔고 자가 치유 결속
-# 13. [NEW] 텔레그램 Errno 104 통신 붕괴 방어용 AiohttpSession 주입
-# 14. [NEW] 토스 API 물리적 단절 시 3단 지수 백오프(Exponential Backoff) 무중단 Fallback 결속
+# 13. 텔레그램 Errno 104 통신 붕괴 방어용 AiohttpSession 주입
+# 14. 토스 API 물리적 단절 시 3단 지수 백오프(Exponential Backoff) 무중단 Fallback 결속
+# 15. [NEW] HA 예열(Warm-up) 데이터 결핍에 따른 색상 왜곡 방어용 수집량(count=200) 전격 상향 락온
 # =====================================================================
 
 import asyncio
@@ -32,7 +33,6 @@ from zoneinfo import ZoneInfo
 from aiogram import Bot, Dispatcher, Router, types, F
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-# NEW: 텔레그램 롱 폴링 TCP 단절(Errno 104) 완화용 세션 임포트
 from aiogram.client.session.aiohttp import AiohttpSession
 
 # 자격증명 및 시스템 상수 락온
@@ -110,7 +110,7 @@ class TossApiClient:
     async def _request(self, method: str, endpoint: str, group_name: str, **kwargs) -> dict:
         url = f"{self.base_url}{endpoint}"
         max_retries = 3
-        # NEW: 글로벌 타임아웃 10초 강제 락온 (네트워크 데드락 원천 방어)
+        # 글로벌 타임아웃 10초 강제 락온 (네트워크 데드락 원천 방어)
         timeout = aiohttp.ClientTimeout(total=10.0)
         
         async with aiohttp.ClientSession(timeout=timeout) as session:
@@ -122,7 +122,7 @@ class TossApiClient:
                     kwargs["headers"]["Authorization"] = f"Bearer {self.token}"
                 
                 try:
-                    # MODIFIED: 물리적 네트워크 단절 및 타임아웃 방어용 try-except 래핑 (Case 32)
+                    # 물리적 네트워크 단절 및 타임아웃 방어용 try-except 래핑 (Case 32)
                     async with session.request(method, url, **kwargs) as response:
                         if response.status == 200:
                             return await response.json()
@@ -140,7 +140,7 @@ class TossApiClient:
                             error_text = await response.text()
                             raise ConnectionError(f"API 통신 붕괴 ({response.status}): {error_text}")
                 except (aiohttp.ClientError, asyncio.TimeoutError) as e:
-                    # NEW: 3단 지수 백오프(Exponential Backoff) 무중단 Fallback 강제 (Case 32)
+                    # 3단 지수 백오프(Exponential Backoff) 무중단 Fallback 강제 (Case 32)
                     if attempt < max_retries - 1:
                         backoff_time = 2 ** attempt  # 1초, 2초
                         print(f"⚠️ API 통신 예외 요격 ({e}). {backoff_time}초 지수 백오프 후 재시도...")
@@ -593,8 +593,8 @@ async def ha_assassin_loop(client: TossApiClient):
                     print(f"⚠️ [HA 암살자] 세션 마감 2분 전 컷오프. Zero-Overnight 방어막 가동 -> {soxl_qty}주 시장가 전량 매도 및 장부 초기화 완료.")
                 continue # 정규 타점 로직 진입 원천 차단 (Bypass)
 
-            # 토스 오픈 API 타격 (캔들 스캔)
-            candles_json = await client.get_1m_candles("SOXL", count=20)
+            # MODIFIED: HA 예열(Warm-up) 데이터 결핍에 따른 색상 왜곡 오판 방어 및 관제탑 동기화를 위해 count 200으로 상향 락온
+            candles_json = await client.get_1m_candles("SOXL", count=200)
             ha_df = HeikinAshiEngine.calculate_3m_ha(candles_json)
             
             if len(ha_df) < 3:
@@ -692,7 +692,7 @@ async def ha_assassin_loop(client: TossApiClient):
 
 # 시스템 심장부 및 비동기 데몬 격발
 async def main():
-    # NEW: 텔레그램 네트워크 단절(Errno 104) 완화용 세션 타임아웃 주입
+    # 텔레그램 네트워크 단절(Errno 104) 완화용 세션 타임아웃 주입
     session = AiohttpSession(timeout=60.0)
     bot = Bot(token=TELEGRAM_BOT_TOKEN, session=session)
     dp = Dispatcher()
