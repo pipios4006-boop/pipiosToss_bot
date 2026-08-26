@@ -121,7 +121,7 @@ class TossApiClient:
 router = Router()
 api_client = TossApiClient(client_id=TOSS_CLIENT_ID, client_secret=TOSS_CLIENT_SECRET)
 
-# MODIFIED: 텔레그램 시작 및 메인 메뉴 렌더링
+# 텔레그램 시작 및 메인 메뉴 렌더링
 @router.message(Command("start"))
 async def cmd_start(message: types.Message):
     if message.from_user.id != ADMIN_CHAT_ID:
@@ -139,17 +139,18 @@ async def cmd_start(message: types.Message):
     )
     await message.answer(welcome_text, reply_markup=keyboard, parse_mode="HTML")
 
-# NEW: 깃허브 원장 강제 동기화 및 봇 자가 부활 모듈 (Case 15)
+# MODIFIED: 독립 레스큐 모듈 격발 및 원자적 롤백 통제망 (Case 15, 제1헌법)
 @router.message(Command("update"))
 async def cmd_update(message: types.Message):
     if message.from_user.id != ADMIN_CHAT_ID:
         return
 
-    await message.answer("⏳ <b>깃허브 원장 동기화 및 업데이트 진행 중...</b>", parse_mode="HTML")
+    await message.answer("⏳ <b>레스큐 모듈(plugin_updater.py) 격발. 깃허브 원장 동기화 및 프리플라이트 검증 진행 중...</b>", parse_mode="HTML")
     
     try:
-        process = await asyncio.create_subprocess_shell(
-            "git pull origin main",
+        # 비동기 쉘이 아닌 파이썬 인터프리터로 독립 파일 격발 (본진 메모리 보호)
+        process = await asyncio.create_subprocess_exec(
+            sys.executable, "plugin_updater.py",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE
         )
@@ -161,21 +162,34 @@ async def cmd_update(message: types.Message):
         safe_out = html.escape(out_text) if out_text else "출력 없음"
         safe_err = html.escape(err_text) if err_text else "에러 없음"
         
-        result_msg = (
-            f"🔄 <b>업데이트 타격 결과</b>\n\n"
-            f"▫️ <b>STDOUT</b>:\n<pre>{safe_out}</pre>\n\n"
-            f"▫️ <b>STDERR</b>:\n<pre>{safe_err}</pre>"
-        )
-        await message.answer(result_msg, parse_mode="HTML")
-        
-        if "Already up to date." not in out_text:
-            await message.answer("⚠️ <b>시스템 코어 변경 팩트 감지. 데몬을 즉시 재가동(Restart)합니다.</b>", parse_mode="HTML")
-            await asyncio.sleep(1)
-            os._exit(0)
+        # 검증 통과 (Exit Code 0)
+        if process.returncode == 0:
+            result_msg = (
+                f"✅ <b>업데이트 및 검증 통과</b>\n\n"
+                f"▫️ <b>STDOUT</b>:\n<pre>{safe_out}</pre>"
+            )
+            await message.answer(result_msg, parse_mode="HTML")
+            
+            # 플러그인 업데이트 시 파이썬 하드 킬 격발로 systemd 부활 유도 (Case 15)
+            if "Already up to date." not in out_text:
+                await message.answer("⚠️ <b>검증된 새 코어 코드 감지. 데몬을 즉시 재가동(Restart)합니다.</b>", parse_mode="HTML")
+                await asyncio.sleep(1)
+                os._exit(0)
+                
+        # 문법 에러 및 레스큐 롤백 가동 (Exit Code 1)
+        else:
+            result_msg = (
+                f"🚨 <b>치명적 에러 감지 및 레스큐 롤백 완료</b>\n\n"
+                f"▫️ <b>본진 프로세스(main.py)는 죽지 않고 생존 상태를 유지합니다.</b>\n"
+                f"▫️ <b>STDERR (문법 에러 원인)</b>:\n<pre>{safe_err}</pre>\n"
+                f"▫️ <b>STDOUT (복구 로그)</b>:\n<pre>{safe_out}</pre>"
+            )
+            # 파서 붕괴 방어(Case 26)가 적용된 상태로 에러 타전 후 os._exit(0)는 절대 격발하지 않음
+            await message.answer(result_msg, parse_mode="HTML")
             
     except Exception as e:
         safe_error = html.escape(str(e))
-        await message.answer(f"🚨 <b>업데이트 붕괴 감지</b>:\n<pre>{safe_error}</pre>", parse_mode="HTML")
+        await message.answer(f"🚨 <b>관제탑 업데이트 통신 붕괴 감지</b>:\n<pre>{safe_error}</pre>", parse_mode="HTML")
 
 # 인라인 버튼 콜백 수신 및 팩트 렌더링
 @router.callback_query(F.data == "scan_asset")
