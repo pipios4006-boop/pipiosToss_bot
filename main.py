@@ -8,8 +8,11 @@
 # 5. HA 스캔 UI 리빌딩: 최대 10개 캔들 평균체결가 단일 렌더링 락온
 # 6. 주문 생성 및 조회 API 래퍼 모듈 결속 (멱등성, 정수형 락온)
 # 7. HA 암살자(aVWAP) 3분봉 네이티브 MARKET 주문 무한 루프 데몬 가동
-# 8. [NEW] 시장 운영 달력(US) 인메모리 캐싱 및 비운영 시간 선제 스킵 락온
-# 9. [NEW] 시장가 증거금(3% 버퍼) 부족 시 422 밴 방어용 자본 잠김 컷오프 결속
+# 8. 시장 운영 달력(US) 인메모리 캐싱 및 비운영 시간 선제 스킵 락온
+# 9. 시장가 증거금(3% 버퍼) 부족 시 422 밴 방어용 자본 잠김 컷오프 결속
+# 10. [NEW] 상태 장부(ha_state.json) 원자적 읽기/쓰기 코어(HAStateManager) 결속
+# 11. [NEW] 세션 마감 2분 전 Zero-Overnight 강제 청산 방어막 결속
+# 12. [NEW] 횡보장 휩쏘 방어용 절대 이격도(0.2%) 검증 알고리즘 및 유령 잔고 자가 치유 결속
 # =====================================================================
 
 import asyncio
@@ -18,6 +21,8 @@ import os
 import html
 import sys
 import math
+import json
+import contextlib
 import pandas as pd
 import numpy as np
 from datetime import datetime
@@ -35,6 +40,7 @@ ADMIN_CHAT_ID = int(os.getenv("TELEGRAM_CHAT_ID", "796232854"))
 # 제1헌법 - 동기 I/O 비동기 격리 및 Rate Limit 중앙 통제소
 class GlobalThrottle:
     _locks = {}
+    _file_locks = {}
     
     @classmethod
     async def wait_api_sync(cls, group_name: str):
@@ -42,6 +48,44 @@ class GlobalThrottle:
             cls._locks[group_name] = asyncio.Lock()
         async with cls._locks[group_name]:
             await asyncio.sleep(1.5)
+
+    # NEW: 파일 I/O 동시성 붕괴 방어용 비동기 컨텍스트 매니저
+    @classmethod
+    @contextlib.asynccontextmanager
+    async def get_file_lock(cls, filepath: str):
+        if filepath not in cls._file_locks:
+            cls._file_locks[filepath] = asyncio.Lock()
+        async with cls._file_locks[filepath]:
+            yield
+
+# NEW: 상태 장부 영구 보존 및 원자적 쓰기 엔진
+class HAStateManager:
+    FILE_PATH = "ha_state.json"
+
+    @classmethod
+    async def get_state(cls) -> float:
+        async with GlobalThrottle.get_file_lock(cls.FILE_PATH):
+            def _read():
+                if not os.path.exists(cls.FILE_PATH):
+                    return 0.0
+                try:
+                    with open(cls.FILE_PATH, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                        return float(data.get("last_buy_price", 0.0))
+                except Exception:
+                    return 0.0
+            return await asyncio.to_thread(_read)
+
+    @classmethod
+    async def save_state(cls, price: float):
+        async with GlobalThrottle.get_file_lock(cls.FILE_PATH):
+            def _write():
+                tmp_path = cls.FILE_PATH + ".tmp"
+                with open(tmp_path, "w", encoding="utf-8") as f:
+                    json.dump({"last_buy_price": price}, f)
+                # 원자적 덮어쓰기로 더티 리드 원천 차단 (제4헌법)
+                os.replace(tmp_path, cls.FILE_PATH)
+            await asyncio.to_thread(_write)
 
 # 비동기 토스증권 API 클라이언트
 class TossApiClient:
@@ -56,7 +100,7 @@ class TossApiClient:
         self._auth_lock = None
         self._last_auth_time = 0.0
         
-        # NEW: 달력 API 인메모리 캐싱 파이프라인 (Case 51)
+        # 달력 API 인메모리 캐싱 파이프라인 (Case 51)
         self._calendar_cache = {}
         self._calendar_lock = None
 
@@ -147,8 +191,8 @@ class TossApiClient:
         else:
             raise ValueError("종합매매 계좌를 찾을 수 없습니다.")
 
-    # NEW: 토스 시장 운영 달력 인메모리 캐싱 및 비운영 시간 스캔 (Case 14, 51)
-    async def is_market_open(self) -> bool:
+    # MODIFIED: 토스 시장 운영 달력 인메모리 캐싱 및 종료 시간 동시 반환
+    async def is_market_open(self) -> tuple[bool, datetime]:
         if not self.token:
             await self.authenticate()
             
@@ -178,20 +222,19 @@ class TossApiClient:
                     print(f"📅 토스증권 US 시장 달력 캐싱 완료: {date_str} (총 {len(sessions)}개 세션 확보)")
                 except Exception as e:
                     print(f"⚠️ [달력 API] 통신 지연 또는 파싱 오류. Fail-Open 가동 (무조건 주문 허용): {e}")
-                    return True # 엣지 타임라인 Fail-Safe 구조화
+                    return True, None # 엣지 타임라인 Fail-Safe 구조화
                     
             cached_sessions = self._calendar_cache.get("sessions", [])
             
-            # 모든 세션이 null 이면 휴장일
             if not cached_sessions:
-                return False
+                return False, None
                 
-            # 현재 시각이 어떠한 세션 내에라도 존재하면 True 반환
+            # 현재 시각이 어떠한 세션 내에 존재하면 (True, 해당 세션 종료시각) 반환
             for start_dt, end_dt in cached_sessions:
                 if start_dt <= now_kst <= end_dt:
-                    return True
+                    return True, end_dt
                     
-            return False
+            return False, None
 
     async def get_usd_buying_power(self) -> float:
         if not self.account_seq:
@@ -509,16 +552,34 @@ async def ha_assassin_loop(client: TossApiClient):
         print(f"🚨 [HA 암살자] 초기 계좌 정보 로드 실패: {e}")
         
     while True:
-        # 1분 주기 스캔: asyncio.sleep(60)을 통해 파이썬 밀림(Drift) 현상을 방어하고, 
-        # 내부 로직에서 3분 캔들 완성을 교차 검증하여 완벽한 '3분 타격망'을 구현 (Case 43)
+        # 1분 주기 스캔: 파이썬 밀림(Drift) 현상 방어를 위해 1분 주기 순회 후 3분 캔들 완성 여부 교차 검증 (Case 43)
         await asyncio.sleep(60)
         
         try:
-            # NEW: 시장 운영 시간 선제적 검증 (휴장일 및 비운영 시간 API 낭비 스킵 락온)
-            is_open = await client.is_market_open()
+            now_kst = datetime.now(ZoneInfo('Asia/Seoul'))
+            
+            # 시장 운영 시간 선제적 검증 및 세션 종료 시각 반환 락온
+            is_open, session_end_time = await client.is_market_open()
             if not is_open:
                 continue
                 
+            soxl_qty = await client.get_soxl_holdings()
+            
+            # NEW: 세션 마감 2분 전(Zero-Overnight) 강제 전량 매도 방어막 격발 (Case 09 & 23)
+            if session_end_time and (session_end_time - now_kst).total_seconds() <= 120:
+                if soxl_qty >= 1:
+                    now_est_str = datetime.now(ZoneInfo('America/New_York')).strftime("%Y%m%d%H%M%S")
+                    await client.create_order(
+                        symbol="SOXL", 
+                        side="SELL", 
+                        order_type="MARKET", 
+                        quantity=soxl_qty, # 전량 덤핑 팩트 보장
+                        client_order_id=f"HAZERO_{now_est_str}"
+                    )
+                    await HAStateManager.save_state(0.0) # 장부 초기화
+                    print(f"⚠️ [HA 암살자] 세션 마감 2분 전 컷오프. Zero-Overnight 방어막 가동 -> {soxl_qty}주 시장가 전량 매도 및 장부 초기화 완료.")
+                continue # 정규 타점 로직 진입 원천 차단 (Bypass)
+
             # 토스 오픈 API 타격 (캔들 스캔)
             candles_json = await client.get_1m_candles("SOXL", count=20)
             ha_df = HeikinAshiEngine.calculate_3m_ha(candles_json)
@@ -551,18 +612,28 @@ async def ha_assassin_loop(client: TossApiClient):
                 print("⚠️ [HA 암살자] 미체결 대기 주문 감지. 이중 결제 방지를 위해 현재 루프 바이패스(Bypass)합니다.")
                 continue
                 
-            # 실잔고 및 멱등키 스캔
-            soxl_qty = await client.get_soxl_holdings()
+            # 타격 전 지연 평가(Lazy Load)로 시세 팩트 스캔
+            current_price = await client.get_current_price("SOXL")
+            if current_price <= 0.0:
+                continue
+                
+            # 상태 장부에서 1주 매수 단가 동기화
+            last_buy_price = await HAStateManager.get_state()
+            
+            # NEW: 유령 잔고 자가 치유(Self-Healing) - 실잔고는 있으나 장부 기록이 소실된 엣지 케이스 방어
+            if soxl_qty >= 1 and last_buy_price <= 0.0:
+                last_buy_price = current_price
+                await HAStateManager.save_state(last_buy_price)
+                print(f"♻️ [HA 암살자] 유령 잔고 팩트 교정: 장부 데이터 소실 감지. 현재가(${last_buy_price:.2f}) 앵커링 완료.")
+                
             now_est_str = datetime.now(ZoneInfo('America/New_York')).strftime("%Y%m%d%H%M%S")
             
-            # [타점 1] 2연속 양봉 -> 시장가 매수 1주 격발
-            if is_c1_yang and is_c2_yang:
-                # NEW: 자본 잠김(422 Error) 방어망 - 지연 평가를 통한 안전 마진 팩트 체크
-                current_price = await client.get_current_price("SOXL")
+            # [타점 1] 0주 상태 & 2연속 양봉 -> 시장가 매수 1주 격발
+            if is_c1_yang and is_c2_yang and soxl_qty == 0:
                 usd_bp = await client.get_usd_buying_power()
                 
-                # 시장가(MARKET) 3% 가승인 증거금 미달 시 타점 영구 소각
-                if current_price <= 0.0 or usd_bp < (current_price * 1.03):
+                # 자본 잠김(422 Error) 방어망 (3% 버퍼)
+                if usd_bp < (current_price * 1.03):
                     print(f"⚠️ [HA 암살자] 자본 잠김 컷오프: 매수 가능 금액(${usd_bp:.2f})이 시장가 증거금 버퍼(${current_price * 1.03:.2f})보다 부족합니다. 타점 소각.")
                     continue
                     
@@ -574,21 +645,33 @@ async def ha_assassin_loop(client: TossApiClient):
                     quantity=1, 
                     client_order_id=client_order_id
                 )
-                last_action_candle_time = current_closed_time
-                print(f"🎯 [HA 암살자] 2연속 양봉 포착 및 자본 검증 통과. 시장가 매수(MARKET) 1주 격발 완료.")
                 
-            # [타점 2] 2연속 음봉 + 보유수량 1주 이상 -> 시장가 매도 1주 격발
-            elif is_c1_eum and is_c2_eum and soxl_qty >= 1:
-                client_order_id = f"HASELL_{now_est_str}"
-                await client.create_order(
-                    symbol="SOXL", 
-                    side="SELL", 
-                    order_type="MARKET", 
-                    quantity=1, 
-                    client_order_id=client_order_id
-                )
+                # 원자적 쓰기로 장부에 체결가 락온
+                await HAStateManager.save_state(current_price)
                 last_action_candle_time = current_closed_time
-                print(f"🎯 [HA 암살자] 2연속 음봉 포착. 시장가 매도(MARKET) 1주 격발 완료.")
+                print(f"🎯 [HA 암살자] 2연속 양봉 포착 및 자본 검증 통과. 시장가 1주 매수 완료 (기록가: ${current_price:.2f}).")
+                
+            # [타점 2] 1주 이상 상태 & 2연속 음봉 -> 절대 이격도 0.2% 검증 후 시장가 매도 1주 격발
+            elif is_c1_eum and is_c2_eum and soxl_qty >= 1:
+                # NEW: 횡보장 휩쏘 방어망 (절대 이격도 0.2% 검증 로직)
+                deviation = abs(current_price - last_buy_price) / last_buy_price
+                
+                if deviation >= 0.002: # 0.2% 이상 이탈 확인 시 타격
+                    client_order_id = f"HASELL_{now_est_str}"
+                    await client.create_order(
+                        symbol="SOXL", 
+                        side="SELL", 
+                        order_type="MARKET", 
+                        quantity=1, 
+                        client_order_id=client_order_id
+                    )
+                    
+                    # 매도 성공 시 장부 영구 초기화
+                    await HAStateManager.save_state(0.0)
+                    last_action_candle_time = current_closed_time
+                    print(f"🎯 [HA 암살자] 2연속 음봉 포착 & 절대 이격도({deviation*100:.2f}%) 0.2% 돌파 팩트 확인. 시장가 1주 매도 완료.")
+                else:
+                    print(f"🛡️ [HA 암살자] 횡보장 휩쏘 방어 컷오프: 2연속 음봉이나 절대 이격도({deviation*100:.2f}%)가 0.2%에 미달합니다. 타점 소각 후 관망 유지.")
                 
         except Exception as e:
             print(f"🚨 [HA 암살자] 감시망 루프 내부 붕괴: {e}")
