@@ -4,7 +4,8 @@
 # 1. SOXL 실시간 현재가(GET /prices) 조회 모듈 결속 (MARKET_DATA 통제)
 # 2. 토스 1분봉(GET /candles) 기반 3분봉 하이킨 아시(Heikin-Ashi) 벡터화 엔진 결속
 # 3. 텔레그램 /start 메인 메뉴 인라인 키보드 HA 스캔 라우터 추가
-# 4. [NEW] 12시간 주기 토큰 자동 갱신 스케줄러 및 401 요격 자가 치유 엔진 결속
+# 4. 12시간 주기 토큰 자동 갱신 스케줄러 및 401 요격 자가 치유 엔진 결속
+# 5. [MODIFIED] HA 스캔 UI 리빌딩: 최대 10개 캔들 양봉/음봉 시각화 렌더링 결속
 # =====================================================================
 
 import asyncio
@@ -46,7 +47,7 @@ class TossApiClient:
         self.token = None
         self.account_seq = None
         
-        # NEW: 토큰 갱신 전역 락 및 타임스탬프 락온 (Thundering Herd 방어용)
+        # 토큰 갱신 전역 락 및 타임스탬프 락온 (Thundering Herd 방어용)
         self._auth_lock = None
         self._last_auth_time = 0.0
 
@@ -58,7 +59,7 @@ class TossApiClient:
             for attempt in range(max_retries):
                 await GlobalThrottle.wait_api_sync(group_name)
                 
-                # MODIFIED: 401 요격 후 재시도 시 최신 갱신된 토큰 동적 주입 방어망
+                # 401 요격 후 재시도 시 최신 갱신된 토큰 동적 주입 방어망
                 if "headers" in kwargs and "Authorization" in kwargs["headers"]:
                     kwargs["headers"]["Authorization"] = f"Bearer {self.token}"
                 
@@ -66,7 +67,7 @@ class TossApiClient:
                     if response.status == 200:
                         return await response.json()
                     elif response.status == 401 and group_name != "AUTH":
-                        # NEW: 401 붕괴 요격 및 토큰 자가 치유 엔진 격발
+                        # 401 붕괴 요격 및 토큰 자가 치유 엔진 격발
                         print("⚠️ 401 Unauthorized 타격. 토큰 자가 치유 엔진 격발...")
                         await self.authenticate(force=True)
                         continue
@@ -80,7 +81,7 @@ class TossApiClient:
                         raise ConnectionError(f"API 통신 붕괴 ({response.status}): {error_text}")
             raise TimeoutError("최대 재시도 횟수 초과로 통신이 즉사했습니다.")
 
-    # MODIFIED: 토큰 갱신 전역 락온 및 병목 컷오프 모듈 결속
+    # 토큰 갱신 전역 락온 및 병목 컷오프 모듈 결속
     async def authenticate(self, force: bool = False) -> None:
         if self._auth_lock is None:
             self._auth_lock = asyncio.Lock()
@@ -88,7 +89,7 @@ class TossApiClient:
         async with self._auth_lock:
             current_time = asyncio.get_event_loop().time()
             
-            # NEW: Thundering Herd 방어 (10초 이내 중복 갱신 원천 차단)
+            # Thundering Herd 방어 (10초 이내 중복 갱신 원천 차단)
             if force and (current_time - self._last_auth_time < 10.0):
                 return
             if not force and self.token:
@@ -104,7 +105,7 @@ class TossApiClient:
             self._last_auth_time = current_time
             print("♻️ 토스증권 API 액세스 토큰 100% 갱신 락온 완료.")
 
-    # NEW: 12시간 주기 선제 타격 스케줄러 엔진
+    # 12시간 주기 선제 타격 스케줄러 엔진
     async def token_renewal_loop(self):
         while True:
             await asyncio.sleep(43200) # 12시간 대기
@@ -332,7 +333,7 @@ async def process_scan_asset(callback_query: types.CallbackQuery):
         error_msg = html.escape(str(e))
         await callback_query.message.edit_text(f"🚨 <b>시스템 붕괴 감지</b>\n\n▫️ {error_msg}", parse_mode="HTML")
 
-# 인라인 버튼: HA 스캔 (동시 격발 파이프라인)
+# MODIFIED: HA 스캔 UI 리빌딩: 최대 10개 캔들 양봉/음봉 시각화 렌더링 결속
 @router.callback_query(F.data == "scan_ha")
 async def process_scan_ha(callback_query: types.CallbackQuery):
     if callback_query.from_user.id != ADMIN_CHAT_ID:
@@ -354,17 +355,29 @@ async def process_scan_ha(callback_query: types.CallbackQuery):
         if ha_df.empty:
             result_text = f"🚨 <b>캔들 데이터 붕괴 (빈 배열)</b>\n\n🔹 <b>기준 시각</b>: {safe_est} EST\n🔹 <b>실시간 종가</b>: ${current_price:.2f}"
         else:
-            latest_ha = ha_df.iloc[-1]
-            ha_avg_price = latest_ha['HA_Close']
-            ha_time = latest_ha.name.strftime("%H:%M")
+            # NEW: 최근 최대 10개 캔들 슬라이싱 및 순회 포맷팅
+            recent_ha = ha_df.tail(10)
+            ha_history_text = ""
             
+            for time_idx, row in recent_ha.iterrows():
+                ha_o = row['HA_Open']
+                ha_c = row['HA_Close']
+                ha_time_str = time_idx.strftime("%H:%M")
+                
+                # HA_Close >= HA_Open 조건으로 십자 도지(보합)까지 양봉 방어 락온
+                if ha_c >= ha_o:
+                    candle_icon = "🟥 양봉"
+                else:
+                    candle_icon = "🟦 음봉"
+                    
+                ha_history_text += f"🔸 [{ha_time_str}] {candle_icon} (시: ${ha_o:.2f} / 종: ${ha_c:.2f})\n"
+                
             result_text = (
                 f"📈 <b>SOXL 시세 및 하이킨 아시 스캔 완료</b>\n\n"
                 f"🔹 <b>스캔 시각</b>: {safe_est} EST\n"
                 f"🔹 <b>실시간 종가 (Tick)</b>: <b>${current_price:.2f}</b>\n\n"
-                f"📊 <b>최근 3분봉 HA 팩트 ({ha_time} 기준)</b>\n"
-                f"🔸 <b>평균 체결가 (HA_Close)</b>: ${ha_avg_price:.2f}\n"
-                f"🔸 <b>추세 시가 (HA_Open)</b>: ${latest_ha['HA_Open']:.2f}\n"
+                f"📊 <b>최근 3분봉 HA 흐름 (최대 10개)</b>\n"
+                f"{ha_history_text}"
             )
             
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -403,7 +416,7 @@ async def main():
     dp = Dispatcher()
     dp.include_router(router)
     
-    # NEW: 12시간 선제 타격 토큰 갱신 스케줄러 백그라운드 데몬 격발
+    # 12시간 선제 타격 토큰 갱신 스케줄러 백그라운드 데몬 격발
     asyncio.create_task(api_client.token_renewal_loop())
     
     print("시스템 코어 로드 완료. 텔레그램 롱 폴링(Long-Polling) 개시...")
