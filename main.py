@@ -5,7 +5,8 @@
 # 2. 토스 1분봉(GET /candles) 기반 3분봉 하이킨 아시(Heikin-Ashi) 벡터화 엔진 결속
 # 3. 텔레그램 /start 메인 메뉴 인라인 키보드 HA 스캔 라우터 추가
 # 4. 12시간 주기 토큰 자동 갱신 스케줄러 및 401 요격 자가 치유 엔진 결속
-# 5. [MODIFIED] HA 스캔 UI 리빌딩: 최대 10개 캔들 양봉/음봉 시각화 렌더링 결속
+# 5. HA 스캔 UI 리빌딩: 최대 10개 캔들 양봉/음봉 시각화 렌더링 결속
+# 6. [MODIFIED] HA UI 압축: 시가 노출 영구 소각 및 HA 평균체결가 단일 렌더링 락온
 # =====================================================================
 
 import asyncio
@@ -333,7 +334,6 @@ async def process_scan_asset(callback_query: types.CallbackQuery):
         error_msg = html.escape(str(e))
         await callback_query.message.edit_text(f"🚨 <b>시스템 붕괴 감지</b>\n\n▫️ {error_msg}", parse_mode="HTML")
 
-# MODIFIED: HA 스캔 UI 리빌딩: 최대 10개 캔들 양봉/음봉 시각화 렌더링 결속
 @router.callback_query(F.data == "scan_ha")
 async def process_scan_ha(callback_query: types.CallbackQuery):
     if callback_query.from_user.id != ADMIN_CHAT_ID:
@@ -355,7 +355,7 @@ async def process_scan_ha(callback_query: types.CallbackQuery):
         if ha_df.empty:
             result_text = f"🚨 <b>캔들 데이터 붕괴 (빈 배열)</b>\n\n🔹 <b>기준 시각</b>: {safe_est} EST\n🔹 <b>실시간 종가</b>: ${current_price:.2f}"
         else:
-            # NEW: 최근 최대 10개 캔들 슬라이싱 및 순회 포맷팅
+            # 최근 최대 10개 캔들 슬라이싱 및 순회 포맷팅
             recent_ha = ha_df.tail(10)
             ha_history_text = ""
             
@@ -370,7 +370,8 @@ async def process_scan_ha(callback_query: types.CallbackQuery):
                 else:
                     candle_icon = "🟦 음봉"
                     
-                ha_history_text += f"🔸 [{ha_time_str}] {candle_icon} (시: ${ha_o:.2f} / 종: ${ha_c:.2f})\n"
+                # MODIFIED: HA 렌더링 시 시가(Open) 노출을 영구 소각하고, 수학적 절대 평균가인 종가(HA_Close) 단일 지표로 압축 포맷팅
+                ha_history_text += f"🔸 [{ha_time_str}] {candle_icon} ${ha_c:.2f}\n"
                 
             result_text = (
                 f"📈 <b>SOXL 시세 및 하이킨 아시 스캔 완료</b>\n\n"
