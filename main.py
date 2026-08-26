@@ -17,7 +17,8 @@
 # 14. 토스 API 물리적 단절 시 3단 지수 백오프(Exponential Backoff) 무중단 Fallback 결속
 # 15. HA 예열(Warm-up) 데이터 결핍에 따른 색상 왜곡 방어용 수집량(count=200) 전격 상향 락온
 # 16. US 달력 API 쿼리 파라미터 오염(KST->EST) 교정 및 락온 (제3헌법 및 Case 51)
-# 17. [NEW] 토스증권 미국 주식 MARKET 주문 제한 패러독스 방어용 '합성 시장가(LIMIT)' 전면 전환 락온
+# 17. 토스증권 미국 주식 MARKET 주문 제한 패러독스 방어용 '합성 시장가(LIMIT)' 전면 전환 락온
+# 18. [NEW] 환율 API 결속 및 계좌 스캔 UI 확장 (총 평단가, 소수점 수량, 수익률, 원화수익금 렌더링)
 # =====================================================================
 
 import asyncio
@@ -255,6 +256,17 @@ class TossApiClient:
                     
             return False, None
 
+    # NEW: 환율 조회 모듈 결속 (원화 수익금 연산용)
+    async def get_usd_to_krw_rate(self) -> float:
+        if not self.token:
+            await self.authenticate()
+            
+        endpoint = "/api/v1/exchange-rate?baseCurrency=USD&quoteCurrency=KRW"
+        data = await self._request("GET", endpoint, "MARKET_INFO", headers=self._get_headers())
+        
+        rate = data.get("result", {}).get("rate", "0")
+        return float(rate) if rate else 0.0
+
     async def get_usd_buying_power(self) -> float:
         if not self.account_seq:
             await self.fetch_account_seq()
@@ -265,6 +277,7 @@ class TossApiClient:
         raw_bp = result.get("cashBuyingPower")
         return float(raw_bp) if raw_bp is not None else 0.0
 
+    # 봇의 코어 매매 로직 전용 수량 조회 (정수형 내림 락온 보존)
     async def get_soxl_holdings(self) -> int:
         if not self.account_seq:
             await self.fetch_account_seq()
@@ -283,6 +296,26 @@ class TossApiClient:
         raw_qty = soxl_item.get("quantity")
         return int(float(raw_qty)) if raw_qty is not None else 0
 
+    # NEW: UI 스캔 전용 자산 상세 조회 (소수점 및 수익률 float 락온)
+    async def get_soxl_holdings_detail(self) -> dict:
+        if not self.account_seq:
+            await self.fetch_account_seq()
+            
+        data = await self._request("GET", "/api/v1/holdings?symbol=SOXL", "ASSET", headers=self._get_headers(requires_account=True))
+        items = data.get("result", {}).get("items", [])
+        
+        # 빈 배열 결측 방어 (Case 03) 및 디폴트 반환
+        if not items:
+            return {"qty": 0.0, "avg_price": 0.0, "profit_rate": 0.0, "profit_usd": 0.0}
+            
+        item = items[0]
+        return {
+            "qty": float(item.get("quantity", 0.0)),
+            "avg_price": float(item.get("averagePurchasePrice", 0.0)),
+            "profit_rate": float(item.get("profitLoss", {}).get("rate", 0.0)),
+            "profit_usd": float(item.get("profitLoss", {}).get("amount", 0.0)) # 토스 API 스펙 단일 string 구조 반영
+        }
+
     async def get_current_price(self, symbol: str) -> float:
         if not self.token:
             await self.authenticate()
@@ -297,7 +330,7 @@ class TossApiClient:
         raw_price = results[0].get("lastPrice")
         return float(raw_price) if raw_price is not None else 0.0
 
-    # NEW: 호가장부 조회 모듈 (합성 시장가 LIMIT 타격 및 1호가 추적용)
+    # 호가장부 조회 모듈 (합성 시장가 LIMIT 타격 및 1호가 추적용)
     async def get_orderbook(self, symbol: str) -> dict:
         if not self.token:
             await self.authenticate()
@@ -472,17 +505,27 @@ async def process_scan_asset(callback_query: types.CallbackQuery):
     await callback_query.message.edit_text("⏳ <b>토스증권 잔고 원장 동기화 중...</b>", parse_mode="HTML")
     
     try:
-        usd_bp = await api_client.get_usd_buying_power()
-        soxl_qty = await api_client.get_soxl_holdings()
+        # MODIFIED: 병렬 타격용 3대 스캔 태스크 할당 (환율, 상세잔고, 매수가능액)
+        holdings_task = api_client.get_soxl_holdings_detail()
+        rate_task = api_client.get_usd_to_krw_rate()
+        usd_bp_task = api_client.get_usd_buying_power()
+        
+        holdings, ex_rate, usd_bp = await asyncio.gather(holdings_task, rate_task, usd_bp_task)
         
         est_now = datetime.now(ZoneInfo('America/New_York')).strftime("%Y-%m-%d %H:%M:%S")
         safe_est = html.escape(est_now)
+        
+        # 수익금 원화 환산 연산
+        krw_profit = holdings["profit_usd"] * ex_rate
+        profit_rate_pct = holdings["profit_rate"] * 100
         
         result_text = (
             f"📊 <b>계좌 자산 스캔 완료</b>\n\n"
             f"🔹 <b>기준 시각</b>: {safe_est} EST\n"
             f"🔹 <b>매수 가능 달러</b>: ${usd_bp:,.2f}\n"
-            f"🔹 <b>SOXL 보유 수량</b>: {soxl_qty}주\n"
+            f"🔹 <b>SOXL 보유 수량</b>: {holdings['qty']:,.2f}주\n"
+            f"🔹 <b>총 평단가</b>: ${holdings['avg_price']:,.2f}\n"
+            f"🔹 <b>수익률</b>: {profit_rate_pct:+,.2f}% (${holdings['profit_usd']:+,.2f} / ₩{krw_profit:+,.0f})\n"
         )
         
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -596,7 +639,7 @@ async def ha_assassin_loop(client: TossApiClient):
             soxl_qty = await client.get_soxl_holdings()
             
             # 세션 마감 2분 전(Zero-Overnight) 강제 전량 매도 방어막 격발 (Case 09 & 23)
-            # MODIFIED: 미국 주식 시장가 제약 방어를 위해 지정가(LIMIT) + 매수 1호가 추적 로직으로 오버라이드
+            # 미국 주식 시장가 제약 방어를 위해 지정가(LIMIT) + 매수 1호가 추적 로직으로 오버라이드
             if session_end_time and (session_end_time - now_kst).total_seconds() <= 120:
                 if soxl_qty >= 1:
                     orderbook = await client.get_orderbook("SOXL")
@@ -686,7 +729,7 @@ async def ha_assassin_loop(client: TossApiClient):
                     
                 client_order_id = f"HABUY_{now_est_str}"
                 
-                # MODIFIED: MARKET 주문 제약 돌파용 매도 1호가 지정가 주입
+                # MARKET 주문 제약 돌파용 매도 1호가 지정가 주입
                 await client.create_order(
                     symbol="SOXL", 
                     side="BUY", 
@@ -717,7 +760,7 @@ async def ha_assassin_loop(client: TossApiClient):
                     bid_1_price = float(bids[0]["price"])
                     client_order_id = f"HASELL_{now_est_str}"
                     
-                    # MODIFIED: MARKET 주문 제약 돌파용 매수 1호가 지정가 주입
+                    # MARKET 주문 제약 돌파용 매수 1호가 지정가 주입
                     await client.create_order(
                         symbol="SOXL", 
                         side="SELL", 
