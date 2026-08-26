@@ -19,7 +19,8 @@
 # 16. US 달력 API 쿼리 파라미터 오염(KST->EST) 교정 및 락온 (제3헌법 및 Case 51)
 # 17. 토스증권 미국 주식 MARKET 주문 제한 패러독스 방어용 '합성 시장가(LIMIT)' 전면 전환 락온
 # 18. 환율 API 결속 및 계좌 스캔 UI 확장 (총 평단가, 수익률, 원화수익금 렌더링)
-# 19. [NEW] 관제탑 잔고 스캔 4중 병렬 타격 확장 (실시간 종가 주입 및 소수점 수량 실수형 렌더링)
+# 19. 관제탑 잔고 스캔 4중 병렬 타격 확장 (실시간 종가 주입 및 소수점 수량 실수형 렌더링)
+# 20. [NEW] 관제탑 UI 렌더링 깜빡임(Flickering) 방지용 토스트 알림 및 단 1회 제자리 갱신 강제 (Case 38)
 # =====================================================================
 
 import asyncio
@@ -405,7 +406,7 @@ class HeikinAshiEngine:
         for col in ['openPrice', 'highPrice', 'lowPrice', 'closePrice', 'volume']:
             df[col] = df[col].astype(float)
             
-        # 3분봉 압축 및 섀도우 결측 방어 (Case 35)
+        # 3분봉 압축 및 섀도 결측 방어 (Case 35)
         df_3m = df.resample('3min', label='left', closed='left').agg({
             'openPrice': 'first',
             'highPrice': 'max',
@@ -503,10 +504,11 @@ async def process_scan_asset(callback_query: types.CallbackQuery):
     if callback_query.from_user.id != ADMIN_CHAT_ID:
         return
 
-    await callback_query.message.edit_text("⏳ <b>토스증권 잔고 원장 동기화 중...</b>", parse_mode="HTML")
+    # MODIFIED: UI 렌더링 깜빡임/밀림 방지를 위해 본문 소각을 피하고 토스트 알림으로 대기 상태 표출 (Case 38)
+    await callback_query.answer("⏳ 잔고 원장 동기화 중...", show_alert=False)
     
     try:
-        # MODIFIED: 4중 병렬 타격망 결속 (잔고상세, 환율, 매수가능액, 실시간현재가)
+        # 4중 병렬 타격망 결속 (잔고상세, 환율, 매수가능액, 실시간현재가)
         holdings_task = api_client.get_soxl_holdings_detail()
         rate_task = api_client.get_usd_to_krw_rate()
         usd_bp_task = api_client.get_usd_buying_power()
@@ -524,7 +526,6 @@ async def process_scan_asset(callback_query: types.CallbackQuery):
         krw_profit = holdings["profit_usd"] * ex_rate
         profit_rate_pct = holdings["profit_rate"] * 100
         
-        # MODIFIED: 소수점 수량 실수형(:,.2f) 렌더링 및 실시간 종가 비교 주입
         result_text = (
             f"📊 <b>계좌 자산 스캔 완료</b>\n\n"
             f"🔹 <b>기준 시각</b>: {safe_est} EST\n"
@@ -540,6 +541,7 @@ async def process_scan_asset(callback_query: types.CallbackQuery):
             [InlineKeyboardButton(text="🔙 메인 메뉴", callback_data="back_to_main")]
         ])
         
+        # MODIFIED: 연산이 모두 끝난 직후 단 1회 제자리 갱신(In-place Edit) 타격
         await callback_query.message.edit_text(result_text, reply_markup=keyboard, parse_mode="HTML")
         
     except Exception as e:
@@ -551,7 +553,8 @@ async def process_scan_ha(callback_query: types.CallbackQuery):
     if callback_query.from_user.id != ADMIN_CHAT_ID:
         return
 
-    await callback_query.message.edit_text("⏳ <b>토스증권 시세 타격 및 HA 벡터 엔진 가동 중...</b>", parse_mode="HTML")
+    # MODIFIED: UI 렌더링 깜빡임/밀림 방지를 위해 본문 소각을 피하고 토스트 알림으로 대기 상태 표출 (Case 38)
+    await callback_query.answer("⏳ 시세 타격 및 HA 벡터 엔진 가동 중...", show_alert=False)
     
     try:
         current_price_task = api_client.get_current_price("SOXL")
@@ -595,6 +598,7 @@ async def process_scan_ha(callback_query: types.CallbackQuery):
             [InlineKeyboardButton(text="🔙 메인 메뉴", callback_data="back_to_main")]
         ])
         
+        # MODIFIED: 연산이 모두 끝난 직후 단 1회 제자리 갱신(In-place Edit) 타격
         await callback_query.message.edit_text(result_text, reply_markup=keyboard, parse_mode="HTML")
         
     except Exception as e:
