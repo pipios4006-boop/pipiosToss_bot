@@ -16,7 +16,8 @@
 # 13. 텔레그램 Errno 104 통신 붕괴 방어용 AiohttpSession 주입
 # 14. 토스 API 물리적 단절 시 3단 지수 백오프(Exponential Backoff) 무중단 Fallback 결속
 # 15. HA 예열(Warm-up) 데이터 결핍에 따른 색상 왜곡 방어용 수집량(count=200) 전격 상향 락온
-# 16. [NEW] US 달력 API 쿼리 파라미터 오염(KST->EST) 교정 및 락온 (제3헌법 및 Case 51)
+# 16. US 달력 API 쿼리 파라미터 오염(KST->EST) 교정 및 락온 (제3헌법 및 Case 51)
+# 17. [NEW] 토스증권 미국 주식 MARKET 주문 제한 패러독스 방어용 '합성 시장가(LIMIT)' 전면 전환 락온
 # =====================================================================
 
 import asyncio
@@ -218,7 +219,7 @@ class TossApiClient:
             # 텔레그램 표출 및 응답 파싱용 기준 시각 (KST)
             now_kst = datetime.now(ZoneInfo('Asia/Seoul'))
             
-            # MODIFIED: 제3헌법 및 Case 01 준수 - 토스 API 쿼리 파라미터는 반드시 EST 기준 날짜를 전송하여 오염 차단
+            # 제3헌법 및 Case 01 준수 - 토스 API 쿼리 파라미터는 반드시 EST 기준 날짜를 전송하여 오염 차단
             est_today_str = datetime.now(ZoneInfo('America/New_York')).strftime("%Y-%m-%d")
             
             if self._calendar_cache.get("date") != est_today_str:
@@ -296,6 +297,16 @@ class TossApiClient:
         raw_price = results[0].get("lastPrice")
         return float(raw_price) if raw_price is not None else 0.0
 
+    # NEW: 호가장부 조회 모듈 (합성 시장가 LIMIT 타격 및 1호가 추적용)
+    async def get_orderbook(self, symbol: str) -> dict:
+        if not self.token:
+            await self.authenticate()
+            
+        endpoint = f"/api/v1/orderbook?symbol={symbol}"
+        data = await self._request("GET", endpoint, "MARKET_DATA", headers=self._get_headers())
+        
+        return data.get("result", {})
+
     async def get_1m_candles(self, symbol: str, count: int = 200) -> list:
         if not self.token:
             await self.authenticate()
@@ -333,6 +344,7 @@ class TossApiClient:
         payload["quantity"] = str(int(math.floor(quantity)))
         
         if order_type == "LIMIT" and price is not None:
+            # 안전한 String 형변환 락온
             payload["price"] = str(price)
             
         if client_order_id:
@@ -584,21 +596,29 @@ async def ha_assassin_loop(client: TossApiClient):
             soxl_qty = await client.get_soxl_holdings()
             
             # 세션 마감 2분 전(Zero-Overnight) 강제 전량 매도 방어막 격발 (Case 09 & 23)
+            # MODIFIED: 미국 주식 시장가 제약 방어를 위해 지정가(LIMIT) + 매수 1호가 추적 로직으로 오버라이드
             if session_end_time and (session_end_time - now_kst).total_seconds() <= 120:
                 if soxl_qty >= 1:
-                    now_est_str = datetime.now(ZoneInfo('America/New_York')).strftime("%Y%m%d%H%M%S")
-                    await client.create_order(
-                        symbol="SOXL", 
-                        side="SELL", 
-                        order_type="MARKET", 
-                        quantity=soxl_qty, # 전량 덤핑 팩트 보장
-                        client_order_id=f"HAZERO_{now_est_str}"
-                    )
-                    await HAStateManager.save_state(0.0) # 장부 초기화
-                    print(f"⚠️ [HA 암살자] 세션 마감 2분 전 컷오프. Zero-Overnight 방어막 가동 -> {soxl_qty}주 시장가 전량 매도 및 장부 초기화 완료.")
+                    orderbook = await client.get_orderbook("SOXL")
+                    bids = orderbook.get("bids", [])
+                    if bids:
+                        bid_1_price = float(bids[0]["price"])
+                        now_est_str = datetime.now(ZoneInfo('America/New_York')).strftime("%Y%m%d%H%M%S")
+                        await client.create_order(
+                            symbol="SOXL", 
+                            side="SELL", 
+                            order_type="LIMIT", 
+                            quantity=soxl_qty, # 전량 덤핑 팩트 보장
+                            price=bid_1_price, # 호가장부 최우선 매수 단가 락온
+                            client_order_id=f"HAZERO_{now_est_str}"
+                        )
+                        await HAStateManager.save_state(0.0) # 장부 초기화
+                        print(f"⚠️ [HA 암살자] 세션 마감 2분 전 컷오프. Zero-Overnight 방어막 가동 -> {soxl_qty}주 지정가(${bid_1_price:.2f}) 전량 매도 및 장부 초기화 완료.")
+                    else:
+                        print("⚠️ [HA 암살자] Zero-Overnight 덤핑 시도 중 호가창 붕괴(매수 잔량 없음) 요격. 지정가 덤핑 불가.")
                 continue # 정규 타점 로직 진입 원천 차단 (Bypass)
 
-            # MODIFIED: HA 예열(Warm-up) 데이터 결핍에 따른 색상 왜곡 오판 방어 및 관제탑 동기화를 위해 count 200으로 상향 락온
+            # HA 예열(Warm-up) 데이터 결핍에 따른 색상 왜곡 오판 방어 및 관제탑 동기화 (count=200)
             candles_json = await client.get_1m_candles("SOXL", count=200)
             ha_df = HeikinAshiEngine.calculate_3m_ha(candles_json)
             
@@ -630,13 +650,13 @@ async def ha_assassin_loop(client: TossApiClient):
                 print("⚠️ [HA 암살자] 미체결 대기 주문 감지. 이중 결제 방지를 위해 현재 루프 바이패스(Bypass)합니다.")
                 continue
                 
-            # 타격 전 지연 평가(Lazy Load)로 시세 팩트 스캔
+            # 상태 장부에서 매수 단가 동기화
+            last_buy_price = await HAStateManager.get_state()
+            
+            # 타점 직전 시세 검증을 위한 지연 평가 (Tick 현재가 락온)
             current_price = await client.get_current_price("SOXL")
             if current_price <= 0.0:
                 continue
-                
-            # 상태 장부에서 1주 매수 단가 동기화
-            last_buy_price = await HAStateManager.get_state()
             
             # 유령 잔고 자가 치유(Self-Healing) - 실잔고는 있으나 장부 기록이 소실된 엣지 케이스 방어
             if soxl_qty >= 1 and last_buy_price <= 0.0:
@@ -646,48 +666,71 @@ async def ha_assassin_loop(client: TossApiClient):
                 
             now_est_str = datetime.now(ZoneInfo('America/New_York')).strftime("%Y%m%d%H%M%S")
             
-            # [타점 1] 0주 상태 & 2연속 양봉 -> 시장가 매수 1주 격발
+            # [타점 1] 0주 상태 & 2연속 양봉 -> 합성 시장가(매도 1호가 기반 LIMIT) 매수 1주 격발
             if is_c1_yang and is_c2_yang and soxl_qty == 0:
+                orderbook = await client.get_orderbook("SOXL")
+                asks = orderbook.get("asks", [])
+                
+                # 호가창 빈 배열(심해 횡보) 방어 단락 평가 (Edge 01)
+                if not asks:
+                    print("⚠️ [HA 암살자] 호가창 붕괴(매도 잔량 없음). 타점 소각.")
+                    continue
+                    
+                ask_1_price = float(asks[0]["price"])
                 usd_bp = await client.get_usd_buying_power()
                 
-                # 자본 잠김(422 Error) 방어망 (3% 버퍼)
-                if usd_bp < (current_price * 1.03):
-                    print(f"⚠️ [HA 암살자] 자본 잠김 컷오프: 매수 가능 금액(${usd_bp:.2f})이 시장가 증거금 버퍼(${current_price * 1.03:.2f})보다 부족합니다. 타점 소각.")
+                # 자본 잠김(422 Error) 방어망 (실제 타격가 기준 3% 버퍼 재조준 - Edge 02)
+                if usd_bp < (ask_1_price * 1.03):
+                    print(f"⚠️ [HA 암살자] 자본 잠김 컷오프: 매수 가능 금액(${usd_bp:.2f})이 지정가 증거금 버퍼(${ask_1_price * 1.03:.2f})보다 부족합니다. 타점 소각.")
                     continue
                     
                 client_order_id = f"HABUY_{now_est_str}"
+                
+                # MODIFIED: MARKET 주문 제약 돌파용 매도 1호가 지정가 주입
                 await client.create_order(
                     symbol="SOXL", 
                     side="BUY", 
-                    order_type="MARKET", 
+                    order_type="LIMIT", 
                     quantity=1, 
+                    price=ask_1_price,
                     client_order_id=client_order_id
                 )
                 
-                # 원자적 쓰기로 장부에 체결가 락온
-                await HAStateManager.save_state(current_price)
+                # 원자적 쓰기로 장부에 체결(예상)가 락온
+                await HAStateManager.save_state(ask_1_price)
                 last_action_candle_time = current_closed_time
-                print(f"🎯 [HA 암살자] 2연속 양봉 포착 및 자본 검증 통과. 시장가 1주 매수 완료 (기록가: ${current_price:.2f}).")
+                print(f"🎯 [HA 암살자] 2연속 양봉 포착 및 자본 검증 통과. 합성 시장가(매도 1호가) 1주 매수 완료 (기록가: ${ask_1_price:.2f}).")
                 
-            # [타점 2] 1주 이상 상태 & 2연속 음봉 -> 절대 이격도 0.2% 검증 후 시장가 매도 1주 격발
+            # [타점 2] 1주 이상 상태 & 2연속 음봉 -> 절대 이격도 0.2% 검증 후 합성 시장가(매수 1호가 기반 LIMIT) 매도 1주 격발
             elif is_c1_eum and is_c2_eum and soxl_qty >= 1:
                 # 횡보장 휩쏘 방어망 (절대 이격도 0.2% 검증 로직)
                 deviation = abs(current_price - last_buy_price) / last_buy_price
                 
                 if deviation >= 0.002: # 0.2% 이상 이탈 확인 시 타격
+                    orderbook = await client.get_orderbook("SOXL")
+                    bids = orderbook.get("bids", [])
+                    
+                    if not bids:
+                        print("⚠️ [HA 암살자] 호가창 붕괴(매수 잔량 없음). 타점 소각.")
+                        continue
+                        
+                    bid_1_price = float(bids[0]["price"])
                     client_order_id = f"HASELL_{now_est_str}"
+                    
+                    # MODIFIED: MARKET 주문 제약 돌파용 매수 1호가 지정가 주입
                     await client.create_order(
                         symbol="SOXL", 
                         side="SELL", 
-                        order_type="MARKET", 
+                        order_type="LIMIT", 
                         quantity=1, 
+                        price=bid_1_price,
                         client_order_id=client_order_id
                     )
                     
-                    # 매도 성공 시 장부 영구 초기화
+                    # 매도 접수 성공 시 장부 영구 초기화
                     await HAStateManager.save_state(0.0)
                     last_action_candle_time = current_closed_time
-                    print(f"🎯 [HA 암살자] 2연속 음봉 포착 & 절대 이격도({deviation*100:.2f}%) 0.2% 돌파 팩트 확인. 시장가 1주 매도 완료.")
+                    print(f"🎯 [HA 암살자] 2연속 음봉 포착 & 절대 이격도({deviation*100:.2f}%) 0.2% 돌파 팩트 확인. 합성 시장가(매수 1호가: ${bid_1_price:.2f}) 1주 매도 완료.")
                 else:
                     print(f"🛡️ [HA 암살자] 횡보장 휩쏘 방어 컷오프: 2연속 음봉이나 절대 이격도({deviation*100:.2f}%)가 0.2%에 미달합니다. 타점 소각 후 관망 유지.")
                 
