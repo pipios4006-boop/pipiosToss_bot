@@ -5,8 +5,9 @@
 # 2. 토스 1분봉(GET /candles) 기반 3분봉 하이킨 아시(Heikin-Ashi) 벡터화 엔진 결속
 # 3. 텔레그램 /start 메인 메뉴 인라인 키보드 HA 스캔 라우터 추가
 # 4. 12시간 주기 토큰 자동 갱신 스케줄러 및 401 요격 자가 치유 엔진 결속
-# 5. HA 스캔 UI 리빌딩: 최대 10개 캔들 양봉/음봉 시각화 렌더링 결속
-# 6. [MODIFIED] HA UI 압축: 시가 노출 영구 소각 및 HA 평균체결가 단일 렌더링 락온
+# 5. HA 스캔 UI 리빌딩: 최대 10개 캔들 평균체결가 단일 렌더링 락온
+# 6. [NEW] 주문 생성 및 조회 API 래퍼 모듈 결속 (멱등성, 정수형 락온)
+# 7. [NEW] HA 암살자(aVWAP) 3분봉 네이티브 MARKET 주문 무한 루프 데몬 가동
 # =====================================================================
 
 import asyncio
@@ -14,6 +15,7 @@ import aiohttp
 import os
 import html
 import sys
+import math
 import pandas as pd
 import numpy as np
 from datetime import datetime
@@ -90,7 +92,6 @@ class TossApiClient:
         async with self._auth_lock:
             current_time = asyncio.get_event_loop().time()
             
-            # Thundering Herd 방어 (10초 이내 중복 갱신 원천 차단)
             if force and (current_time - self._last_auth_time < 10.0):
                 return
             if not force and self.token:
@@ -190,6 +191,42 @@ class TossApiClient:
         data = await self._request("GET", endpoint, "MARKET_DATA_CHART", headers=self._get_headers())
         
         return data.get("result", {}).get("candles", [])
+
+    # NEW: 대기 주문 조회 (Case 42 - Limit-Trap 방어용 미체결 스캔)
+    async def get_orders(self, status: str, symbol: str = None) -> list:
+        if not self.account_seq:
+            await self.fetch_account_seq()
+            
+        endpoint = f"/api/v1/orders?status={status}"
+        if symbol:
+            endpoint += f"&symbol={symbol}"
+            
+        data = await self._request("GET", endpoint, "ORDER_HISTORY", headers=self._get_headers(requires_account=True))
+        return data.get("result", {}).get("orders", [])
+
+    # NEW: 멱등성 보장 주문 전송 코어 엔진 (Case 60 - 정수형 락온)
+    async def create_order(self, symbol: str, side: str, order_type: str, quantity: float, price: float = None, time_in_force: str = "DAY", client_order_id: str = None) -> dict:
+        if not self.account_seq:
+            await self.fetch_account_seq()
+            
+        payload = {
+            "symbol": symbol,
+            "side": side,
+            "orderType": order_type,
+            "timeInForce": time_in_force
+        }
+        
+        # 소수점 팻핑거 거절 원천 방어망 (내림 정수형 락온)
+        payload["quantity"] = str(int(math.floor(quantity)))
+        
+        if order_type == "LIMIT" and price is not None:
+            payload["price"] = str(price)
+            
+        if client_order_id:
+            payload["clientOrderId"] = client_order_id
+            
+        data = await self._request("POST", "/api/v1/orders", "ORDER", headers=self._get_headers(requires_account=True), json=payload)
+        return data.get("result", {})
 
 # 3분봉 하이킨 아시 100% 벡터화 엔진
 class HeikinAshiEngine:
@@ -355,7 +392,6 @@ async def process_scan_ha(callback_query: types.CallbackQuery):
         if ha_df.empty:
             result_text = f"🚨 <b>캔들 데이터 붕괴 (빈 배열)</b>\n\n🔹 <b>기준 시각</b>: {safe_est} EST\n🔹 <b>실시간 종가</b>: ${current_price:.2f}"
         else:
-            # 최근 최대 10개 캔들 슬라이싱 및 순회 포맷팅
             recent_ha = ha_df.tail(10)
             ha_history_text = ""
             
@@ -364,13 +400,11 @@ async def process_scan_ha(callback_query: types.CallbackQuery):
                 ha_c = row['HA_Close']
                 ha_time_str = time_idx.strftime("%H:%M")
                 
-                # HA_Close >= HA_Open 조건으로 십자 도지(보합)까지 양봉 방어 락온
                 if ha_c >= ha_o:
                     candle_icon = "🟥 양봉"
                 else:
                     candle_icon = "🟦 음봉"
                     
-                # MODIFIED: HA 렌더링 시 시가(Open) 노출을 영구 소각하고, 수학적 절대 평균가인 종가(HA_Close) 단일 지표로 압축 포맷팅
                 ha_history_text += f"🔸 [{ha_time_str}] {candle_icon} ${ha_c:.2f}\n"
                 
             result_text = (
@@ -411,6 +445,93 @@ async def process_back_to_main(callback_query: types.CallbackQuery):
     )
     await callback_query.message.edit_text(welcome_text, reply_markup=keyboard, parse_mode="HTML")
 
+
+# NEW: HA 암살자 무한 폴링 루프 (데이마켓 09:00 KST ~ )
+async def ha_assassin_loop(client: TossApiClient):
+    last_action_candle_time = None
+    
+    # 안전망: 서버 재기동 시 계좌 정보 선행 적재
+    try:
+        await client.fetch_account_seq()
+    except Exception as e:
+        print(f"🚨 [HA 암살자] 초기 계좌 정보 로드 실패: {e}")
+        
+    while True:
+        await asyncio.sleep(60) # 1분 주기 감시망 락온 (Case 43)
+        
+        try:
+            now_kst = datetime.now(ZoneInfo('Asia/Seoul'))
+            
+            # 절대 타임쉴드 (데이장 09:00~09:06 KST) 매수/매도 원천 차단
+            if now_kst.hour == 9 and now_kst.minute < 6:
+                continue
+                
+            # 토스 오픈 API 타격 (캔들 스캔)
+            candles_json = await client.get_1m_candles("SOXL", count=20)
+            ha_df = HeikinAshiEngine.calculate_3m_ha(candles_json)
+            
+            if len(ha_df) < 3:
+                continue
+                
+            # Repainting 방어를 위해 닫힌(Closed) 직전 2개의 캔들만 팩트 검증
+            c1 = ha_df.iloc[-3]
+            c2 = ha_df.iloc[-2]
+            current_closed_time = c2.name
+            
+            # 동일 3분 캔들 구간 내 이중 타격 방어
+            if last_action_candle_time == current_closed_time:
+                continue
+                
+            is_c1_yang = c1['HA_Close'] >= c1['HA_Open']
+            is_c2_yang = c2['HA_Close'] >= c2['HA_Open']
+            
+            is_c1_eum = c1['HA_Close'] < c1['HA_Open']
+            is_c2_eum = c2['HA_Close'] < c2['HA_Open']
+            
+            # 2연속 양봉 또는 2연속 음봉이 아닌 경우 관망
+            if not ((is_c1_yang and is_c2_yang) or (is_c1_eum and is_c2_eum)):
+                continue
+
+            # Limit-Trap 및 이중 결제 대참사 100% 방어망 (미체결 스캔)
+            open_orders = await client.get_orders(status="OPEN", symbol="SOXL")
+            if open_orders:
+                print("⚠️ [HA 암살자] 미체결 대기 주문 감지. 이중 결제 방지를 위해 현재 루프 바이패스(Bypass)합니다.")
+                continue
+                
+            # 실잔고 및 멱등키 스캔
+            soxl_qty = await client.get_soxl_holdings()
+            now_est_str = datetime.now(ZoneInfo('America/New_York')).strftime("%Y%m%d%H%M%S")
+            
+            # [타점 1] 2연속 양봉 -> 시장가 매수 1주 격발
+            if is_c1_yang and is_c2_yang:
+                client_order_id = f"HABUY_{now_est_str}"
+                await client.create_order(
+                    symbol="SOXL", 
+                    side="BUY", 
+                    order_type="MARKET", 
+                    quantity=1, 
+                    client_order_id=client_order_id
+                )
+                last_action_candle_time = current_closed_time
+                print(f"🎯 [HA 암살자] 2연속 양봉 포착. 시장가 매수(MARKET) 1주 격발 완료.")
+                
+            # [타점 2] 2연속 음봉 + 보유수량 1주 이상 -> 시장가 매도 1주 격발
+            elif is_c1_eum and is_c2_eum and soxl_qty >= 1:
+                client_order_id = f"HASELL_{now_est_str}"
+                await client.create_order(
+                    symbol="SOXL", 
+                    side="SELL", 
+                    order_type="MARKET", 
+                    quantity=1, 
+                    client_order_id=client_order_id
+                )
+                last_action_candle_time = current_closed_time
+                print(f"🎯 [HA 암살자] 2연속 음봉 포착. 시장가 매도(MARKET) 1주 격발 완료.")
+                
+        except Exception as e:
+            print(f"🚨 [HA 암살자] 감시망 루프 내부 붕괴: {e}")
+
+
 # 시스템 심장부 및 비동기 데몬 격발
 async def main():
     bot = Bot(token=TELEGRAM_BOT_TOKEN)
@@ -419,6 +540,9 @@ async def main():
     
     # 12시간 선제 타격 토큰 갱신 스케줄러 백그라운드 데몬 격발
     asyncio.create_task(api_client.token_renewal_loop())
+    
+    # HA 암살자 무한 매매 폴링 루프 백그라운드 데몬 격발
+    asyncio.create_task(ha_assassin_loop(api_client))
     
     print("시스템 코어 로드 완료. 텔레그램 롱 폴링(Long-Polling) 개시...")
     
