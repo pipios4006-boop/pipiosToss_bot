@@ -20,7 +20,8 @@
 # 17. 토스증권 미국 주식 MARKET 주문 제한 패러독스 방어용 '합성 시장가(LIMIT)' 전면 전환 락온
 # 18. 환율 API 결속 및 계좌 스캔 UI 확장 (총 평단가, 수익률, 원화수익금 렌더링)
 # 19. 관제탑 잔고 스캔 4중 병렬 타격 확장 (실시간 종가 주입 및 소수점 수량 실수형 렌더링)
-# 20. [NEW] 관제탑 UI 렌더링 깜빡임(Flickering) 방지용 토스트 알림 및 단 1회 제자리 갱신 강제 (Case 38)
+# 20. 관제탑 UI 렌더링 깜빡임(Flickering) 방지용 토스트 알림 및 단 1회 제자리 갱신 강제 (Case 38)
+# 21. [NEW] 수동 전량 매도(Hit & Cut) 개입에 따른 0주 상태 파편화 100% 방어막 결속 (Case 46)
 # =====================================================================
 
 import asyncio
@@ -504,7 +505,6 @@ async def process_scan_asset(callback_query: types.CallbackQuery):
     if callback_query.from_user.id != ADMIN_CHAT_ID:
         return
 
-    # MODIFIED: UI 렌더링 깜빡임/밀림 방지를 위해 본문 소각을 피하고 토스트 알림으로 대기 상태 표출 (Case 38)
     await callback_query.answer("⏳ 잔고 원장 동기화 중...", show_alert=False)
     
     try:
@@ -541,7 +541,7 @@ async def process_scan_asset(callback_query: types.CallbackQuery):
             [InlineKeyboardButton(text="🔙 메인 메뉴", callback_data="back_to_main")]
         ])
         
-        # MODIFIED: 연산이 모두 끝난 직후 단 1회 제자리 갱신(In-place Edit) 타격
+        # 단 1회 제자리 갱신(In-place Edit) 타격
         await callback_query.message.edit_text(result_text, reply_markup=keyboard, parse_mode="HTML")
         
     except Exception as e:
@@ -553,7 +553,6 @@ async def process_scan_ha(callback_query: types.CallbackQuery):
     if callback_query.from_user.id != ADMIN_CHAT_ID:
         return
 
-    # MODIFIED: UI 렌더링 깜빡임/밀림 방지를 위해 본문 소각을 피하고 토스트 알림으로 대기 상태 표출 (Case 38)
     await callback_query.answer("⏳ 시세 타격 및 HA 벡터 엔진 가동 중...", show_alert=False)
     
     try:
@@ -598,7 +597,6 @@ async def process_scan_ha(callback_query: types.CallbackQuery):
             [InlineKeyboardButton(text="🔙 메인 메뉴", callback_data="back_to_main")]
         ])
         
-        # MODIFIED: 연산이 모두 끝난 직후 단 1회 제자리 갱신(In-place Edit) 타격
         await callback_query.message.edit_text(result_text, reply_markup=keyboard, parse_mode="HTML")
         
     except Exception as e:
@@ -649,6 +647,13 @@ async def ha_assassin_loop(client: TossApiClient):
                 
             soxl_qty = await client.get_soxl_holdings()
             
+            # NEW: 수동 전량 매도 개입에 따른 0주 상태 파편화 방어 (Case 46)
+            # 실시간 잔고가 0주임에도 장부 매수가가 남아있다면, 사용자가 앱에서 전량 청산한 것으로 간주하여 즉각 동기화
+            early_state_price = await HAStateManager.get_state()
+            if soxl_qty == 0 and early_state_price > 0.0:
+                await HAStateManager.save_state(0.0)
+                print(f"♻️ [HA 암살자] 수동 청산 팩트 교정: 실잔고 0주 감지. 오염된 장부 매수가(${early_state_price:.2f})를 0.0으로 강제 동기화 완료.")
+
             # 세션 마감 2분 전(Zero-Overnight) 강제 전량 매도 방어막 격발 (Case 09 & 23)
             # 미국 주식 시장가 제약 방어를 위해 지정가(LIMIT) + 매수 1호가 추적 로직으로 오버라이드
             if session_end_time and (session_end_time - now_kst).total_seconds() <= 120:
