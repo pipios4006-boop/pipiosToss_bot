@@ -1,9 +1,9 @@
 # =====================================================================
 # 파일명: main.py
 # 최근 업데이트:
-# 1. 독립 레스큐 모듈(plugin_updater.py) 비동기 격발 및 원자적 롤백 통제망 결속 (Case 15)
-# 2. 토스증권 API Rate Limit 중앙 통제소(GlobalThrottle) 결속 및 지수 백오프
-# 3. 빈 배열(items: []) 응답 시 IndexError 사수 및 결측치 0.0 강제 형변환 폴백
+# 1. SOXL 실시간 현재가(GET /prices) 조회 모듈 결속 (MARKET_DATA 통제)
+# 2. 토스 1분봉(GET /candles) 기반 3분봉 하이킨 아시(Heikin-Ashi) 벡터화 엔진 결속
+# 3. 텔레그램 /start 메인 메뉴 인라인 키보드 HA 스캔 라우터 추가
 # =====================================================================
 
 import asyncio
@@ -11,6 +11,9 @@ import aiohttp
 import os
 import html
 import sys
+# NEW: 하이킨 아시 벡터화 연산을 위한 데이터 분석 코어 주입
+import pandas as pd
+import numpy as np
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from aiogram import Bot, Dispatcher, Router, types, F
@@ -125,18 +128,87 @@ class TossApiClient:
         raw_qty = soxl_item.get("quantity")
         return int(float(raw_qty)) if raw_qty is not None else 0
 
+    # NEW: 실시간 현재가 단일 조회 타격망 (Case 05)
+    async def get_current_price(self, symbol: str) -> float:
+        if not self.token:
+            await self.authenticate()
+            
+        endpoint = f"/api/v1/prices?symbols={symbol}"
+        data = await self._request("GET", endpoint, "MARKET_DATA", headers=self._get_headers())
+        
+        results = data.get("result", [])
+        if not results:
+            return 0.0
+            
+        raw_price = results[0].get("lastPrice")
+        return float(raw_price) if raw_price is not None else 0.0
+
+    # NEW: 1분봉 캔들 조회 API 타격망 (Case 03)
+    async def get_1m_candles(self, symbol: str, count: int = 200) -> list:
+        if not self.token:
+            await self.authenticate()
+            
+        endpoint = f"/api/v1/candles?symbol={symbol}&interval=1m&count={count}"
+        data = await self._request("GET", endpoint, "MARKET_DATA_CHART", headers=self._get_headers())
+        
+        return data.get("result", {}).get("candles", [])
+
+# NEW: 3분봉 하이킨 아시 100% 벡터화 엔진 (내부 이식)
+class HeikinAshiEngine:
+    @staticmethod
+    def calculate_3m_ha(candles_json: list) -> pd.DataFrame:
+        if not candles_json:
+            return pd.DataFrame()
+            
+        df = pd.DataFrame(candles_json)
+        df['timestamp'] = pd.to_datetime(df['timestamp'])
+        
+        # 제3헌법 타임존 락온 (EST 강제 변환)
+        df['timestamp'] = df['timestamp'].dt.tz_convert(ZoneInfo('America/New_York'))
+        df.set_index('timestamp', inplace=True)
+        
+        # 정밀도 락온
+        for col in ['openPrice', 'highPrice', 'lowPrice', 'closePrice', 'volume']:
+            df[col] = df[col].astype(float)
+            
+        # 3분봉 압축 및 섀도우 결측 방어 (Case 35)
+        df_3m = df.resample('3min', label='left', closed='left').agg({
+            'openPrice': 'first',
+            'highPrice': 'max',
+            'lowPrice': 'min',
+            'closePrice': 'last',
+            'volume': 'sum'
+        }).ffill()
+        
+        ha_df = pd.DataFrame(index=df_3m.index)
+        
+        # 벡터화 HA 수식 (루프 소각)
+        ha_df['HA_Close'] = (df_3m['openPrice'] + df_3m['highPrice'] + df_3m['lowPrice'] + df_3m['closePrice']) / 4.0
+        
+        shifted_ha_close = ha_df['HA_Close'].shift(1)
+        shifted_ha_close.iloc[0] = (df_3m['openPrice'].iloc[0] + df_3m['closePrice'].iloc[0]) / 2.0
+        ha_df['HA_Open'] = shifted_ha_close.ewm(alpha=0.5, adjust=False).mean()
+        
+        ha_df['HA_High'] = pd.concat([df_3m['highPrice'], ha_df['HA_Open'], ha_df['HA_Close']], axis=1).max(axis=1)
+        ha_df['HA_Low'] = pd.concat([df_3m['lowPrice'], ha_df['HA_Open'], ha_df['HA_Close']], axis=1).min(axis=1)
+        ha_df['Volume'] = df_3m['volume']
+        
+        return ha_df.sort_index(ascending=True)
+
 # 텔레그램 관제탑 라우터 및 봇 초기화
 router = Router()
 api_client = TossApiClient(client_id=TOSS_CLIENT_ID, client_secret=TOSS_CLIENT_SECRET)
 
-# 텔레그램 시작 및 메인 메뉴 렌더링
+# MODIFIED: 텔레그램 시작 및 확장 메인 메뉴 렌더링
 @router.message(Command("start"))
 async def cmd_start(message: types.Message):
     if message.from_user.id != ADMIN_CHAT_ID:
         return
         
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💰 잔고 및 SOXL 스캔", callback_data="scan_asset")]
+        [InlineKeyboardButton(text="💰 잔고 스캔", callback_data="scan_asset")],
+        # NEW: HA 스캔 버튼 병렬 주입
+        [InlineKeyboardButton(text="📈 SOXL 실시간 & 3분봉 HA 스캔", callback_data="scan_ha")]
     ])
     
     welcome_text = (
@@ -147,7 +219,7 @@ async def cmd_start(message: types.Message):
     )
     await message.answer(welcome_text, reply_markup=keyboard, parse_mode="HTML")
 
-# MODIFIED: 독립 레스큐 모듈 격발 및 원자적 롤백 통제망 (Case 15, 제1헌법)
+# 독립 레스큐 모듈 격발 및 원자적 롤백 통제망
 @router.message(Command("update"))
 async def cmd_update(message: types.Message):
     if message.from_user.id != ADMIN_CHAT_ID:
@@ -156,7 +228,6 @@ async def cmd_update(message: types.Message):
     await message.answer("⏳ <b>레스큐 모듈(plugin_updater.py) 격발. 깃허브 원장 동기화 및 프리플라이트 검증 진행 중...</b>", parse_mode="HTML")
     
     try:
-        # 비동기 쉘이 아닌 파이썬 인터프리터로 독립 파일 격발 (본진 메모리 보호)
         process = await asyncio.create_subprocess_exec(
             sys.executable, "plugin_updater.py",
             stdout=asyncio.subprocess.PIPE,
@@ -170,7 +241,6 @@ async def cmd_update(message: types.Message):
         safe_out = html.escape(out_text) if out_text else "출력 없음"
         safe_err = html.escape(err_text) if err_text else "에러 없음"
         
-        # 검증 통과 (Exit Code 0)
         if process.returncode == 0:
             result_msg = (
                 f"✅ <b>업데이트 및 검증 통과</b>\n\n"
@@ -178,13 +248,10 @@ async def cmd_update(message: types.Message):
             )
             await message.answer(result_msg, parse_mode="HTML")
             
-            # 플러그인 업데이트 시 파이썬 하드 킬 격발로 systemd 부활 유도 (Case 15)
             if "Already up to date." not in out_text:
                 await message.answer("⚠️ <b>검증된 새 코어 코드 감지. 데몬을 즉시 재가동(Restart)합니다.</b>", parse_mode="HTML")
                 await asyncio.sleep(1)
                 os._exit(0)
-                
-        # 문법 에러 및 레스큐 롤백 가동 (Exit Code 1)
         else:
             result_msg = (
                 f"🚨 <b>치명적 에러 감지 및 레스큐 롤백 완료</b>\n\n"
@@ -192,20 +259,19 @@ async def cmd_update(message: types.Message):
                 f"▫️ <b>STDERR (문법 에러 원인)</b>:\n<pre>{safe_err}</pre>\n"
                 f"▫️ <b>STDOUT (복구 로그)</b>:\n<pre>{safe_out}</pre>"
             )
-            # 파서 붕괴 방어(Case 26)가 적용된 상태로 에러 타전 후 os._exit(0)는 절대 격발하지 않음
             await message.answer(result_msg, parse_mode="HTML")
             
     except Exception as e:
         safe_error = html.escape(str(e))
         await message.answer(f"🚨 <b>관제탑 업데이트 통신 붕괴 감지</b>:\n<pre>{safe_error}</pre>", parse_mode="HTML")
 
-# 인라인 버튼 콜백 수신 및 팩트 렌더링
+# 인라인 버튼: 잔고 스캔
 @router.callback_query(F.data == "scan_asset")
-async def process_scan_callback(callback_query: types.CallbackQuery):
+async def process_scan_asset(callback_query: types.CallbackQuery):
     if callback_query.from_user.id != ADMIN_CHAT_ID:
         return
 
-    await callback_query.message.edit_text("⏳ <b>토스증권 API 원장 동기화 중...</b>", parse_mode="HTML")
+    await callback_query.message.edit_text("⏳ <b>토스증권 잔고 원장 동기화 중...</b>", parse_mode="HTML")
     
     try:
         usd_bp = await api_client.get_usd_buying_power()
@@ -222,7 +288,8 @@ async def process_scan_callback(callback_query: types.CallbackQuery):
         )
         
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔄 다시 스캔하기", callback_data="scan_asset")]
+            [InlineKeyboardButton(text="🔄 다시 스캔하기", callback_data="scan_asset")],
+            [InlineKeyboardButton(text="🔙 메인 메뉴", callback_data="back_to_main")]
         ])
         
         await callback_query.message.edit_text(result_text, reply_markup=keyboard, parse_mode="HTML")
@@ -230,6 +297,74 @@ async def process_scan_callback(callback_query: types.CallbackQuery):
     except Exception as e:
         error_msg = html.escape(str(e))
         await callback_query.message.edit_text(f"🚨 <b>시스템 붕괴 감지</b>\n\n▫️ {error_msg}", parse_mode="HTML")
+
+# NEW: 인라인 버튼: HA 스캔 (동시 격발 파이프라인)
+@router.callback_query(F.data == "scan_ha")
+async def process_scan_ha(callback_query: types.CallbackQuery):
+    if callback_query.from_user.id != ADMIN_CHAT_ID:
+        return
+
+    await callback_query.message.edit_text("⏳ <b>토스증권 시세 타격 및 HA 벡터 엔진 가동 중...</b>", parse_mode="HTML")
+    
+    try:
+        # 비동기 병렬 타격 (I/O 블로킹 최소화)
+        current_price_task = api_client.get_current_price("SOXL")
+        candles_task = api_client.get_1m_candles("SOXL", count=200)
+        
+        current_price, candles_json = await asyncio.gather(current_price_task, candles_task)
+        
+        # 벡터 엔진 가동
+        ha_df = HeikinAshiEngine.calculate_3m_ha(candles_json)
+        
+        est_now = datetime.now(ZoneInfo('America/New_York')).strftime("%Y-%m-%d %H:%M:%S")
+        safe_est = html.escape(est_now)
+        
+        if ha_df.empty:
+            result_text = f"🚨 <b>캔들 데이터 붕괴 (빈 배열)</b>\n\n🔹 <b>기준 시각</b>: {safe_est} EST\n🔹 <b>실시간 종가</b>: ${current_price:.2f}"
+        else:
+            # 최신 완성봉 추출
+            latest_ha = ha_df.iloc[-1]
+            ha_avg_price = latest_ha['HA_Close'] # HA 체결 평균가 (O+H+L+C)/4
+            ha_time = latest_ha.name.strftime("%H:%M")
+            
+            result_text = (
+                f"📈 <b>SOXL 시세 및 하이킨 아시 스캔 완료</b>\n\n"
+                f"🔹 <b>스캔 시각</b>: {safe_est} EST\n"
+                f"🔹 <b>실시간 종가 (Tick)</b>: <b>${current_price:.2f}</b>\n\n"
+                f"📊 <b>최근 3분봉 HA 팩트 ({ha_time} 기준)</b>\n"
+                f"🔸 <b>평균 체결가 (HA_Close)</b>: ${ha_avg_price:.2f}\n"
+                f"🔸 <b>추세 시가 (HA_Open)</b>: ${latest_ha['HA_Open']:.2f}\n"
+            )
+            
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔄 다시 스캔하기", callback_data="scan_ha")],
+            [InlineKeyboardButton(text="🔙 메인 메뉴", callback_data="back_to_main")]
+        ])
+        
+        await callback_query.message.edit_text(result_text, reply_markup=keyboard, parse_mode="HTML")
+        
+    except Exception as e:
+        error_msg = html.escape(str(e))
+        await callback_query.message.edit_text(f"🚨 <b>연산 엔진 붕괴 감지</b>\n\n▫️ {error_msg}", parse_mode="HTML")
+
+# 뒤로가기 버튼
+@router.callback_query(F.data == "back_to_main")
+async def process_back_to_main(callback_query: types.CallbackQuery):
+    if callback_query.from_user.id != ADMIN_CHAT_ID:
+        return
+        
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="💰 잔고 스캔", callback_data="scan_asset")],
+        [InlineKeyboardButton(text="📈 SOXL 실시간 & 3분봉 HA 스캔", callback_data="scan_ha")]
+    ])
+    
+    welcome_text = (
+        "🤖 <b>승승장군 퀀트 관제탑 가동</b>\n\n"
+        "▫️ 시스템: Toss Securities V14 / V-REV\n"
+        "▫️ 상태: Online 및 API 대기 중\n\n"
+        "원하시는 명령을 선택하십시오."
+    )
+    await callback_query.message.edit_text(welcome_text, reply_markup=keyboard, parse_mode="HTML")
 
 # 시스템 심장부 및 비동기 데몬 격발
 async def main():
