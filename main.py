@@ -22,7 +22,8 @@
 # 19. 관제탑 잔고 스캔 4중 병렬 타격 확장 (실시간 종가 주입 및 소수점 수량 실수형 렌더링)
 # 20. 관제탑 UI 렌더링 깜빡임(Flickering) 방지용 토스트 알림 및 단 1회 제자리 갱신 강제 (Case 38)
 # 21. 수동 전량 매도(Hit & Cut) 개입에 따른 0주 상태 파편화 100% 방어막 결속 (Case 46)
-# 22. [MODIFIED] 동적 목표 수량 할당 및 상태 장부 병합/원자적 덮어쓰기 로직 전면 락온 (Case 52, 54, 55, 60)
+# 22. 동적 목표 수량 할당 및 상태 장부 병합/원자적 덮어쓰기 로직 전면 락온 (Case 52, 54, 55, 60)
+# 23. [NEW] 텔레그램 관제탑 인라인 퀵 프리셋 UI 결속 및 토스트 알림 상태 전이 락온 (Case 38, 52)
 # =====================================================================
 
 import asyncio
@@ -68,7 +69,7 @@ class GlobalThrottle:
         async with cls._file_locks[filepath]:
             yield
 
-# 상태 장부 영구 보존 및 원자적 쓰기 엔진 (MODIFIED: 수량 동적 스케일링 결속)
+# 상태 장부 영구 보존 및 원자적 쓰기 엔진 (수량 동적 스케일링 결속)
 class HAStateManager:
     FILE_PATH = "ha_state.json"
 
@@ -81,7 +82,6 @@ class HAStateManager:
                 try:
                     with open(cls.FILE_PATH, "r", encoding="utf-8") as f:
                         data = json.load(f)
-                        # Case 54: 파편화 방어용 기본 디폴트 값 주입
                         last_price = float(data.get("last_buy_price", 0.0))
                         target_qty = int(data.get("target_qty", 10))
                         return last_price, target_qty
@@ -125,35 +125,29 @@ class TossApiClient:
         self.token = None
         self.account_seq = None
         
-        # 토큰 갱신 전역 락 및 타임스탬프 락온 (Thundering Herd 방어용)
         self._auth_lock = None
         self._last_auth_time = 0.0
         
-        # 달력 API 인메모리 캐싱 파이프라인 (Case 51)
         self._calendar_cache = {}
         self._calendar_lock = None
 
     async def _request(self, method: str, endpoint: str, group_name: str, **kwargs) -> dict:
         url = f"{self.base_url}{endpoint}"
         max_retries = 3
-        # 글로벌 타임아웃 10초 강제 락온 (네트워크 데드락 원천 방어)
         timeout = aiohttp.ClientTimeout(total=10.0)
         
         async with aiohttp.ClientSession(timeout=timeout) as session:
             for attempt in range(max_retries):
                 await GlobalThrottle.wait_api_sync(group_name)
                 
-                # 401 요격 후 재시도 시 최신 갱신된 토큰 동적 주입 방어망
                 if "headers" in kwargs and "Authorization" in kwargs["headers"]:
                     kwargs["headers"]["Authorization"] = f"Bearer {self.token}"
                 
                 try:
-                    # 물리적 네트워크 단절 및 타임아웃 방어용 try-except 래핑 (Case 32)
                     async with session.request(method, url, **kwargs) as response:
                         if response.status == 200:
                             return await response.json()
                         elif response.status == 401 and group_name != "AUTH":
-                            # 401 붕괴 요격 및 토큰 자가 치유 엔진 격발
                             print("⚠️ 401 Unauthorized 타격. 토큰 자가 치유 엔진 격발...")
                             await self.authenticate(force=True)
                             continue
@@ -166,15 +160,13 @@ class TossApiClient:
                             error_text = await response.text()
                             raise ConnectionError(f"API 통신 붕괴 ({response.status}): {error_text}")
                 except (aiohttp.ClientError, asyncio.TimeoutError) as e:
-                    # 3단 지수 백오프(Exponential Backoff) 무중단 Fallback 강제 (Case 32)
                     if attempt < max_retries - 1:
-                        backoff_time = 2 ** attempt  # 1초, 2초
+                        backoff_time = 2 ** attempt
                         print(f"⚠️ API 통신 예외 요격 ({e}). {backoff_time}초 지수 백오프 후 재시도...")
                         await asyncio.sleep(backoff_time)
                         continue
                     raise TimeoutError(f"최대 재시도 횟수 초과 즉사: {e}")
 
-    # 토큰 갱신 전역 락온 및 병목 컷오프 모듈 결속
     async def authenticate(self, force: bool = False) -> None:
         if self._auth_lock is None:
             self._auth_lock = asyncio.Lock()
@@ -197,10 +189,9 @@ class TossApiClient:
             self._last_auth_time = current_time
             print("♻️ 토스증권 API 액세스 토큰 100% 갱신 락온 완료.")
 
-    # 12시간 주기 선제 타격 스케줄러 엔진
     async def token_renewal_loop(self):
         while True:
-            await asyncio.sleep(43200) # 12시간 대기
+            await asyncio.sleep(43200)
             try:
                 print("⏳ 12시간 주기 토큰 선제 타격 엔진 가동...")
                 await self.authenticate(force=True)
@@ -231,7 +222,6 @@ class TossApiClient:
         else:
             raise ValueError("종합매매 계좌를 찾을 수 없습니다.")
 
-    # 토스 시장 운영 달력 인메모리 캐싱 및 종료 시간 동시 반환
     async def is_market_open(self) -> tuple[bool, datetime]:
         if not self.token:
             await self.authenticate()
@@ -240,10 +230,7 @@ class TossApiClient:
             self._calendar_lock = asyncio.Lock()
             
         async with self._calendar_lock:
-            # 텔레그램 표출 및 응답 파싱용 기준 시각 (KST)
             now_kst = datetime.now(ZoneInfo('Asia/Seoul'))
-            
-            # 제3헌법 및 Case 01 준수 - 토스 API 쿼리 파라미터는 반드시 EST 기준 날짜를 전송하여 오염 차단
             est_today_str = datetime.now(ZoneInfo('America/New_York')).strftime("%Y-%m-%d")
             
             if self._calendar_cache.get("date") != est_today_str:
@@ -256,7 +243,6 @@ class TossApiClient:
                     for session_name in ["dayMarket", "preMarket", "regularMarket", "afterMarket"]:
                         session_data = today_cal.get(session_name)
                         if session_data:
-                            # 토스 응답의 startTime/endTime은 KST(+09:00) 기준 ISO 8601 문자열
                             start_dt = datetime.fromisoformat(session_data["startTime"])
                             end_dt = datetime.fromisoformat(session_data["endTime"])
                             sessions.append((start_dt, end_dt))
@@ -265,21 +251,19 @@ class TossApiClient:
                     print(f"📅 토스증권 US 시장 달력 캐싱 완료: {est_today_str} (총 {len(sessions)}개 세션 확보)")
                 except Exception as e:
                     print(f"⚠️ [달력 API] 통신 지연 또는 파싱 오류. Fail-Open 가동 (무조건 주문 허용): {e}")
-                    return True, None # 엣지 타임라인 Fail-Safe 구조화
+                    return True, None
                     
             cached_sessions = self._calendar_cache.get("sessions", [])
             
             if not cached_sessions:
                 return False, None
                 
-            # 현재 KST 시각이 어떠한 세션 내에 존재하면 (True, 해당 세션 종료시각) 반환
             for start_dt, end_dt in cached_sessions:
                 if start_dt <= now_kst <= end_dt:
                     return True, end_dt
                     
             return False, None
 
-    # 환율 조회 모듈 결속 (원화 수익금 연산용)
     async def get_usd_to_krw_rate(self) -> float:
         if not self.token:
             await self.authenticate()
@@ -300,7 +284,6 @@ class TossApiClient:
         raw_bp = result.get("cashBuyingPower")
         return float(raw_bp) if raw_bp is not None else 0.0
 
-    # 봇의 코어 매매 로직 전용 수량 조회 (정수형 내림 락온 보존)
     async def get_soxl_holdings(self) -> int:
         if not self.account_seq:
             await self.fetch_account_seq()
@@ -319,7 +302,6 @@ class TossApiClient:
         raw_qty = soxl_item.get("quantity")
         return int(float(raw_qty)) if raw_qty is not None else 0
 
-    # UI 스캔 전용 자산 상세 조회 (소수점 투자 수량 대응을 위해 qty를 float으로 락온)
     async def get_soxl_holdings_detail(self) -> dict:
         if not self.account_seq:
             await self.fetch_account_seq()
@@ -327,7 +309,6 @@ class TossApiClient:
         data = await self._request("GET", "/api/v1/holdings?symbol=SOXL", "ASSET", headers=self._get_headers(requires_account=True))
         items = data.get("result", {}).get("items", [])
         
-        # 빈 배열 결측 방어 (Case 03) 및 디폴트 반환
         if not items:
             return {"qty": 0.0, "avg_price": 0.0, "profit_rate": 0.0, "profit_usd": 0.0}
             
@@ -336,7 +317,7 @@ class TossApiClient:
             "qty": float(item.get("quantity", 0.0)),
             "avg_price": float(item.get("averagePurchasePrice", 0.0)),
             "profit_rate": float(item.get("profitLoss", {}).get("rate", 0.0)),
-            "profit_usd": float(item.get("profitLoss", {}).get("amount", 0.0)) # 토스 API 스펙 단일 string 구조 반영
+            "profit_usd": float(item.get("profitLoss", {}).get("amount", 0.0))
         }
 
     async def get_current_price(self, symbol: str) -> float:
@@ -353,7 +334,6 @@ class TossApiClient:
         raw_price = results[0].get("lastPrice")
         return float(raw_price) if raw_price is not None else 0.0
 
-    # 호가장부 조회 모듈 (합성 시장가 LIMIT 타격 및 1호가 추적용)
     async def get_orderbook(self, symbol: str) -> dict:
         if not self.token:
             await self.authenticate()
@@ -372,7 +352,6 @@ class TossApiClient:
         
         return data.get("result", {}).get("candles", [])
 
-    # 대기 주문 조회 (Case 42 - Limit-Trap 방어용 미체결 스캔)
     async def get_orders(self, status: str, symbol: str = None) -> list:
         if not self.account_seq:
             await self.fetch_account_seq()
@@ -384,7 +363,6 @@ class TossApiClient:
         data = await self._request("GET", endpoint, "ORDER_HISTORY", headers=self._get_headers(requires_account=True))
         return data.get("result", {}).get("orders", [])
 
-    # 멱등성 보장 주문 전송 코어 엔진 (Case 60 - 정수형 락온)
     async def create_order(self, symbol: str, side: str, order_type: str, quantity: float, price: float = None, time_in_force: str = "DAY", client_order_id: str = None) -> dict:
         if not self.account_seq:
             await self.fetch_account_seq()
@@ -396,11 +374,9 @@ class TossApiClient:
             "timeInForce": time_in_force
         }
         
-        # 봇 매매의 소수점 팻핑거 거절 원천 방어망 (내림 정수형 락온 강제)
         payload["quantity"] = str(int(math.floor(quantity)))
         
         if order_type == "LIMIT" and price is not None:
-            # 안전한 String 형변환 락온
             payload["price"] = str(price)
             
         if client_order_id:
@@ -419,15 +395,12 @@ class HeikinAshiEngine:
         df = pd.DataFrame(candles_json)
         df['timestamp'] = pd.to_datetime(df['timestamp'])
         
-        # 제3헌법 타임존 락온 (EST 강제 변환)
         df['timestamp'] = df['timestamp'].dt.tz_convert(ZoneInfo('America/New_York'))
         df.set_index('timestamp', inplace=True)
         
-        # 정밀도 락온
         for col in ['openPrice', 'highPrice', 'lowPrice', 'closePrice', 'volume']:
             df[col] = df[col].astype(float)
             
-        # 3분봉 압축 및 섀도 결측 방어 (Case 35)
         df_3m = df.resample('3min', label='left', closed='left').agg({
             'openPrice': 'first',
             'highPrice': 'max',
@@ -438,7 +411,6 @@ class HeikinAshiEngine:
         
         ha_df = pd.DataFrame(index=df_3m.index)
         
-        # 벡터화 HA 수식 (루프 소각)
         ha_df['HA_Close'] = (df_3m['openPrice'] + df_3m['highPrice'] + df_3m['lowPrice'] + df_3m['closePrice']) / 4.0
         
         shifted_ha_close = ha_df['HA_Close'].shift(1)
@@ -455,6 +427,7 @@ class HeikinAshiEngine:
 router = Router()
 api_client = TossApiClient(client_id=TOSS_CLIENT_ID, client_secret=TOSS_CLIENT_SECRET)
 
+# MODIFIED: 메인 메뉴 하단에 퀵 프리셋 진입 인라인 버튼 추가
 @router.message(Command("start"))
 async def cmd_start(message: types.Message):
     if message.from_user.id != ADMIN_CHAT_ID:
@@ -462,7 +435,8 @@ async def cmd_start(message: types.Message):
         
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="💰 잔고 스캔", callback_data="scan_asset")],
-        [InlineKeyboardButton(text="📈 SOXL 실시간 & 3분봉 HA 스캔", callback_data="scan_ha")]
+        [InlineKeyboardButton(text="📈 SOXL 실시간 & 3분봉 HA 스캔", callback_data="scan_ha")],
+        [InlineKeyboardButton(text="⚙️ 타격 목표 수량 설정", callback_data="menu_set_qty")]
     ])
     
     welcome_text = (
@@ -473,7 +447,54 @@ async def cmd_start(message: types.Message):
     )
     await message.answer(welcome_text, reply_markup=keyboard, parse_mode="HTML")
 
-# NEW: 텔레그램 동적 수량 제어 파서 라우터 결속 (Case 52 & 60 방어막)
+# NEW: 퀵 프리셋 UI 라우터 결속
+@router.callback_query(F.data == "menu_set_qty")
+async def process_menu_set_qty(callback_query: types.CallbackQuery):
+    if callback_query.from_user.id != ADMIN_CHAT_ID:
+        return
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="10주", callback_data="set_qty_10"),
+            InlineKeyboardButton(text="20주", callback_data="set_qty_20"),
+            InlineKeyboardButton(text="50주", callback_data="set_qty_50")
+        ],
+        [InlineKeyboardButton(text="🔙 뒤로가기", callback_data="back_to_main")]
+    ])
+    
+    text = (
+        "⚙️ <b>타격 목표 수량 설정</b>\n\n"
+        "▫️ 원하시는 목표 수량을 퀵 프리셋에서 선택하십시오.\n"
+        "▫️ 세밀한 수동 입력이 필요한 경우 <code>/setqty 수량</code> 명령어를 사용하십시오.\n"
+        "   (예시: /setqty 15)"
+    )
+    
+    # 제자리 갱신 타격
+    await callback_query.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
+
+# NEW: 퀵 프리셋 액션 처리 라우터 및 토스트 알림 결속
+@router.callback_query(F.data.startswith("set_qty_"))
+async def process_set_qty_action(callback_query: types.CallbackQuery):
+    if callback_query.from_user.id != ADMIN_CHAT_ID:
+        return
+    
+    try:
+        qty_str = callback_query.data.split("_")[-1]
+        qty = int(qty_str) # 파서 오염 100% 방어
+        
+        await HAStateManager.save_state(target_qty=qty)
+        
+        # Case 38: 토스트 팝업으로 메시지 밀림 및 화면 깜빡임 방지
+        await callback_query.answer(f"✅ {qty}주 타격 락온 완료. 다음 스캔부터 즉시 적용됩니다.", show_alert=False)
+        
+        # 원자적 처리 완료 후 메인 메뉴로 무중단 복귀
+        await process_back_to_main(callback_query)
+        
+    except Exception as e:
+        error_msg = html.escape(str(e))
+        await callback_query.message.edit_text(f"🚨 <b>상태 장부 기록 붕괴</b>\n\n▫️ {error_msg}", parse_mode="HTML")
+
+# 수동 개입 명령어 파서 (기존 백업용)
 @router.message(Command("setqty"))
 async def cmd_setqty(message: types.Message):
     if message.from_user.id != ADMIN_CHAT_ID:
@@ -486,14 +507,12 @@ async def cmd_setqty(message: types.Message):
         
     qty_str = args[1]
     
-    # 정수 파싱 및 팻핑거 오염 원천 요격 (Case 52)
     if not qty_str.isdigit():
         await message.answer("🚨 <b>수량은 양의 정수만 입력 가능합니다.</b> (소수점, 음수, 문자열 입력 불가)", parse_mode="HTML")
         return
         
     qty = int(qty_str)
     
-    # 하드 캡핑 리미트 방어망 (1 ~ 1000주)
     if not (1 <= qty <= 1000):
         await message.answer("🚨 <b>수량은 1주에서 1,000주 사이로 캡핑되어야 합니다.</b>", parse_mode="HTML")
         return
@@ -510,7 +529,6 @@ async def cmd_setqty(message: types.Message):
         safe_error = html.escape(str(e))
         await message.answer(f"🚨 <b>상태 장부 기록 붕괴</b>: <pre>{safe_error}</pre>", parse_mode="HTML")
 
-# 독립 레스큐 모듈 격발 및 원자적 롤백 통제망
 @router.message(Command("update"))
 async def cmd_update(message: types.Message):
     if message.from_user.id != ADMIN_CHAT_ID:
@@ -556,7 +574,6 @@ async def cmd_update(message: types.Message):
         safe_error = html.escape(str(e))
         await message.answer(f"🚨 <b>관제탑 업데이트 통신 붕괴 감지</b>:\n<pre>{safe_error}</pre>", parse_mode="HTML")
 
-# 인라인 버튼: 잔고 스캔
 @router.callback_query(F.data == "scan_asset")
 async def process_scan_asset(callback_query: types.CallbackQuery):
     if callback_query.from_user.id != ADMIN_CHAT_ID:
@@ -565,25 +582,21 @@ async def process_scan_asset(callback_query: types.CallbackQuery):
     await callback_query.answer("⏳ 잔고 원장 동기화 중...", show_alert=False)
     
     try:
-        # 4중 병렬 타격망 결속 (잔고상세, 환율, 매수가능액, 실시간현재가)
         holdings_task = api_client.get_soxl_holdings_detail()
         rate_task = api_client.get_usd_to_krw_rate()
         usd_bp_task = api_client.get_usd_buying_power()
         current_price_task = api_client.get_current_price("SOXL")
         target_qty_task = HAStateManager.get_state()
         
-        # API 동시 요격 및 언패킹
         holdings, ex_rate, usd_bp, current_price, state_tuple = await asyncio.gather(
             holdings_task, rate_task, usd_bp_task, current_price_task, target_qty_task
         )
         
-        # 튜플 언패킹
         _, target_qty = state_tuple
         
         est_now = datetime.now(ZoneInfo('America/New_York')).strftime("%Y-%m-%d %H:%M:%S")
         safe_est = html.escape(est_now)
         
-        # 수익금 원화 환산 연산
         krw_profit = holdings["profit_usd"] * ex_rate
         profit_rate_pct = holdings["profit_rate"] * 100
         
@@ -603,7 +616,6 @@ async def process_scan_asset(callback_query: types.CallbackQuery):
             [InlineKeyboardButton(text="🔙 메인 메뉴", callback_data="back_to_main")]
         ])
         
-        # 단 1회 제자리 갱신(In-place Edit) 타격
         await callback_query.message.edit_text(result_text, reply_markup=keyboard, parse_mode="HTML")
         
     except Exception as e:
@@ -665,7 +677,7 @@ async def process_scan_ha(callback_query: types.CallbackQuery):
         error_msg = html.escape(str(e))
         await callback_query.message.edit_text(f"🚨 <b>연산 엔진 붕괴 감지</b>\n\n▫️ {error_msg}", parse_mode="HTML")
 
-# 뒤로가기 버튼
+# MODIFIED: 뒤로가기 버튼 라우터도 일관성을 위해 키보드 레이아웃 동기화
 @router.callback_query(F.data == "back_to_main")
 async def process_back_to_main(callback_query: types.CallbackQuery):
     if callback_query.from_user.id != ADMIN_CHAT_ID:
@@ -673,7 +685,8 @@ async def process_back_to_main(callback_query: types.CallbackQuery):
         
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="💰 잔고 스캔", callback_data="scan_asset")],
-        [InlineKeyboardButton(text="📈 SOXL 실시간 & 3분봉 HA 스캔", callback_data="scan_ha")]
+        [InlineKeyboardButton(text="📈 SOXL 실시간 & 3분봉 HA 스캔", callback_data="scan_ha")],
+        [InlineKeyboardButton(text="⚙️ 타격 목표 수량 설정", callback_data="menu_set_qty")]
     ])
     
     welcome_text = (
@@ -682,45 +695,42 @@ async def process_back_to_main(callback_query: types.CallbackQuery):
         "▫️ 상태: Online 및 API 대기 중\n\n"
         "원하시는 명령을 선택하십시오."
     )
-    await callback_query.message.edit_text(welcome_text, reply_markup=keyboard, parse_mode="HTML")
+    
+    # 본문이 같으면 텔레그램 BadRequest가 뜨므로 예외 무시 래핑
+    try:
+        await callback_query.message.edit_text(welcome_text, reply_markup=keyboard, parse_mode="HTML")
+    except Exception:
+        pass
 
 
 # HA 암살자 무한 폴링 루프 (데이장 ~ 애프터장 상시 가동)
 async def ha_assassin_loop(client: TossApiClient):
     last_action_candle_time = None
     
-    # 안전망: 서버 재기동 시 계좌 정보 선행 적재
     try:
         await client.fetch_account_seq()
     except Exception as e:
         print(f"🚨 [HA 암살자] 초기 계좌 정보 로드 실패: {e}")
         
     while True:
-        # 1분 주기 스캔: 파이썬 밀림(Drift) 현상 방어를 위해 1분 주기 순회 후 3분 캔들 완성 여부 교차 검증 (Case 43)
         await asyncio.sleep(60)
         
         try:
-            # MODIFIED: 지연 평가(Lazy Load) 즉각 반영 - 매 사이클마다 상태 장부의 동적 목표 수량을 로드 (Case 43)
             last_buy_price, target_qty = await HAStateManager.get_state()
             
             now_kst = datetime.now(ZoneInfo('Asia/Seoul'))
             
-            # 시장 운영 시간 선제적 검증 및 세션 종료 시각 반환 락온
             is_open, session_end_time = await client.is_market_open()
             if not is_open:
                 continue
                 
             soxl_qty = await client.get_soxl_holdings()
             
-            # 수동 전량 매도 개입에 따른 0주 상태 파편화 방어 (Case 46)
-            # 실시간 잔고가 0주임에도 장부 매수가가 남아있다면, 사용자가 앱에서 전량 청산한 것으로 간주하여 즉각 동기화
             if soxl_qty == 0 and last_buy_price > 0.0:
                 await HAStateManager.save_state(price=0.0)
-                last_buy_price = 0.0 # 스코프 내 변수 즉각 갱신
+                last_buy_price = 0.0
                 print(f"♻️ [HA 암살자] 수동 청산 팩트 교정: 실잔고 0주 감지. 오염된 장부 매수가를 0.0으로 강제 동기화 완료.")
 
-            # 세션 마감 2분 전(Zero-Overnight) 강제 전량 매도 방어막 격발 (Case 09 & 23)
-            # 미국 주식 시장가 제약 방어를 위해 지정가(LIMIT) + 매수 1호가 추적 로직으로 오버라이드
             if session_end_time and (session_end_time - now_kst).total_seconds() <= 120:
                 if soxl_qty >= 1:
                     orderbook = await client.get_orderbook("SOXL")
@@ -732,29 +742,26 @@ async def ha_assassin_loop(client: TossApiClient):
                             symbol="SOXL", 
                             side="SELL", 
                             order_type="LIMIT", 
-                            quantity=soxl_qty, # 봇 타격 정수 물량 전량 덤핑 팩트 보장
-                            price=bid_1_price, # 호가장부 최우선 매수 단가 락온
+                            quantity=soxl_qty, 
+                            price=bid_1_price, 
                             client_order_id=f"HAZERO_{now_est_str}"
                         )
-                        await HAStateManager.save_state(price=0.0) # 장부 초기화
+                        await HAStateManager.save_state(price=0.0)
                         print(f"⚠️ [HA 암살자] 세션 마감 2분 전 컷오프. Zero-Overnight 방어막 가동 -> {soxl_qty}주 지정가(${bid_1_price:.2f}) 전량 매도 및 장부 초기화 완료.")
                     else:
                         print("⚠️ [HA 암살자] Zero-Overnight 덤핑 시도 중 호가창 붕괴(매수 잔량 없음) 요격. 지정가 덤핑 불가.")
-                continue # 정규 타점 로직 진입 원천 차단 (Bypass)
+                continue
 
-            # HA 예열(Warm-up) 데이터 결핍에 따른 색상 왜곡 오판 방어 및 관제탑 동기화 (count=200)
             candles_json = await client.get_1m_candles("SOXL", count=200)
             ha_df = HeikinAshiEngine.calculate_3m_ha(candles_json)
             
             if len(ha_df) < 3:
                 continue
                 
-            # Repainting 방어를 위해 닫힌(Closed) 직전 2개의 캔들만 팩트 검증
             c1 = ha_df.iloc[-3]
             c2 = ha_df.iloc[-2]
             current_closed_time = c2.name
             
-            # 동일 3분 캔들 구간 내 이중 타격 원천 차단
             if last_action_candle_time == current_closed_time:
                 continue
                 
@@ -764,22 +771,18 @@ async def ha_assassin_loop(client: TossApiClient):
             is_c1_eum = c1['HA_Close'] < c1['HA_Open']
             is_c2_eum = c2['HA_Close'] < c2['HA_Open']
             
-            # 2연속 양봉 또는 2연속 음봉이 아닌 경우 캔들 추적만 하고 관망
             if not ((is_c1_yang and is_c2_yang) or (is_c1_eum and is_c2_eum)):
                 continue
 
-            # Limit-Trap 및 이중 결제 대참사 100% 방어망 (미체결 주문 스캔)
             open_orders = await client.get_orders(status="OPEN", symbol="SOXL")
             if open_orders:
                 print("⚠️ [HA 암살자] 미체결 대기 주문 감지. 이중 결제 방지를 위해 현재 루프 바이패스(Bypass)합니다.")
                 continue
                 
-            # 타점 직전 시세 검증을 위한 지연 평가 (Tick 현재가 락온)
             current_price = await client.get_current_price("SOXL")
             if current_price <= 0.0:
                 continue
             
-            # 유령 잔고 자가 치유(Self-Healing) - 실잔고는 있으나 장부 기록이 소실된 엣지 케이스 방어
             if soxl_qty >= 1 and last_buy_price <= 0.0:
                 last_buy_price = current_price
                 await HAStateManager.save_state(price=last_buy_price)
@@ -787,12 +790,10 @@ async def ha_assassin_loop(client: TossApiClient):
                 
             now_est_str = datetime.now(ZoneInfo('America/New_York')).strftime("%Y%m%d%H%M%S")
             
-            # [타점 1] 0주 상태 & 2연속 양봉 -> 합성 시장가(매도 1호가 기반 LIMIT) 목표 수량 매수 격발
             if is_c1_yang and is_c2_yang and soxl_qty == 0:
                 orderbook = await client.get_orderbook("SOXL")
                 asks = orderbook.get("asks", [])
                 
-                # 호가창 빈 배열(심해 횡보) 방어 단락 평가 (Edge 01)
                 if not asks:
                     print("⚠️ [HA 암살자] 호가창 붕괴(매도 잔량 없음). 타점 소각.")
                     continue
@@ -800,7 +801,6 @@ async def ha_assassin_loop(client: TossApiClient):
                 ask_1_price = float(asks[0]["price"])
                 usd_bp = await client.get_usd_buying_power()
                 
-                # MODIFIED: 동적 스케일링 자본 잠김 검증 (동적 수량 반영, 실타격가 기준 3% 버퍼 재조준)
                 required_bp = ask_1_price * target_qty * 1.03
                 if usd_bp < required_bp:
                     print(f"⚠️ [HA 암살자] 자본 잠김 컷오프: 매수 가능 금액(${usd_bp:.2f})이 지정가 증거금 버퍼(${required_bp:.2f})보다 부족합니다. 타점 소각.")
@@ -808,7 +808,6 @@ async def ha_assassin_loop(client: TossApiClient):
                     
                 client_order_id = f"HABUY_{now_est_str}"
                 
-                # MODIFIED: 목표 수량(target_qty) 지정 매수 타격
                 await client.create_order(
                     symbol="SOXL", 
                     side="BUY", 
@@ -818,17 +817,14 @@ async def ha_assassin_loop(client: TossApiClient):
                     client_order_id=client_order_id
                 )
                 
-                # 원자적 쓰기로 장부에 체결(예상)가 락온
                 await HAStateManager.save_state(price=ask_1_price)
                 last_action_candle_time = current_closed_time
                 print(f"🎯 [HA 암살자] 2연속 양봉 포착 및 자본 검증 통과. 합성 시장가(매도 1호가) {target_qty}주 매수 완료 (기록가: ${ask_1_price:.2f}).")
                 
-            # [타점 2] 1주 이상 상태 & 2연속 음봉 -> 절대 이격도 0.2% 검증 후 합성 시장가(매수 1호가 기반 LIMIT) 매도 격발
             elif is_c1_eum and is_c2_eum and soxl_qty >= 1:
-                # 횡보장 휩쏘 방어망 (절대 이격도 0.2% 검증 로직)
                 deviation = abs(current_price - last_buy_price) / last_buy_price
                 
-                if deviation >= 0.002: # 0.2% 이상 이탈 확인 시 타격
+                if deviation >= 0.002:
                     orderbook = await client.get_orderbook("SOXL")
                     bids = orderbook.get("bids", [])
                     
@@ -839,10 +835,8 @@ async def ha_assassin_loop(client: TossApiClient):
                     bid_1_price = float(bids[0]["price"])
                     client_order_id = f"HASELL_{now_est_str}"
                     
-                    # MODIFIED: 물량 격리 연산 (Case 45, 55). 실잔고가 목표 수량보다 적으면 실잔고 전체 타격, 크면 할당량만 타격
                     sell_qty = target_qty if soxl_qty >= target_qty else soxl_qty
                     
-                    # MODIFIED: 동적 산출 수량 매도 타격
                     await client.create_order(
                         symbol="SOXL", 
                         side="SELL", 
@@ -852,7 +846,6 @@ async def ha_assassin_loop(client: TossApiClient):
                         client_order_id=client_order_id
                     )
                     
-                    # 매도 접수 성공 시 장부 영구 초기화
                     await HAStateManager.save_state(price=0.0)
                     last_action_candle_time = current_closed_time
                     print(f"🎯 [HA 암살자] 2연속 음봉 포착 & 절대 이격도({deviation*100:.2f}%) 0.2% 돌파 팩트 확인. 합성 시장가(매수 1호가: ${bid_1_price:.2f}) {sell_qty}주 매도 완료.")
@@ -865,16 +858,12 @@ async def ha_assassin_loop(client: TossApiClient):
 
 # 시스템 심장부 및 비동기 데몬 격발
 async def main():
-    # 텔레그램 네트워크 단절(Errno 104) 완화용 세션 타임아웃 주입
     session = AiohttpSession(timeout=60.0)
     bot = Bot(token=TELEGRAM_BOT_TOKEN, session=session)
     dp = Dispatcher()
     dp.include_router(router)
     
-    # 12시간 선제 타격 토큰 갱신 스케줄러 백그라운드 데몬 격발
     asyncio.create_task(api_client.token_renewal_loop())
-    
-    # HA 암살자 무한 매매 폴링 루프 백그라운드 데몬 격발
     asyncio.create_task(ha_assassin_loop(api_client))
     
     print("시스템 코어 로드 완료. 텔레그램 롱 폴링(Long-Polling) 개시...")
