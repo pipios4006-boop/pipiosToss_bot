@@ -23,7 +23,8 @@
 # 20. 관제탑 UI 렌더링 깜빡임(Flickering) 방지용 토스트 알림 및 단 1회 제자리 갱신 강제 (Case 38)
 # 21. 수동 전량 매도(Hit & Cut) 개입에 따른 0주 상태 파편화 100% 방어막 결속 (Case 46)
 # 22. 동적 목표 수량 할당 및 상태 장부 병합/원자적 덮어쓰기 로직 전면 락온 (Case 52, 54, 55, 60)
-# 23. [NEW] 텔레그램 관제탑 인라인 퀵 프리셋 UI 결속 및 토스트 알림 상태 전이 락온 (Case 38, 52)
+# 23. 텔레그램 관제탑 인라인 퀵 프리셋 UI 결속 및 토스트 알림 상태 전이 락온 (Case 38, 52)
+# 24. [MODIFIED] 3영업일 스캐닝 파이프라인 확장을 통한 KST 데이마켓 패러독스 타파 (Case 01, 51)
 # =====================================================================
 
 import asyncio
@@ -69,7 +70,7 @@ class GlobalThrottle:
         async with cls._file_locks[filepath]:
             yield
 
-# 상태 장부 영구 보존 및 원자적 쓰기 엔진 (수량 동적 스케일링 결속)
+# 상태 장부 영구 보존 및 원자적 쓰기 엔진
 class HAStateManager:
     FILE_PATH = "ha_state.json"
 
@@ -96,7 +97,6 @@ class HAStateManager:
                 curr_price = 0.0
                 curr_qty = 10
                 
-                # 원자적 덮어쓰기 전 기존 장부 선행 적재 (고아화 방어)
                 if os.path.exists(cls.FILE_PATH):
                     try:
                         with open(cls.FILE_PATH, "r", encoding="utf-8") as f:
@@ -112,7 +112,7 @@ class HAStateManager:
                 tmp_path = cls.FILE_PATH + ".tmp"
                 with open(tmp_path, "w", encoding="utf-8") as f:
                     json.dump({"last_buy_price": new_price, "target_qty": new_qty}, f)
-                # 원자적 덮어쓰기로 더티 리드 원천 차단 (제4헌법)
+                # 원자적 덮어쓰기
                 os.replace(tmp_path, cls.FILE_PATH)
             await asyncio.to_thread(_write)
 
@@ -222,6 +222,7 @@ class TossApiClient:
         else:
             raise ValueError("종합매매 계좌를 찾을 수 없습니다.")
 
+    # MODIFIED: 3영업일 기반 세션 전체 스캔으로 KST 데이마켓 패러독스 타파
     async def is_market_open(self) -> tuple[bool, datetime]:
         if not self.token:
             await self.authenticate()
@@ -237,18 +238,23 @@ class TossApiClient:
                 try:
                     endpoint = f"/api/v1/market-calendar/US?date={est_today_str}"
                     data = await self._request("GET", endpoint, "MARKET_INFO", headers=self._get_headers())
-                    today_cal = data.get("result", {}).get("today", {})
+                    result_data = data.get("result", {})
                     
                     sessions = []
-                    for session_name in ["dayMarket", "preMarket", "regularMarket", "afterMarket"]:
-                        session_data = today_cal.get(session_name)
-                        if session_data:
-                            start_dt = datetime.fromisoformat(session_data["startTime"])
-                            end_dt = datetime.fromisoformat(session_data["endTime"])
-                            sessions.append((start_dt, end_dt))
+                    # 3영업일 순회 스캔 결속
+                    for day_key in ["previousBusinessDay", "today", "nextBusinessDay"]:
+                        day_cal = result_data.get(day_key, {})
+                        if not day_cal:
+                            continue
+                        for session_name in ["dayMarket", "preMarket", "regularMarket", "afterMarket"]:
+                            session_data = day_cal.get(session_name)
+                            if session_data:
+                                start_dt = datetime.fromisoformat(session_data["startTime"])
+                                end_dt = datetime.fromisoformat(session_data["endTime"])
+                                sessions.append((start_dt, end_dt))
                     
                     self._calendar_cache = {"date": est_today_str, "sessions": sessions}
-                    print(f"📅 토스증권 US 시장 달력 캐싱 완료: {est_today_str} (총 {len(sessions)}개 세션 확보)")
+                    print(f"📅 토스증권 US 시장 3영업일 달력 병합 완료: {est_today_str} (총 {len(sessions)}개 세션 확보)")
                 except Exception as e:
                     print(f"⚠️ [달력 API] 통신 지연 또는 파싱 오류. Fail-Open 가동 (무조건 주문 허용): {e}")
                     return True, None
@@ -427,7 +433,6 @@ class HeikinAshiEngine:
 router = Router()
 api_client = TossApiClient(client_id=TOSS_CLIENT_ID, client_secret=TOSS_CLIENT_SECRET)
 
-# MODIFIED: 메인 메뉴 하단에 퀵 프리셋 진입 인라인 버튼 추가
 @router.message(Command("start"))
 async def cmd_start(message: types.Message):
     if message.from_user.id != ADMIN_CHAT_ID:
@@ -447,7 +452,6 @@ async def cmd_start(message: types.Message):
     )
     await message.answer(welcome_text, reply_markup=keyboard, parse_mode="HTML")
 
-# NEW: 퀵 프리셋 UI 라우터 결속
 @router.callback_query(F.data == "menu_set_qty")
 async def process_menu_set_qty(callback_query: types.CallbackQuery):
     if callback_query.from_user.id != ADMIN_CHAT_ID:
@@ -469,10 +473,8 @@ async def process_menu_set_qty(callback_query: types.CallbackQuery):
         "   (예시: /setqty 15)"
     )
     
-    # 제자리 갱신 타격
     await callback_query.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
 
-# NEW: 퀵 프리셋 액션 처리 라우터 및 토스트 알림 결속
 @router.callback_query(F.data.startswith("set_qty_"))
 async def process_set_qty_action(callback_query: types.CallbackQuery):
     if callback_query.from_user.id != ADMIN_CHAT_ID:
@@ -480,21 +482,16 @@ async def process_set_qty_action(callback_query: types.CallbackQuery):
     
     try:
         qty_str = callback_query.data.split("_")[-1]
-        qty = int(qty_str) # 파서 오염 100% 방어
+        qty = int(qty_str)
         
         await HAStateManager.save_state(target_qty=qty)
-        
-        # Case 38: 토스트 팝업으로 메시지 밀림 및 화면 깜빡임 방지
         await callback_query.answer(f"✅ {qty}주 타격 락온 완료. 다음 스캔부터 즉시 적용됩니다.", show_alert=False)
-        
-        # 원자적 처리 완료 후 메인 메뉴로 무중단 복귀
         await process_back_to_main(callback_query)
         
     except Exception as e:
         error_msg = html.escape(str(e))
         await callback_query.message.edit_text(f"🚨 <b>상태 장부 기록 붕괴</b>\n\n▫️ {error_msg}", parse_mode="HTML")
 
-# 수동 개입 명령어 파서 (기존 백업용)
 @router.message(Command("setqty"))
 async def cmd_setqty(message: types.Message):
     if message.from_user.id != ADMIN_CHAT_ID:
@@ -677,7 +674,6 @@ async def process_scan_ha(callback_query: types.CallbackQuery):
         error_msg = html.escape(str(e))
         await callback_query.message.edit_text(f"🚨 <b>연산 엔진 붕괴 감지</b>\n\n▫️ {error_msg}", parse_mode="HTML")
 
-# MODIFIED: 뒤로가기 버튼 라우터도 일관성을 위해 키보드 레이아웃 동기화
 @router.callback_query(F.data == "back_to_main")
 async def process_back_to_main(callback_query: types.CallbackQuery):
     if callback_query.from_user.id != ADMIN_CHAT_ID:
@@ -696,7 +692,6 @@ async def process_back_to_main(callback_query: types.CallbackQuery):
         "원하시는 명령을 선택하십시오."
     )
     
-    # 본문이 같으면 텔레그램 BadRequest가 뜨므로 예외 무시 래핑
     try:
         await callback_query.message.edit_text(welcome_text, reply_markup=keyboard, parse_mode="HTML")
     except Exception:
