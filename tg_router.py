@@ -45,7 +45,7 @@ async def cmd_start(message: types.Message, state: FSMContext):
     
     welcome_text = (
         "🤖 <b>승승장군 퀀트 관제탑 가동</b>\n\n"
-        "▫️ 시스템: Toss Securities V14 / V-REV\n"
+        "▫️ 시스템: Toss Securities V14 / V-REV (Up-Trend Engine)\n"
         "▫️ 상태: Online 및 API 대기 중\n\n"
         "원하시는 명령을 선택하십시오."
     )
@@ -254,9 +254,8 @@ async def process_scan_asset(callback_query: types.CallbackQuery, state: FSMCont
             holdings_task, rate_task, usd_bp_task, current_price_task, target_qty_task
         )
         
-        # MODIFIED: Rule 4 파라미터 언패킹 구조 수정
-        _, target_qty, _, rule4_shield_active = state_tuple
-        shield_status_str = "🟢 장전됨" if rule4_shield_active else "🔴 소모됨 (V반등 대기)"
+        # MODIFIED: 2-Tier 언패킹 규격 적용 (Rule 4 소각)
+        _, target_qty = state_tuple
         
         est_now = datetime.now(ZoneInfo('America/New_York')).strftime("%Y-%m-%d %H:%M:%S")
         safe_est = html.escape(est_now)
@@ -269,7 +268,7 @@ async def process_scan_asset(callback_query: types.CallbackQuery, state: FSMCont
             f"🔹 <b>기준 시각</b>: {safe_est} EST\n"
             f"🔹 <b>매수 가능 달러</b>: ${usd_bp:,.2f}\n"
             f"🔹 <b>SOXL 보유 수량</b>: {holdings['qty']:,.2f}주\n"
-            f"🔹 <b>SOXL 타격 목표 수량</b>: {target_qty}주 (Rule4 방어막: {shield_status_str})\n"
+            f"🔹 <b>SOXL 타격 목표 수량</b>: {target_qty}주 (EMA 필터 가동 중)\n"
             f"🔹 <b>총 평단가</b>: ${holdings['avg_price']:,.2f}\n"
             f"🔹 <b>실시간 종가</b>: ${current_price:,.2f}\n"
             f"🔹 <b>수익률</b>: {profit_rate_pct:+,.2f}% (${holdings['profit_usd']:+,.2f} / ₩{krw_profit:+,.0f})\n"
@@ -373,7 +372,7 @@ async def process_back_to_main(callback_query: types.CallbackQuery, state: FSMCo
     
     welcome_text = (
         "🤖 <b>승승장군 퀀트 관제탑 가동</b>\n\n"
-        "▫️ 시스템: Toss Securities V14 / V-REV\n"
+        "▫️ 시스템: Toss Securities V14 / V-REV (Up-Trend Engine)\n"
         "▫️ 상태: Online 및 API 대기 중\n\n"
         "원하시는 명령을 선택하십시오."
     )

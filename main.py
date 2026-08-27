@@ -1,6 +1,6 @@
 # =====================================================================
 # 파일명: main.py
-# 목적: 분리된 플러그인 모듈 의존성 주입 및 무한 폴링 데몬 격발
+# 목적: 분리된 플러그인 모듈 의존성 주입 및 상승장 필터(Up-Trend) 전용 무한 폴링 데몬 격발
 # =====================================================================
 
 import asyncio
@@ -50,8 +50,8 @@ async def ha_assassin_loop(client: TossApiClient, bot: Bot, chat_id: int):
         await asyncio.sleep(60)
         
         try:
-            # MODIFIED: Rule 4 파라미터(reference_buy_price, rule4_shield_active) 팩트 언패킹
-            last_buy_price, target_qty, reference_buy_price, rule4_shield_active = await HAStateManager.get_state()
+            # MODIFIED: Rule 4 소각. 가격 및 목표 수량만 언패킹
+            last_buy_price, target_qty = await HAStateManager.get_state()
             
             now_kst = datetime.now(ZoneInfo('Asia/Seoul'))
             
@@ -143,8 +143,11 @@ async def ha_assassin_loop(client: TossApiClient, bot: Bot, chat_id: int):
             c2_body_size = abs(c2['HA_Close'] - c2['HA_Open']) / c2['HA_Open'] if c2['HA_Open'] > 0 else 0.0
             c2_shaved_bottom = ((c2['HA_Open'] - c2['HA_Low']) / c2['HA_Open'] < 0.0005) if c2['HA_Open'] > 0 else False
             
-            # MODIFIED: Track 1 아래꼬리 진공 시 몸통 크기 제한 소각, Track 2 아래꼬리 진공 검증 전면 소각
-            buy_signal = (is_c2_yang and c2_shaved_bottom) or (is_c1_yang and is_c2_yang)
+            # NEW: EMA 정배열(단기 > 중기) 기반 상승장 팩트 필터 판별
+            is_up_trend = c2['EMA_10'] > c2['EMA_20']
+            
+            # MODIFIED: 상승장(is_up_trend) 조건 추가 결합. 하락/횡보장 가짜 반등 100% 컷오프
+            buy_signal = ((is_c2_yang and c2_shaved_bottom) or (is_c1_yang and is_c2_yang)) and is_up_trend
             sell_signal = (is_c2_eum and c2_body_size >= 0.003) or (is_c1_eum and is_c2_eum)
 
             if not (buy_signal or sell_signal):
@@ -178,25 +181,9 @@ async def ha_assassin_loop(client: TossApiClient, bot: Bot, chat_id: int):
                 ask_1_price = float(asks[0]["price"])
                 usd_bp = await client.get_usd_buying_power()
                 
-                # MODIFIED: Rule 4 (하락 추세 1회 캡핑 & 리셋 반등 스나이핑) 로직 적용
+                # MODIFIED: Rule 4 소각. 항상 목표 수량(target_qty) 100% 타격.
                 actual_buy_qty = target_qty
-                new_shield_state = rule4_shield_active
                 
-                if reference_buy_price > 0.0:
-                    if ask_1_price < reference_buy_price:
-                        if rule4_shield_active:
-                            print(f"🛡️ [Rule 4 발동] 하락 파동 감지(${reference_buy_price:.2f} ➡️ ${ask_1_price:.2f}). 1주 캡핑 방어막을 가동 및 소진합니다.")
-                            actual_buy_qty = 1 if target_qty > 1 else target_qty
-                            new_shield_state = False
-                        else:
-                            print(f"🎯 [Rule 4 리셋 대기] 방어막 소진 상태에서 연속 하락 감지(${reference_buy_price:.2f} ➡️ ${ask_1_price:.2f}). V자 반등을 스나이핑하기 위해 100% 타격합니다.")
-                    else:
-                        print(f"🟢 [Rule 4 재장전] 단가 상승 및 횡보 추세 전환 감지(${reference_buy_price:.2f} ➡️ ${ask_1_price:.2f}). 1주 캡핑 방어막을 리셋합니다.")
-                        new_shield_state = True
-                else:
-                    new_shield_state = True # 최초 매매 시 장전 상태 초기화
-                
-                # Rule 4가 결정한 최종 수량(actual_buy_qty) 기준으로 증거금 연산
                 required_bp = ask_1_price * actual_buy_qty * 1.03
                 if usd_bp < required_bp:
                     print(f"⚠️ [HA 암살자] 자본 잠김 컷오프: 매수 가능 금액(${usd_bp:.2f})이 지정가 증거금 버퍼(${required_bp:.2f})보다 부족합니다. 타점 소각.")
@@ -214,26 +201,21 @@ async def ha_assassin_loop(client: TossApiClient, bot: Bot, chat_id: int):
                 )
                 
                 total_amount = ask_1_price * actual_buy_qty
-                shield_status_str = "🟢 장전 완료" if new_shield_state else "🔴 소모됨 (V반등 대기)"
+                
                 msg = (
-                    f"🟢 <b>[HA 암살자] 매수 타격 완료</b>\n\n"
+                    f"🟢 <b>[HA 암살자] 매수 타격 완료 (상승장 돌파)</b>\n\n"
                     f"▫️ <b>종목</b>: SOXL\n"
                     f"▫️ <b>체결 예상 단가</b>: ${ask_1_price:.2f}\n"
-                    f"▫️ <b>타격 수량</b>: {actual_buy_qty}주 (목표: {target_qty}주)\n"
+                    f"▫️ <b>타격 수량</b>: {actual_buy_qty}주\n"
                     f"▫️ <b>총 결제 금액</b>: ${total_amount:,.2f}\n"
-                    f"▫️ <b>방어막 상태</b>: {shield_status_str}\n"
                     f"▫️ <b>시각</b>: {now_est_str}"
                 )
                 await notify_tg(msg)
                 
-                # 체결 직후 로컬 장부에 파라미터 3개(매수 단가, 기준 앵커링 단가, 방어막 상태) 원자적 덮어쓰기
-                await HAStateManager.save_state(
-                    price=ask_1_price,
-                    reference_buy_price=ask_1_price,
-                    rule4_shield_active=new_shield_state
-                )
+                # 체결 직후 로컬 장부에 매수 단가 원자적 기록
+                await HAStateManager.save_state(price=ask_1_price)
                 last_action_candle_time = current_closed_time
-                print(f"🎯 [HA 암살자] 매수 타점 포착 및 자본 검증 통과. 합성 시장가(매도 1호가) {actual_buy_qty}주 매수 완료 (기록가: ${ask_1_price:.2f}).")
+                print(f"🎯 [HA 암살자] 거시적 상승장(Up-Trend) 및 캔들 시그널 교차 검증 통과. 합성 시장가(매도 1호가) {actual_buy_qty}주 전량 매수 완료 (기록가: ${ask_1_price:.2f}).")
                 
             elif sell_signal and soxl_qty >= 1:
                 deviation = abs(current_price - last_buy_price) / last_buy_price if last_buy_price > 0 else 0.0
@@ -277,7 +259,6 @@ async def ha_assassin_loop(client: TossApiClient, bot: Bot, chat_id: int):
                     )
                     await notify_tg(msg)
                     
-                    # 매도 완료 시 이탈 계산용 last_buy_price만 0.0으로 초기화하고, Rule 4 상태는 보존함
                     await HAStateManager.save_state(price=0.0)
                     last_action_candle_time = current_closed_time
                     print(f"🎯 [HA 암살자] 매도 타점 포착 & 절대 이격도({deviation*100:.2f}%) 0.2% 돌파 팩트 확인. 합성 시장가(매수 1호가: ${bid_1_price:.2f}) {sell_qty}주 매도 완료.")

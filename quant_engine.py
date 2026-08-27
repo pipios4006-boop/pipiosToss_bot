@@ -1,6 +1,6 @@
 # =====================================================================
 # 파일명: quant_engine.py
-# 목적: 3분봉 HA 100% 벡터화 연산 및 상태 장부(JSON) 원자적 쓰기 엔진
+# 목적: 3분봉 HA 100% 벡터화 연산 (EMA 장세 필터 탑재) 및 상태 장부(JSON) 원자적 쓰기 엔진
 # =====================================================================
 
 import os
@@ -14,57 +14,46 @@ class HAStateManager:
     FILE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ha_state.json")
 
     @classmethod
-    async def get_state(cls) -> tuple[float, int, float, bool]:
+    async def get_state(cls) -> tuple[float, int]:
         async with GlobalThrottle.get_file_lock(cls.FILE_PATH):
             def _read():
-                # MODIFIED: Rule 4 파라미터 (reference_buy_price, rule4_shield_active) 추가 반환
+                # MODIFIED: Rule 4 파라미터 완전 소각. 오직 단가와 수량만 관리.
                 if not os.path.exists(cls.FILE_PATH):
-                    return 0.0, 10, 0.0, True
+                    return 0.0, 10
                 try:
                     with open(cls.FILE_PATH, "r", encoding="utf-8") as f:
                         data = json.load(f)
                         last_price = float(data.get("last_buy_price", 0.0))
                         target_qty = int(data.get("target_qty", 10))
-                        ref_price = float(data.get("reference_buy_price", 0.0))
-                        shield = bool(data.get("rule4_shield_active", True))
-                        return last_price, target_qty, ref_price, shield
+                        return last_price, target_qty
                 except Exception:
-                    return 0.0, 10, 0.0, True
+                    return 0.0, 10
             return await asyncio.to_thread(_read)
 
     @classmethod
-    async def save_state(cls, price: float = None, target_qty: int = None, reference_buy_price: float = None, rule4_shield_active: bool = None):
+    async def save_state(cls, price: float = None, target_qty: int = None):
         async with GlobalThrottle.get_file_lock(cls.FILE_PATH):
             def _write():
                 curr_price = 0.0
                 curr_qty = 10
-                curr_ref = 0.0
-                curr_shield = True
                 
-                # 기존 데이터 병합 (None인 파라미터는 기존 상태 유지)
                 if os.path.exists(cls.FILE_PATH):
                     try:
                         with open(cls.FILE_PATH, "r", encoding="utf-8") as f:
                             data = json.load(f)
                             curr_price = float(data.get("last_buy_price", 0.0))
                             curr_qty = int(data.get("target_qty", 10))
-                            curr_ref = float(data.get("reference_buy_price", 0.0))
-                            curr_shield = bool(data.get("rule4_shield_active", True))
                     except Exception:
                         pass
                 
                 new_price = curr_price if price is None else price
                 new_qty = curr_qty if target_qty is None else target_qty
-                new_ref = curr_ref if reference_buy_price is None else reference_buy_price
-                new_shield = curr_shield if rule4_shield_active is None else rule4_shield_active
                 
                 tmp_path = cls.FILE_PATH + ".tmp"
                 with open(tmp_path, "w", encoding="utf-8") as f:
                     json.dump({
                         "last_buy_price": new_price, 
-                        "target_qty": new_qty,
-                        "reference_buy_price": new_ref,
-                        "rule4_shield_active": new_shield
+                        "target_qty": new_qty
                     }, f)
                 # 원자적 덮어쓰기
                 os.replace(tmp_path, cls.FILE_PATH)
@@ -105,5 +94,9 @@ class HeikinAshiEngine:
         ha_df['HA_High'] = pd.concat([df_3m['highPrice'], ha_df['HA_Open'], ha_df['HA_Close']], axis=1).max(axis=1)
         ha_df['HA_Low'] = pd.concat([df_3m['lowPrice'], ha_df['HA_Open'], ha_df['HA_Close']], axis=1).min(axis=1)
         ha_df['Volume'] = df_3m['volume']
+        
+        # NEW: 거시적 장세(Macro Trend) 판별을 위한 EMA 10/20 지수이동평균선 벡터화 섀도우 렌더링
+        ha_df['EMA_10'] = ha_df['HA_Close'].ewm(span=10, adjust=False).mean()
+        ha_df['EMA_20'] = ha_df['HA_Close'].ewm(span=20, adjust=False).mean()
         
         return ha_df.sort_index(ascending=True)
