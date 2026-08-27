@@ -22,7 +22,7 @@
 # 19. 관제탑 잔고 스캔 4중 병렬 타격 확장 (실시간 종가 주입 및 소수점 수량 실수형 렌더링)
 # 20. 관제탑 UI 렌더링 깜빡임(Flickering) 방지용 토스트 알림 및 단 1회 제자리 갱신 강제 (Case 38)
 # 21. 수동 전량 매도(Hit & Cut) 개입에 따른 0주 상태 파편화 100% 방어막 결속 (Case 46)
-# 22. [NEW] 10주 스케일링 동적 수량 타격 및 자본 잠김/파편화 방어막 결속
+# 22. [MODIFIED] 동적 목표 수량 할당 및 상태 장부 병합/원자적 덮어쓰기 로직 전면 락온 (Case 52, 54, 55, 60)
 # =====================================================================
 
 import asyncio
@@ -68,31 +68,50 @@ class GlobalThrottle:
         async with cls._file_locks[filepath]:
             yield
 
-# 상태 장부 영구 보존 및 원자적 쓰기 엔진
+# 상태 장부 영구 보존 및 원자적 쓰기 엔진 (MODIFIED: 수량 동적 스케일링 결속)
 class HAStateManager:
     FILE_PATH = "ha_state.json"
 
     @classmethod
-    async def get_state(cls) -> float:
+    async def get_state(cls) -> tuple[float, int]:
         async with GlobalThrottle.get_file_lock(cls.FILE_PATH):
             def _read():
                 if not os.path.exists(cls.FILE_PATH):
-                    return 0.0
+                    return 0.0, 10
                 try:
                     with open(cls.FILE_PATH, "r", encoding="utf-8") as f:
                         data = json.load(f)
-                        return float(data.get("last_buy_price", 0.0))
+                        # Case 54: 파편화 방어용 기본 디폴트 값 주입
+                        last_price = float(data.get("last_buy_price", 0.0))
+                        target_qty = int(data.get("target_qty", 10))
+                        return last_price, target_qty
                 except Exception:
-                    return 0.0
+                    return 0.0, 10
             return await asyncio.to_thread(_read)
 
     @classmethod
-    async def save_state(cls, price: float):
+    async def save_state(cls, price: float = None, target_qty: int = None):
         async with GlobalThrottle.get_file_lock(cls.FILE_PATH):
             def _write():
+                curr_price = 0.0
+                curr_qty = 10
+                
+                # 원자적 덮어쓰기 전 기존 장부 선행 적재 (고아화 방어)
+                if os.path.exists(cls.FILE_PATH):
+                    try:
+                        with open(cls.FILE_PATH, "r", encoding="utf-8") as f:
+                            data = json.load(f)
+                            curr_price = float(data.get("last_buy_price", 0.0))
+                            curr_qty = int(data.get("target_qty", 10))
+                    except Exception:
+                        pass
+                
+                new_price = curr_price if price is None else price
+                new_qty = curr_qty if target_qty is None else target_qty
+                
                 tmp_path = cls.FILE_PATH + ".tmp"
                 with open(tmp_path, "w", encoding="utf-8") as f:
-                    json.dump({"last_buy_price": price}, f)
+                    json.dump({"last_buy_price": new_price, "target_qty": new_qty}, f)
                 # 원자적 덮어쓰기로 더티 리드 원천 차단 (제4헌법)
                 os.replace(tmp_path, cls.FILE_PATH)
             await asyncio.to_thread(_write)
@@ -377,7 +396,7 @@ class TossApiClient:
             "timeInForce": time_in_force
         }
         
-        # 봇 매매의 소수점 팻핑거 거절 원천 방어망 (내림 정수형 1주 락온 강제)
+        # 봇 매매의 소수점 팻핑거 거절 원천 방어망 (내림 정수형 락온 강제)
         payload["quantity"] = str(int(math.floor(quantity)))
         
         if order_type == "LIMIT" and price is not None:
@@ -454,6 +473,43 @@ async def cmd_start(message: types.Message):
     )
     await message.answer(welcome_text, reply_markup=keyboard, parse_mode="HTML")
 
+# NEW: 텔레그램 동적 수량 제어 파서 라우터 결속 (Case 52 & 60 방어막)
+@router.message(Command("setqty"))
+async def cmd_setqty(message: types.Message):
+    if message.from_user.id != ADMIN_CHAT_ID:
+        return
+
+    args = message.text.split()
+    if len(args) != 2:
+        await message.answer("⚠️ <b>사용법</b>: /setqty [수량]\n▫️ 예시: /setqty 20", parse_mode="HTML")
+        return
+        
+    qty_str = args[1]
+    
+    # 정수 파싱 및 팻핑거 오염 원천 요격 (Case 52)
+    if not qty_str.isdigit():
+        await message.answer("🚨 <b>수량은 양의 정수만 입력 가능합니다.</b> (소수점, 음수, 문자열 입력 불가)", parse_mode="HTML")
+        return
+        
+    qty = int(qty_str)
+    
+    # 하드 캡핑 리미트 방어망 (1 ~ 1000주)
+    if not (1 <= qty <= 1000):
+        await message.answer("🚨 <b>수량은 1주에서 1,000주 사이로 캡핑되어야 합니다.</b>", parse_mode="HTML")
+        return
+        
+    try:
+        await HAStateManager.save_state(target_qty=qty)
+        success_text = (
+            f"✅ <b>타격 수량 동기화 완료</b>\n\n"
+            f"▫️ <b>변경 수량</b>: {qty}주\n"
+            f"▫️ <b>적용 시점</b>: 다음 1분 스캔 주기부터 즉시 락온"
+        )
+        await message.answer(success_text, parse_mode="HTML")
+    except Exception as e:
+        safe_error = html.escape(str(e))
+        await message.answer(f"🚨 <b>상태 장부 기록 붕괴</b>: <pre>{safe_error}</pre>", parse_mode="HTML")
+
 # 독립 레스큐 모듈 격발 및 원자적 롤백 통제망
 @router.message(Command("update"))
 async def cmd_update(message: types.Message):
@@ -514,11 +570,15 @@ async def process_scan_asset(callback_query: types.CallbackQuery):
         rate_task = api_client.get_usd_to_krw_rate()
         usd_bp_task = api_client.get_usd_buying_power()
         current_price_task = api_client.get_current_price("SOXL")
+        target_qty_task = HAStateManager.get_state()
         
-        # 4개 API 동시 요격 및 언패킹
-        holdings, ex_rate, usd_bp, current_price = await asyncio.gather(
-            holdings_task, rate_task, usd_bp_task, current_price_task
+        # API 동시 요격 및 언패킹
+        holdings, ex_rate, usd_bp, current_price, state_tuple = await asyncio.gather(
+            holdings_task, rate_task, usd_bp_task, current_price_task, target_qty_task
         )
+        
+        # 튜플 언패킹
+        _, target_qty = state_tuple
         
         est_now = datetime.now(ZoneInfo('America/New_York')).strftime("%Y-%m-%d %H:%M:%S")
         safe_est = html.escape(est_now)
@@ -532,6 +592,7 @@ async def process_scan_asset(callback_query: types.CallbackQuery):
             f"🔹 <b>기준 시각</b>: {safe_est} EST\n"
             f"🔹 <b>매수 가능 달러</b>: ${usd_bp:,.2f}\n"
             f"🔹 <b>SOXL 보유 수량</b>: {holdings['qty']:,.2f}주\n"
+            f"🔹 <b>SOXL 타격 목표 수량</b>: {target_qty}주 락온\n"
             f"🔹 <b>총 평단가</b>: ${holdings['avg_price']:,.2f}\n"
             f"🔹 <b>실시간 종가</b>: ${current_price:,.2f}\n"
             f"🔹 <b>수익률</b>: {profit_rate_pct:+,.2f}% (${holdings['profit_usd']:+,.2f} / ₩{krw_profit:+,.0f})\n"
@@ -628,9 +689,6 @@ async def process_back_to_main(callback_query: types.CallbackQuery):
 async def ha_assassin_loop(client: TossApiClient):
     last_action_candle_time = None
     
-    # NEW: 10주 락온 타격 수량 지정
-    TARGET_QTY = 10
-    
     # 안전망: 서버 재기동 시 계좌 정보 선행 적재
     try:
         await client.fetch_account_seq()
@@ -642,6 +700,9 @@ async def ha_assassin_loop(client: TossApiClient):
         await asyncio.sleep(60)
         
         try:
+            # MODIFIED: 지연 평가(Lazy Load) 즉각 반영 - 매 사이클마다 상태 장부의 동적 목표 수량을 로드 (Case 43)
+            last_buy_price, target_qty = await HAStateManager.get_state()
+            
             now_kst = datetime.now(ZoneInfo('Asia/Seoul'))
             
             # 시장 운영 시간 선제적 검증 및 세션 종료 시각 반환 락온
@@ -653,10 +714,10 @@ async def ha_assassin_loop(client: TossApiClient):
             
             # 수동 전량 매도 개입에 따른 0주 상태 파편화 방어 (Case 46)
             # 실시간 잔고가 0주임에도 장부 매수가가 남아있다면, 사용자가 앱에서 전량 청산한 것으로 간주하여 즉각 동기화
-            early_state_price = await HAStateManager.get_state()
-            if soxl_qty == 0 and early_state_price > 0.0:
-                await HAStateManager.save_state(0.0)
-                print(f"♻️ [HA 암살자] 수동 청산 팩트 교정: 실잔고 0주 감지. 오염된 장부 매수가(${early_state_price:.2f})를 0.0으로 강제 동기화 완료.")
+            if soxl_qty == 0 and last_buy_price > 0.0:
+                await HAStateManager.save_state(price=0.0)
+                last_buy_price = 0.0 # 스코프 내 변수 즉각 갱신
+                print(f"♻️ [HA 암살자] 수동 청산 팩트 교정: 실잔고 0주 감지. 오염된 장부 매수가를 0.0으로 강제 동기화 완료.")
 
             # 세션 마감 2분 전(Zero-Overnight) 강제 전량 매도 방어막 격발 (Case 09 & 23)
             # 미국 주식 시장가 제약 방어를 위해 지정가(LIMIT) + 매수 1호가 추적 로직으로 오버라이드
@@ -675,7 +736,7 @@ async def ha_assassin_loop(client: TossApiClient):
                             price=bid_1_price, # 호가장부 최우선 매수 단가 락온
                             client_order_id=f"HAZERO_{now_est_str}"
                         )
-                        await HAStateManager.save_state(0.0) # 장부 초기화
+                        await HAStateManager.save_state(price=0.0) # 장부 초기화
                         print(f"⚠️ [HA 암살자] 세션 마감 2분 전 컷오프. Zero-Overnight 방어막 가동 -> {soxl_qty}주 지정가(${bid_1_price:.2f}) 전량 매도 및 장부 초기화 완료.")
                     else:
                         print("⚠️ [HA 암살자] Zero-Overnight 덤핑 시도 중 호가창 붕괴(매수 잔량 없음) 요격. 지정가 덤핑 불가.")
@@ -713,9 +774,6 @@ async def ha_assassin_loop(client: TossApiClient):
                 print("⚠️ [HA 암살자] 미체결 대기 주문 감지. 이중 결제 방지를 위해 현재 루프 바이패스(Bypass)합니다.")
                 continue
                 
-            # 상태 장부에서 매수 단가 동기화
-            last_buy_price = await HAStateManager.get_state()
-            
             # 타점 직전 시세 검증을 위한 지연 평가 (Tick 현재가 락온)
             current_price = await client.get_current_price("SOXL")
             if current_price <= 0.0:
@@ -724,7 +782,7 @@ async def ha_assassin_loop(client: TossApiClient):
             # 유령 잔고 자가 치유(Self-Healing) - 실잔고는 있으나 장부 기록이 소실된 엣지 케이스 방어
             if soxl_qty >= 1 and last_buy_price <= 0.0:
                 last_buy_price = current_price
-                await HAStateManager.save_state(last_buy_price)
+                await HAStateManager.save_state(price=last_buy_price)
                 print(f"♻️ [HA 암살자] 유령 잔고 팩트 교정: 장부 데이터 소실 감지. 현재가(${last_buy_price:.2f}) 앵커링 완료.")
                 
             now_est_str = datetime.now(ZoneInfo('America/New_York')).strftime("%Y%m%d%H%M%S")
@@ -742,28 +800,28 @@ async def ha_assassin_loop(client: TossApiClient):
                 ask_1_price = float(asks[0]["price"])
                 usd_bp = await client.get_usd_buying_power()
                 
-                # MODIFIED: 10주 스케일링 자본 잠김 검증 (목표 수량 반영, 실타격가 기준 3% 버퍼 재조준)
-                required_bp = ask_1_price * TARGET_QTY * 1.03
+                # MODIFIED: 동적 스케일링 자본 잠김 검증 (동적 수량 반영, 실타격가 기준 3% 버퍼 재조준)
+                required_bp = ask_1_price * target_qty * 1.03
                 if usd_bp < required_bp:
                     print(f"⚠️ [HA 암살자] 자본 잠김 컷오프: 매수 가능 금액(${usd_bp:.2f})이 지정가 증거금 버퍼(${required_bp:.2f})보다 부족합니다. 타점 소각.")
                     continue
                     
                 client_order_id = f"HABUY_{now_est_str}"
                 
-                # MODIFIED: 목표 수량(TARGET_QTY) 지정 매수 타격
+                # MODIFIED: 목표 수량(target_qty) 지정 매수 타격
                 await client.create_order(
                     symbol="SOXL", 
                     side="BUY", 
                     order_type="LIMIT", 
-                    quantity=TARGET_QTY, 
+                    quantity=target_qty, 
                     price=ask_1_price,
                     client_order_id=client_order_id
                 )
                 
                 # 원자적 쓰기로 장부에 체결(예상)가 락온
-                await HAStateManager.save_state(ask_1_price)
+                await HAStateManager.save_state(price=ask_1_price)
                 last_action_candle_time = current_closed_time
-                print(f"🎯 [HA 암살자] 2연속 양봉 포착 및 자본 검증 통과. 합성 시장가(매도 1호가) {TARGET_QTY}주 매수 완료 (기록가: ${ask_1_price:.2f}).")
+                print(f"🎯 [HA 암살자] 2연속 양봉 포착 및 자본 검증 통과. 합성 시장가(매도 1호가) {target_qty}주 매수 완료 (기록가: ${ask_1_price:.2f}).")
                 
             # [타점 2] 1주 이상 상태 & 2연속 음봉 -> 절대 이격도 0.2% 검증 후 합성 시장가(매수 1호가 기반 LIMIT) 매도 격발
             elif is_c1_eum and is_c2_eum and soxl_qty >= 1:
@@ -781,8 +839,8 @@ async def ha_assassin_loop(client: TossApiClient):
                     bid_1_price = float(bids[0]["price"])
                     client_order_id = f"HASELL_{now_est_str}"
                     
-                    # NEW: 수동 개입에 의한 파편화 물량 체결 거부 방어용 동적 수량 할당 (Fail-Safe)
-                    sell_qty = TARGET_QTY if soxl_qty >= TARGET_QTY else soxl_qty
+                    # MODIFIED: 물량 격리 연산 (Case 45, 55). 실잔고가 목표 수량보다 적으면 실잔고 전체 타격, 크면 할당량만 타격
+                    sell_qty = target_qty if soxl_qty >= target_qty else soxl_qty
                     
                     # MODIFIED: 동적 산출 수량 매도 타격
                     await client.create_order(
@@ -795,7 +853,7 @@ async def ha_assassin_loop(client: TossApiClient):
                     )
                     
                     # 매도 접수 성공 시 장부 영구 초기화
-                    await HAStateManager.save_state(0.0)
+                    await HAStateManager.save_state(price=0.0)
                     last_action_candle_time = current_closed_time
                     print(f"🎯 [HA 암살자] 2연속 음봉 포착 & 절대 이격도({deviation*100:.2f}%) 0.2% 돌파 팩트 확인. 합성 시장가(매수 1호가: ${bid_1_price:.2f}) {sell_qty}주 매도 완료.")
                 else:
