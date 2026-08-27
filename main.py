@@ -30,7 +30,8 @@
 # 27. 매수/매도/강제청산 타격 시 텔레그램 실시간 영수증(단가, 수량, 총액, 손익금 USD/KRW) 비동기 타전 결속
 # 28. 횡보장 락다운 휩쏘 방어막: 얕은 음봉(이격도 0.6% 미달) 컷오프 유지
 # 29. 과최적화(Overfitting) 타점 누수 방지를 위한 가짜 양봉(모멘텀 0.3%) 컷오프 조건 전면 소각
-# 30. [MODIFIED] 듀얼 코어 스나이핑 아키텍처 결속: 진성 몸통(0.3% 이상) 1봉 단독 요격 및 2연속 캔들 병렬 검증 (지연 타점 롤백)
+# 30. 듀얼 코어 스나이핑 아키텍처 결속: 진성 몸통(0.3% 이상) 1봉 단독 요격 및 2연속 캔들 병렬 검증 (지연 타점 롤백)
+# 31. [MODIFIED] 멱등키 정규식 위반(공백 포함) 수정 및 HA 벡터 엔진 시계열 역전 현상 원천 차단
 # =====================================================================
 
 import asyncio
@@ -423,6 +424,9 @@ class HeikinAshiEngine:
         df['timestamp'] = df['timestamp'].dt.tz_convert(ZoneInfo('America/New_York'))
         df.set_index('timestamp', inplace=True)
         
+        # MODIFIED: Case 35 방어 및 resample 역전 현상 원천 차단을 위한 오름차순 정렬 락온
+        df.sort_index(ascending=True, inplace=True)
+        
         for col in ['openPrice', 'highPrice', 'lowPrice', 'closePrice', 'volume']:
             df[col] = df[col].astype(float)
             
@@ -758,13 +762,14 @@ async def ha_assassin_loop(client: TossApiClient, bot: Bot, chat_id: int):
                     if bids:
                         bid_1_price = float(bids[0]["price"])
                         now_est_str = datetime.now(ZoneInfo('America/New_York')).strftime("%Y-%m-%d %H:%M:%S EST")
+                        # MODIFIED: 멱등키 정규식 위반 공백 제거 락온
                         await client.create_order(
                             symbol="SOXL", 
                             side="SELL", 
                             order_type="LIMIT", 
                             quantity=soxl_qty, 
                             price=bid_1_price, 
-                            client_order_id=f"HAZERO_{now_est_str.replace(':', '').replace('-', '').replace(' EST', '')}"
+                            client_order_id=f"HAZERO_{datetime.now(ZoneInfo('America/New_York')).strftime('%Y%m%d_%H%M%S')}"
                         )
                         
                         profit_usd = (bid_1_price - last_buy_price) * soxl_qty if last_buy_price > 0 else 0.0
@@ -833,7 +838,8 @@ async def ha_assassin_loop(client: TossApiClient, bot: Bot, chat_id: int):
                 print(f"♻️ [HA 암살자] 유령 잔고 팩트 교정: 장부 데이터 소실 감지. 현재가(${last_buy_price:.2f}) 앵커링 완료.")
                 
             now_est_str = datetime.now(ZoneInfo('America/New_York')).strftime("%Y-%m-%d %H:%M:%S EST")
-            client_order_id_suffix = now_est_str.replace(':', '').replace('-', '').replace(' EST', '')
+            # MODIFIED: 멱등키 정규식(^[a-zA-Z0-9\-_]+$) 위반(공백 포함)에 따른 400 에러 즉사 방어 락온
+            client_order_id_suffix = datetime.now(ZoneInfo('America/New_York')).strftime("%Y%m%d_%H%M%S")
             
             if buy_signal and soxl_qty == 0:
                 orderbook = await client.get_orderbook("SOXL")
@@ -926,8 +932,12 @@ async def ha_assassin_loop(client: TossApiClient, bot: Bot, chat_id: int):
                     print(f"🛡️ [HA 암살자] 횡보장 휩쏘 방어 컷오프: 매도 시그널(Track 1/2) 발생했으나 절대 이격도({deviation*100:.2f}%)가 0.6%에 미달합니다. 타점 소각 후 관망 유지.")
                 
         except Exception as e:
-            print(f"🚨 [HA 암살자] 감시망 루프 내부 붕괴: {e}")
-
+            error_msg = str(e)
+            print(f"🚨 [HA 암살자] 감시망 루프 내부 붕괴: {error_msg}")
+            # MODIFIED: Case 29 (400, 422 ErrorResponse 사유 텔레그램 타전) 락온
+            if "API 통신 붕괴" in error_msg:
+                safe_error = html.escape(error_msg)
+                await notify_tg(f"🚨 <b>[HA 암살자] API 런타임 붕괴 요격</b>\n<pre>{safe_error}</pre>")
 
 # 시스템 심장부 및 비동기 데몬 격발
 async def main():
