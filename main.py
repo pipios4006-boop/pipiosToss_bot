@@ -7,6 +7,7 @@ import asyncio
 import os
 import sys
 import html
+import math  # NEW: 부동소수점 내림(Floor) 연산 캡핑용
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from aiogram import Bot, Dispatcher
@@ -58,7 +59,9 @@ async def ha_assassin_loop(client: TossApiClient, bot: Bot, chat_id: int):
             if not is_open:
                 continue
                 
-            soxl_qty = await client.get_soxl_holdings()
+            # MODIFIED: Case 60 하드 캡핑 - 부동소수점 더스트(0.01주 등) 원천 소각 및 정수형 0주 락온
+            raw_soxl_qty = await client.get_soxl_holdings()
+            soxl_qty = int(math.floor(float(raw_soxl_qty)))
             
             if soxl_qty == 0 and last_buy_price > 0.0:
                 await HAStateManager.save_state(price=0.0, target_sell_price=0.0)
@@ -323,7 +326,6 @@ async def main():
     except Exception as e:
         print(f"⚠️ [텔레그램 통신 붕괴 방어] 웹훅 해제 실패 (무시 후 강행): {e}", flush=True)
         
-    # NEW: 텔레그램 네트워크 단절(Errno 104) 시 파이썬 프로세스 즉사(Exit 0) 방어를 위한 불사조 무한 루프
     while True:
         try:
             await dp.start_polling(bot)
