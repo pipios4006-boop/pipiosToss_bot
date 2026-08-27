@@ -24,7 +24,8 @@
 # 21. 수동 전량 매도(Hit & Cut) 개입에 따른 0주 상태 파편화 100% 방어막 결속 (Case 46)
 # 22. 동적 목표 수량 할당 및 상태 장부 병합/원자적 덮어쓰기 로직 전면 락온 (Case 52, 54, 55, 60)
 # 23. 텔레그램 관제탑 인라인 퀵 프리셋 UI 결속 및 토스트 알림 상태 전이 락온 (Case 38, 52)
-# 24. [MODIFIED] 3영업일 스캐닝 파이프라인 확장을 통한 KST 데이마켓 패러독스 타파 (Case 01, 51)
+# 24. 3영업일 스캐닝 파이프라인 확장을 통한 KST 데이마켓 패러독스 타파 (Case 01, 51)
+# 25. [MODIFIED] 자격증명 하드코딩 영구 소각, dotenv 환경변수 격리 및 Pre-flight 무결성 검증 결속
 # =====================================================================
 
 import asyncio
@@ -44,11 +45,26 @@ from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.client.session.aiohttp import AiohttpSession
 
-# 자격증명 및 시스템 상수 락온
-TOSS_CLIENT_ID = os.getenv("TOSS_CLIENT_ID", "tsck_live_QogVVVdZPhhg3sbTo5T7hB")
-TOSS_CLIENT_SECRET = os.getenv("TOSS_CLIENT_SECRET", "tssk_live_vvWo029zWfkoNLKscu8QbEoM7enrcOeNpCg98sHTeVYD")
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "7850532415:AAGiZg_gbUDXjBA7QOnvTbSPXii5WwFQ7wQ")
-ADMIN_CHAT_ID = int(os.getenv("TELEGRAM_CHAT_ID", "796232854"))
+# MODIFIED: 하드코딩 영구 소각 및 환경변수 인메모리 파이프라인 결속
+from dotenv import load_dotenv
+
+# .env 파일에서 환경변수 로드
+load_dotenv()
+
+# 환경변수 추출
+TOSS_CLIENT_ID = os.getenv("TOSS_CLIENT_ID")
+TOSS_CLIENT_SECRET = os.getenv("TOSS_CLIENT_SECRET")
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+_telegram_chat_id_str = os.getenv("TELEGRAM_CHAT_ID")
+
+# Pre-flight 자격증명 무결성 검증 및 단락 평가 (Fail-Fast)
+if not all([TOSS_CLIENT_ID, TOSS_CLIENT_SECRET, TELEGRAM_BOT_TOKEN, _telegram_chat_id_str]):
+    print("🚨 치명적 에러: 필수 자격증명 환경변수(TOSS_CLIENT_ID, TOSS_CLIENT_SECRET, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID)가 누락되었습니다.")
+    print("💡 해결 조치: .env 파일을 생성하거나 서버 환경변수에 값을 주입하십시오.")
+    sys.exit(1)
+
+ADMIN_CHAT_ID = int(_telegram_chat_id_str)
+
 
 # 제1헌법 - 동기 I/O 비동기 격리 및 Rate Limit 중앙 통제소
 class GlobalThrottle:
@@ -222,7 +238,6 @@ class TossApiClient:
         else:
             raise ValueError("종합매매 계좌를 찾을 수 없습니다.")
 
-    # MODIFIED: 3영업일 기반 세션 전체 스캔으로 KST 데이마켓 패러독스 타파
     async def is_market_open(self) -> tuple[bool, datetime]:
         if not self.token:
             await self.authenticate()
@@ -241,7 +256,6 @@ class TossApiClient:
                     result_data = data.get("result", {})
                     
                     sessions = []
-                    # 3영업일 순회 스캔 결속
                     for day_key in ["previousBusinessDay", "today", "nextBusinessDay"]:
                         day_cal = result_data.get(day_key, {})
                         if not day_cal:
