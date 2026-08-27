@@ -50,7 +50,6 @@ async def ha_assassin_loop(client: TossApiClient, bot: Bot, chat_id: int):
         await asyncio.sleep(60)
         
         try:
-            # MODIFIED: target_sell_price 언패킹 규격 적용
             last_buy_price, target_qty, target_sell_price = await HAStateManager.get_state()
             
             now_kst = datetime.now(ZoneInfo('Asia/Seoul'))
@@ -92,19 +91,30 @@ async def ha_assassin_loop(client: TossApiClient, bot: Bot, chat_id: int):
                             client_order_id=f"HAZERO_{datetime.now(ZoneInfo('America/New_York')).strftime('%Y%m%d_%H%M%S')}"
                         )
                         
-                        profit_usd = (bid_1_price - last_buy_price) * soxl_qty if last_buy_price > 0 else 0.0
+                        # MODIFIED: 제비용(0.2%) 포함 순 실현 손익(Net PnL) 계산 로직 주입
+                        sell_amount = bid_1_price * soxl_qty
+                        buy_amount = last_buy_price * soxl_qty
+                        commission_usd = sell_amount * 0.002
+                        
+                        if last_buy_price > 0:
+                            profit_usd = (sell_amount - buy_amount) - commission_usd
+                            profit_rate = (profit_usd / buy_amount) * 100
+                        else:
+                            profit_usd = 0.0
+                            profit_rate = 0.0
+                            
                         ex_rate = await client.get_usd_to_krw_rate()
                         profit_krw = profit_usd * ex_rate
-                        profit_rate = ((bid_1_price - last_buy_price) / last_buy_price * 100) if last_buy_price > 0 else 0.0
                         
                         msg = (
                             f"⚠️ <b>[HA 암살자] Zero-Overnight 강제 청산 완료</b>\n\n"
                             f"▫️ <b>종목</b>: SOXL\n"
                             f"▫️ <b>체결 예상 단가</b>: ${bid_1_price:.2f}\n"
                             f"▫️ <b>타격 수량</b>: {soxl_qty}주\n"
-                            f"▫️ <b>총 매도 금액</b>: ${bid_1_price * soxl_qty:,.2f}\n"
-                            f"▫️ <b>수익률</b>: {profit_rate:+.2f}%\n"
-                            f"▫️ <b>실현 손익</b>: {profit_usd:+.2f} USD ({profit_krw:+,.0f} KRW)\n"
+                            f"▫️ <b>총 매도 금액</b>: ${sell_amount:,.2f}\n"
+                            f"▫️ <b>예상 제비용 (0.2%)</b>: -${commission_usd:,.2f}\n"
+                            f"▫️ <b>순 수익률</b>: {profit_rate:+.2f}%\n"
+                            f"▫️ <b>순 실현 손익</b>: {profit_usd:+.2f} USD ({profit_krw:+,.0f} KRW)\n"
                             f"▫️ <b>시각</b>: {now_est_str}"
                         )
                         await notify_tg(msg)
@@ -128,7 +138,6 @@ async def ha_assassin_loop(client: TossApiClient, bot: Bot, chat_id: int):
                     print(f"🛡️ [HA 암살자] Fail-Open 섀도우 쉴드 락온: 캔들 갱신 5분 이상 지연 (물리적 휴장 진공 상태). 유령 타점 원천 소각.")
                     continue
 
-            # NEW: c0 (진행 중인 미확정 실시간 캔들) 상태 추적 파라미터 추가
             c1 = ha_df.iloc[-3]
             c2 = ha_df.iloc[-2]
             c0 = ha_df.iloc[-1]
@@ -142,18 +151,15 @@ async def ha_assassin_loop(client: TossApiClient, bot: Bot, chat_id: int):
             
             is_up_trend = c2['EMA_10'] > c2['EMA_20']
             
-            # 매수 시그널 검증 (동일 캔들 중복 타격 방어 적용)
             buy_signal = False
             if last_action_candle_time != current_closed_time:
                 buy_signal = ((is_c2_yang and c2_shaved_bottom) or (is_c1_yang and is_c2_yang)) and is_up_trend
 
-            # MODIFIED: 직전 진성 양봉 평균값(Target Sell Price) 동적 갱신 및 락온 (Stale Reference 방어)
             if soxl_qty >= 1:
                 closed_ha = ha_df.iloc[:-1]
                 bulls = closed_ha[closed_ha['HA_Close'] >= closed_ha['HA_Open']]
                 if not bulls.empty:
                     latest_bull = bulls.iloc[-1]
-                    # 기준가 = 양봉 몸통의 중심값
                     dynamic_target = (latest_bull['HA_Open'] + latest_bull['HA_Close']) / 2.0
                     if abs(target_sell_price - dynamic_target) > 0.001:
                         target_sell_price = dynamic_target
@@ -162,7 +168,6 @@ async def ha_assassin_loop(client: TossApiClient, bot: Bot, chat_id: int):
             
             is_c0_eum = c0['HA_Close'] < c0['HA_Open']
             
-            # MODIFIED: API 낭비 방어 - 매수 시그널이 떴거나, 동적 스나이핑 장전(보유 & 진행중 음봉) 상태일 때만 현재가 스캔
             need_current_price = buy_signal or (soxl_qty >= 1 and is_c0_eum and target_sell_price > 0.0)
             
             if not need_current_price:
@@ -172,13 +177,11 @@ async def ha_assassin_loop(client: TossApiClient, bot: Bot, chat_id: int):
             if current_price <= 0.0:
                 continue
             
-            # 유령 잔고 자가 치유 앵커링
             if soxl_qty >= 1 and last_buy_price <= 0.0:
                 last_buy_price = current_price
                 await HAStateManager.save_state(price=last_buy_price)
                 print(f"♻️ [HA 암살자] 유령 잔고 팩트 교정: 장부 데이터 소실 감지. 현재가(${last_buy_price:.2f}) 앵커링 완료.")
             
-            # NEW: 동적 스나이핑 룰 격발 (진행중 캔들이 음봉이고, 실시간 현재가가 락온된 양봉 평균가 이하로 하방 돌파 시)
             dynamic_sell_signal = False
             if soxl_qty >= 1 and is_c0_eum and target_sell_price > 0.0:
                 if current_price <= target_sell_price:
@@ -262,10 +265,20 @@ async def ha_assassin_loop(client: TossApiClient, bot: Bot, chat_id: int):
                     client_order_id=client_order_id
                 )
                 
-                profit_usd = (bid_1_price - last_buy_price) * sell_qty
+                # MODIFIED: 제비용(0.2%) 포함 순 실현 손익(Net PnL) 계산 로직 주입
+                sell_amount = bid_1_price * sell_qty
+                buy_amount = last_buy_price * sell_qty
+                commission_usd = sell_amount * 0.002
+                
+                if last_buy_price > 0:
+                    profit_usd = (sell_amount - buy_amount) - commission_usd
+                    profit_rate = (profit_usd / buy_amount) * 100
+                else:
+                    profit_usd = 0.0
+                    profit_rate = 0.0
+                    
                 ex_rate = await client.get_usd_to_krw_rate()
                 profit_krw = profit_usd * ex_rate
-                profit_rate = ((bid_1_price - last_buy_price) / last_buy_price * 100) if last_buy_price > 0 else 0.0
                 
                 msg = (
                     f"🔴 <b>[HA 암살자] 매도 타격 완료 (동적 스나이핑)</b>\n\n"
@@ -273,14 +286,14 @@ async def ha_assassin_loop(client: TossApiClient, bot: Bot, chat_id: int):
                     f"▫️ <b>체결 예상 단가</b>: ${bid_1_price:.2f}\n"
                     f"▫️ <b>스나이핑 락온가</b>: ${target_sell_price:.2f}\n"
                     f"▫️ <b>타격 수량</b>: {sell_qty}주\n"
-                    f"▫️ <b>총 매도 금액</b>: ${bid_1_price * sell_qty:,.2f}\n"
-                    f"▫️ <b>수익률</b>: {profit_rate:+.2f}%\n"
-                    f"▫️ <b>실현 손익</b>: {profit_usd:+.2f} USD ({profit_krw:+,.0f} KRW)\n"
+                    f"▫️ <b>총 매도 금액</b>: ${sell_amount:,.2f}\n"
+                    f"▫️ <b>예상 제비용 (0.2%)</b>: -${commission_usd:,.2f}\n"
+                    f"▫️ <b>순 수익률</b>: {profit_rate:+.2f}%\n"
+                    f"▫️ <b>순 실현 손익</b>: {profit_usd:+.2f} USD ({profit_krw:+,.0f} KRW)\n"
                     f"▫️ <b>시각</b>: {now_est_str}"
                 )
                 await notify_tg(msg)
                 
-                # 매도 직후 장부 및 타겟 스나이핑 락온가 전면 초기화
                 await HAStateManager.save_state(price=0.0, target_sell_price=0.0)
                 last_action_candle_time = current_closed_time
                 print(f"🎯 [HA 암살자] 동적 스나이핑 격발: 진행중 음봉 포착 & 지정 락온가(${target_sell_price:.2f}) 하방 돌파. 합성 시장가(매수 1호가: ${bid_1_price:.2f}) {sell_qty}주 매도 완료.")
