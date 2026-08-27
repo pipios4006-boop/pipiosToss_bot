@@ -32,11 +32,11 @@ if not all([TOSS_CLIENT_ID, TOSS_CLIENT_SECRET, TELEGRAM_BOT_TOKEN, _telegram_ch
 
 ADMIN_CHAT_ID = int(_telegram_chat_id_str)
 
-# NEW: HA 암살자 무한 폴링 루프 (본진 스케줄러)
 async def ha_assassin_loop(client: TossApiClient, bot: Bot, chat_id: int):
     last_action_candle_time = None
     
     async def notify_tg(text: str):
+        # MODIFIED: [Case 64 완벽 락온] 텔레그램 네트워크 단절 시 예외 격리망 전개
         try:
             await bot.send_message(chat_id=chat_id, text=text, parse_mode="HTML")
         except Exception as e:
@@ -263,7 +263,6 @@ async def ha_assassin_loop(client: TossApiClient, bot: Bot, chat_id: int):
                 safe_error = html.escape(error_msg)
                 await notify_tg(f"🚨 <b>[HA 암살자] API 런타임 붕괴 요격</b>\n<pre>{safe_error}</pre>")
 
-# 시스템 심장부 및 비동기 데몬 격발
 async def main():
     session = AiohttpSession(timeout=60.0)
     bot = Bot(token=TELEGRAM_BOT_TOKEN, session=session)
@@ -271,7 +270,6 @@ async def main():
     
     api_client = TossApiClient(client_id=TOSS_CLIENT_ID, client_secret=TOSS_CLIENT_SECRET)
     
-    # MODIFIED: 분리된 텔레그램 라우터에 의존성 주입 후 연결
     inject_dependencies(api_client, ADMIN_CHAT_ID)
     dp.include_router(router)
     
@@ -280,8 +278,16 @@ async def main():
     
     print("시스템 코어 로드 및 모듈 결합 완료. 텔레그램 롱 폴링(Long-Polling) 개시...")
     
-    await bot.delete_webhook(drop_pending_updates=True)
-    await dp.start_polling(bot)
+    # MODIFIED: [Case 64 완벽 락온] 텔레그램 초기화 및 폴링 단계의 예외 격리
+    try:
+        await bot.delete_webhook(drop_pending_updates=True)
+    except Exception as e:
+        print(f"⚠️ [텔레그램 통신 붕괴 방어] 웹훅 해제 실패 (무시 후 강행): {e}")
+        
+    try:
+        await dp.start_polling(bot)
+    except Exception as e:
+        print(f"🚨 [텔레그램 통신 붕괴 방어] 롱 폴링 루프 즉사 감지: {e}")
 
 if __name__ == "__main__":
     try:

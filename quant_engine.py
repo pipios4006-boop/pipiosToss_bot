@@ -10,7 +10,6 @@ import pandas as pd
 from zoneinfo import ZoneInfo
 from toss_api import GlobalThrottle
 
-# NEW: 상태 장부 영구 보존 및 원자적 쓰기 엔진 (독립 모듈화)
 class HAStateManager:
     FILE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ha_state.json")
 
@@ -56,7 +55,6 @@ class HAStateManager:
                 os.replace(tmp_path, cls.FILE_PATH)
             await asyncio.to_thread(_write)
 
-# NEW: 3분봉 하이킨 아시 100% 벡터화 엔진 (독립 모듈화)
 class HeikinAshiEngine:
     @staticmethod
     def calculate_3m_ha(candles_json: list) -> pd.DataFrame:
@@ -64,7 +62,9 @@ class HeikinAshiEngine:
             return pd.DataFrame()
             
         df = pd.DataFrame(candles_json)
-        df['timestamp'] = pd.to_datetime(df['timestamp'])
+        
+        # MODIFIED: 시계열 파서 벡터 연산 병목 및 UserWarning 소각 (format='ISO8601' 강제 주입)
+        df['timestamp'] = pd.to_datetime(df['timestamp'], format='ISO8601')
         
         df['timestamp'] = df['timestamp'].dt.tz_convert(ZoneInfo('America/New_York'))
         df.set_index('timestamp', inplace=True)

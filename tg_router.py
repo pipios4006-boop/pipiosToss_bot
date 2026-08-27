@@ -1,6 +1,6 @@
 # =====================================================================
 # 파일명: tg_router.py
-# 목적: 텔레그램 메인 메뉴, 콜백, FSM 라우팅 전담 및 네트워크 격리
+# 목적: 텔레그램 메인 메뉴, 콜백, FSM 라우팅 전담 및 네트워크 예외(Errno 104) 철저 격리
 # =====================================================================
 
 import asyncio
@@ -19,7 +19,6 @@ from quant_engine import HAStateManager, HeikinAshiEngine
 
 router = Router()
 
-# NEW: 의존성 주입 변수 락온
 api_client = None
 ADMIN_CHAT_ID = None
 
@@ -51,6 +50,7 @@ async def cmd_start(message: types.Message, state: FSMContext):
         "원하시는 명령을 선택하십시오."
     )
     
+    # MODIFIED: [Case 64 완벽 락온] 모든 UI 렌더링을 try-except 로 감싸 물리적 단절 셧다운 방어
     try:
         await message.answer(welcome_text, reply_markup=keyboard, parse_mode="HTML")
     except Exception as e:
@@ -135,7 +135,8 @@ async def process_manual_qty_input(message: types.Message, state: FSMContext):
     if not qty_str.isdigit():
         try:
             await message.answer("🚨 <b>수량은 양의 정수만 입력 가능합니다.</b> 다시 숫자만 입력해 주십시오.", parse_mode="HTML")
-        except Exception: pass
+        except Exception as e:
+            print(f"⚠️ [텔레그램 통신 붕괴 방어] 예외 렌더링 실패: {e}")
         return
         
     qty = int(qty_str)
@@ -143,7 +144,8 @@ async def process_manual_qty_input(message: types.Message, state: FSMContext):
     if not (1 <= qty <= 1000):
         try:
             await message.answer("🚨 <b>수량은 1주에서 1,000주 사이로 캡핑되어야 합니다.</b> 다시 입력해 주십시오.", parse_mode="HTML")
-        except Exception: pass
+        except Exception as e:
+            print(f"⚠️ [텔레그램 통신 붕괴 방어] 예외 렌더링 실패: {e}")
         return
         
     try:
@@ -161,12 +163,14 @@ async def process_manual_qty_input(message: types.Message, state: FSMContext):
         )
         try:
             await message.answer(success_text, reply_markup=keyboard, parse_mode="HTML")
-        except Exception: pass
+        except Exception as e:
+            print(f"⚠️ [텔레그램 통신 붕괴 방어] 성공 렌더링 실패: {e}")
     except Exception as e:
         safe_error = html.escape(str(e))
         try:
             await message.answer(f"🚨 <b>상태 장부 기록 붕괴</b>: <pre>{safe_error}</pre>", parse_mode="HTML")
-        except Exception: pass
+        except Exception as ex:
+            print(f"⚠️ [텔레그램 통신 붕괴 방어] 에러 렌더링 실패: {ex}")
 
 @router.message(Command("update"))
 async def cmd_update(message: types.Message):
@@ -199,12 +203,14 @@ async def cmd_update(message: types.Message):
             )
             try:
                 await message.answer(result_msg, parse_mode="HTML")
-            except Exception: pass
+            except Exception as e:
+                print(f"⚠️ [텔레그램 통신 붕괴 방어] 업데이트 결과 알림 실패: {e}")
             
             if "Already up to date." not in out_text:
                 try:
                     await message.answer("⚠️ <b>검증된 새 코어 코드 감지. 데몬을 즉시 재가동(Restart)합니다.</b>", parse_mode="HTML")
-                except Exception: pass
+                except Exception as e:
+                    print(f"⚠️ [텔레그램 통신 붕괴 방어] 재가동 알림 실패: {e}")
                 await asyncio.sleep(1)
                 os._exit(0)
         else:
@@ -216,13 +222,15 @@ async def cmd_update(message: types.Message):
             )
             try:
                 await message.answer(result_msg, parse_mode="HTML")
-            except Exception: pass
+            except Exception as e:
+                print(f"⚠️ [텔레그램 통신 붕괴 방어] 롤백 알림 실패: {e}")
             
     except Exception as e:
         safe_error = html.escape(str(e))
         try:
             await message.answer(f"🚨 <b>관제탑 업데이트 통신 붕괴 감지</b>:\n<pre>{safe_error}</pre>", parse_mode="HTML")
-        except Exception: pass
+        except Exception as ex:
+            print(f"⚠️ [텔레그램 통신 붕괴 방어] 붕괴 알림 실패: {ex}")
 
 @router.callback_query(F.data == "scan_asset")
 async def process_scan_asset(callback_query: types.CallbackQuery, state: FSMContext):
@@ -231,6 +239,7 @@ async def process_scan_asset(callback_query: types.CallbackQuery, state: FSMCont
 
     await state.clear()
     
+    # MODIFIED: 기존 Errno 104 타격 지점 완벽 방어 처리
     try:
         await callback_query.answer("⏳ 잔고 원장 동기화 중...", show_alert=False)
     except Exception as e:
