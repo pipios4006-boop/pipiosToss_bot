@@ -14,43 +14,58 @@ class HAStateManager:
     FILE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ha_state.json")
 
     @classmethod
-    async def get_state(cls) -> tuple[float, int]:
+    async def get_state(cls) -> tuple[float, int, float, bool]:
         async with GlobalThrottle.get_file_lock(cls.FILE_PATH):
             def _read():
+                # MODIFIED: Rule 4 파라미터 (reference_buy_price, rule4_shield_active) 추가 반환
                 if not os.path.exists(cls.FILE_PATH):
-                    return 0.0, 10
+                    return 0.0, 10, 0.0, True
                 try:
                     with open(cls.FILE_PATH, "r", encoding="utf-8") as f:
                         data = json.load(f)
                         last_price = float(data.get("last_buy_price", 0.0))
                         target_qty = int(data.get("target_qty", 10))
-                        return last_price, target_qty
+                        ref_price = float(data.get("reference_buy_price", 0.0))
+                        shield = bool(data.get("rule4_shield_active", True))
+                        return last_price, target_qty, ref_price, shield
                 except Exception:
-                    return 0.0, 10
+                    return 0.0, 10, 0.0, True
             return await asyncio.to_thread(_read)
 
     @classmethod
-    async def save_state(cls, price: float = None, target_qty: int = None):
+    async def save_state(cls, price: float = None, target_qty: int = None, reference_buy_price: float = None, rule4_shield_active: bool = None):
         async with GlobalThrottle.get_file_lock(cls.FILE_PATH):
             def _write():
                 curr_price = 0.0
                 curr_qty = 10
+                curr_ref = 0.0
+                curr_shield = True
                 
+                # 기존 데이터 병합 (None인 파라미터는 기존 상태 유지)
                 if os.path.exists(cls.FILE_PATH):
                     try:
                         with open(cls.FILE_PATH, "r", encoding="utf-8") as f:
                             data = json.load(f)
                             curr_price = float(data.get("last_buy_price", 0.0))
                             curr_qty = int(data.get("target_qty", 10))
+                            curr_ref = float(data.get("reference_buy_price", 0.0))
+                            curr_shield = bool(data.get("rule4_shield_active", True))
                     except Exception:
                         pass
                 
                 new_price = curr_price if price is None else price
                 new_qty = curr_qty if target_qty is None else target_qty
+                new_ref = curr_ref if reference_buy_price is None else reference_buy_price
+                new_shield = curr_shield if rule4_shield_active is None else rule4_shield_active
                 
                 tmp_path = cls.FILE_PATH + ".tmp"
                 with open(tmp_path, "w", encoding="utf-8") as f:
-                    json.dump({"last_buy_price": new_price, "target_qty": new_qty}, f)
+                    json.dump({
+                        "last_buy_price": new_price, 
+                        "target_qty": new_qty,
+                        "reference_buy_price": new_ref,
+                        "rule4_shield_active": new_shield
+                    }, f)
                 # 원자적 덮어쓰기
                 os.replace(tmp_path, cls.FILE_PATH)
             await asyncio.to_thread(_write)
@@ -63,12 +78,9 @@ class HeikinAshiEngine:
             
         df = pd.DataFrame(candles_json)
         
-        # MODIFIED: 시계열 파서 벡터 연산 병목 및 UserWarning 소각 (format='ISO8601' 강제 주입)
         df['timestamp'] = pd.to_datetime(df['timestamp'], format='ISO8601')
-        
         df['timestamp'] = df['timestamp'].dt.tz_convert(ZoneInfo('America/New_York'))
         df.set_index('timestamp', inplace=True)
-        
         df.sort_index(ascending=True, inplace=True)
         
         for col in ['openPrice', 'highPrice', 'lowPrice', 'closePrice', 'volume']:

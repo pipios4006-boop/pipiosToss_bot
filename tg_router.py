@@ -50,7 +50,6 @@ async def cmd_start(message: types.Message, state: FSMContext):
         "원하시는 명령을 선택하십시오."
     )
     
-    # MODIFIED: [Case 64 완벽 락온] 모든 UI 렌더링을 try-except 로 감싸 물리적 단절 셧다운 방어
     try:
         await message.answer(welcome_text, reply_markup=keyboard, parse_mode="HTML")
     except Exception as e:
@@ -239,7 +238,6 @@ async def process_scan_asset(callback_query: types.CallbackQuery, state: FSMCont
 
     await state.clear()
     
-    # MODIFIED: 기존 Errno 104 타격 지점 완벽 방어 처리
     try:
         await callback_query.answer("⏳ 잔고 원장 동기화 중...", show_alert=False)
     except Exception as e:
@@ -256,7 +254,9 @@ async def process_scan_asset(callback_query: types.CallbackQuery, state: FSMCont
             holdings_task, rate_task, usd_bp_task, current_price_task, target_qty_task
         )
         
-        _, target_qty = state_tuple
+        # MODIFIED: Rule 4 파라미터 언패킹 구조 수정
+        _, target_qty, _, rule4_shield_active = state_tuple
+        shield_status_str = "🟢 장전됨" if rule4_shield_active else "🔴 소모됨 (V반등 대기)"
         
         est_now = datetime.now(ZoneInfo('America/New_York')).strftime("%Y-%m-%d %H:%M:%S")
         safe_est = html.escape(est_now)
@@ -269,7 +269,7 @@ async def process_scan_asset(callback_query: types.CallbackQuery, state: FSMCont
             f"🔹 <b>기준 시각</b>: {safe_est} EST\n"
             f"🔹 <b>매수 가능 달러</b>: ${usd_bp:,.2f}\n"
             f"🔹 <b>SOXL 보유 수량</b>: {holdings['qty']:,.2f}주\n"
-            f"🔹 <b>SOXL 타격 목표 수량</b>: {target_qty}주 락온\n"
+            f"🔹 <b>SOXL 타격 목표 수량</b>: {target_qty}주 (Rule4 방어막: {shield_status_str})\n"
             f"🔹 <b>총 평단가</b>: ${holdings['avg_price']:,.2f}\n"
             f"🔹 <b>실시간 종가</b>: ${current_price:,.2f}\n"
             f"🔹 <b>수익률</b>: {profit_rate_pct:+,.2f}% (${holdings['profit_usd']:+,.2f} / ₩{krw_profit:+,.0f})\n"
