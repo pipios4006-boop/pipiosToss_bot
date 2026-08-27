@@ -25,7 +25,10 @@
 # 22. 동적 목표 수량 할당 및 상태 장부 병합/원자적 덮어쓰기 로직 전면 락온 (Case 52, 54, 55, 60)
 # 23. 텔레그램 관제탑 인라인 퀵 프리셋 UI 결속 및 토스트 알림 상태 전이 락온 (Case 38, 52)
 # 24. 3영업일 스캐닝 파이프라인 확장을 통한 KST 데이마켓 패러독스 타파 (Case 01, 51)
-# 25. [MODIFIED] 자격증명 하드코딩 영구 소각, dotenv 환경변수 격리 및 Pre-flight 무결성 검증 결속
+# 25. 자격증명 하드코딩 영구 소각, dotenv 환경변수 격리 및 Pre-flight 무결성 검증 결속
+# 26. 시스템 데몬(systemd) 구동 시 상대경로 누수(Path Resolution Paradox) 방어를 위한 절대경로 락온
+# 27. 매수/매도/강제청산 타격 시 텔레그램 실시간 영수증(단가, 수량, 총액, 손익금 USD/KRW) 비동기 타전 결속
+# 28. [MODIFIED] 횡보장 락다운 휩쏘(Whipsaw) 방어막 전격 결속: 가짜 양봉(모멘텀 0.3% 미달) 및 얕은 음봉(이격도 0.6% 미달) 컷오프
 # =====================================================================
 
 import asyncio
@@ -45,11 +48,10 @@ from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.client.session.aiohttp import AiohttpSession
 
-# MODIFIED: 하드코딩 영구 소각 및 환경변수 인메모리 파이프라인 결속
 from dotenv import load_dotenv
 
-# .env 파일에서 환경변수 로드
-load_dotenv()
+env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env')
+load_dotenv(dotenv_path=env_path)
 
 # 환경변수 추출
 TOSS_CLIENT_ID = os.getenv("TOSS_CLIENT_ID")
@@ -60,7 +62,7 @@ _telegram_chat_id_str = os.getenv("TELEGRAM_CHAT_ID")
 # Pre-flight 자격증명 무결성 검증 및 단락 평가 (Fail-Fast)
 if not all([TOSS_CLIENT_ID, TOSS_CLIENT_SECRET, TELEGRAM_BOT_TOKEN, _telegram_chat_id_str]):
     print("🚨 치명적 에러: 필수 자격증명 환경변수(TOSS_CLIENT_ID, TOSS_CLIENT_SECRET, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID)가 누락되었습니다.")
-    print("💡 해결 조치: .env 파일을 생성하거나 서버 환경변수에 값을 주입하십시오.")
+    print(f"💡 해결 조치: {env_path} 파일을 생성하거나 서버 환경변수에 값을 주입하십시오.")
     sys.exit(1)
 
 ADMIN_CHAT_ID = int(_telegram_chat_id_str)
@@ -88,7 +90,8 @@ class GlobalThrottle:
 
 # 상태 장부 영구 보존 및 원자적 쓰기 엔진
 class HAStateManager:
-    FILE_PATH = "ha_state.json"
+    # 절대경로 락온을 통해 상태 장부도 데몬 실행 위치와 무관하게 동일 위치에 보존
+    FILE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ha_state.json")
 
     @classmethod
     async def get_state(cls) -> tuple[float, int]:
@@ -713,9 +716,15 @@ async def process_back_to_main(callback_query: types.CallbackQuery):
 
 
 # HA 암살자 무한 폴링 루프 (데이장 ~ 애프터장 상시 가동)
-async def ha_assassin_loop(client: TossApiClient):
+async def ha_assassin_loop(client: TossApiClient, bot: Bot, chat_id: int):
     last_action_candle_time = None
     
+    async def notify_tg(text: str):
+        try:
+            await bot.send_message(chat_id=chat_id, text=text, parse_mode="HTML")
+        except Exception as e:
+            print(f"🚨 [텔레그램 전송 붕괴 방어] {e}")
+
     try:
         await client.fetch_account_seq()
     except Exception as e:
@@ -746,15 +755,33 @@ async def ha_assassin_loop(client: TossApiClient):
                     bids = orderbook.get("bids", [])
                     if bids:
                         bid_1_price = float(bids[0]["price"])
-                        now_est_str = datetime.now(ZoneInfo('America/New_York')).strftime("%Y%m%d%H%M%S")
+                        now_est_str = datetime.now(ZoneInfo('America/New_York')).strftime("%Y-%m-%d %H:%M:%S EST")
                         await client.create_order(
                             symbol="SOXL", 
                             side="SELL", 
                             order_type="LIMIT", 
                             quantity=soxl_qty, 
                             price=bid_1_price, 
-                            client_order_id=f"HAZERO_{now_est_str}"
+                            client_order_id=f"HAZERO_{now_est_str.replace(':', '').replace('-', '').replace(' EST', '')}"
                         )
+                        
+                        profit_usd = (bid_1_price - last_buy_price) * soxl_qty if last_buy_price > 0 else 0.0
+                        ex_rate = await client.get_usd_to_krw_rate()
+                        profit_krw = profit_usd * ex_rate
+                        profit_rate = ((bid_1_price - last_buy_price) / last_buy_price * 100) if last_buy_price > 0 else 0.0
+                        
+                        msg = (
+                            f"⚠️ <b>[HA 암살자] Zero-Overnight 강제 청산 완료</b>\n\n"
+                            f"▫️ <b>종목</b>: SOXL\n"
+                            f"▫️ <b>체결 예상 단가</b>: ${bid_1_price:.2f}\n"
+                            f"▫️ <b>타격 수량</b>: {soxl_qty}주\n"
+                            f"▫️ <b>총 매도 금액</b>: ${bid_1_price * soxl_qty:,.2f}\n"
+                            f"▫️ <b>수익률</b>: {profit_rate:+.2f}%\n"
+                            f"▫️ <b>실현 손익</b>: {profit_usd:+.2f} USD ({profit_krw:+,.0f} KRW)\n"
+                            f"▫️ <b>시각</b>: {now_est_str}"
+                        )
+                        await notify_tg(msg)
+                        
                         await HAStateManager.save_state(price=0.0)
                         print(f"⚠️ [HA 암살자] 세션 마감 2분 전 컷오프. Zero-Overnight 방어막 가동 -> {soxl_qty}주 지정가(${bid_1_price:.2f}) 전량 매도 및 장부 초기화 완료.")
                     else:
@@ -797,9 +824,16 @@ async def ha_assassin_loop(client: TossApiClient):
                 await HAStateManager.save_state(price=last_buy_price)
                 print(f"♻️ [HA 암살자] 유령 잔고 팩트 교정: 장부 데이터 소실 감지. 현재가(${last_buy_price:.2f}) 앵커링 완료.")
                 
-            now_est_str = datetime.now(ZoneInfo('America/New_York')).strftime("%Y%m%d%H%M%S")
+            now_est_str = datetime.now(ZoneInfo('America/New_York')).strftime("%Y-%m-%d %H:%M:%S EST")
+            client_order_id_suffix = now_est_str.replace(':', '').replace('-', '').replace(' EST', '')
             
             if is_c1_yang and is_c2_yang and soxl_qty == 0:
+                # MODIFIED: 제2 방어막 - 누적 모멘텀 0.3% 검증 (가짜 양봉 소각)
+                buy_momentum = (c2['HA_Close'] - c1['HA_Open']) / c1['HA_Open'] if c1['HA_Open'] > 0 else 0.0
+                if buy_momentum < 0.003:
+                    print(f"🛡️ [HA 암살자] 가짜 양봉 휩쏘 방어 컷오프: 2연속 양봉이나 누적 모멘텀({buy_momentum*100:.2f}%)이 0.3%에 미달합니다. 타점 소각.")
+                    continue
+                
                 orderbook = await client.get_orderbook("SOXL")
                 asks = orderbook.get("asks", [])
                 
@@ -815,7 +849,7 @@ async def ha_assassin_loop(client: TossApiClient):
                     print(f"⚠️ [HA 암살자] 자본 잠김 컷오프: 매수 가능 금액(${usd_bp:.2f})이 지정가 증거금 버퍼(${required_bp:.2f})보다 부족합니다. 타점 소각.")
                     continue
                     
-                client_order_id = f"HABUY_{now_est_str}"
+                client_order_id = f"HABUY_{client_order_id_suffix}"
                 
                 await client.create_order(
                     symbol="SOXL", 
@@ -826,14 +860,26 @@ async def ha_assassin_loop(client: TossApiClient):
                     client_order_id=client_order_id
                 )
                 
+                total_amount = ask_1_price * target_qty
+                msg = (
+                    f"🟢 <b>[HA 암살자] 매수 타격 완료</b>\n\n"
+                    f"▫️ <b>종목</b>: SOXL\n"
+                    f"▫️ <b>체결 예상 단가</b>: ${ask_1_price:.2f}\n"
+                    f"▫️ <b>타격 수량</b>: {target_qty}주\n"
+                    f"▫️ <b>총 결제 금액</b>: ${total_amount:,.2f}\n"
+                    f"▫️ <b>시각</b>: {now_est_str}"
+                )
+                await notify_tg(msg)
+                
                 await HAStateManager.save_state(price=ask_1_price)
                 last_action_candle_time = current_closed_time
-                print(f"🎯 [HA 암살자] 2연속 양봉 포착 및 자본 검증 통과. 합성 시장가(매도 1호가) {target_qty}주 매수 완료 (기록가: ${ask_1_price:.2f}).")
+                print(f"🎯 [HA 암살자] 2연속 양봉 포착(모멘텀 {buy_momentum*100:.2f}%) 및 자본 검증 통과. 합성 시장가(매도 1호가) {target_qty}주 매수 완료 (기록가: ${ask_1_price:.2f}).")
                 
             elif is_c1_eum and is_c2_eum and soxl_qty >= 1:
-                deviation = abs(current_price - last_buy_price) / last_buy_price
+                deviation = abs(current_price - last_buy_price) / last_buy_price if last_buy_price > 0 else 0.0
                 
-                if deviation >= 0.002:
+                # MODIFIED: 제1 방어막 - 횡보장 휩쏘 방어용 절대 이격도 임계치 0.2% -> 0.6% 대폭 상향
+                if deviation >= 0.006:
                     orderbook = await client.get_orderbook("SOXL")
                     bids = orderbook.get("bids", [])
                     
@@ -842,7 +888,7 @@ async def ha_assassin_loop(client: TossApiClient):
                         continue
                         
                     bid_1_price = float(bids[0]["price"])
-                    client_order_id = f"HASELL_{now_est_str}"
+                    client_order_id = f"HASELL_{client_order_id_suffix}"
                     
                     sell_qty = target_qty if soxl_qty >= target_qty else soxl_qty
                     
@@ -855,11 +901,28 @@ async def ha_assassin_loop(client: TossApiClient):
                         client_order_id=client_order_id
                     )
                     
+                    profit_usd = (bid_1_price - last_buy_price) * sell_qty
+                    ex_rate = await client.get_usd_to_krw_rate()
+                    profit_krw = profit_usd * ex_rate
+                    profit_rate = ((bid_1_price - last_buy_price) / last_buy_price * 100) if last_buy_price > 0 else 0.0
+                    
+                    msg = (
+                        f"🔴 <b>[HA 암살자] 매도 타격 완료</b>\n\n"
+                        f"▫️ <b>종목</b>: SOXL\n"
+                        f"▫️ <b>체결 예상 단가</b>: ${bid_1_price:.2f}\n"
+                        f"▫️ <b>타격 수량</b>: {sell_qty}주\n"
+                        f"▫️ <b>총 매도 금액</b>: ${bid_1_price * sell_qty:,.2f}\n"
+                        f"▫️ <b>수익률</b>: {profit_rate:+.2f}%\n"
+                        f"▫️ <b>실현 손익</b>: {profit_usd:+.2f} USD ({profit_krw:+,.0f} KRW)\n"
+                        f"▫️ <b>시각</b>: {now_est_str}"
+                    )
+                    await notify_tg(msg)
+                    
                     await HAStateManager.save_state(price=0.0)
                     last_action_candle_time = current_closed_time
-                    print(f"🎯 [HA 암살자] 2연속 음봉 포착 & 절대 이격도({deviation*100:.2f}%) 0.2% 돌파 팩트 확인. 합성 시장가(매수 1호가: ${bid_1_price:.2f}) {sell_qty}주 매도 완료.")
+                    print(f"🎯 [HA 암살자] 2연속 음봉 포착 & 절대 이격도({deviation*100:.2f}%) 0.6% 돌파 팩트 확인. 합성 시장가(매수 1호가: ${bid_1_price:.2f}) {sell_qty}주 매도 완료.")
                 else:
-                    print(f"🛡️ [HA 암살자] 횡보장 휩쏘 방어 컷오프: 2연속 음봉이나 절대 이격도({deviation*100:.2f}%)가 0.2%에 미달합니다. 타점 소각 후 관망 유지.")
+                    print(f"🛡️ [HA 암살자] 횡보장 휩쏘 방어 컷오프: 2연속 음봉이나 절대 이격도({deviation*100:.2f}%)가 0.6%에 미달합니다. 타점 소각 후 관망 유지.")
                 
         except Exception as e:
             print(f"🚨 [HA 암살자] 감시망 루프 내부 붕괴: {e}")
@@ -873,7 +936,7 @@ async def main():
     dp.include_router(router)
     
     asyncio.create_task(api_client.token_renewal_loop())
-    asyncio.create_task(ha_assassin_loop(api_client))
+    asyncio.create_task(ha_assassin_loop(api_client, bot, ADMIN_CHAT_ID))
     
     print("시스템 코어 로드 완료. 텔레그램 롱 폴링(Long-Polling) 개시...")
     
