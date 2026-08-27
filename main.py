@@ -143,7 +143,8 @@ async def ha_assassin_loop(client: TossApiClient, bot: Bot, chat_id: int):
             c2_body_size = abs(c2['HA_Close'] - c2['HA_Open']) / c2['HA_Open'] if c2['HA_Open'] > 0 else 0.0
             c2_shaved_bottom = ((c2['HA_Open'] - c2['HA_Low']) / c2['HA_Open'] < 0.0005) if c2['HA_Open'] > 0 else False
             
-            buy_signal = (is_c2_yang and c2_shaved_bottom and c2_body_size >= 0.003) or (is_c1_yang and is_c2_yang and c2_shaved_bottom)
+            # MODIFIED: Track 1 아래꼬리 진공 시 몸통 크기 제한 소각, Track 2 아래꼬리 진공 검증 전면 소각
+            buy_signal = (is_c2_yang and c2_shaved_bottom) or (is_c1_yang and is_c2_yang)
             sell_signal = (is_c2_eum and c2_body_size >= 0.003) or (is_c1_eum and is_c2_eum)
 
             if not (buy_signal or sell_signal):
