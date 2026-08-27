@@ -34,8 +34,9 @@
 # 31. 멱등키 정규식 위반(공백 포함) 수정 및 HA 벡터 엔진 시계열 역전 현상 원천 차단
 # 32. 하락장 휩쏘 완벽 방어를 위한 '아래꼬리 진공(Shaved Bottom)' 로직 주입 및 매도 이격도 0.2% 하향 락온
 # 33. 목표 수량 UI 전면 개편 (1주/10주/수동) 및 FSM(유한상태기계) 기반 채팅창 숫자 직접 입력 파이프라인 락온
-# 34. [NEW/MODIFIED] 10-Minute Gap 유령 타점 요격을 위한 달력 캐시 Dual Fallback 및 Fail-Open 섀도우 쉴드 결속
-# 35. [NEW] Zero-Overnight 100% 관철을 위한 세션 마감 직전 OPEN 미체결 주문 선제 강제 취소망 주입
+# 34. 10-Minute Gap 유령 타점 요격을 위한 달력 캐시 Dual Fallback 및 Fail-Open 섀도우 쉴드 결속
+# 35. Zero-Overnight 100% 관철을 위한 세션 마감 직전 OPEN 미체결 주문 선제 강제 취소망 주입
+# 36. [NEW] 텔레그램 UI(답변/렌더링) 네트워크 단절(Errno 104)에 따른 메인 루프 즉사 방어용 전역 격리망 결속
 # =====================================================================
 
 import asyncio
@@ -282,7 +283,6 @@ class TossApiClient:
                     self._calendar_cache = {"date": est_today_str, "sessions": sessions}
                     print(f"📅 토스증권 US 시장 3영업일 달력 병합 완료: {est_today_str} (총 {len(sessions)}개 세션 확보)")
                 except Exception as e:
-                    # MODIFIED: 이중 폴백(Dual Fallback) 및 휴장 진공 타점(Ghost Trading) 원천 차단
                     cached_sessions = self._calendar_cache.get("sessions", [])
                     if cached_sessions:
                         print(f"⚠️ [달력 API] 통신 지연. 인메모리 캐시 기반 Dual Fallback 가동: {e}")
@@ -422,7 +422,6 @@ class TossApiClient:
         data = await self._request("POST", "/api/v1/orders", "ORDER", headers=self._get_headers(requires_account=True), json=payload)
         return data.get("result", {})
 
-    # NEW: 주문 취소 API (Zero-Overnight 선제 요격용)
     async def cancel_order(self, order_id: str) -> dict:
         if not self.account_seq:
             await self.fetch_account_seq()
@@ -498,7 +497,12 @@ async def cmd_start(message: types.Message, state: FSMContext):
         "▫️ 상태: Online 및 API 대기 중\n\n"
         "원하시는 명령을 선택하십시오."
     )
-    await message.answer(welcome_text, reply_markup=keyboard, parse_mode="HTML")
+    
+    # MODIFIED: 텔레그램 네트워크 붕괴 방어망 주입
+    try:
+        await message.answer(welcome_text, reply_markup=keyboard, parse_mode="HTML")
+    except Exception as e:
+        print(f"⚠️ [텔레그램 통신 붕괴 방어] 메인 메뉴 렌더링 실패: {e}")
 
 @router.callback_query(F.data == "menu_set_qty")
 async def process_menu_set_qty(callback_query: types.CallbackQuery, state: FSMContext):
@@ -522,7 +526,11 @@ async def process_menu_set_qty(callback_query: types.CallbackQuery, state: FSMCo
         "▫️ <b>[수동]</b> 버튼을 누르시면 채팅창에서 숫자를 직접 입력할 수 있습니다."
     )
     
-    await callback_query.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
+    # MODIFIED: 텔레그램 네트워크 붕괴 방어망 주입
+    try:
+        await callback_query.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
+    except Exception as e:
+        print(f"⚠️ [텔레그램 통신 붕괴 방어] 수량 설정 메뉴 렌더링 실패: {e}")
 
 @router.callback_query(F.data.startswith("set_qty_"))
 async def process_set_qty_action(callback_query: types.CallbackQuery, state: FSMContext):
@@ -543,18 +551,31 @@ async def process_set_qty_action(callback_query: types.CallbackQuery, state: FSM
             "▫️ 채팅창에 원하시는 타격 수량(숫자)만 입력하여 전송해 주십시오.\n"
             "▫️ <i>예시: 15</i>"
         )
-        await callback_query.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
+        # MODIFIED: 텔레그램 네트워크 붕괴 방어망 주입
+        try:
+            await callback_query.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
+        except Exception as e:
+            print(f"⚠️ [텔레그램 통신 붕괴 방어] 수동 입력 UI 렌더링 실패: {e}")
         return
     
     try:
         qty = int(action)
         await HAStateManager.save_state(target_qty=qty)
-        await callback_query.answer(f"✅ {qty}주 타격 락온 완료. 다음 스캔부터 즉시 적용됩니다.", show_alert=False)
+        # MODIFIED: 텔레그램 네트워크 붕괴 방어망 주입
+        try:
+            await callback_query.answer(f"✅ {qty}주 타격 락온 완료. 다음 스캔부터 즉시 적용됩니다.", show_alert=False)
+        except Exception as e:
+            print(f"⚠️ [텔레그램 통신 붕괴 방어] 토스트 알림 실패: {e}")
+            
         await process_back_to_main(callback_query, state)
         
     except Exception as e:
         error_msg = html.escape(str(e))
-        await callback_query.message.edit_text(f"🚨 <b>상태 장부 기록 붕괴</b>\n\n▫️ {error_msg}", parse_mode="HTML")
+        # MODIFIED: 텔레그램 네트워크 붕괴 방어망 주입
+        try:
+            await callback_query.message.edit_text(f"🚨 <b>상태 장부 기록 붕괴</b>\n\n▫️ {error_msg}", parse_mode="HTML")
+        except Exception as ex:
+            print(f"🚨 [텔레그램 통신 붕괴 방어] 에러 렌더링 실패: {ex}")
 
 @router.message(ManualQtyState.waiting_for_qty)
 async def process_manual_qty_input(message: types.Message, state: FSMContext):
@@ -563,14 +584,19 @@ async def process_manual_qty_input(message: types.Message, state: FSMContext):
         
     qty_str = message.text.strip()
     
+    # MODIFIED: 텔레그램 네트워크 붕괴 방어망 주입 (전 구간 적용)
     if not qty_str.isdigit():
-        await message.answer("🚨 <b>수량은 양의 정수만 입력 가능합니다.</b> 다시 숫자만 입력해 주십시오.", parse_mode="HTML")
+        try:
+            await message.answer("🚨 <b>수량은 양의 정수만 입력 가능합니다.</b> 다시 숫자만 입력해 주십시오.", parse_mode="HTML")
+        except Exception: pass
         return
         
     qty = int(qty_str)
     
     if not (1 <= qty <= 1000):
-        await message.answer("🚨 <b>수량은 1주에서 1,000주 사이로 캡핑되어야 합니다.</b> 다시 입력해 주십시오.", parse_mode="HTML")
+        try:
+            await message.answer("🚨 <b>수량은 1주에서 1,000주 사이로 캡핑되어야 합니다.</b> 다시 입력해 주십시오.", parse_mode="HTML")
+        except Exception: pass
         return
         
     try:
@@ -586,17 +612,25 @@ async def process_manual_qty_input(message: types.Message, state: FSMContext):
             f"▫️ <b>변경 수량</b>: {qty}주\n"
             f"▫️ <b>적용 시점</b>: 다음 1분 스캔 주기부터 즉시 락온"
         )
-        await message.answer(success_text, reply_markup=keyboard, parse_mode="HTML")
+        try:
+            await message.answer(success_text, reply_markup=keyboard, parse_mode="HTML")
+        except Exception: pass
     except Exception as e:
         safe_error = html.escape(str(e))
-        await message.answer(f"🚨 <b>상태 장부 기록 붕괴</b>: <pre>{safe_error}</pre>", parse_mode="HTML")
+        try:
+            await message.answer(f"🚨 <b>상태 장부 기록 붕괴</b>: <pre>{safe_error}</pre>", parse_mode="HTML")
+        except Exception: pass
 
 @router.message(Command("update"))
 async def cmd_update(message: types.Message):
     if message.from_user.id != ADMIN_CHAT_ID:
         return
 
-    await message.answer("⏳ <b>레스큐 모듈(plugin_updater.py) 격발. 깃허브 원장 동기화 및 프리플라이트 검증 진행 중...</b>", parse_mode="HTML")
+    # MODIFIED: 텔레그램 네트워크 붕괴 방어망 주입
+    try:
+        await message.answer("⏳ <b>레스큐 모듈(plugin_updater.py) 격발. 깃허브 원장 동기화 및 프리플라이트 검증 진행 중...</b>", parse_mode="HTML")
+    except Exception as e:
+        print(f"⚠️ [텔레그램 통신 붕괴 방어] 업데이트 시작 알림 실패: {e}")
     
     try:
         process = await asyncio.create_subprocess_exec(
@@ -617,10 +651,14 @@ async def cmd_update(message: types.Message):
                 f"✅ <b>업데이트 및 검증 통과</b>\n\n"
                 f"▫️ <b>STDOUT</b>:\n<pre>{safe_out}</pre>"
             )
-            await message.answer(result_msg, parse_mode="HTML")
+            try:
+                await message.answer(result_msg, parse_mode="HTML")
+            except Exception: pass
             
             if "Already up to date." not in out_text:
-                await message.answer("⚠️ <b>검증된 새 코어 코드 감지. 데몬을 즉시 재가동(Restart)합니다.</b>", parse_mode="HTML")
+                try:
+                    await message.answer("⚠️ <b>검증된 새 코어 코드 감지. 데몬을 즉시 재가동(Restart)합니다.</b>", parse_mode="HTML")
+                except Exception: pass
                 await asyncio.sleep(1)
                 os._exit(0)
         else:
@@ -630,11 +668,15 @@ async def cmd_update(message: types.Message):
                 f"▫️ <b>STDERR (문법 에러 원인)</b>:\n<pre>{safe_err}</pre>\n"
                 f"▫️ <b>STDOUT (복구 로그)</b>:\n<pre>{safe_out}</pre>"
             )
-            await message.answer(result_msg, parse_mode="HTML")
+            try:
+                await message.answer(result_msg, parse_mode="HTML")
+            except Exception: pass
             
     except Exception as e:
         safe_error = html.escape(str(e))
-        await message.answer(f"🚨 <b>관제탑 업데이트 통신 붕괴 감지</b>:\n<pre>{safe_error}</pre>", parse_mode="HTML")
+        try:
+            await message.answer(f"🚨 <b>관제탑 업데이트 통신 붕괴 감지</b>:\n<pre>{safe_error}</pre>", parse_mode="HTML")
+        except Exception: pass
 
 @router.callback_query(F.data == "scan_asset")
 async def process_scan_asset(callback_query: types.CallbackQuery, state: FSMContext):
@@ -642,7 +684,12 @@ async def process_scan_asset(callback_query: types.CallbackQuery, state: FSMCont
         return
 
     await state.clear()
-    await callback_query.answer("⏳ 잔고 원장 동기화 중...", show_alert=False)
+    
+    # MODIFIED: 텔레그램 네트워크 붕괴 방어망 주입 (Errno 104 집중 격리 구간)
+    try:
+        await callback_query.answer("⏳ 잔고 원장 동기화 중...", show_alert=False)
+    except Exception as e:
+        print(f"⚠️ [텔레그램 통신 붕괴 방어] 잔고 스캔 토스트 알림 실패 (무시 후 스캔 강행): {e}")
     
     try:
         holdings_task = api_client.get_soxl_holdings_detail()
@@ -679,11 +726,19 @@ async def process_scan_asset(callback_query: types.CallbackQuery, state: FSMCont
             [InlineKeyboardButton(text="🔙 메인 메뉴", callback_data="back_to_main")]
         ])
         
-        await callback_query.message.edit_text(result_text, reply_markup=keyboard, parse_mode="HTML")
+        # MODIFIED: 텔레그램 네트워크 붕괴 방어망 주입
+        try:
+            await callback_query.message.edit_text(result_text, reply_markup=keyboard, parse_mode="HTML")
+        except Exception as e:
+            print(f"⚠️ [텔레그램 통신 붕괴 방어] 잔고 스캔 UI 렌더링 실패: {e}")
         
     except Exception as e:
         error_msg = html.escape(str(e))
-        await callback_query.message.edit_text(f"🚨 <b>시스템 붕괴 감지</b>\n\n▫️ {error_msg}", parse_mode="HTML")
+        # MODIFIED: 텔레그램 네트워크 붕괴 방어망 주입
+        try:
+            await callback_query.message.edit_text(f"🚨 <b>시스템 붕괴 감지</b>\n\n▫️ {error_msg}", parse_mode="HTML")
+        except Exception as ex:
+            print(f"🚨 [텔레그램 통신 붕괴 방어] 잔고 스캔 에러 렌더링 실패: {ex}")
 
 @router.callback_query(F.data == "scan_ha")
 async def process_scan_ha(callback_query: types.CallbackQuery, state: FSMContext):
@@ -691,7 +746,12 @@ async def process_scan_ha(callback_query: types.CallbackQuery, state: FSMContext
         return
 
     await state.clear()
-    await callback_query.answer("⏳ 시세 타격 및 HA 벡터 엔진 가동 중...", show_alert=False)
+    
+    # MODIFIED: 텔레그램 네트워크 붕괴 방어망 주입
+    try:
+        await callback_query.answer("⏳ 시세 타격 및 HA 벡터 엔진 가동 중...", show_alert=False)
+    except Exception as e:
+        print(f"⚠️ [텔레그램 통신 붕괴 방어] HA 스캔 토스트 알림 실패 (무시 후 스캔 강행): {e}")
     
     try:
         current_price_task = api_client.get_current_price("SOXL")
@@ -735,11 +795,19 @@ async def process_scan_ha(callback_query: types.CallbackQuery, state: FSMContext
             [InlineKeyboardButton(text="🔙 메인 메뉴", callback_data="back_to_main")]
         ])
         
-        await callback_query.message.edit_text(result_text, reply_markup=keyboard, parse_mode="HTML")
+        # MODIFIED: 텔레그램 네트워크 붕괴 방어망 주입
+        try:
+            await callback_query.message.edit_text(result_text, reply_markup=keyboard, parse_mode="HTML")
+        except Exception as e:
+            print(f"⚠️ [텔레그램 통신 붕괴 방어] HA 스캔 UI 렌더링 실패: {e}")
         
     except Exception as e:
         error_msg = html.escape(str(e))
-        await callback_query.message.edit_text(f"🚨 <b>연산 엔진 붕괴 감지</b>\n\n▫️ {error_msg}", parse_mode="HTML")
+        # MODIFIED: 텔레그램 네트워크 붕괴 방어망 주입
+        try:
+            await callback_query.message.edit_text(f"🚨 <b>연산 엔진 붕괴 감지</b>\n\n▫️ {error_msg}", parse_mode="HTML")
+        except Exception as ex:
+            print(f"🚨 [텔레그램 통신 붕괴 방어] HA 스캔 에러 렌더링 실패: {ex}")
 
 @router.callback_query(F.data == "back_to_main")
 async def process_back_to_main(callback_query: types.CallbackQuery, state: FSMContext):
@@ -761,10 +829,11 @@ async def process_back_to_main(callback_query: types.CallbackQuery, state: FSMCo
         "원하시는 명령을 선택하십시오."
     )
     
+    # MODIFIED: 텔레그램 네트워크 붕괴 방어망 주입
     try:
         await callback_query.message.edit_text(welcome_text, reply_markup=keyboard, parse_mode="HTML")
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"⚠️ [텔레그램 통신 붕괴 방어] 메인 메뉴 복귀 UI 렌더링 실패: {e}")
 
 
 # HA 암살자 무한 폴링 루프 (데이장 ~ 애프터장 상시 가동)
@@ -802,7 +871,6 @@ async def ha_assassin_loop(client: TossApiClient, bot: Bot, chat_id: int):
                 print(f"♻️ [HA 암살자] 수동 청산 팩트 교정: 실잔고 0주 감지. 오염된 장부 매수가를 0.0으로 강제 동기화 완료.")
 
             if session_end_time and (session_end_time - now_kst).total_seconds() <= 120:
-                # MODIFIED: Zero-Overnight 강제 청산 전 미체결(OPEN) 주문 100% 선제 취소 요격망 가동
                 try:
                     open_orders = await client.get_orders(status="OPEN", symbol="SOXL")
                     if open_orders:
@@ -856,7 +924,6 @@ async def ha_assassin_loop(client: TossApiClient, bot: Bot, chat_id: int):
             if len(ha_df) < 3:
                 continue
                 
-            # NEW: Fail-Open 섀도우 쉴드 (물리적 휴장기 10-Minute Gap 유령 캔들 타점 원천 소각)
             if session_end_time is None:
                 latest_candle_time = ha_df.index[-1]
                 now_est = datetime.now(ZoneInfo('America/New_York'))
