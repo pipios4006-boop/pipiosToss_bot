@@ -32,7 +32,8 @@
 # 29. 과최적화(Overfitting) 타점 누수 방지를 위한 가짜 양봉(모멘텀 0.3%) 컷오프 조건 전면 소각
 # 30. 듀얼 코어 스나이핑 아키텍처 결속: 진성 몸통(0.3% 이상) 1봉 단독 요격 및 2연속 캔들 병렬 검증 (지연 타점 롤백)
 # 31. 멱등키 정규식 위반(공백 포함) 수정 및 HA 벡터 엔진 시계열 역전 현상 원천 차단
-# 32. [MODIFIED] 하락장 휩쏘 완벽 방어를 위한 '아래꼬리 진공(Shaved Bottom)' 로직 주입 및 매도 이격도 0.2% 하향 락온
+# 32. 하락장 휩쏘 완벽 방어를 위한 '아래꼬리 진공(Shaved Bottom)' 로직 주입 및 매도 이격도 0.2% 하향 락온
+# 33. [MODIFIED] 목표 수량 UI 전면 개편 (1주/10주/수동) 및 FSM(유한상태기계) 기반 채팅창 숫자 직접 입력 파이프라인 락온
 # =====================================================================
 
 import asyncio
@@ -51,6 +52,8 @@ from aiogram import Bot, Dispatcher, Router, types, F
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.client.session.aiohttp import AiohttpSession
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.fsm.context import FSMContext
 
 from dotenv import load_dotenv
 
@@ -456,10 +459,16 @@ class HeikinAshiEngine:
 router = Router()
 api_client = TossApiClient(client_id=TOSS_CLIENT_ID, client_secret=TOSS_CLIENT_SECRET)
 
+# FSM 상태 클래스 락온
+class ManualQtyState(StatesGroup):
+    waiting_for_qty = State()
+
 @router.message(Command("start"))
-async def cmd_start(message: types.Message):
+async def cmd_start(message: types.Message, state: FSMContext):
     if message.from_user.id != ADMIN_CHAT_ID:
         return
+        
+    await state.clear()
         
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="💰 잔고 스캔", callback_data="scan_asset")],
@@ -476,15 +485,18 @@ async def cmd_start(message: types.Message):
     await message.answer(welcome_text, reply_markup=keyboard, parse_mode="HTML")
 
 @router.callback_query(F.data == "menu_set_qty")
-async def process_menu_set_qty(callback_query: types.CallbackQuery):
+async def process_menu_set_qty(callback_query: types.CallbackQuery, state: FSMContext):
     if callback_query.from_user.id != ADMIN_CHAT_ID:
         return
 
+    await state.clear()
+
+    # MODIFIED: 1주/10주/수동 프리셋 단순화 락온
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
+            InlineKeyboardButton(text="1주", callback_data="set_qty_1"),
             InlineKeyboardButton(text="10주", callback_data="set_qty_10"),
-            InlineKeyboardButton(text="20주", callback_data="set_qty_20"),
-            InlineKeyboardButton(text="50주", callback_data="set_qty_50")
+            InlineKeyboardButton(text="수동", callback_data="set_qty_manual")
         ],
         [InlineKeyboardButton(text="🔙 뒤로가기", callback_data="back_to_main")]
     ])
@@ -492,59 +504,77 @@ async def process_menu_set_qty(callback_query: types.CallbackQuery):
     text = (
         "⚙️ <b>타격 목표 수량 설정</b>\n\n"
         "▫️ 원하시는 목표 수량을 퀵 프리셋에서 선택하십시오.\n"
-        "▫️ 세밀한 수동 입력이 필요한 경우 <code>/setqty 수량</code> 명령어를 사용하십시오.\n"
-        "   (예시: /setqty 15)"
+        "▫️ <b>[수동]</b> 버튼을 누르시면 채팅창에서 숫자를 직접 입력할 수 있습니다."
     )
     
     await callback_query.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
 
 @router.callback_query(F.data.startswith("set_qty_"))
-async def process_set_qty_action(callback_query: types.CallbackQuery):
+async def process_set_qty_action(callback_query: types.CallbackQuery, state: FSMContext):
     if callback_query.from_user.id != ADMIN_CHAT_ID:
         return
     
-    try:
-        qty_str = callback_query.data.split("_")[-1]
-        qty = int(qty_str)
+    action = callback_query.data.split("_")[-1]
+    
+    # 수동 모드 FSM 전이 락온
+    if action == "manual":
+        await state.set_state(ManualQtyState.waiting_for_qty)
         
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔙 취소 및 뒤로가기", callback_data="menu_set_qty")]
+        ])
+        
+        text = (
+            "⌨️ <b>수동 수량 입력 모드</b>\n\n"
+            "▫️ 채팅창에 원하시는 타격 수량(숫자)만 입력하여 전송해 주십시오.\n"
+            "▫️ <i>예시: 15</i>"
+        )
+        await callback_query.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
+        return
+    
+    # 퀵 프리셋 락온
+    try:
+        qty = int(action)
         await HAStateManager.save_state(target_qty=qty)
         await callback_query.answer(f"✅ {qty}주 타격 락온 완료. 다음 스캔부터 즉시 적용됩니다.", show_alert=False)
-        await process_back_to_main(callback_query)
+        await process_back_to_main(callback_query, state)
         
     except Exception as e:
         error_msg = html.escape(str(e))
         await callback_query.message.edit_text(f"🚨 <b>상태 장부 기록 붕괴</b>\n\n▫️ {error_msg}", parse_mode="HTML")
 
-@router.message(Command("setqty"))
-async def cmd_setqty(message: types.Message):
+# FSM 기반 수동 수량 텍스트 파서 락온
+@router.message(ManualQtyState.waiting_for_qty)
+async def process_manual_qty_input(message: types.Message, state: FSMContext):
     if message.from_user.id != ADMIN_CHAT_ID:
         return
-
-    args = message.text.split()
-    if len(args) != 2:
-        await message.answer("⚠️ <b>사용법</b>: /setqty [수량]\n▫️ 예시: /setqty 20", parse_mode="HTML")
-        return
         
-    qty_str = args[1]
+    qty_str = message.text.strip()
     
     if not qty_str.isdigit():
-        await message.answer("🚨 <b>수량은 양의 정수만 입력 가능합니다.</b> (소수점, 음수, 문자열 입력 불가)", parse_mode="HTML")
+        await message.answer("🚨 <b>수량은 양의 정수만 입력 가능합니다.</b> 다시 숫자만 입력해 주십시오.", parse_mode="HTML")
         return
         
     qty = int(qty_str)
     
     if not (1 <= qty <= 1000):
-        await message.answer("🚨 <b>수량은 1주에서 1,000주 사이로 캡핑되어야 합니다.</b>", parse_mode="HTML")
+        await message.answer("🚨 <b>수량은 1주에서 1,000주 사이로 캡핑되어야 합니다.</b> 다시 입력해 주십시오.", parse_mode="HTML")
         return
         
     try:
         await HAStateManager.save_state(target_qty=qty)
+        await state.clear()
+        
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔙 메인 메뉴", callback_data="back_to_main")]
+        ])
+        
         success_text = (
-            f"✅ <b>타격 수량 동기화 완료</b>\n\n"
+            f"✅ <b>수동 타격 수량 동기화 완료</b>\n\n"
             f"▫️ <b>변경 수량</b>: {qty}주\n"
             f"▫️ <b>적용 시점</b>: 다음 1분 스캔 주기부터 즉시 락온"
         )
-        await message.answer(success_text, parse_mode="HTML")
+        await message.answer(success_text, reply_markup=keyboard, parse_mode="HTML")
     except Exception as e:
         safe_error = html.escape(str(e))
         await message.answer(f"🚨 <b>상태 장부 기록 붕괴</b>: <pre>{safe_error}</pre>", parse_mode="HTML")
@@ -595,10 +625,11 @@ async def cmd_update(message: types.Message):
         await message.answer(f"🚨 <b>관제탑 업데이트 통신 붕괴 감지</b>:\n<pre>{safe_error}</pre>", parse_mode="HTML")
 
 @router.callback_query(F.data == "scan_asset")
-async def process_scan_asset(callback_query: types.CallbackQuery):
+async def process_scan_asset(callback_query: types.CallbackQuery, state: FSMContext):
     if callback_query.from_user.id != ADMIN_CHAT_ID:
         return
 
+    await state.clear()
     await callback_query.answer("⏳ 잔고 원장 동기화 중...", show_alert=False)
     
     try:
@@ -643,10 +674,11 @@ async def process_scan_asset(callback_query: types.CallbackQuery):
         await callback_query.message.edit_text(f"🚨 <b>시스템 붕괴 감지</b>\n\n▫️ {error_msg}", parse_mode="HTML")
 
 @router.callback_query(F.data == "scan_ha")
-async def process_scan_ha(callback_query: types.CallbackQuery):
+async def process_scan_ha(callback_query: types.CallbackQuery, state: FSMContext):
     if callback_query.from_user.id != ADMIN_CHAT_ID:
         return
 
+    await state.clear()
     await callback_query.answer("⏳ 시세 타격 및 HA 벡터 엔진 가동 중...", show_alert=False)
     
     try:
@@ -698,9 +730,11 @@ async def process_scan_ha(callback_query: types.CallbackQuery):
         await callback_query.message.edit_text(f"🚨 <b>연산 엔진 붕괴 감지</b>\n\n▫️ {error_msg}", parse_mode="HTML")
 
 @router.callback_query(F.data == "back_to_main")
-async def process_back_to_main(callback_query: types.CallbackQuery):
+async def process_back_to_main(callback_query: types.CallbackQuery, state: FSMContext):
     if callback_query.from_user.id != ADMIN_CHAT_ID:
         return
+        
+    await state.clear()
         
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="💰 잔고 스캔", callback_data="scan_asset")],
@@ -813,7 +847,6 @@ async def ha_assassin_loop(client: TossApiClient, bot: Bot, chat_id: int):
             is_c1_eum = c1['HA_Close'] < c1['HA_Open']
             is_c2_eum = c2['HA_Close'] < c2['HA_Open']
             
-            # MODIFIED: 제30헌법 듀얼 코어 스나이핑 엔진(아래꼬리 진공 팩트 주입) 결속
             c2_body_size = abs(c2['HA_Close'] - c2['HA_Open']) / c2['HA_Open'] if c2['HA_Open'] > 0 else 0.0
             c2_shaved_bottom = ((c2['HA_Open'] - c2['HA_Low']) / c2['HA_Open'] < 0.0005) if c2['HA_Open'] > 0 else False
             
@@ -885,7 +918,6 @@ async def ha_assassin_loop(client: TossApiClient, bot: Bot, chat_id: int):
             elif sell_signal and soxl_qty >= 1:
                 deviation = abs(current_price - last_buy_price) / last_buy_price if last_buy_price > 0 else 0.0
                 
-                # MODIFIED: 횡보장 휩쏘 방어막 절대 이격도 0.2% 하향 락온 (Case 04)
                 if deviation >= 0.002:
                     orderbook = await client.get_orderbook("SOXL")
                     bids = orderbook.get("bids", [])
