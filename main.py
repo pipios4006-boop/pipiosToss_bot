@@ -33,7 +33,9 @@
 # 30. 듀얼 코어 스나이핑 아키텍처 결속: 진성 몸통(0.3% 이상) 1봉 단독 요격 및 2연속 캔들 병렬 검증 (지연 타점 롤백)
 # 31. 멱등키 정규식 위반(공백 포함) 수정 및 HA 벡터 엔진 시계열 역전 현상 원천 차단
 # 32. 하락장 휩쏘 완벽 방어를 위한 '아래꼬리 진공(Shaved Bottom)' 로직 주입 및 매도 이격도 0.2% 하향 락온
-# 33. [MODIFIED] 목표 수량 UI 전면 개편 (1주/10주/수동) 및 FSM(유한상태기계) 기반 채팅창 숫자 직접 입력 파이프라인 락온
+# 33. 목표 수량 UI 전면 개편 (1주/10주/수동) 및 FSM(유한상태기계) 기반 채팅창 숫자 직접 입력 파이프라인 락온
+# 34. [NEW/MODIFIED] 10-Minute Gap 유령 타점 요격을 위한 달력 캐시 Dual Fallback 및 Fail-Open 섀도우 쉴드 결속
+# 35. [NEW] Zero-Overnight 100% 관철을 위한 세션 마감 직전 OPEN 미체결 주문 선제 강제 취소망 주입
 # =====================================================================
 
 import asyncio
@@ -280,8 +282,13 @@ class TossApiClient:
                     self._calendar_cache = {"date": est_today_str, "sessions": sessions}
                     print(f"📅 토스증권 US 시장 3영업일 달력 병합 완료: {est_today_str} (총 {len(sessions)}개 세션 확보)")
                 except Exception as e:
-                    print(f"⚠️ [달력 API] 통신 지연 또는 파싱 오류. Fail-Open 가동 (무조건 주문 허용): {e}")
-                    return True, None
+                    # MODIFIED: 이중 폴백(Dual Fallback) 및 휴장 진공 타점(Ghost Trading) 원천 차단
+                    cached_sessions = self._calendar_cache.get("sessions", [])
+                    if cached_sessions:
+                        print(f"⚠️ [달력 API] 통신 지연. 인메모리 캐시 기반 Dual Fallback 가동: {e}")
+                    else:
+                        print(f"🚨 [달력 API] 통신 붕괴 및 캐시 부재. Fail-Open(조건부 허용) 섀도우 모드 가동: {e}")
+                        return True, None
                     
             cached_sessions = self._calendar_cache.get("sessions", [])
             
@@ -415,6 +422,15 @@ class TossApiClient:
         data = await self._request("POST", "/api/v1/orders", "ORDER", headers=self._get_headers(requires_account=True), json=payload)
         return data.get("result", {})
 
+    # NEW: 주문 취소 API (Zero-Overnight 선제 요격용)
+    async def cancel_order(self, order_id: str) -> dict:
+        if not self.account_seq:
+            await self.fetch_account_seq()
+            
+        endpoint = f"/api/v1/orders/{order_id}/cancel"
+        data = await self._request("POST", endpoint, "ORDER", headers=self._get_headers(requires_account=True))
+        return data.get("result", {})
+
 # 3분봉 하이킨 아시 100% 벡터화 엔진
 class HeikinAshiEngine:
     @staticmethod
@@ -491,7 +507,6 @@ async def process_menu_set_qty(callback_query: types.CallbackQuery, state: FSMCo
 
     await state.clear()
 
-    # MODIFIED: 1주/10주/수동 프리셋 단순화 락온
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(text="1주", callback_data="set_qty_1"),
@@ -516,7 +531,6 @@ async def process_set_qty_action(callback_query: types.CallbackQuery, state: FSM
     
     action = callback_query.data.split("_")[-1]
     
-    # 수동 모드 FSM 전이 락온
     if action == "manual":
         await state.set_state(ManualQtyState.waiting_for_qty)
         
@@ -532,7 +546,6 @@ async def process_set_qty_action(callback_query: types.CallbackQuery, state: FSM
         await callback_query.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
         return
     
-    # 퀵 프리셋 락온
     try:
         qty = int(action)
         await HAStateManager.save_state(target_qty=qty)
@@ -543,7 +556,6 @@ async def process_set_qty_action(callback_query: types.CallbackQuery, state: FSM
         error_msg = html.escape(str(e))
         await callback_query.message.edit_text(f"🚨 <b>상태 장부 기록 붕괴</b>\n\n▫️ {error_msg}", parse_mode="HTML")
 
-# FSM 기반 수동 수량 텍스트 파서 락온
 @router.message(ManualQtyState.waiting_for_qty)
 async def process_manual_qty_input(message: types.Message, state: FSMContext):
     if message.from_user.id != ADMIN_CHAT_ID:
@@ -790,6 +802,16 @@ async def ha_assassin_loop(client: TossApiClient, bot: Bot, chat_id: int):
                 print(f"♻️ [HA 암살자] 수동 청산 팩트 교정: 실잔고 0주 감지. 오염된 장부 매수가를 0.0으로 강제 동기화 완료.")
 
             if session_end_time and (session_end_time - now_kst).total_seconds() <= 120:
+                # MODIFIED: Zero-Overnight 강제 청산 전 미체결(OPEN) 주문 100% 선제 취소 요격망 가동
+                try:
+                    open_orders = await client.get_orders(status="OPEN", symbol="SOXL")
+                    if open_orders:
+                        for order in open_orders:
+                            await client.cancel_order(order["orderId"])
+                            print(f"🛡️ [HA 암살자] Zero-Overnight 선제 요격: 미체결 주문({order['orderId']}) 취소 타격 완료.")
+                except Exception as e:
+                    print(f"⚠️ [HA 암살자] 미체결 주문 선제 취소망 통신 붕괴: {e}")
+
                 if soxl_qty >= 1:
                     orderbook = await client.get_orderbook("SOXL")
                     bids = orderbook.get("bids", [])
@@ -834,6 +856,14 @@ async def ha_assassin_loop(client: TossApiClient, bot: Bot, chat_id: int):
             if len(ha_df) < 3:
                 continue
                 
+            # NEW: Fail-Open 섀도우 쉴드 (물리적 휴장기 10-Minute Gap 유령 캔들 타점 원천 소각)
+            if session_end_time is None:
+                latest_candle_time = ha_df.index[-1]
+                now_est = datetime.now(ZoneInfo('America/New_York'))
+                if (now_est - latest_candle_time).total_seconds() > 300:
+                    print(f"🛡️ [HA 암살자] Fail-Open 섀도우 쉴드 락온: 캔들 갱신 5분 이상 지연 (물리적 휴장 진공 상태). 유령 타점 원천 소각.")
+                    continue
+
             c1 = ha_df.iloc[-3]
             c2 = ha_df.iloc[-2]
             current_closed_time = c2.name
