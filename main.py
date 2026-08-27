@@ -15,14 +15,13 @@
 # 12. HA 예열(Warm-up) 데이터 결핍에 따른 색상 왜곡 방어용 수집량(count=200) 전격 상향 락온
 # 13. US 달력 API 쿼리 파라미터 오염(KST->EST) 교정 및 락온 (제3헌법 및 Case 51)
 # 14. 토스증권 미국 주식 MARKET 주문 제한 패러독스 방어용 '합성 시장가(LIMIT)' 전면 전환 락온
-# 15. 관제탑 잔고 스캔 병렬 타격 확장 (모든 자산 통합 스캔으로 리빌딩)
-# 16. 수동 전량 매도(Hit & Cut) 개입에 따른 0주 상태 파편화 100% 방어막 결속 (Case 46)
-# 17. 10주 스케일링 동적 수량 타격 및 자본 잠김/파편화 방어막 결속
-# 18. 폐기된 HA 스캔 UI 영구 소각 및 텔레그램 메인 메뉴 다이내믹 인터페이스 리빌딩
-# 19. 상태 장부(ha_state.json) 2-Tier 마이그레이션 및 SOXL/GDXU 다중 종목 병렬 타격망 결속
-# 20. 인라인 키보드 기반 정수형 동적 수량 제어반(Hard-Capping) 결속 (Case 60)
-# 21. 전역 디폴트 상태 비활성(False) 유지 및 베이스라인 타격 수량 1주 하향 락온
-# 22. [NEW] 누락 교정: 0주 상태에서도 타겟 종목 시세를 확인할 수 있도록 다건 시세조회(get_current_prices) 모듈 UI 결속
+# 15. 수동 전량 매도(Hit & Cut) 개입에 따른 0주 상태 파편화 100% 방어막 결속 (Case 46)
+# 16. 폐기된 HA 스캔 UI 영구 소각 및 텔레그램 메인 메뉴 다이내믹 인터페이스 리빌딩
+# 17. 상태 장부(ha_state.json) 2-Tier 마이그레이션 및 SOXL/GDXU 다중 종목 병렬 타격망 결속
+# 18. 전역 디폴트 상태 비활성(False) 유지 및 베이스라인 타격 수량 1주 하향 락온
+# 19. 다건 시세 병렬 추출(get_current_prices) UI 결속
+# 20. [NEW] FSM(유한 상태 머신) 기반 텍스트 동적 수량 입력 및 팻핑거 원천 방어 락온 (Case 60)
+# 21. [NEW] 관제탑 자산 스캔 시 렌더링 과부하 방지를 위한 타겟 종목(TARGET_SYMBOLS) 필터링 결속
 # =====================================================================
 
 import asyncio
@@ -41,6 +40,9 @@ from aiogram import Bot, Dispatcher, Router, types, F
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.client.session.aiohttp import AiohttpSession
+# NEW: 텍스트 입력을 위한 FSM 모듈 결속
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
 
 # 자격증명 및 시스템 상수 락온
 TOSS_CLIENT_ID = os.getenv("TOSS_CLIENT_ID", "tsck_live_QogVVVdZPhhg3sbTo5T7hB")
@@ -50,6 +52,10 @@ ADMIN_CHAT_ID = int(os.getenv("TELEGRAM_CHAT_ID", "796232854"))
 
 # 감시 대상 글로벌 유니버스 락온
 TARGET_SYMBOLS = ["SOXL", "GDXU"]
+
+# NEW: FSM 상태 클래스 정의
+class QuantityInputState(StatesGroup):
+    waiting_for_qty = State()
 
 # 제1헌법 - 동기 I/O 비동기 격리 및 Rate Limit 중앙 통제소
 class GlobalThrottle:
@@ -331,7 +337,7 @@ class TossApiClient:
         raw_price = results[0].get("lastPrice")
         return float(raw_price) if raw_price is not None else 0.0
 
-    # [NEW] 다건 시세 병렬 추출 모듈 (관제탑 블라인드 방어용)
+    # 다건 시세 병렬 추출 모듈 (관제탑 블라인드 방어용)
     async def get_current_prices(self, symbols: list) -> dict:
         if not self.token:
             await self.authenticate()
@@ -465,17 +471,19 @@ def get_main_keyboard(state: dict) -> InlineKeyboardMarkup:
         
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
+# MODIFIED: 시작 시 FSM 초기화 결속
 @router.message(Command("start"))
-async def cmd_start(message: types.Message):
+async def cmd_start(message: types.Message, state: FSMContext):
     if message.from_user.id != ADMIN_CHAT_ID:
         return
         
-    state = await HAStateManager.get_state()
-    keyboard = get_main_keyboard(state)
+    await state.clear() # 컨텍스트 스위칭 락다운 방어
+    app_state = await HAStateManager.get_state()
+    keyboard = get_main_keyboard(app_state)
     
     welcome_text = (
         "🤖 <b>승승장군 퀀트 관제탑 가동</b>\n\n"
-        "▫️ 시스템: Toss Securities V16 / V-REV\n"
+        "▫️ 시스템: Toss Securities V17 / V-REV\n"
         "▫️ 상태: Online 및 다이내믹 패널 대기 중\n\n"
         "아래 패널에서 각 종목별 매매 엔진을 독립 제어하십시오."
     )
@@ -483,12 +491,13 @@ async def cmd_start(message: types.Message):
 
 # 다중 종목 토글 스위치 코어
 @router.callback_query(F.data.startswith("toggle_"))
-async def process_toggle(callback_query: types.CallbackQuery):
+async def process_toggle(callback_query: types.CallbackQuery, state: FSMContext):
     if callback_query.from_user.id != ADMIN_CHAT_ID: return
+    await state.clear()
     
     symbol = callback_query.data.split("_")[1]
-    state = await HAStateManager.get_state()
-    sym_state = state.get(symbol, {"active": False, "qty": 1, "last_buy_price": 0.0})
+    app_state = await HAStateManager.get_state()
+    sym_state = app_state.get(symbol, {"active": False, "qty": 1, "last_buy_price": 0.0})
     
     new_active = not sym_state.get("active", False)
     sym_state["active"] = new_active
@@ -497,87 +506,85 @@ async def process_toggle(callback_query: types.CallbackQuery):
     if not new_active:
         sym_state["last_buy_price"] = 0.0
         
-    state[symbol] = sym_state
-    await HAStateManager.save_state(state)
+    app_state[symbol] = sym_state
+    await HAStateManager.save_state(app_state)
     await callback_query.answer(f"✅ {symbol} 엔진 {'가동' if new_active else '중지'} 완료", show_alert=False)
     
-    keyboard = get_main_keyboard(state)
+    keyboard = get_main_keyboard(app_state)
     await callback_query.message.edit_reply_markup(reply_markup=keyboard)
 
-# 수량 제어 서브 메뉴 진입
+# MODIFIED: FSM 상태 진입 및 텍스트 입력 유도
 @router.callback_query(F.data.startswith("menu_qty_"))
-async def process_menu_qty(callback_query: types.CallbackQuery):
+async def process_menu_qty(callback_query: types.CallbackQuery, state: FSMContext):
     if callback_query.from_user.id != ADMIN_CHAT_ID: return
     
     symbol = callback_query.data.split("_")[2]
-    state = await HAStateManager.get_state()
-    # 하위 메뉴 진입 시 fallback 1주 락온
-    qty = state.get(symbol, {"active": False, "qty": 1, "last_buy_price": 0.0}).get("qty", 1)
     
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(text="➖ 5주", callback_data=f"adj_{symbol}_-5"),
-            InlineKeyboardButton(text="➖ 1주", callback_data=f"adj_{symbol}_-1"),
-            InlineKeyboardButton(text="➕ 1주", callback_data=f"adj_{symbol}_+1"),
-            InlineKeyboardButton(text="➕ 5주", callback_data=f"adj_{symbol}_+5")
-        ],
-        [InlineKeyboardButton(text="💾 저장 및 메인으로", callback_data="back_to_main")]
-    ])
+    # FSM 상태에 심볼 저장 및 대기 모드 진입
+    await state.update_data(target_symbol=symbol)
+    await state.set_state(QuantityInputState.waiting_for_qty)
     
     text = (
         f"⚙️ <b>{symbol} 타격 수량 설정</b>\n\n"
-        f"🔹 현재 설정된 타격 수량: <b>{qty}주</b>\n\n"
-        f"아래 다이얼을 터치하여 수량을 정밀 조준하십시오."
+        f"🔹 변경하실 수량을 <b>채팅창에 숫자로만</b> 입력하십시오.\n"
+        f"🔹 (예시: 10)\n\n"
+        f"⚠️ 설정을 취소하시려면 /start 를 다시 입력하십시오."
     )
-    await callback_query.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
+    await callback_query.message.edit_text(text, parse_mode="HTML")
+    await callback_query.answer()
 
-# 동적 수량 가감 연산 코어 (팻핑거 하드 캡핑)
-@router.callback_query(F.data.startswith("adj_"))
-async def process_adj_qty(callback_query: types.CallbackQuery):
-    if callback_query.from_user.id != ADMIN_CHAT_ID: return
+# NEW: FSM 기반 정수형 동적 수량 입력 처리 코어
+@router.message(QuantityInputState.waiting_for_qty)
+async def process_qty_input(message: types.Message, state: FSMContext):
+    if message.from_user.id != ADMIN_CHAT_ID: return
     
-    parts = callback_query.data.split("_")
-    symbol = parts[1]
-    delta = int(parts[2])
+    input_text = message.text.strip()
     
-    state = await HAStateManager.get_state()
-    sym_state = state.get(symbol, {"active": False, "qty": 1, "last_buy_price": 0.0})
-    # 다이얼 조작 시 베이스라인 1주 락온
-    current_qty = sym_state.get("qty", 1)
-    
-    # 0주 이하 팻핑거 원천 차단 락온
-    new_qty = max(1, current_qty + delta)
-    
-    if new_qty != current_qty:
-        sym_state["qty"] = new_qty
-        state[symbol] = sym_state
-        await HAStateManager.save_state(state)
+    # 팻핑거 1차 방어: 순수 숫자 검증
+    if not input_text.isdigit():
+        await message.answer("🚨 <b>입력 오류</b>: 순수 정수(숫자)만 입력하십시오. (예: 10)", parse_mode="HTML")
+        return
         
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [
-                InlineKeyboardButton(text="➖ 5주", callback_data=f"adj_{symbol}_-5"),
-                InlineKeyboardButton(text="➖ 1주", callback_data=f"adj_{symbol}_-1"),
-                InlineKeyboardButton(text="➕ 1주", callback_data=f"adj_{symbol}_+1"),
-                InlineKeyboardButton(text="➕ 5주", callback_data=f"adj_{symbol}_+5")
-            ],
-            [InlineKeyboardButton(text="💾 저장 및 메인으로", callback_data="back_to_main")]
-        ])
+    new_qty = int(input_text)
+    
+    # 팻핑거 2차 방어: 0주 이하 락온
+    if new_qty < 1:
+        await message.answer("🚨 <b>입력 오류</b>: 최소 1주 이상 입력하십시오.", parse_mode="HTML")
+        return
         
-        text = (
-            f"⚙️ <b>{symbol} 타격 수량 설정</b>\n\n"
-            f"🔹 현재 설정된 타격 수량: <b>{new_qty}주</b>\n\n"
-            f"아래 다이얼을 터치하여 수량을 정밀 조준하십시오."
-        )
-        await callback_query.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
+    data = await state.get_data()
+    symbol = data.get("target_symbol")
+    
+    if not symbol:
+        await state.clear()
+        await message.answer("🚨 시스템 오류: 대상 종목이 소실되었습니다. /start 를 다시 입력하십시오.")
+        return
         
-    await callback_query.answer(f"🔄 {symbol} 수량 변경: {new_qty}주", show_alert=False)
+    # 상태 장부에 원자적 쓰기 동기화
+    app_state = await HAStateManager.get_state()
+    sym_state = app_state.get(symbol, {"active": False, "qty": 1, "last_buy_price": 0.0})
+    sym_state["qty"] = new_qty
+    app_state[symbol] = sym_state
+    await HAStateManager.save_state(app_state)
+    
+    # FSM 초기화
+    await state.clear()
+    
+    keyboard = get_main_keyboard(app_state)
+    success_text = (
+        f"✅ <b>{symbol} 수량 변경 완료</b>\n\n"
+        f"🔹 현재 설정된 타격 수량: <b>{new_qty}주</b>\n\n"
+        f"아래 패널에서 각 종목별 매매 엔진을 독립 제어하십시오."
+    )
+    await message.answer(success_text, reply_markup=keyboard, parse_mode="HTML")
 
-# 통합 자산 스캔 코어 (다건 실시간 시세 병렬 추출 결속)
+# 통합 자산 스캔 코어 (다건 실시간 시세 병렬 추출 및 렌더링 필터링 결속)
 @router.callback_query(F.data == "scan_asset")
-async def process_scan_asset(callback_query: types.CallbackQuery):
+async def process_scan_asset(callback_query: types.CallbackQuery, state: FSMContext):
     if callback_query.from_user.id != ADMIN_CHAT_ID:
         return
 
+    await state.clear()
     await callback_query.answer("⏳ 전 종목 시세 및 원장 동기화 중...", show_alert=False)
     
     try:
@@ -612,11 +619,14 @@ async def process_scan_asset(callback_query: types.CallbackQuery):
             p_usd = float(item.get("profitLoss", {}).get("amount", 0.0))
             p_rate = float(item.get("profitLoss", {}).get("rate", 0.0)) * 100
             
+            # 총 수익금 연산은 필터링 없이 전체 계좌 자산 기준으로 100% 팩트 보존
             p_krw = p_usd * ex_rate
             krw_profit_total += p_krw
             usd_profit_total += p_usd
             
-            item_texts.append(f"🔸 <b>{sym}</b>: {qty:,.2f}주 (평단 ${avg_price:,.2f} 👉 종가 ${last_price:,.2f}) [{p_rate:+,.2f}%]")
+            # MODIFIED: 렌더링 과부하 방지를 위해 TARGET_SYMBOLS 만 추출하여 리스트 결속
+            if sym in TARGET_SYMBOLS:
+                item_texts.append(f"🔸 <b>{sym}</b>: {qty:,.2f}주 (평단 ${avg_price:,.2f} 👉 종가 ${last_price:,.2f}) [{p_rate:+,.2f}%]")
             
         result_text = (
             f"📊 <b>통합 자산 및 시세 스캔 완료</b>\n\n"
@@ -624,8 +634,8 @@ async def process_scan_asset(callback_query: types.CallbackQuery):
             f"🔹 <b>실시간 종가</b>: {price_str}\n"
             f"🔹 <b>매수 가능 달러</b>: ${usd_bp:,.2f}\n"
             f"🔹 <b>총 수익금</b>: ${usd_profit_total:+,.2f} (₩{krw_profit_total:+,.0f})\n\n"
-            f"📈 <b>보유 종목 상세</b>\n"
-            + ("\n".join(item_texts) if item_texts else "🔸 보유 종목이 존재하지 않습니다.")
+            f"📈 <b>타겟 종목 상세</b>\n"
+            + ("\n".join(item_texts) if item_texts else "🔸 보유 중인 타겟 종목이 없습니다.")
         )
         
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -642,16 +652,17 @@ async def process_scan_asset(callback_query: types.CallbackQuery):
 
 # 뒤로가기 버튼
 @router.callback_query(F.data == "back_to_main")
-async def process_back_to_main(callback_query: types.CallbackQuery):
+async def process_back_to_main(callback_query: types.CallbackQuery, state: FSMContext):
     if callback_query.from_user.id != ADMIN_CHAT_ID:
         return
         
-    state = await HAStateManager.get_state()
-    keyboard = get_main_keyboard(state)
+    await state.clear()
+    app_state = await HAStateManager.get_state()
+    keyboard = get_main_keyboard(app_state)
     
     welcome_text = (
         "🤖 <b>승승장군 퀀트 관제탑 가동</b>\n\n"
-        "▫️ 시스템: Toss Securities V16 / V-REV\n"
+        "▫️ 시스템: Toss Securities V17 / V-REV\n"
         "▫️ 상태: Online 및 다이내믹 패널 대기 중\n\n"
         "아래 패널에서 각 종목별 매매 엔진을 독립 제어하십시오."
     )
