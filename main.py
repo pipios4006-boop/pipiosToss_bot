@@ -12,7 +12,7 @@
 # 9. 시장가 증거금(3% 버퍼) 부족 시 422 밴 방어용 자본 잠김 컷오프 결속
 # 10. 상태 장부(ha_state.json) 원자적 읽기/쓰기 코어(HAStateManager) 결속
 # 11. 세션 마감 2분 전 Zero-Overnight 강제 청산 방어막 결속
-# 12. 횡보장 휩쏘 방어용 절대 이격도(0.2%) 검증 알고리즘 및 유령 잔고 자가 치유 결속
+# 12. 횡보장 휩쏘 방어용 절대 이격도 검증 알고리즘 및 유령 잔고 자가 치유 결속
 # 13. 텔레그램 Errno 104 통신 붕괴 방어용 AiohttpSession 주입
 # 14. 토스 API 물리적 단절 시 3단 지수 백오프(Exponential Backoff) 무중단 Fallback 결속
 # 15. HA 예열(Warm-up) 데이터 결핍에 따른 색상 왜곡 방어용 수집량(count=200) 전격 상향 락온
@@ -29,7 +29,8 @@
 # 26. 시스템 데몬(systemd) 구동 시 상대경로 누수(Path Resolution Paradox) 방어를 위한 절대경로 락온
 # 27. 매수/매도/강제청산 타격 시 텔레그램 실시간 영수증(단가, 수량, 총액, 손익금 USD/KRW) 비동기 타전 결속
 # 28. 횡보장 락다운 휩쏘 방어막: 얕은 음봉(이격도 0.6% 미달) 컷오프 유지
-# 29. [MODIFIED] 과최적화(Overfitting) 타점 누수 방지를 위한 가짜 양봉(모멘텀 0.3%) 컷오프 조건 전면 소각 
+# 29. 과최적화(Overfitting) 타점 누수 방지를 위한 가짜 양봉(모멘텀 0.3%) 컷오프 조건 전면 소각
+# 30. [MODIFIED] 듀얼 코어 스나이핑 아키텍처 결속: 진성 몸통(0.3% 이상) 1봉 단독 요격 및 2연속 캔들 병렬 검증 (지연 타점 롤백)
 # =====================================================================
 
 import asyncio
@@ -808,7 +809,13 @@ async def ha_assassin_loop(client: TossApiClient, bot: Bot, chat_id: int):
             is_c1_eum = c1['HA_Close'] < c1['HA_Open']
             is_c2_eum = c2['HA_Close'] < c2['HA_Open']
             
-            if not ((is_c1_yang and is_c2_yang) or (is_c1_eum and is_c2_eum)):
+            # MODIFIED: 듀얼 코어 스나이핑 엔진 결속 (Track 1: 진성 1봉 단독 처리, Track 2: 2연속 추세 처리)
+            c2_body_size = abs(c2['HA_Close'] - c2['HA_Open']) / c2['HA_Open'] if c2['HA_Open'] > 0 else 0.0
+            
+            buy_signal = (is_c2_yang and c2_body_size >= 0.003) or (is_c1_yang and is_c2_yang)
+            sell_signal = (is_c2_eum and c2_body_size >= 0.003) or (is_c1_eum and is_c2_eum)
+
+            if not (buy_signal or sell_signal):
                 continue
 
             open_orders = await client.get_orders(status="OPEN", symbol="SOXL")
@@ -828,8 +835,7 @@ async def ha_assassin_loop(client: TossApiClient, bot: Bot, chat_id: int):
             now_est_str = datetime.now(ZoneInfo('America/New_York')).strftime("%Y-%m-%d %H:%M:%S EST")
             client_order_id_suffix = now_est_str.replace(':', '').replace('-', '').replace(' EST', '')
             
-            if is_c1_yang and is_c2_yang and soxl_qty == 0:
-                # MODIFIED: 제2 방어막(가짜 양봉 0.3% 모멘텀 필터) 전면 삭제. 2연속 양봉 발생 즉시 진입 허용.
+            if buy_signal and soxl_qty == 0:
                 orderbook = await client.get_orderbook("SOXL")
                 asks = orderbook.get("asks", [])
                 
@@ -869,12 +875,11 @@ async def ha_assassin_loop(client: TossApiClient, bot: Bot, chat_id: int):
                 
                 await HAStateManager.save_state(price=ask_1_price)
                 last_action_candle_time = current_closed_time
-                print(f"🎯 [HA 암살자] 2연속 양봉 포착 및 자본 검증 통과. 합성 시장가(매도 1호가) {target_qty}주 매수 완료 (기록가: ${ask_1_price:.2f}).")
+                print(f"🎯 [HA 암살자] 매수 타점 포착 (Track 1/2 통과) 및 자본 검증 통과. 합성 시장가(매도 1호가) {target_qty}주 매수 완료 (기록가: ${ask_1_price:.2f}).")
                 
-            elif is_c1_eum and is_c2_eum and soxl_qty >= 1:
+            elif sell_signal and soxl_qty >= 1:
                 deviation = abs(current_price - last_buy_price) / last_buy_price if last_buy_price > 0 else 0.0
                 
-                # MAINTAINED: 제1 방어막 - 횡보장 휩쏘 방어용 매도 절대 이격도 임계치 0.6% 유지
                 if deviation >= 0.006:
                     orderbook = await client.get_orderbook("SOXL")
                     bids = orderbook.get("bids", [])
@@ -916,9 +921,9 @@ async def ha_assassin_loop(client: TossApiClient, bot: Bot, chat_id: int):
                     
                     await HAStateManager.save_state(price=0.0)
                     last_action_candle_time = current_closed_time
-                    print(f"🎯 [HA 암살자] 2연속 음봉 포착 & 절대 이격도({deviation*100:.2f}%) 0.6% 돌파 팩트 확인. 합성 시장가(매수 1호가: ${bid_1_price:.2f}) {sell_qty}주 매도 완료.")
+                    print(f"🎯 [HA 암살자] 매도 타점 포착 & 절대 이격도({deviation*100:.2f}%) 0.6% 돌파 팩트 확인. 합성 시장가(매수 1호가: ${bid_1_price:.2f}) {sell_qty}주 매도 완료.")
                 else:
-                    print(f"🛡️ [HA 암살자] 횡보장 휩쏘 방어 컷오프: 2연속 음봉이나 절대 이격도({deviation*100:.2f}%)가 0.6%에 미달합니다. 타점 소각 후 관망 유지.")
+                    print(f"🛡️ [HA 암살자] 횡보장 휩쏘 방어 컷오프: 매도 시그널(Track 1/2) 발생했으나 절대 이격도({deviation*100:.2f}%)가 0.6%에 미달합니다. 타점 소각 후 관망 유지.")
                 
         except Exception as e:
             print(f"🚨 [HA 암살자] 감시망 루프 내부 붕괴: {e}")
