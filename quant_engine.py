@@ -14,28 +14,30 @@ class HAStateManager:
     FILE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ha_state.json")
 
     @classmethod
-    async def get_state(cls) -> tuple[float, int]:
+    async def get_state(cls) -> tuple[float, int, float]:
         async with GlobalThrottle.get_file_lock(cls.FILE_PATH):
             def _read():
-                # MODIFIED: Rule 4 파라미터 완전 소각. 오직 단가와 수량만 관리.
+                # MODIFIED: target_sell_price(스나이핑 기준가) 파라미터 추가
                 if not os.path.exists(cls.FILE_PATH):
-                    return 0.0, 10
+                    return 0.0, 10, 0.0
                 try:
                     with open(cls.FILE_PATH, "r", encoding="utf-8") as f:
                         data = json.load(f)
                         last_price = float(data.get("last_buy_price", 0.0))
                         target_qty = int(data.get("target_qty", 10))
-                        return last_price, target_qty
+                        target_sell_price = float(data.get("target_sell_price", 0.0))
+                        return last_price, target_qty, target_sell_price
                 except Exception:
-                    return 0.0, 10
+                    return 0.0, 10, 0.0
             return await asyncio.to_thread(_read)
 
     @classmethod
-    async def save_state(cls, price: float = None, target_qty: int = None):
+    async def save_state(cls, price: float = None, target_qty: int = None, target_sell_price: float = None):
         async with GlobalThrottle.get_file_lock(cls.FILE_PATH):
             def _write():
                 curr_price = 0.0
                 curr_qty = 10
+                curr_target_sell = 0.0
                 
                 if os.path.exists(cls.FILE_PATH):
                     try:
@@ -43,17 +45,20 @@ class HAStateManager:
                             data = json.load(f)
                             curr_price = float(data.get("last_buy_price", 0.0))
                             curr_qty = int(data.get("target_qty", 10))
+                            curr_target_sell = float(data.get("target_sell_price", 0.0))
                     except Exception:
                         pass
                 
                 new_price = curr_price if price is None else price
                 new_qty = curr_qty if target_qty is None else target_qty
+                new_target_sell = curr_target_sell if target_sell_price is None else target_sell_price
                 
                 tmp_path = cls.FILE_PATH + ".tmp"
                 with open(tmp_path, "w", encoding="utf-8") as f:
                     json.dump({
                         "last_buy_price": new_price, 
-                        "target_qty": new_qty
+                        "target_qty": new_qty,
+                        "target_sell_price": new_target_sell
                     }, f)
                 # 원자적 덮어쓰기
                 os.replace(tmp_path, cls.FILE_PATH)
@@ -95,7 +100,6 @@ class HeikinAshiEngine:
         ha_df['HA_Low'] = pd.concat([df_3m['lowPrice'], ha_df['HA_Open'], ha_df['HA_Close']], axis=1).min(axis=1)
         ha_df['Volume'] = df_3m['volume']
         
-        # NEW: 거시적 장세(Macro Trend) 판별을 위한 EMA 10/20 지수이동평균선 벡터화 섀도우 렌더링
         ha_df['EMA_10'] = ha_df['HA_Close'].ewm(span=10, adjust=False).mean()
         ha_df['EMA_20'] = ha_df['HA_Close'].ewm(span=20, adjust=False).mean()
         

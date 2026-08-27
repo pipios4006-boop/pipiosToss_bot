@@ -254,8 +254,8 @@ async def process_scan_asset(callback_query: types.CallbackQuery, state: FSMCont
             holdings_task, rate_task, usd_bp_task, current_price_task, target_qty_task
         )
         
-        # MODIFIED: 2-Tier 언패킹 규격 적용 (Rule 4 소각)
-        _, target_qty = state_tuple
+        # MODIFIED: 3-Tier 언패킹 규격 적용 (target_sell_price 동기화)
+        _, target_qty, target_sell_price = state_tuple
         
         est_now = datetime.now(ZoneInfo('America/New_York')).strftime("%Y-%m-%d %H:%M:%S")
         safe_est = html.escape(est_now)
@@ -269,6 +269,7 @@ async def process_scan_asset(callback_query: types.CallbackQuery, state: FSMCont
             f"🔹 <b>매수 가능 달러</b>: ${usd_bp:,.2f}\n"
             f"🔹 <b>SOXL 보유 수량</b>: {holdings['qty']:,.2f}주\n"
             f"🔹 <b>SOXL 타격 목표 수량</b>: {target_qty}주 (EMA 필터 가동 중)\n"
+            f"🔹 <b>동적 스나이핑 락온가</b>: ${target_sell_price:,.2f} (진성 양봉 중심값)\n"
             f"🔹 <b>총 평단가</b>: ${holdings['avg_price']:,.2f}\n"
             f"🔹 <b>실시간 종가</b>: ${current_price:,.2f}\n"
             f"🔹 <b>수익률</b>: {profit_rate_pct:+,.2f}% (${holdings['profit_usd']:+,.2f} / ₩{krw_profit:+,.0f})\n"

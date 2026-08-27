@@ -50,8 +50,8 @@ async def ha_assassin_loop(client: TossApiClient, bot: Bot, chat_id: int):
         await asyncio.sleep(60)
         
         try:
-            # MODIFIED: Rule 4 소각. 가격 및 목표 수량만 언패킹
-            last_buy_price, target_qty = await HAStateManager.get_state()
+            # MODIFIED: target_sell_price 언패킹 규격 적용
+            last_buy_price, target_qty, target_sell_price = await HAStateManager.get_state()
             
             now_kst = datetime.now(ZoneInfo('Asia/Seoul'))
             
@@ -62,8 +62,9 @@ async def ha_assassin_loop(client: TossApiClient, bot: Bot, chat_id: int):
             soxl_qty = await client.get_soxl_holdings()
             
             if soxl_qty == 0 and last_buy_price > 0.0:
-                await HAStateManager.save_state(price=0.0)
+                await HAStateManager.save_state(price=0.0, target_sell_price=0.0)
                 last_buy_price = 0.0
+                target_sell_price = 0.0
                 print(f"♻️ [HA 암살자] 수동 청산 팩트 교정: 실잔고 0주 감지. 오염된 장부 매수가를 0.0으로 강제 동기화 완료.")
 
             if session_end_time and (session_end_time - now_kst).total_seconds() <= 120:
@@ -108,7 +109,7 @@ async def ha_assassin_loop(client: TossApiClient, bot: Bot, chat_id: int):
                         )
                         await notify_tg(msg)
                         
-                        await HAStateManager.save_state(price=0.0)
+                        await HAStateManager.save_state(price=0.0, target_sell_price=0.0)
                         print(f"⚠️ [HA 암살자] 세션 마감 2분 전 컷오프. Zero-Overnight 방어막 가동 -> {soxl_qty}주 지정가(${bid_1_price:.2f}) 전량 매도 및 장부 초기화 완료.")
                     else:
                         print("⚠️ [HA 암살자] Zero-Overnight 덤핑 시도 중 호가창 붕괴(매수 잔량 없음) 요격. 지정가 덤핑 불가.")
@@ -127,45 +128,69 @@ async def ha_assassin_loop(client: TossApiClient, bot: Bot, chat_id: int):
                     print(f"🛡️ [HA 암살자] Fail-Open 섀도우 쉴드 락온: 캔들 갱신 5분 이상 지연 (물리적 휴장 진공 상태). 유령 타점 원천 소각.")
                     continue
 
+            # NEW: c0 (진행 중인 미확정 실시간 캔들) 상태 추적 파라미터 추가
             c1 = ha_df.iloc[-3]
             c2 = ha_df.iloc[-2]
+            c0 = ha_df.iloc[-1]
             current_closed_time = c2.name
             
-            if last_action_candle_time == current_closed_time:
-                continue
-                
             is_c1_yang = c1['HA_Close'] >= c1['HA_Open']
             is_c2_yang = c2['HA_Close'] >= c2['HA_Open']
-            
-            is_c1_eum = c1['HA_Close'] < c1['HA_Open']
-            is_c2_eum = c2['HA_Close'] < c2['HA_Open']
             
             c2_body_size = abs(c2['HA_Close'] - c2['HA_Open']) / c2['HA_Open'] if c2['HA_Open'] > 0 else 0.0
             c2_shaved_bottom = ((c2['HA_Open'] - c2['HA_Low']) / c2['HA_Open'] < 0.0005) if c2['HA_Open'] > 0 else False
             
-            # NEW: EMA 정배열(단기 > 중기) 기반 상승장 팩트 필터 판별
             is_up_trend = c2['EMA_10'] > c2['EMA_20']
             
-            # MODIFIED: 상승장(is_up_trend) 조건 추가 결합. 하락/횡보장 가짜 반등 100% 컷오프
-            buy_signal = ((is_c2_yang and c2_shaved_bottom) or (is_c1_yang and is_c2_yang)) and is_up_trend
-            sell_signal = (is_c2_eum and c2_body_size >= 0.003) or (is_c1_eum and is_c2_eum)
+            # 매수 시그널 검증 (동일 캔들 중복 타격 방어 적용)
+            buy_signal = False
+            if last_action_candle_time != current_closed_time:
+                buy_signal = ((is_c2_yang and c2_shaved_bottom) or (is_c1_yang and is_c2_yang)) and is_up_trend
 
-            if not (buy_signal or sell_signal):
-                continue
-
-            open_orders = await client.get_orders(status="OPEN", symbol="SOXL")
-            if open_orders:
-                print("⚠️ [HA 암살자] 미체결 대기 주문 감지. 이중 결제 방지를 위해 현재 루프 바이패스(Bypass)합니다.")
+            # MODIFIED: 직전 진성 양봉 평균값(Target Sell Price) 동적 갱신 및 락온 (Stale Reference 방어)
+            if soxl_qty >= 1:
+                closed_ha = ha_df.iloc[:-1]
+                bulls = closed_ha[closed_ha['HA_Close'] >= closed_ha['HA_Open']]
+                if not bulls.empty:
+                    latest_bull = bulls.iloc[-1]
+                    # 기준가 = 양봉 몸통의 중심값
+                    dynamic_target = (latest_bull['HA_Open'] + latest_bull['HA_Close']) / 2.0
+                    if abs(target_sell_price - dynamic_target) > 0.001:
+                        target_sell_price = dynamic_target
+                        await HAStateManager.save_state(target_sell_price=target_sell_price)
+                        print(f"🎯 [HA 암살자] Trailing Stop 갱신: 직전 양봉 평균값(${target_sell_price:.2f}) 락온 완료.")
+            
+            is_c0_eum = c0['HA_Close'] < c0['HA_Open']
+            
+            # MODIFIED: API 낭비 방어 - 매수 시그널이 떴거나, 동적 스나이핑 장전(보유 & 진행중 음봉) 상태일 때만 현재가 스캔
+            need_current_price = buy_signal or (soxl_qty >= 1 and is_c0_eum and target_sell_price > 0.0)
+            
+            if not need_current_price:
                 continue
                 
             current_price = await client.get_current_price("SOXL")
             if current_price <= 0.0:
                 continue
             
+            # 유령 잔고 자가 치유 앵커링
             if soxl_qty >= 1 and last_buy_price <= 0.0:
                 last_buy_price = current_price
                 await HAStateManager.save_state(price=last_buy_price)
                 print(f"♻️ [HA 암살자] 유령 잔고 팩트 교정: 장부 데이터 소실 감지. 현재가(${last_buy_price:.2f}) 앵커링 완료.")
+            
+            # NEW: 동적 스나이핑 룰 격발 (진행중 캔들이 음봉이고, 실시간 현재가가 락온된 양봉 평균가 이하로 하방 돌파 시)
+            dynamic_sell_signal = False
+            if soxl_qty >= 1 and is_c0_eum and target_sell_price > 0.0:
+                if current_price <= target_sell_price:
+                    dynamic_sell_signal = True
+
+            if not (buy_signal or dynamic_sell_signal):
+                continue
+
+            open_orders = await client.get_orders(status="OPEN", symbol="SOXL")
+            if open_orders:
+                print("⚠️ [HA 암살자] 미체결 대기 주문 감지. 이중 결제 방지를 위해 현재 루프 바이패스(Bypass)합니다.")
+                continue
                 
             now_est_str = datetime.now(ZoneInfo('America/New_York')).strftime("%Y-%m-%d %H:%M:%S EST")
             client_order_id_suffix = datetime.now(ZoneInfo('America/New_York')).strftime("%Y%m%d_%H%M%S")
@@ -181,7 +206,6 @@ async def ha_assassin_loop(client: TossApiClient, bot: Bot, chat_id: int):
                 ask_1_price = float(asks[0]["price"])
                 usd_bp = await client.get_usd_buying_power()
                 
-                # MODIFIED: Rule 4 소각. 항상 목표 수량(target_qty) 100% 타격.
                 actual_buy_qty = target_qty
                 
                 required_bp = ask_1_price * actual_buy_qty * 1.03
@@ -212,58 +236,54 @@ async def ha_assassin_loop(client: TossApiClient, bot: Bot, chat_id: int):
                 )
                 await notify_tg(msg)
                 
-                # 체결 직후 로컬 장부에 매수 단가 원자적 기록
                 await HAStateManager.save_state(price=ask_1_price)
                 last_action_candle_time = current_closed_time
                 print(f"🎯 [HA 암살자] 거시적 상승장(Up-Trend) 및 캔들 시그널 교차 검증 통과. 합성 시장가(매도 1호가) {actual_buy_qty}주 전량 매수 완료 (기록가: ${ask_1_price:.2f}).")
                 
-            elif sell_signal and soxl_qty >= 1:
-                deviation = abs(current_price - last_buy_price) / last_buy_price if last_buy_price > 0 else 0.0
+            elif dynamic_sell_signal and soxl_qty >= 1:
+                orderbook = await client.get_orderbook("SOXL")
+                bids = orderbook.get("bids", [])
                 
-                if deviation >= 0.002:
-                    orderbook = await client.get_orderbook("SOXL")
-                    bids = orderbook.get("bids", [])
+                if not bids:
+                    print("⚠️ [HA 암살자] 호가창 붕괴(매수 잔량 없음). 타점 소각.")
+                    continue
                     
-                    if not bids:
-                        print("⚠️ [HA 암살자] 호가창 붕괴(매수 잔량 없음). 타점 소각.")
-                        continue
-                        
-                    bid_1_price = float(bids[0]["price"])
-                    client_order_id = f"HASELL_{client_order_id_suffix}"
-                    
-                    sell_qty = target_qty if soxl_qty >= target_qty else soxl_qty
-                    
-                    await client.create_order(
-                        symbol="SOXL", 
-                        side="SELL", 
-                        order_type="LIMIT", 
-                        quantity=sell_qty, 
-                        price=bid_1_price,
-                        client_order_id=client_order_id
-                    )
-                    
-                    profit_usd = (bid_1_price - last_buy_price) * sell_qty
-                    ex_rate = await client.get_usd_to_krw_rate()
-                    profit_krw = profit_usd * ex_rate
-                    profit_rate = ((bid_1_price - last_buy_price) / last_buy_price * 100) if last_buy_price > 0 else 0.0
-                    
-                    msg = (
-                        f"🔴 <b>[HA 암살자] 매도 타격 완료</b>\n\n"
-                        f"▫️ <b>종목</b>: SOXL\n"
-                        f"▫️ <b>체결 예상 단가</b>: ${bid_1_price:.2f}\n"
-                        f"▫️ <b>타격 수량</b>: {sell_qty}주\n"
-                        f"▫️ <b>총 매도 금액</b>: ${bid_1_price * sell_qty:,.2f}\n"
-                        f"▫️ <b>수익률</b>: {profit_rate:+.2f}%\n"
-                        f"▫️ <b>실현 손익</b>: {profit_usd:+.2f} USD ({profit_krw:+,.0f} KRW)\n"
-                        f"▫️ <b>시각</b>: {now_est_str}"
-                    )
-                    await notify_tg(msg)
-                    
-                    await HAStateManager.save_state(price=0.0)
-                    last_action_candle_time = current_closed_time
-                    print(f"🎯 [HA 암살자] 매도 타점 포착 & 절대 이격도({deviation*100:.2f}%) 0.2% 돌파 팩트 확인. 합성 시장가(매수 1호가: ${bid_1_price:.2f}) {sell_qty}주 매도 완료.")
-                else:
-                    print(f"🛡️ [HA 암살자] 횡보장 휩쏘 방어 컷오프: 매도 시그널(Track 1/2) 발생했으나 절대 이격도({deviation*100:.2f}%)가 0.2%에 미달합니다. 타점 소각 후 관망 유지.")
+                bid_1_price = float(bids[0]["price"])
+                client_order_id = f"HASELL_{client_order_id_suffix}"
+                
+                sell_qty = target_qty if soxl_qty >= target_qty else soxl_qty
+                
+                await client.create_order(
+                    symbol="SOXL", 
+                    side="SELL", 
+                    order_type="LIMIT", 
+                    quantity=sell_qty, 
+                    price=bid_1_price,
+                    client_order_id=client_order_id
+                )
+                
+                profit_usd = (bid_1_price - last_buy_price) * sell_qty
+                ex_rate = await client.get_usd_to_krw_rate()
+                profit_krw = profit_usd * ex_rate
+                profit_rate = ((bid_1_price - last_buy_price) / last_buy_price * 100) if last_buy_price > 0 else 0.0
+                
+                msg = (
+                    f"🔴 <b>[HA 암살자] 매도 타격 완료 (동적 스나이핑)</b>\n\n"
+                    f"▫️ <b>종목</b>: SOXL\n"
+                    f"▫️ <b>체결 예상 단가</b>: ${bid_1_price:.2f}\n"
+                    f"▫️ <b>스나이핑 락온가</b>: ${target_sell_price:.2f}\n"
+                    f"▫️ <b>타격 수량</b>: {sell_qty}주\n"
+                    f"▫️ <b>총 매도 금액</b>: ${bid_1_price * sell_qty:,.2f}\n"
+                    f"▫️ <b>수익률</b>: {profit_rate:+.2f}%\n"
+                    f"▫️ <b>실현 손익</b>: {profit_usd:+.2f} USD ({profit_krw:+,.0f} KRW)\n"
+                    f"▫️ <b>시각</b>: {now_est_str}"
+                )
+                await notify_tg(msg)
+                
+                # 매도 직후 장부 및 타겟 스나이핑 락온가 전면 초기화
+                await HAStateManager.save_state(price=0.0, target_sell_price=0.0)
+                last_action_candle_time = current_closed_time
+                print(f"🎯 [HA 암살자] 동적 스나이핑 격발: 진행중 음봉 포착 & 지정 락온가(${target_sell_price:.2f}) 하방 돌파. 합성 시장가(매수 1호가: ${bid_1_price:.2f}) {sell_qty}주 매도 완료.")
                 
         except Exception as e:
             error_msg = str(e)
