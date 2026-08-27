@@ -28,7 +28,8 @@
 # 25. 자격증명 하드코딩 영구 소각, dotenv 환경변수 격리 및 Pre-flight 무결성 검증 결속
 # 26. 시스템 데몬(systemd) 구동 시 상대경로 누수(Path Resolution Paradox) 방어를 위한 절대경로 락온
 # 27. 매수/매도/강제청산 타격 시 텔레그램 실시간 영수증(단가, 수량, 총액, 손익금 USD/KRW) 비동기 타전 결속
-# 28. [MODIFIED] 횡보장 락다운 휩쏘(Whipsaw) 방어막 전격 결속: 가짜 양봉(모멘텀 0.3% 미달) 및 얕은 음봉(이격도 0.6% 미달) 컷오프
+# 28. 횡보장 락다운 휩쏘 방어막: 얕은 음봉(이격도 0.6% 미달) 컷오프 유지
+# 29. [MODIFIED] 과최적화(Overfitting) 타점 누수 방지를 위한 가짜 양봉(모멘텀 0.3%) 컷오프 조건 전면 소각 
 # =====================================================================
 
 import asyncio
@@ -828,12 +829,7 @@ async def ha_assassin_loop(client: TossApiClient, bot: Bot, chat_id: int):
             client_order_id_suffix = now_est_str.replace(':', '').replace('-', '').replace(' EST', '')
             
             if is_c1_yang and is_c2_yang and soxl_qty == 0:
-                # MODIFIED: 제2 방어막 - 누적 모멘텀 0.3% 검증 (가짜 양봉 소각)
-                buy_momentum = (c2['HA_Close'] - c1['HA_Open']) / c1['HA_Open'] if c1['HA_Open'] > 0 else 0.0
-                if buy_momentum < 0.003:
-                    print(f"🛡️ [HA 암살자] 가짜 양봉 휩쏘 방어 컷오프: 2연속 양봉이나 누적 모멘텀({buy_momentum*100:.2f}%)이 0.3%에 미달합니다. 타점 소각.")
-                    continue
-                
+                # MODIFIED: 제2 방어막(가짜 양봉 0.3% 모멘텀 필터) 전면 삭제. 2연속 양봉 발생 즉시 진입 허용.
                 orderbook = await client.get_orderbook("SOXL")
                 asks = orderbook.get("asks", [])
                 
@@ -873,12 +869,12 @@ async def ha_assassin_loop(client: TossApiClient, bot: Bot, chat_id: int):
                 
                 await HAStateManager.save_state(price=ask_1_price)
                 last_action_candle_time = current_closed_time
-                print(f"🎯 [HA 암살자] 2연속 양봉 포착(모멘텀 {buy_momentum*100:.2f}%) 및 자본 검증 통과. 합성 시장가(매도 1호가) {target_qty}주 매수 완료 (기록가: ${ask_1_price:.2f}).")
+                print(f"🎯 [HA 암살자] 2연속 양봉 포착 및 자본 검증 통과. 합성 시장가(매도 1호가) {target_qty}주 매수 완료 (기록가: ${ask_1_price:.2f}).")
                 
             elif is_c1_eum and is_c2_eum and soxl_qty >= 1:
                 deviation = abs(current_price - last_buy_price) / last_buy_price if last_buy_price > 0 else 0.0
                 
-                # MODIFIED: 제1 방어막 - 횡보장 휩쏘 방어용 절대 이격도 임계치 0.2% -> 0.6% 대폭 상향
+                # MAINTAINED: 제1 방어막 - 횡보장 휩쏘 방어용 매도 절대 이격도 임계치 0.6% 유지
                 if deviation >= 0.006:
                     orderbook = await client.get_orderbook("SOXL")
                     bids = orderbook.get("bids", [])
