@@ -138,9 +138,8 @@ async def ha_assassin_loop(client: TossApiClient, bot: Bot, chat_id: int):
                 if (datetime.now(ZoneInfo('America/New_York')) - ha_df.index[-1]).total_seconds() > 300:
                     continue
 
-            # MODIFIED: 당일 실시간 일봉 기반 누적 진폭(체력) 스캔 (200 캔들 슬라이딩 소실 방어)
-            current_amp = HeikinAshiEngine.calculate_today_amplitude(daily_candles_json)
-            
+            # MODIFIED: 다이내믹 세션 체력 엔진 연동 (오직 현재 세션의 고가/저가 누적치만 산출)
+            current_amp = 0.0
             session_open_price = 0.0
             if session_start_time is not None and not ha_df.empty:
                 session_start_est = session_start_time.astimezone(ZoneInfo('America/New_York'))
@@ -148,6 +147,7 @@ async def ha_assassin_loop(client: TossApiClient, bot: Bot, chat_id: int):
                 
                 if not session_candles.empty:
                     session_open_price = session_candles.iloc[0]['HA_Open']
+                    current_amp = await HeikinAshiEngine.get_dynamic_session_amp(session_start_est, session_name, session_candles)
 
             c1 = ha_df.iloc[-3]
             c2 = ha_df.iloc[-2]

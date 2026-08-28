@@ -1,12 +1,13 @@
 # =====================================================================
 # 파일명: quant_engine.py
-# 목적: 3분봉 HA 100% 벡터화 연산 및 5일/당일 체력 진폭(Amplitude) 산출 엔진
+# 목적: 3분봉 HA 100% 벡터화 연산 및 5일/당일 세션 체력 진폭 산출 엔진
 # =====================================================================
 
 import os
 import json
 import asyncio
 import pandas as pd
+from datetime import datetime
 from zoneinfo import ZoneInfo
 from toss_api import GlobalThrottle
 
@@ -34,33 +35,64 @@ class HAStateManager:
     async def save_state(cls, price: float = None, target_qty: int = None, target_sell_price: float = None):
         async with GlobalThrottle.get_file_lock(cls.FILE_PATH):
             def _write():
-                curr_price = 0.0
-                curr_qty = 10
-                curr_target_sell = 0.0
-                
+                data = {}
                 if os.path.exists(cls.FILE_PATH):
                     try:
                         with open(cls.FILE_PATH, "r", encoding="utf-8") as f:
                             data = json.load(f)
-                            curr_price = float(data.get("last_buy_price", 0.0))
-                            curr_qty = int(data.get("target_qty", 10))
-                            curr_target_sell = float(data.get("target_sell_price", 0.0))
                     except Exception:
                         pass
                 
-                new_price = curr_price if price is None else price
-                new_qty = curr_qty if target_qty is None else target_qty
-                new_target_sell = curr_target_sell if target_sell_price is None else target_sell_price
+                if price is not None:
+                    data["last_buy_price"] = price
+                if target_qty is not None:
+                    data["target_qty"] = target_qty
+                if target_sell_price is not None:
+                    data["target_sell_price"] = target_sell_price
                 
                 tmp_path = cls.FILE_PATH + ".tmp"
                 with open(tmp_path, "w", encoding="utf-8") as f:
-                    json.dump({
-                        "last_buy_price": new_price, 
-                        "target_qty": new_qty,
-                        "target_sell_price": new_target_sell
-                    }, f)
+                    json.dump(data, f)
                 os.replace(tmp_path, cls.FILE_PATH)
             await asyncio.to_thread(_write)
+
+    # NEW: 세션 고가/저가 보존을 위한 상태 장부 I/O
+    @classmethod
+    async def get_session_state(cls) -> tuple[str, float, float]:
+        async with GlobalThrottle.get_file_lock(cls.FILE_PATH):
+            def _read():
+                if not os.path.exists(cls.FILE_PATH):
+                    return "", 0.0, 0.0
+                try:
+                    with open(cls.FILE_PATH, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                        return str(data.get("session_id", "")), float(data.get("session_high", 0.0)), float(data.get("session_low", 0.0))
+                except Exception:
+                    return "", 0.0, 0.0
+            return await asyncio.to_thread(_read)
+
+    @classmethod
+    async def save_session_state(cls, session_id: str, session_high: float, session_low: float):
+        async with GlobalThrottle.get_file_lock(cls.FILE_PATH):
+            def _write():
+                data = {}
+                if os.path.exists(cls.FILE_PATH):
+                    try:
+                        with open(cls.FILE_PATH, "r", encoding="utf-8") as f:
+                            data = json.load(f)
+                    except Exception:
+                        pass
+                
+                data["session_id"] = session_id
+                data["session_high"] = session_high
+                data["session_low"] = session_low
+                
+                tmp_path = cls.FILE_PATH + ".tmp"
+                with open(tmp_path, "w", encoding="utf-8") as f:
+                    json.dump(data, f)
+                os.replace(tmp_path, cls.FILE_PATH)
+            await asyncio.to_thread(_write)
+
 
 class HeikinAshiEngine:
     @staticmethod
@@ -118,21 +150,28 @@ class HeikinAshiEngine:
         
         return float(df['amplitude'].mean())
 
-    # NEW: Track A - 당일 실시간 진폭(체력) 산출 (200 캔들 슬라이딩 소실 방어)
+    # NEW: 다이내믹 세션 진폭 추적 (200 캔들 소실 방어 및 세션 고립 연산)
     @staticmethod
-    def calculate_today_amplitude(daily_candles_json: list) -> float:
-        if not daily_candles_json:
+    async def get_dynamic_session_amp(session_start_est: datetime, session_name: str, session_candles: pd.DataFrame) -> float:
+        if session_candles.empty:
             return 0.0
+
+        current_window_high = float(session_candles['HA_High'].max())
+        current_window_low = float(session_candles['HA_Low'].min())
+        
+        session_id = f"{session_start_est.strftime('%Y%m%d')}_{session_name}"
+        
+        saved_id, saved_high, saved_low = await HAStateManager.get_session_state()
+        
+        if saved_id != session_id:
+            session_high = current_window_high
+            session_low = current_window_low
+        else:
+            session_high = max(saved_high, current_window_high)
+            session_low = min(saved_low, current_window_low) if saved_low > 0 else current_window_low
             
-        df = pd.DataFrame(daily_candles_json)
-        if df.empty:
-            return 0.0
-            
-        for col in ['highPrice', 'lowPrice']:
-            df[col] = df[col].astype(float)
-            
-        today_candle = df.iloc[-1]
-        if today_candle['lowPrice'] > 0:
-            return float((today_candle['highPrice'] - today_candle['lowPrice']) / today_candle['lowPrice'])
-            
+        await HAStateManager.save_session_state(session_id, session_high, session_low)
+        
+        if session_low > 0:
+            return float((session_high - session_low) / session_low)
         return 0.0
