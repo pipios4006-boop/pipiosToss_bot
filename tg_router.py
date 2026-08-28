@@ -1,6 +1,6 @@
 # =====================================================================
 # 파일명: tg_router.py
-# 목적: 텔레그램 콜백 라우팅 및 온디맨드(On-Demand) 덫 해제 인터럽트 융합 (5분봉 및 퇴근 시스템 적용)
+# 목적: 텔레그램 콜백 라우팅 및 온디맨드 인터럽트 (+1% 추적 활성화 상태 UI 분리 병합)
 # =====================================================================
 
 import asyncio
@@ -39,8 +39,7 @@ async def cmd_start(message: types.Message, state: FSMContext):
         
     await state.clear()
     
-    _, _, _, _, _, is_active = await HAStateManager.get_state()
-    # MODIFIED: 완전 차단 상태 텍스트 렌더링
+    _, _, _, _, _, is_active, _ = await HAStateManager.get_state()
     toggle_text = "🔴 봇 매매 정지 (현재 OFF)" if not is_active else "🟢 봇 매매 가동 (현재 ON)"
         
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -52,7 +51,7 @@ async def cmd_start(message: types.Message, state: FSMContext):
     
     welcome_text = (
         "🤖 <b>승승장군 퀀트 관제탑 가동</b>\n\n"
-        "▫️ 시스템: Toss Securities V14 / V-REV 4.0 (EMA-10 Shield)\n"
+        "▫️ 시스템: Toss Securities V14 / Activation Trailing Mode\n"
         "▫️ 상태: Online 및 API 대기 중\n\n"
         "원하시는 명령을 선택하십시오."
     )
@@ -68,10 +67,10 @@ async def cmd_reset(message: types.Message, state: FSMContext):
         return
 
     try:
-        await HAStateManager.save_state(price=0.0, target_sell_price=0.0, is_session_done=False)
+        await HAStateManager.save_state(price=0.0, target_sell_price=0.0, is_session_done=False, is_trailing_active=False)
         reset_text = (
             "✅ <b>로컬 장부 원자적 덮어쓰기 완료</b>\n\n"
-            "▫️ <b>조치</b>: 포지션 단가, 방어선 강제 0.0 동기화 및 금일 퇴근 상태 해제\n"
+            "▫️ <b>조치</b>: 포지션 단가, 방어선 강제 0.0 동기화 및 금일 퇴근/추적 상태 해제\n"
             "▫️ <b>목적</b>: 과거 상태 오염 소각 및 신규 타점 스캔 락아웃 해제"
         )
         await message.answer(reset_text, parse_mode="HTML")
@@ -87,14 +86,13 @@ async def process_toggle_active(callback_query: types.CallbackQuery, state: FSMC
         return
         
     try:
-        _, _, _, _, _, is_active = await HAStateManager.get_state()
+        _, _, _, _, _, is_active, _ = await HAStateManager.get_state()
         new_state = not is_active
         await HAStateManager.save_state(is_active=new_state)
         
         if wakeup_event:
             wakeup_event.set()
             
-        # MODIFIED: 완전 차단 상태 텍스트 렌더링
         status_text = "🟢 가동 재개 (매수/매도 전면 허용 락온)" if new_state else "🔴 수면 모드 (매수 및 매도 전면 차단 / 관망 모드 락온)"
         try:
             await callback_query.answer(f"✅ 상태 전환 완료: {status_text}", show_alert=False)
@@ -294,32 +292,47 @@ async def process_scan_asset(callback_query: types.CallbackQuery, state: FSMCont
         rate_task = api_client.get_usd_to_krw_rate()
         usd_bp_task = api_client.get_usd_buying_power()
         current_price_task = api_client.get_current_price("SOXL")
-        target_qty_task = HAStateManager.get_state()
+        state_task = HAStateManager.get_state()
+        daily_candles_task = api_client.get_daily_candles("SOXL", count=6)
+        session_state_task = HAStateManager.get_session_state()
         
-        holdings, ex_rate, usd_bp, current_price, state_tuple = await asyncio.gather(
-            holdings_task, rate_task, usd_bp_task, current_price_task, target_qty_task
+        holdings, ex_rate, usd_bp, current_price, state_tuple, daily_candles_json, session_state = await asyncio.gather(
+            holdings_task, rate_task, usd_bp_task, current_price_task, state_task, daily_candles_task, session_state_task
         )
         
-        _, target_qty, target_sell_price, _, is_session_done, is_active = state_tuple
+        _, target_qty, target_sell_price, _, is_session_done, is_active, is_trailing_active = state_tuple
+        _, session_high, session_low = session_state
+        
+        avg_stamina = HeikinAshiEngine.calculate_amplitude_stamina(daily_candles_json)
+        ceiling, floor, max_profit_pct, max_loss_pct = HeikinAshiEngine.calculate_volatility_bands(
+            session_high, session_low, current_price, avg_stamina, holdings['avg_price']
+        )
         
         est_now = datetime.now(ZoneInfo('America/New_York')).strftime("%Y-%m-%d %H:%M:%S")
-        
         krw_profit = holdings["profit_usd"] * ex_rate
         profit_rate_pct = holdings["profit_rate"] * 100
         
-        # MODIFIED: 완전 차단 상태 텍스트 렌더링
+        trailing_status = "🟢 가동 중 (EMA 10 이탈 매도 대기)" if is_trailing_active else "🟡 대기 중 (+1% 돌파 전 관망)"
+        target_1pct = holdings['avg_price'] * 1.01 if holdings['avg_price'] > 0 else 0.0
+        
         result_text = (
             f"📊 <b>계좌 자산 스캔 완료</b>\n\n"
             f"🔹 <b>기준 시각</b>: {html.escape(est_now)} EST\n"
-            f"🔹 <b>봇 매매 상태</b>: {'🟢 ON (매매 허용)' if is_active else '🔴 OFF (매수 및 매도 전면 차단)'}\n"
-            f"🔹 <b>금일 퇴근 여부</b>: {'🔴 업무 종료 (수익 달성)' if is_session_done else '🟢 영업 중'}\n"
+            f"🔹 <b>봇 매매 상태</b>: {'🟢 ON (매매 허용)' if is_active else '🔴 OFF (매수/매도 전면 차단)'}\n"
+            f"🔹 <b>금일 퇴근 여부</b>: {'🔴 업무 종료 (관망 또는 수익 엑시트 완료)' if is_session_done else '🟢 영업 중 (프리마켓 대기/진행 중)'}\n"
             f"🔹 <b>매수 가능 달러</b>: ${usd_bp:,.2f}\n"
             f"🔹 <b>SOXL 보유 수량</b>: {holdings['qty']:,.2f}주\n"
             f"🔹 <b>SOXL 타격 목표 수량</b>: {target_qty}주\n"
-            f"🔹 <b>거시 추세 방어선</b>: ${target_sell_price:,.2f} (EMA 10 락온)\n"
+            f"🔹 <b>+1% 기상 목표가</b>: ${target_1pct:,.2f}\n"
+            f"🔹 <b>실시간 EMA 10 방어선</b>: ${target_sell_price:,.2f} (갱신 중)\n"
+            f"🔹 <b>매도 방어망 상태</b>: {trailing_status}\n"
             f"🔹 <b>총 평단가</b>: ${holdings['avg_price']:,.2f}\n"
             f"🔹 <b>실시간 종가</b>: ${current_price:,.2f}\n"
-            f"🔹 <b>수익률</b>: {profit_rate_pct:+,.2f}% (${holdings['profit_usd']:+,.2f} / ₩{krw_profit:+,.0f})\n"
+            f"🔹 <b>수익률</b>: {profit_rate_pct:+,.2f}% (${holdings['profit_usd']:+,.2f} / ₩{krw_profit:+,.0f})\n\n"
+            f"🎯 <b>[변동성 한계 맵핑 (ADR Projection)]</b>\n"
+            f"🔸 <b>세션 고가 / 저가</b>: ${session_high:.2f} / ${session_low:.2f}\n"
+            f"🔸 <b>예상 최고가 (Ceiling)</b>: ${ceiling:.2f} (기대 {max_profit_pct:+.2f}%)\n"
+            f"🔸 <b>예상 최저가 (Floor)</b>: ${floor:.2f} (위험 {max_loss_pct:+.2f}%)"
         )
         
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -364,11 +377,13 @@ async def process_scan_ha(callback_query: types.CallbackQuery, state: FSMContext
         current_price_task = api_client.get_current_price("SOXL")
         candles_task = api_client.get_1m_candles("SOXL", count=200)
         daily_candles_task = api_client.get_daily_candles("SOXL", count=6)
+        state_task = HAStateManager.get_state()
         
-        is_open_tuple, current_price, candles_json, daily_candles_json = await asyncio.gather(
-            is_open_task, current_price_task, candles_task, daily_candles_task
+        is_open_tuple, current_price, candles_json, daily_candles_json, state_tuple = await asyncio.gather(
+            is_open_task, current_price_task, candles_task, daily_candles_task, state_task
         )
         
+        last_buy_price = state_tuple[0]
         is_open, session_end_time, session_name, session_start_time = is_open_tuple
         ha_df = HeikinAshiEngine.calculate_5m_ha(candles_json)
         avg_stamina = HeikinAshiEngine.calculate_amplitude_stamina(daily_candles_json)
@@ -421,6 +436,11 @@ async def process_scan_ha(callback_query: types.CallbackQuery, state: FSMContext
             if (avg_stamina > 0.0) and (current_amp >= avg_stamina * 0.95):
                 stamina_status_text = "🔴 체력 소진 (타점 소각)"
             
+            _, session_high, session_low = await HAStateManager.get_session_state()
+            ceiling, floor, max_profit_pct, max_loss_pct = HeikinAshiEngine.calculate_volatility_bands(
+                session_high, session_low, current_price, avg_stamina, last_buy_price
+            )
+            
             recent_ha = ha_df.tail(10)
             ha_history_text = ""
             for time_idx, row in recent_ha.iterrows():
@@ -441,6 +461,10 @@ async def process_scan_ha(callback_query: types.CallbackQuery, state: FSMContext
                 f"🔸 <b>현재 세션 진폭 (소진 체력)</b>: {current_amp*100:.2f}%\n"
                 f"🔸 <b>체력 고갈 여부</b>: {stamina_status_text}\n"
                 f"🔸 <b>세션 경계 갭 쉴드</b>: {shield_status_text}\n\n"
+                f"🎯 <b>[변동성 한계 맵핑 (ADR Projection)]</b>\n"
+                f"🔸 <b>세션 고가 / 저가</b>: ${session_high:.2f} / ${session_low:.2f}\n"
+                f"🔸 <b>예상 최고가 (Ceiling)</b>: ${ceiling:.2f} (기대 {max_profit_pct:+.2f}%)\n"
+                f"🔸 <b>예상 최저가 (Floor)</b>: ${floor:.2f} (위험 {max_loss_pct:+.2f}%)\n\n"
                 f"📊 <b>최근 5분봉 HA 흐름 (최대 10개)</b>\n"
                 f"{ha_history_text}"
             )
@@ -468,8 +492,7 @@ async def process_back_to_main(callback_query: types.CallbackQuery, state: FSMCo
         
     await state.clear()
     
-    _, _, _, _, _, is_active = await HAStateManager.get_state()
-    # MODIFIED: 완전 차단 상태 텍스트 렌더링
+    _, _, _, _, _, is_active, _ = await HAStateManager.get_state()
     toggle_text = "🔴 봇 매매 정지 (현재 OFF)" if not is_active else "🟢 봇 매매 가동 (현재 ON)"
         
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -481,7 +504,7 @@ async def process_back_to_main(callback_query: types.CallbackQuery, state: FSMCo
     
     welcome_text = (
         "🤖 <b>승승장군 퀀트 관제탑 가동</b>\n\n"
-        "▫️ 시스템: Toss Securities V14 / V-REV 4.0 (EMA-10 Shield)\n"
+        "▫️ 시스템: Toss Securities V14 / Activation Trailing Mode\n"
         "▫️ 상태: Online 및 API 대기 중\n\n"
         "원하시는 명령을 선택하십시오."
     )
