@@ -57,7 +57,8 @@ async def ha_assassin_loop(client: TossApiClient, bot: Bot, chat_id: int):
         
         try:
             last_buy_price, target_qty, target_sell_price = await HAStateManager.get_state()
-            now_kst = datetime.now(ZoneInfo('Asia/Seoul'))
+            # MODIFIED: 제3헌법 EST 100% 락온. KST 완전 소각
+            now_est = datetime.now(ZoneInfo('America/New_York'))
             
             is_open, session_end_time, session_name, session_start_time = await client.is_market_open()
             if not is_open:
@@ -72,7 +73,8 @@ async def ha_assassin_loop(client: TossApiClient, bot: Bot, chat_id: int):
                 target_sell_price = 0.0
                 print(f"♻️ [HA 암살자] 수동 청산 팩트 교정: 오염된 장부가 0.0 강제 동기화.", flush=True)
 
-            if session_end_time and (session_end_time - now_kst).total_seconds() <= 120:
+            # MODIFIED: Zero-Overnight 마감 120초 전 컷오프 (EST 연산 락온)
+            if session_end_time and (session_end_time - now_est).total_seconds() <= 120:
                 try:
                     open_orders = await client.get_orders(status="OPEN", symbol="SOXL")
                     if open_orders:
@@ -86,11 +88,11 @@ async def ha_assassin_loop(client: TossApiClient, bot: Bot, chat_id: int):
                     bids = orderbook.get("bids", [])
                     if bids:
                         bid_1_price = float(bids[0]["price"])
-                        now_est_str = datetime.now(ZoneInfo('America/New_York')).strftime("%Y-%m-%d %H:%M:%S EST")
+                        now_est_str = now_est.strftime("%Y-%m-%d %H:%M:%S EST")
                         await client.create_order(
                             symbol="SOXL", side="SELL", order_type="LIMIT", 
                             quantity=soxl_qty, price=bid_1_price, 
-                            client_order_id=f"HAZERO_{datetime.now(ZoneInfo('America/New_York')).strftime('%Y%m%d_%H%M%S')}"
+                            client_order_id=f"HAZERO_{now_est.strftime('%Y%m%d_%H%M%S')}"
                         )
                         
                         sell_amount = bid_1_price * soxl_qty
@@ -131,12 +133,11 @@ async def ha_assassin_loop(client: TossApiClient, bot: Bot, chat_id: int):
             ha_df = HeikinAshiEngine.calculate_3m_ha(candles_json)
             avg_stamina = HeikinAshiEngine.calculate_amplitude_stamina(daily_candles_json)
             
-            # MODIFIED: 3연속 닫힌 양봉 판별을 위해 최소 배열 길이 4로 상향 락온 (Case 24 단락 평가 방어)
             if len(ha_df) < 4:
                 continue
                 
             if session_end_time is None:
-                if (datetime.now(ZoneInfo('America/New_York')) - ha_df.index[-1]).total_seconds() > 300:
+                if (now_est - ha_df.index[-1]).total_seconds() > 300:
                     continue
 
             current_amp = 0.0
@@ -149,7 +150,6 @@ async def ha_assassin_loop(client: TossApiClient, bot: Bot, chat_id: int):
                     session_open_price = session_candles.iloc[0]['HA_Open']
                     current_amp = await HeikinAshiEngine.get_dynamic_session_amp(session_start_est, session_name, session_candles)
 
-            # NEW: 3연속 닫힌 봉 스캔을 위한 c3 변수 전진 배치
             c3 = ha_df.iloc[-4]
             c1 = ha_df.iloc[-3]
             c2 = ha_df.iloc[-2]
@@ -167,7 +167,8 @@ async def ha_assassin_loop(client: TossApiClient, bot: Bot, chat_id: int):
             
             gap_shield_block = False
             if session_start_time:
-                elapsed_sec = (now_kst - session_start_time).total_seconds()
+                # MODIFIED: 개장 직후 60분 갭 쉴드 (EST 연산 락온)
+                elapsed_sec = (now_est - session_start_time).total_seconds()
                 if elapsed_sec <= 3600:
                     if is_c0_eum or (c0['HA_Close'] < session_open_price):
                         gap_shield_block = True
@@ -185,7 +186,6 @@ async def ha_assassin_loop(client: TossApiClient, bot: Bot, chat_id: int):
             dynamic_sell_signal = False
             
             if last_action_candle_time != current_closed_time:
-                # MODIFIED: Track 1, 2 (순추세) + Track 3 (역추세 3연속 양봉 돌파) 하이브리드 결합 락온
                 base_trend_signal = ((is_c2_yang and c2_shaved_bottom) or (is_c1_yang and is_c2_yang)) and is_up_trend
                 v_reversal_signal = is_c3_yang and is_c1_yang and is_c2_yang
                 raw_buy_signal = base_trend_signal or v_reversal_signal
@@ -229,8 +229,8 @@ async def ha_assassin_loop(client: TossApiClient, bot: Bot, chat_id: int):
                         pass
                 continue
                 
-            now_est_str = datetime.now(ZoneInfo('America/New_York')).strftime("%Y-%m-%d %H:%M:%S EST")
-            client_order_id_suffix = datetime.now(ZoneInfo('America/New_York')).strftime("%Y%m%d_%H%M%S")
+            now_est_str = now_est.strftime("%Y-%m-%d %H:%M:%S EST")
+            client_order_id_suffix = now_est.strftime("%Y%m%d_%H%M%S")
             
             if buy_signal and soxl_qty == 0:
                 orderbook = await client.get_orderbook("SOXL")

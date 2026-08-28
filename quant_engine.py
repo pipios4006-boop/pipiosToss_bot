@@ -92,7 +92,6 @@ class HAStateManager:
                 os.replace(tmp_path, cls.FILE_PATH)
             await asyncio.to_thread(_write)
 
-
 class HeikinAshiEngine:
     @staticmethod
     def calculate_3m_ha(candles_json: list) -> pd.DataFrame:
@@ -129,7 +128,6 @@ class HeikinAshiEngine:
         ha_df['HA_Low'] = pd.concat([df_3m['lowPrice'], ha_df['HA_Open'], ha_df['HA_Close']], axis=1).min(axis=1)
         ha_df['Volume'] = df_3m['volume']
         
-        # MODIFIED: 가속화된 렌더링 (단기 EMA 5, 중기 EMA 10) 락온
         ha_df['EMA_5'] = ha_df['HA_Close'].ewm(span=5, adjust=False).mean()
         ha_df['EMA_10'] = ha_df['HA_Close'].ewm(span=10, adjust=False).mean()
         

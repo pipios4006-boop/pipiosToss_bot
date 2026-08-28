@@ -45,7 +45,6 @@ async def cmd_start(message: types.Message, state: FSMContext):
         [InlineKeyboardButton(text="⚙️ 타격 목표 수량 설정", callback_data="menu_set_qty")]
     ])
     
-    # MODIFIED: 시스템 명칭 가속화 표기 (EMA-10 Shield)
     welcome_text = (
         "🤖 <b>승승장군 퀀트 관제탑 가동</b>\n\n"
         "▫️ 시스템: Toss Securities V14 / V-REV 4.0 (EMA-10 Shield)\n"
@@ -58,7 +57,6 @@ async def cmd_start(message: types.Message, state: FSMContext):
     except Exception as e:
         print(f"⚠️ [텔레그램 통신 붕괴 방어] 메인 메뉴 렌더링 실패: {e}")
 
-# NEW: 로컬 장부 오염 초기화 방어망 (Case 02)
 @router.message(Command("reset"))
 async def cmd_reset(message: types.Message, state: FSMContext):
     if message.from_user.id != ADMIN_CHAT_ID:
@@ -277,7 +275,6 @@ async def process_scan_asset(callback_query: types.CallbackQuery, state: FSMCont
         krw_profit = holdings["profit_usd"] * ex_rate
         profit_rate_pct = holdings["profit_rate"] * 100
         
-        # MODIFIED: UI 거시 방어선 EMA 10 표기
         result_text = (
             f"📊 <b>계좌 자산 스캔 완료</b>\n\n"
             f"🔹 <b>기준 시각</b>: {html.escape(est_now)} EST\n"
@@ -341,10 +338,12 @@ async def process_scan_ha(callback_query: types.CallbackQuery, state: FSMContext
         ha_df = HeikinAshiEngine.calculate_3m_ha(candles_json)
         avg_stamina = HeikinAshiEngine.calculate_amplitude_stamina(daily_candles_json)
         
-        est_now = datetime.now(ZoneInfo('America/New_York')).strftime("%Y-%m-%d %H:%M:%S")
+        now_est = datetime.now(ZoneInfo('America/New_York'))
+        est_now_str = now_est.strftime("%Y-%m-%d %H:%M:%S")
         
-        if ha_df.empty:
-            result_text = f"🚨 <b>캔들 데이터 붕괴 (빈 배열)</b>\n\n🔹 <b>기준 시각</b>: {html.escape(est_now)} EST\n🔹 <b>실시간 종가</b>: ${current_price:.2f}"
+        # MODIFIED: Case 24 관제탑 렌더링 단락 평가 하드코딩 (len < 4)
+        if len(ha_df) < 4:
+            result_text = f"🚨 <b>캔들 데이터 붕괴 (최소 4배열 미달)</b>\n\n🔹 <b>기준 시각</b>: {html.escape(est_now_str)} EST\n🔹 <b>실시간 종가</b>: ${current_price:.2f}"
         else:
             current_amp = 0.0
             gap_shield_active = False
@@ -360,24 +359,22 @@ async def process_scan_ha(callback_query: types.CallbackQuery, state: FSMContext
             session_display = session_map.get(session_name, "알 수 없음") if is_open else "휴장 (Closed)"
             
             trend_text = "➖ 횡보장 (Neutral)"
-            if len(ha_df) >= 2:
-                # MODIFIED: UI 추세장 판별 역시 EMA 5 > EMA 10 가속 벡터 참조
-                c2_ema5 = ha_df.iloc[-2]['EMA_5']
-                c2_ema10 = ha_df.iloc[-2]['EMA_10']
-                if c2_ema5 > c2_ema10:
-                    trend_text = "📈 상승장 (Up-Trend)"
-                elif c2_ema5 < c2_ema10:
-                    trend_text = "📉 하락장 (Down-Trend)"
+            c2_ema5 = ha_df.iloc[-2]['EMA_5']
+            c2_ema10 = ha_df.iloc[-2]['EMA_10']
+            if c2_ema5 > c2_ema10:
+                trend_text = "📈 상승장 (Up-Trend)"
+            elif c2_ema5 < c2_ema10:
+                trend_text = "📉 하락장 (Down-Trend)"
             
             if is_open and session_start_time is not None:
-                now_kst = datetime.now(ZoneInfo('Asia/Seoul'))
+                # MODIFIED: KST 완전 격리 및 EST 락온
                 session_start_est = session_start_time.astimezone(ZoneInfo('America/New_York'))
                 session_candles = ha_df[ha_df.index >= session_start_est]
                 
                 if not session_candles.empty:
                     current_amp = await HeikinAshiEngine.get_dynamic_session_amp(session_start_est, session_name, session_candles)
                     
-                    elapsed_sec = (now_kst - session_start_time).total_seconds()
+                    elapsed_sec = (now_est - session_start_est).total_seconds()
                     if elapsed_sec <= 3600:
                         c0 = session_candles.iloc[-1]
                         session_open_price = session_candles.iloc[0]['HA_Open']
@@ -402,7 +399,7 @@ async def process_scan_ha(callback_query: types.CallbackQuery, state: FSMContext
                 
             result_text = (
                 f"📈 <b>SOXL 퀀트 타점 및 체력 스캔 완료</b>\n\n"
-                f"🔹 <b>스캔 시각</b>: {html.escape(est_now)} EST\n"
+                f"🔹 <b>스캔 시각</b>: {html.escape(est_now_str)} EST\n"
                 f"🔹 <b>실시간 종가 (Tick)</b>: <b>${current_price:.2f}</b>\n"
                 f"🔹 <b>진행 세션</b>: {session_display}\n"
                 f"🔹 <b>거시 장세 (EMA)</b>: {trend_text}\n\n"

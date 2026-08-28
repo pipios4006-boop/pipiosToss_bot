@@ -42,42 +42,48 @@ class TossApiClient:
         
         self._calendar_cache = {}
         self._calendar_lock = None
+        
+        # NEW: Case 06 무지연 커넥션 풀링 세션 초기화
+        self._session = None
 
     async def _request(self, method: str, endpoint: str, group_name: str, **kwargs) -> dict:
         url = f"{self.base_url}{endpoint}"
         max_retries = 3
-        timeout = aiohttp.ClientTimeout(total=10.0)
         
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            for attempt in range(max_retries):
-                await GlobalThrottle.wait_api_sync(group_name)
-                
-                if "headers" in kwargs and "Authorization" in kwargs["headers"]:
-                    kwargs["headers"]["Authorization"] = f"Bearer {self.token}"
-                
-                try:
-                    async with session.request(method, url, **kwargs) as response:
-                        if response.status == 200:
-                            return await response.json()
-                        elif response.status == 401 and group_name != "AUTH":
-                            print("⚠️ 401 Unauthorized 타격. 토큰 자가 치유 엔진 격발...")
-                            await self.authenticate(force=True)
-                            continue
-                        elif response.status == 429:
-                            retry_after = int(response.headers.get("Retry-After", 3))
-                            print(f"⚠️ 429 Rate Limit 타격. {retry_after}초 지수 백오프 대기...")
-                            await asyncio.sleep(retry_after)
-                            continue
-                        else:
-                            error_text = await response.text()
-                            raise ConnectionError(f"API 통신 붕괴 ({response.status}): {error_text}")
-                except (aiohttp.ClientError, asyncio.TimeoutError) as e:
-                    if attempt < max_retries - 1:
-                        backoff_time = 2 ** attempt
-                        print(f"⚠️ API 통신 예외 요격 ({e}). {backoff_time}초 지수 백오프 후 재시도...")
-                        await asyncio.sleep(backoff_time)
+        # MODIFIED: Case 06 무지연 타격망. 세션 지연 초기화 및 재사용 (Connection Pooling)
+        if self._session is None or self._session.closed:
+            timeout = aiohttp.ClientTimeout(total=10.0)
+            self._session = aiohttp.ClientSession(timeout=timeout)
+        
+        for attempt in range(max_retries):
+            await GlobalThrottle.wait_api_sync(group_name)
+            
+            if "headers" in kwargs and "Authorization" in kwargs["headers"]:
+                kwargs["headers"]["Authorization"] = f"Bearer {self.token}"
+            
+            try:
+                async with self._session.request(method, url, **kwargs) as response:
+                    if response.status == 200:
+                        return await response.json()
+                    elif response.status == 401 and group_name != "AUTH":
+                        print("⚠️ 401 Unauthorized 타격. 토큰 자가 치유 엔진 격발...")
+                        await self.authenticate(force=True)
                         continue
-                    raise TimeoutError(f"최대 재시도 횟수 초과 즉사: {e}")
+                    elif response.status == 429:
+                        retry_after = int(response.headers.get("Retry-After", 3))
+                        print(f"⚠️ 429 Rate Limit 타격. {retry_after}초 지수 백오프 대기...")
+                        await asyncio.sleep(retry_after)
+                        continue
+                    else:
+                        error_text = await response.text()
+                        raise ConnectionError(f"API 통신 붕괴 ({response.status}): {error_text}")
+            except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+                if attempt < max_retries - 1:
+                    backoff_time = 2 ** attempt
+                    print(f"⚠️ API 통신 예외 요격 ({e}). {backoff_time}초 지수 백오프 후 재시도...")
+                    await asyncio.sleep(backoff_time)
+                    continue
+                raise TimeoutError(f"최대 재시도 횟수 초과 즉사: {e}")
 
     async def authenticate(self, force: bool = False) -> None:
         if self._auth_lock is None:
@@ -134,7 +140,6 @@ class TossApiClient:
         else:
             raise ValueError("종합매매 계좌를 찾을 수 없습니다.")
 
-    # MODIFIED: 세션 시작 시각 및 세션명(Track B, C) 반환을 위한 튜플 확장
     async def is_market_open(self) -> tuple[bool, datetime, str, datetime]:
         if not self.token:
             await self.authenticate()
@@ -143,8 +148,9 @@ class TossApiClient:
             self._calendar_lock = asyncio.Lock()
             
         async with self._calendar_lock:
-            now_kst = datetime.now(ZoneInfo('Asia/Seoul'))
-            est_today_str = datetime.now(ZoneInfo('America/New_York')).strftime("%Y-%m-%d")
+            # MODIFIED: 제3헌법 EST 100% 락온. 캘린더 파싱 시 즉각 EST 변환
+            now_est = datetime.now(ZoneInfo('America/New_York'))
+            est_today_str = now_est.strftime("%Y-%m-%d")
             
             if self._calendar_cache.get("date") != est_today_str:
                 try:
@@ -160,8 +166,9 @@ class TossApiClient:
                         for session_name in ["dayMarket", "preMarket", "regularMarket", "afterMarket"]:
                             session_data = day_cal.get(session_name)
                             if session_data:
-                                start_dt = datetime.fromisoformat(session_data["startTime"])
-                                end_dt = datetime.fromisoformat(session_data["endTime"])
+                                # EST 강제 변환
+                                start_dt = datetime.fromisoformat(session_data["startTime"]).astimezone(ZoneInfo('America/New_York'))
+                                end_dt = datetime.fromisoformat(session_data["endTime"]).astimezone(ZoneInfo('America/New_York'))
                                 sessions.append((session_name, start_dt, end_dt))
                     
                     self._calendar_cache = {"date": est_today_str, "sessions": sessions}
@@ -180,7 +187,7 @@ class TossApiClient:
                 return False, None, None, None
                 
             for s_name, start_dt, end_dt in cached_sessions:
-                if start_dt <= now_kst <= end_dt:
+                if start_dt <= now_est <= end_dt:
                     return True, end_dt, s_name, start_dt
                     
             return False, None, None, None
@@ -255,7 +262,6 @@ class TossApiClient:
         data = await self._request("GET", endpoint, "MARKET_DATA_CHART", headers=self._get_headers())
         return data.get("result", {}).get("candles", [])
         
-    # NEW: Track A 체력 측정을 위한 일봉 수신 엔진
     async def get_daily_candles(self, symbol: str, count: int = 6) -> list:
         if not self.token:
             await self.authenticate()
