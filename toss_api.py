@@ -10,7 +10,6 @@ import contextlib
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-# NEW: 제1헌법 - 동기 I/O 비동기 격리 및 Rate Limit 중앙 통제소 (독립 모듈화)
 class GlobalThrottle:
     _locks = {}
     _file_locks = {}
@@ -30,7 +29,6 @@ class GlobalThrottle:
         async with cls._file_locks[filepath]:
             yield
 
-# NEW: API 클라이언트 엔진 단독 분리
 class TossApiClient:
     def __init__(self, client_id: str, client_secret: str):
         self.client_id = client_id
@@ -136,7 +134,8 @@ class TossApiClient:
         else:
             raise ValueError("종합매매 계좌를 찾을 수 없습니다.")
 
-    async def is_market_open(self) -> tuple[bool, datetime]:
+    # MODIFIED: 세션 시작 시각 및 세션명(Track B, C) 반환을 위한 튜플 확장
+    async def is_market_open(self) -> tuple[bool, datetime, str, datetime]:
         if not self.token:
             await self.authenticate()
             
@@ -163,7 +162,7 @@ class TossApiClient:
                             if session_data:
                                 start_dt = datetime.fromisoformat(session_data["startTime"])
                                 end_dt = datetime.fromisoformat(session_data["endTime"])
-                                sessions.append((start_dt, end_dt))
+                                sessions.append((session_name, start_dt, end_dt))
                     
                     self._calendar_cache = {"date": est_today_str, "sessions": sessions}
                     print(f"📅 토스증권 US 시장 3영업일 달력 병합 완료: {est_today_str} (총 {len(sessions)}개 세션 확보)")
@@ -173,67 +172,56 @@ class TossApiClient:
                         print(f"⚠️ [달력 API] 통신 지연. 인메모리 캐시 기반 Dual Fallback 가동: {e}")
                     else:
                         print(f"🚨 [달력 API] 통신 붕괴 및 캐시 부재. Fail-Open(조건부 허용) 섀도 모드 가동: {e}")
-                        return True, None
+                        return True, None, None, None
                     
             cached_sessions = self._calendar_cache.get("sessions", [])
             
             if not cached_sessions:
-                return False, None
+                return False, None, None, None
                 
-            for start_dt, end_dt in cached_sessions:
+            for s_name, start_dt, end_dt in cached_sessions:
                 if start_dt <= now_kst <= end_dt:
-                    return True, end_dt
+                    return True, end_dt, s_name, start_dt
                     
-            return False, None
+            return False, None, None, None
 
     async def get_usd_to_krw_rate(self) -> float:
         if not self.token:
             await self.authenticate()
-            
         endpoint = "/api/v1/exchange-rate?baseCurrency=USD&quoteCurrency=KRW"
         data = await self._request("GET", endpoint, "MARKET_INFO", headers=self._get_headers())
-        
         rate = data.get("result", {}).get("rate", "0")
         return float(rate) if rate else 0.0
 
     async def get_usd_buying_power(self) -> float:
         if not self.account_seq:
             await self.fetch_account_seq()
-            
         data = await self._request("GET", "/api/v1/buying-power?currency=USD", "ORDER_INFO", headers=self._get_headers(requires_account=True))
         result = data.get("result", {})
-        
         raw_bp = result.get("cashBuyingPower")
         return float(raw_bp) if raw_bp is not None else 0.0
 
     async def get_soxl_holdings(self) -> int:
         if not self.account_seq:
             await self.fetch_account_seq()
-            
         data = await self._request("GET", "/api/v1/holdings?symbol=SOXL", "ASSET", headers=self._get_headers(requires_account=True))
         result = data.get("result", {})
-        
         items = result.get("items", [])
         if not items:
             return 0
-            
         soxl_item = next((item for item in items if item.get("symbol") == "SOXL"), None)
         if not soxl_item:
             return 0
-            
         raw_qty = soxl_item.get("quantity")
         return int(float(raw_qty)) if raw_qty is not None else 0
 
     async def get_soxl_holdings_detail(self) -> dict:
         if not self.account_seq:
             await self.fetch_account_seq()
-            
         data = await self._request("GET", "/api/v1/holdings?symbol=SOXL", "ASSET", headers=self._get_headers(requires_account=True))
         items = data.get("result", {}).get("items", [])
-        
         if not items:
             return {"qty": 0.0, "avg_price": 0.0, "profit_rate": 0.0, "profit_usd": 0.0}
-            
         item = items[0]
         return {
             "qty": float(item.get("quantity", 0.0)),
@@ -245,72 +233,65 @@ class TossApiClient:
     async def get_current_price(self, symbol: str) -> float:
         if not self.token:
             await self.authenticate()
-            
         endpoint = f"/api/v1/prices?symbols={symbol}"
         data = await self._request("GET", endpoint, "MARKET_DATA", headers=self._get_headers())
-        
         results = data.get("result", [])
         if not results:
             return 0.0
-            
         raw_price = results[0].get("lastPrice")
         return float(raw_price) if raw_price is not None else 0.0
 
     async def get_orderbook(self, symbol: str) -> dict:
         if not self.token:
             await self.authenticate()
-            
         endpoint = f"/api/v1/orderbook?symbol={symbol}"
         data = await self._request("GET", endpoint, "MARKET_DATA", headers=self._get_headers())
-        
         return data.get("result", {})
 
     async def get_1m_candles(self, symbol: str, count: int = 200) -> list:
         if not self.token:
             await self.authenticate()
-            
         endpoint = f"/api/v1/candles?symbol={symbol}&interval=1m&count={count}"
         data = await self._request("GET", endpoint, "MARKET_DATA_CHART", headers=self._get_headers())
+        return data.get("result", {}).get("candles", [])
         
+    # NEW: Track A 체력 측정을 위한 일봉 수신 엔진
+    async def get_daily_candles(self, symbol: str, count: int = 6) -> list:
+        if not self.token:
+            await self.authenticate()
+        endpoint = f"/api/v1/candles?symbol={symbol}&interval=1d&count={count}"
+        data = await self._request("GET", endpoint, "MARKET_DATA_CHART", headers=self._get_headers())
         return data.get("result", {}).get("candles", [])
 
     async def get_orders(self, status: str, symbol: str = None) -> list:
         if not self.account_seq:
             await self.fetch_account_seq()
-            
         endpoint = f"/api/v1/orders?status={status}"
         if symbol:
             endpoint += f"&symbol={symbol}"
-            
         data = await self._request("GET", endpoint, "ORDER_HISTORY", headers=self._get_headers(requires_account=True))
         return data.get("result", {}).get("orders", [])
 
     async def create_order(self, symbol: str, side: str, order_type: str, quantity: float, price: float = None, time_in_force: str = "DAY", client_order_id: str = None) -> dict:
         if not self.account_seq:
             await self.fetch_account_seq()
-            
         payload = {
             "symbol": symbol,
             "side": side,
             "orderType": order_type,
             "timeInForce": time_in_force
         }
-        
         payload["quantity"] = str(int(math.floor(quantity)))
-        
         if order_type == "LIMIT" and price is not None:
             payload["price"] = str(price)
-            
         if client_order_id:
             payload["clientOrderId"] = client_order_id
-            
         data = await self._request("POST", "/api/v1/orders", "ORDER", headers=self._get_headers(requires_account=True), json=payload)
         return data.get("result", {})
 
     async def cancel_order(self, order_id: str) -> dict:
         if not self.account_seq:
             await self.fetch_account_seq()
-            
         endpoint = f"/api/v1/orders/{order_id}/cancel"
         data = await self._request("POST", endpoint, "ORDER", headers=self._get_headers(requires_account=True))
         return data.get("result", {})

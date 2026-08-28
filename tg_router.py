@@ -1,6 +1,6 @@
 # =====================================================================
 # 파일명: tg_router.py
-# 목적: 텔레그램 메인 메뉴, 콜백, FSM 라우팅 전담 및 네트워크 예외(Errno 104) 철저 격리
+# 목적: 텔레그램 메인 메뉴, 콜백, FSM 라우팅 및 퀀트 지표 대시보드 직관적 렌더링
 # =====================================================================
 
 import asyncio
@@ -39,7 +39,7 @@ async def cmd_start(message: types.Message, state: FSMContext):
         
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="💰 잔고 스캔", callback_data="scan_asset")],
-        [InlineKeyboardButton(text="📈 SOXL 실시간 & 3분봉 HA 스캔", callback_data="scan_ha")],
+        [InlineKeyboardButton(text="📈 SOXL 타점 및 방어망 스캔", callback_data="scan_ha")],
         [InlineKeyboardButton(text="⚙️ 타격 목표 수량 설정", callback_data="menu_set_qty")]
     ])
     
@@ -80,7 +80,7 @@ async def process_menu_set_qty(callback_query: types.CallbackQuery, state: FSMCo
     try:
         await callback_query.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
     except Exception as e:
-        print(f"⚠️ [텔레그램 통신 붕괴 방어] 수량 설정 메뉴 렌더링 실패: {e}")
+        pass
 
 @router.callback_query(F.data.startswith("set_qty_"))
 async def process_set_qty_action(callback_query: types.CallbackQuery, state: FSMContext):
@@ -103,8 +103,8 @@ async def process_set_qty_action(callback_query: types.CallbackQuery, state: FSM
         )
         try:
             await callback_query.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
-        except Exception as e:
-            print(f"⚠️ [텔레그램 통신 붕괴 방어] 수동 입력 UI 렌더링 실패: {e}")
+        except Exception:
+            pass
         return
     
     try:
@@ -112,17 +112,15 @@ async def process_set_qty_action(callback_query: types.CallbackQuery, state: FSM
         await HAStateManager.save_state(target_qty=qty)
         try:
             await callback_query.answer(f"✅ {qty}주 타격 락온 완료. 다음 스캔부터 즉시 적용됩니다.", show_alert=False)
-        except Exception as e:
-            print(f"⚠️ [텔레그램 통신 붕괴 방어] 토스트 알림 실패: {e}")
+        except Exception:
+            pass
             
         await process_back_to_main(callback_query, state)
-        
     except Exception as e:
-        error_msg = html.escape(str(e))
         try:
-            await callback_query.message.edit_text(f"🚨 <b>상태 장부 기록 붕괴</b>\n\n▫️ {error_msg}", parse_mode="HTML")
-        except Exception as ex:
-            print(f"🚨 [텔레그램 통신 붕괴 방어] 에러 렌더링 실패: {ex}")
+            await callback_query.message.edit_text(f"🚨 <b>상태 장부 기록 붕괴</b>\n\n▫️ {html.escape(str(e))}", parse_mode="HTML")
+        except Exception:
+            pass
 
 @router.message(ManualQtyState.waiting_for_qty)
 async def process_manual_qty_input(message: types.Message, state: FSMContext):
@@ -134,8 +132,8 @@ async def process_manual_qty_input(message: types.Message, state: FSMContext):
     if not qty_str.isdigit():
         try:
             await message.answer("🚨 <b>수량은 양의 정수만 입력 가능합니다.</b> 다시 숫자만 입력해 주십시오.", parse_mode="HTML")
-        except Exception as e:
-            print(f"⚠️ [텔레그램 통신 붕괴 방어] 예외 렌더링 실패: {e}")
+        except Exception:
+            pass
         return
         
     qty = int(qty_str)
@@ -143,8 +141,8 @@ async def process_manual_qty_input(message: types.Message, state: FSMContext):
     if not (1 <= qty <= 1000):
         try:
             await message.answer("🚨 <b>수량은 1주에서 1,000주 사이로 캡핑되어야 합니다.</b> 다시 입력해 주십시오.", parse_mode="HTML")
-        except Exception as e:
-            print(f"⚠️ [텔레그램 통신 붕괴 방어] 예외 렌더링 실패: {e}")
+        except Exception:
+            pass
         return
         
     try:
@@ -162,14 +160,13 @@ async def process_manual_qty_input(message: types.Message, state: FSMContext):
         )
         try:
             await message.answer(success_text, reply_markup=keyboard, parse_mode="HTML")
-        except Exception as e:
-            print(f"⚠️ [텔레그램 통신 붕괴 방어] 성공 렌더링 실패: {e}")
+        except Exception:
+            pass
     except Exception as e:
-        safe_error = html.escape(str(e))
         try:
-            await message.answer(f"🚨 <b>상태 장부 기록 붕괴</b>: <pre>{safe_error}</pre>", parse_mode="HTML")
-        except Exception as ex:
-            print(f"⚠️ [텔레그램 통신 붕괴 방어] 에러 렌더링 실패: {ex}")
+            await message.answer(f"🚨 <b>상태 장부 기록 붕괴</b>: <pre>{html.escape(str(e))}</pre>", parse_mode="HTML")
+        except Exception:
+            pass
 
 @router.message(Command("update"))
 async def cmd_update(message: types.Message):
@@ -178,10 +175,7 @@ async def cmd_update(message: types.Message):
 
     try:
         await message.answer("⏳ <b>레스큐 모듈(plugin_updater.py) 격발. 깃허브 원장 동기화 및 프리플라이트 검증 진행 중...</b>", parse_mode="HTML")
-    except Exception as e:
-        print(f"⚠️ [텔레그램 통신 붕괴 방어] 업데이트 시작 알림 실패: {e}")
-    
-    try:
+        
         process = await asyncio.create_subprocess_exec(
             sys.executable, "plugin_updater.py",
             stdout=asyncio.subprocess.PIPE,
@@ -200,16 +194,10 @@ async def cmd_update(message: types.Message):
                 f"✅ <b>업데이트 및 검증 통과</b>\n\n"
                 f"▫️ <b>STDOUT</b>:\n<pre>{safe_out}</pre>"
             )
-            try:
-                await message.answer(result_msg, parse_mode="HTML")
-            except Exception as e:
-                print(f"⚠️ [텔레그램 통신 붕괴 방어] 업데이트 결과 알림 실패: {e}")
+            await message.answer(result_msg, parse_mode="HTML")
             
             if "Already up to date." not in out_text:
-                try:
-                    await message.answer("⚠️ <b>검증된 새 코어 코드 감지. 데몬을 즉시 재가동(Restart)합니다.</b>", parse_mode="HTML")
-                except Exception as e:
-                    print(f"⚠️ [텔레그램 통신 붕괴 방어] 재가동 알림 실패: {e}")
+                await message.answer("⚠️ <b>검증된 새 코어 코드 감지. 데몬을 즉시 재가동(Restart)합니다.</b>", parse_mode="HTML")
                 await asyncio.sleep(1)
                 os._exit(0)
         else:
@@ -219,17 +207,13 @@ async def cmd_update(message: types.Message):
                 f"▫️ <b>STDERR (문법 에러 원인)</b>:\n<pre>{safe_err}</pre>\n"
                 f"▫️ <b>STDOUT (복구 로그)</b>:\n<pre>{safe_out}</pre>"
             )
-            try:
-                await message.answer(result_msg, parse_mode="HTML")
-            except Exception as e:
-                print(f"⚠️ [텔레그램 통신 붕괴 방어] 롤백 알림 실패: {e}")
+            await message.answer(result_msg, parse_mode="HTML")
             
     except Exception as e:
-        safe_error = html.escape(str(e))
         try:
-            await message.answer(f"🚨 <b>관제탑 업데이트 통신 붕괴 감지</b>:\n<pre>{safe_error}</pre>", parse_mode="HTML")
-        except Exception as ex:
-            print(f"⚠️ [텔레그램 통신 붕괴 방어] 붕괴 알림 실패: {ex}")
+            await message.answer(f"🚨 <b>관제탑 업데이트 통신 붕괴 감지</b>:\n<pre>{html.escape(str(e))}</pre>", parse_mode="HTML")
+        except Exception:
+            pass
 
 @router.callback_query(F.data == "scan_asset")
 async def process_scan_asset(callback_query: types.CallbackQuery, state: FSMContext):
@@ -240,8 +224,8 @@ async def process_scan_asset(callback_query: types.CallbackQuery, state: FSMCont
     
     try:
         await callback_query.answer("⏳ 잔고 원장 동기화 중...", show_alert=False)
-    except Exception as e:
-        print(f"⚠️ [텔레그램 통신 붕괴 방어] 잔고 스캔 토스트 알림 실패 (무시 후 스캔 강행): {e}")
+    except Exception:
+        pass
     
     try:
         holdings_task = api_client.get_soxl_holdings_detail()
@@ -254,21 +238,19 @@ async def process_scan_asset(callback_query: types.CallbackQuery, state: FSMCont
             holdings_task, rate_task, usd_bp_task, current_price_task, target_qty_task
         )
         
-        # MODIFIED: 3-Tier 언패킹 규격 적용 (target_sell_price 동기화)
         _, target_qty, target_sell_price = state_tuple
         
         est_now = datetime.now(ZoneInfo('America/New_York')).strftime("%Y-%m-%d %H:%M:%S")
-        safe_est = html.escape(est_now)
         
         krw_profit = holdings["profit_usd"] * ex_rate
         profit_rate_pct = holdings["profit_rate"] * 100
         
         result_text = (
             f"📊 <b>계좌 자산 스캔 완료</b>\n\n"
-            f"🔹 <b>기준 시각</b>: {safe_est} EST\n"
+            f"🔹 <b>기준 시각</b>: {html.escape(est_now)} EST\n"
             f"🔹 <b>매수 가능 달러</b>: ${usd_bp:,.2f}\n"
             f"🔹 <b>SOXL 보유 수량</b>: {holdings['qty']:,.2f}주\n"
-            f"🔹 <b>SOXL 타격 목표 수량</b>: {target_qty}주 (EMA 필터 가동 중)\n"
+            f"🔹 <b>SOXL 타격 목표 수량</b>: {target_qty}주\n"
             f"🔹 <b>동적 스나이핑 락온가</b>: ${target_sell_price:,.2f} (진성 양봉 중심값)\n"
             f"🔹 <b>총 평단가</b>: ${holdings['avg_price']:,.2f}\n"
             f"🔹 <b>실시간 종가</b>: ${current_price:,.2f}\n"
@@ -282,16 +264,16 @@ async def process_scan_asset(callback_query: types.CallbackQuery, state: FSMCont
         
         try:
             await callback_query.message.edit_text(result_text, reply_markup=keyboard, parse_mode="HTML")
-        except Exception as e:
-            print(f"⚠️ [텔레그램 통신 붕괴 방어] 잔고 스캔 UI 렌더링 실패: {e}")
+        except Exception:
+            pass
         
     except Exception as e:
-        error_msg = html.escape(str(e))
         try:
-            await callback_query.message.edit_text(f"🚨 <b>시스템 붕괴 감지</b>\n\n▫️ {error_msg}", parse_mode="HTML")
-        except Exception as ex:
-            print(f"🚨 [텔레그램 통신 붕괴 방어] 잔고 스캔 에러 렌더링 실패: {ex}")
+            await callback_query.message.edit_text(f"🚨 <b>시스템 붕괴 감지</b>\n\n▫️ {html.escape(str(e))}", parse_mode="HTML")
+        except Exception:
+            pass
 
+# NEW: 대시보드 규격 업데이트 - 5일 평균 진폭 및 세션별 갭 쉴드 렌더링
 @router.callback_query(F.data == "scan_ha")
 async def process_scan_ha(callback_query: types.CallbackQuery, state: FSMContext):
     if callback_query.from_user.id != ADMIN_CHAT_ID:
@@ -301,42 +283,85 @@ async def process_scan_ha(callback_query: types.CallbackQuery, state: FSMContext
     
     try:
         await callback_query.answer("⏳ 시세 타격 및 HA 벡터 엔진 가동 중...", show_alert=False)
-    except Exception as e:
-        print(f"⚠️ [텔레그램 통신 붕괴 방어] HA 스캔 토스트 알림 실패 (무시 후 스캔 강행): {e}")
+    except Exception:
+        pass
     
     try:
+        is_open_task = api_client.is_market_open()
         current_price_task = api_client.get_current_price("SOXL")
         candles_task = api_client.get_1m_candles("SOXL", count=200)
+        daily_candles_task = api_client.get_daily_candles("SOXL", count=6)
         
-        current_price, candles_json = await asyncio.gather(current_price_task, candles_task)
+        is_open_tuple, current_price, candles_json, daily_candles_json = await asyncio.gather(
+            is_open_task, current_price_task, candles_task, daily_candles_task
+        )
         
+        is_open, session_end_time, session_name, session_start_time = is_open_tuple
         ha_df = HeikinAshiEngine.calculate_3m_ha(candles_json)
+        avg_stamina = HeikinAshiEngine.calculate_amplitude_stamina(daily_candles_json)
         
         est_now = datetime.now(ZoneInfo('America/New_York')).strftime("%Y-%m-%d %H:%M:%S")
-        safe_est = html.escape(est_now)
         
         if ha_df.empty:
-            result_text = f"🚨 <b>캔들 데이터 붕괴 (빈 배열)</b>\n\n🔹 <b>기준 시각</b>: {safe_est} EST\n🔹 <b>실시간 종가</b>: ${current_price:.2f}"
+            result_text = f"🚨 <b>캔들 데이터 붕괴 (빈 배열)</b>\n\n🔹 <b>기준 시각</b>: {html.escape(est_now)} EST\n🔹 <b>실시간 종가</b>: ${current_price:.2f}"
         else:
+            current_amp = 0.0
+            gap_shield_active = False
+            shield_status_text = "🔴 해제됨 (개장 60분 경과 혹은 진행장 아님)"
+            stamina_status_text = "🟢 정상 (진입 가능)"
+            
+            session_map = {
+                "dayMarket": "데이마켓 (Day Market)",
+                "preMarket": "프리마켓 (Pre Market)",
+                "regularMarket": "정규장 (Regular Market)",
+                "afterMarket": "애프터마켓 (After Market)"
+            }
+            session_display = session_map.get(session_name, "알 수 없음") if is_open else "휴장 (Closed)"
+            
+            if is_open and session_start_time is not None:
+                now_kst = datetime.now(ZoneInfo('Asia/Seoul'))
+                session_start_est = session_start_time.astimezone(ZoneInfo('America/New_York'))
+                session_candles = ha_df[ha_df.index >= session_start_est]
+                
+                if not session_candles.empty:
+                    s_high = session_candles['HA_High'].max()
+                    s_low = session_candles['HA_Low'].min()
+                    if s_low > 0:
+                        current_amp = (s_high - s_low) / s_low
+                        
+                    elapsed_sec = (now_kst - session_start_time).total_seconds()
+                    if elapsed_sec <= 3600:
+                        c0 = session_candles.iloc[-1]
+                        session_open_price = session_candles.iloc[0]['HA_Open']
+                        
+                        if (c0['HA_Close'] < c0['HA_Open']) or (c0['HA_Close'] < session_open_price):
+                            gap_shield_active = True
+                            shield_status_text = "🟢 가동 중 (음봉 하락 팩트 감지. 타점 소각)"
+                        else:
+                            shield_status_text = "🟡 대기 중 (상승 팩트 도출)"
+                            
+            if (avg_stamina > 0.0) and (current_amp >= avg_stamina * 0.95):
+                stamina_status_text = "🔴 체력 소진 (타점 소각)"
+            
             recent_ha = ha_df.tail(10)
             ha_history_text = ""
-            
             for time_idx, row in recent_ha.iterrows():
                 ha_o = row['HA_Open']
                 ha_c = row['HA_Close']
                 ha_time_str = time_idx.strftime("%H:%M")
-                
-                if ha_c >= ha_o:
-                    candle_icon = "🟥 양봉"
-                else:
-                    candle_icon = "🟦 음봉"
-                    
+                candle_icon = "🟥 양봉" if ha_c >= ha_o else "🟦 음봉"
                 ha_history_text += f"🔸 [{ha_time_str}] {candle_icon} ${ha_c:.2f}\n"
                 
             result_text = (
-                f"📈 <b>SOXL 시세 및 하이킨 아시 스캔 완료</b>\n\n"
-                f"🔹 <b>스캔 시각</b>: {safe_est} EST\n"
-                f"🔹 <b>실시간 종가 (Tick)</b>: <b>${current_price:.2f}</b>\n\n"
+                f"📈 <b>SOXL 퀀트 타점 및 체력 스캔 완료</b>\n\n"
+                f"🔹 <b>스캔 시각</b>: {html.escape(est_now)} EST\n"
+                f"🔹 <b>실시간 종가 (Tick)</b>: <b>${current_price:.2f}</b>\n"
+                f"🔹 <b>진행 세션</b>: {session_display}\n\n"
+                f"🛡️ <b>[HA 암살자 엣지 방어망 상태]</b>\n"
+                f"🔸 <b>5일 평균 진폭 (체력 한계)</b>: {avg_stamina*100:.2f}%\n"
+                f"🔸 <b>현재 세션 진폭 (소진 체력)</b>: {current_amp*100:.2f}%\n"
+                f"🔸 <b>체력 고갈 여부</b>: {stamina_status_text}\n"
+                f"🔸 <b>세션 경계 갭 쉴드</b>: {shield_status_text}\n\n"
                 f"📊 <b>최근 3분봉 HA 흐름 (최대 10개)</b>\n"
                 f"{ha_history_text}"
             )
@@ -348,15 +373,14 @@ async def process_scan_ha(callback_query: types.CallbackQuery, state: FSMContext
         
         try:
             await callback_query.message.edit_text(result_text, reply_markup=keyboard, parse_mode="HTML")
-        except Exception as e:
-            print(f"⚠️ [텔레그램 통신 붕괴 방어] HA 스캔 UI 렌더링 실패: {e}")
+        except Exception:
+            pass
         
     except Exception as e:
-        error_msg = html.escape(str(e))
         try:
-            await callback_query.message.edit_text(f"🚨 <b>연산 엔진 붕괴 감지</b>\n\n▫️ {error_msg}", parse_mode="HTML")
-        except Exception as ex:
-            print(f"🚨 [텔레그램 통신 붕괴 방어] HA 스캔 에러 렌더링 실패: {ex}")
+            await callback_query.message.edit_text(f"🚨 <b>연산 엔진 붕괴 감지</b>\n\n▫️ {html.escape(str(e))}", parse_mode="HTML")
+        except Exception:
+            pass
 
 @router.callback_query(F.data == "back_to_main")
 async def process_back_to_main(callback_query: types.CallbackQuery, state: FSMContext):
@@ -367,7 +391,7 @@ async def process_back_to_main(callback_query: types.CallbackQuery, state: FSMCo
         
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="💰 잔고 스캔", callback_data="scan_asset")],
-        [InlineKeyboardButton(text="📈 SOXL 실시간 & 3분봉 HA 스캔", callback_data="scan_ha")],
+        [InlineKeyboardButton(text="📈 SOXL 타점 및 방어망 스캔", callback_data="scan_ha")],
         [InlineKeyboardButton(text="⚙️ 타격 목표 수량 설정", callback_data="menu_set_qty")]
     ])
     
@@ -380,5 +404,5 @@ async def process_back_to_main(callback_query: types.CallbackQuery, state: FSMCo
     
     try:
         await callback_query.message.edit_text(welcome_text, reply_markup=keyboard, parse_mode="HTML")
-    except Exception as e:
-        print(f"⚠️ [텔레그램 통신 붕괴 방어] 메인 메뉴 복귀 UI 렌더링 실패: {e}")
+    except Exception:
+        pass

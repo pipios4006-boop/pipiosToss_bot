@@ -1,6 +1,6 @@
 # =====================================================================
 # 파일명: quant_engine.py
-# 목적: 3분봉 HA 100% 벡터화 연산 (EMA 장세 필터 탑재) 및 상태 장부(JSON) 원자적 쓰기 엔진
+# 목적: 3분봉 HA 100% 벡터화 연산 및 5일 체력 진폭(Amplitude) 산출 엔진
 # =====================================================================
 
 import os
@@ -17,7 +17,6 @@ class HAStateManager:
     async def get_state(cls) -> tuple[float, int, float]:
         async with GlobalThrottle.get_file_lock(cls.FILE_PATH):
             def _read():
-                # MODIFIED: target_sell_price(스나이핑 기준가) 파라미터 추가
                 if not os.path.exists(cls.FILE_PATH):
                     return 0.0, 10, 0.0
                 try:
@@ -60,7 +59,6 @@ class HAStateManager:
                         "target_qty": new_qty,
                         "target_sell_price": new_target_sell
                     }, f)
-                # 원자적 덮어쓰기
                 os.replace(tmp_path, cls.FILE_PATH)
             await asyncio.to_thread(_write)
 
@@ -104,3 +102,24 @@ class HeikinAshiEngine:
         ha_df['EMA_20'] = ha_df['HA_Close'].ewm(span=20, adjust=False).mean()
         
         return ha_df.sort_index(ascending=True)
+
+    # NEW: Track A - 5일 평균 진폭(체력) 산출 (공식: (고가 - 저가) / 저가)
+    @staticmethod
+    def calculate_amplitude_stamina(daily_candles_json: list) -> float:
+        if not daily_candles_json or len(daily_candles_json) < 2:
+            return 0.0
+            
+        df = pd.DataFrame(daily_candles_json)
+        for col in ['highPrice', 'lowPrice']:
+            df[col] = df[col].astype(float)
+            
+        # 진행 중인 당일(미완성 캔들)은 오차를 유발하므로 배제 (-1 슬라이싱)
+        df = df.iloc[:-1]
+        
+        # 최근 5영업일 데이터만 벡터 추출
+        df = df.tail(5)
+        
+        # 진폭 체력 공식: 절대 바닥으로부터의 Max Yield
+        df['amplitude'] = (df['highPrice'] - df['lowPrice']) / df['lowPrice']
+        
+        return float(df['amplitude'].mean())
