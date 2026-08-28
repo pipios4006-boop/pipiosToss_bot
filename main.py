@@ -57,7 +57,6 @@ async def ha_assassin_loop(client: TossApiClient, bot: Bot, chat_id: int):
         
         try:
             last_buy_price, target_qty, target_sell_price = await HAStateManager.get_state()
-            # MODIFIED: 제3헌법 EST 100% 락온. KST 완전 소각
             now_est = datetime.now(ZoneInfo('America/New_York'))
             
             is_open, session_end_time, session_name, session_start_time = await client.is_market_open()
@@ -73,7 +72,6 @@ async def ha_assassin_loop(client: TossApiClient, bot: Bot, chat_id: int):
                 target_sell_price = 0.0
                 print(f"♻️ [HA 암살자] 수동 청산 팩트 교정: 오염된 장부가 0.0 강제 동기화.", flush=True)
 
-            # MODIFIED: Zero-Overnight 마감 120초 전 컷오프 (EST 연산 락온)
             if session_end_time and (session_end_time - now_est).total_seconds() <= 120:
                 try:
                     open_orders = await client.get_orders(status="OPEN", symbol="SOXL")
@@ -89,9 +87,11 @@ async def ha_assassin_loop(client: TossApiClient, bot: Bot, chat_id: int):
                     if bids:
                         bid_1_price = float(bids[0]["price"])
                         now_est_str = now_est.strftime("%Y-%m-%d %H:%M:%S EST")
+                        
+                        # MODIFIED: Case 66 호가 단위 정밀도 락온 (Zero-Overnight 매도)
                         await client.create_order(
                             symbol="SOXL", side="SELL", order_type="LIMIT", 
-                            quantity=soxl_qty, price=bid_1_price, 
+                            quantity=soxl_qty, price=f"{bid_1_price:.2f}", 
                             client_order_id=f"HAZERO_{now_est.strftime('%Y%m%d_%H%M%S')}"
                         )
                         
@@ -167,7 +167,6 @@ async def ha_assassin_loop(client: TossApiClient, bot: Bot, chat_id: int):
             
             gap_shield_block = False
             if session_start_time:
-                # MODIFIED: 개장 직후 60분 갭 쉴드 (EST 연산 락온)
                 elapsed_sec = (now_est - session_start_time).total_seconds()
                 if elapsed_sec <= 3600:
                     if is_c0_eum or (c0['HA_Close'] < session_open_price):
@@ -248,9 +247,10 @@ async def ha_assassin_loop(client: TossApiClient, bot: Bot, chat_id: int):
                     print(f"⚠️ [HA 암살자] 자본 잠김 컷오프: 증거금 버퍼(${required_bp:.2f}) 부족. 타점 소각.", flush=True)
                     continue
                     
+                # MODIFIED: Case 66 호가 단위 정밀도 락온 (매수 타격)
                 await client.create_order(
                     symbol="SOXL", side="BUY", order_type="LIMIT", 
-                    quantity=actual_buy_qty, price=ask_1_price,
+                    quantity=actual_buy_qty, price=f"{ask_1_price:.2f}",
                     client_order_id=f"HABUY_{client_order_id_suffix}"
                 )
                 
@@ -282,9 +282,10 @@ async def ha_assassin_loop(client: TossApiClient, bot: Bot, chat_id: int):
                 bid_1_price = float(bids[0]["price"])
                 sell_qty = target_qty if soxl_qty >= target_qty else soxl_qty
                 
+                # MODIFIED: Case 66 호가 단위 정밀도 락온 (거시 붕괴 매도 타격)
                 await client.create_order(
                     symbol="SOXL", side="SELL", order_type="LIMIT", 
-                    quantity=sell_qty, price=bid_1_price,
+                    quantity=sell_qty, price=f"{bid_1_price:.2f}",
                     client_order_id=f"HASELL_{client_order_id_suffix}"
                 )
                 

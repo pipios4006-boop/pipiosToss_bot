@@ -7,6 +7,7 @@ import asyncio
 import aiohttp
 import math
 import contextlib
+from typing import Union
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -43,14 +44,12 @@ class TossApiClient:
         self._calendar_cache = {}
         self._calendar_lock = None
         
-        # NEW: Case 06 무지연 커넥션 풀링 세션 초기화
         self._session = None
 
     async def _request(self, method: str, endpoint: str, group_name: str, **kwargs) -> dict:
         url = f"{self.base_url}{endpoint}"
         max_retries = 3
         
-        # MODIFIED: Case 06 무지연 타격망. 세션 지연 초기화 및 재사용 (Connection Pooling)
         if self._session is None or self._session.closed:
             timeout = aiohttp.ClientTimeout(total=10.0)
             self._session = aiohttp.ClientSession(timeout=timeout)
@@ -148,7 +147,6 @@ class TossApiClient:
             self._calendar_lock = asyncio.Lock()
             
         async with self._calendar_lock:
-            # MODIFIED: 제3헌법 EST 100% 락온. 캘린더 파싱 시 즉각 EST 변환
             now_est = datetime.now(ZoneInfo('America/New_York'))
             est_today_str = now_est.strftime("%Y-%m-%d")
             
@@ -166,7 +164,6 @@ class TossApiClient:
                         for session_name in ["dayMarket", "preMarket", "regularMarket", "afterMarket"]:
                             session_data = day_cal.get(session_name)
                             if session_data:
-                                # EST 강제 변환
                                 start_dt = datetime.fromisoformat(session_data["startTime"]).astimezone(ZoneInfo('America/New_York'))
                                 end_dt = datetime.fromisoformat(session_data["endTime"]).astimezone(ZoneInfo('America/New_York'))
                                 sessions.append((session_name, start_dt, end_dt))
@@ -278,7 +275,8 @@ class TossApiClient:
         data = await self._request("GET", endpoint, "ORDER_HISTORY", headers=self._get_headers(requires_account=True))
         return data.get("result", {}).get("orders", [])
 
-    async def create_order(self, symbol: str, side: str, order_type: str, quantity: float, price: float = None, time_in_force: str = "DAY", client_order_id: str = None) -> dict:
+    # MODIFIED: Case 66 호가 단위 정밀도 락온을 위해 Union[float, str] 타입 힌트 확장 수용
+    async def create_order(self, symbol: str, side: str, order_type: str, quantity: float, price: Union[float, str] = None, time_in_force: str = "DAY", client_order_id: str = None) -> dict:
         if not self.account_seq:
             await self.fetch_account_seq()
         payload = {
