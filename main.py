@@ -1,6 +1,6 @@
 # =====================================================================
 # 파일명: main.py
-# 목적: 분리된 플러그인 모듈 의존성 주입 및 V-REV 4.0 (EMA-20 Shield) 데몬
+# 목적: 분리된 플러그인 모듈 의존성 주입 및 V-REV 4.0 (EMA-20 Shield + Track 1/2 Entry) 데몬
 # =====================================================================
 
 import asyncio
@@ -153,6 +153,9 @@ async def ha_assassin_loop(client: TossApiClient, bot: Bot, chat_id: int):
             is_c1_yang = c1['HA_Close'] >= c1['HA_Open']
             is_c2_yang = c2['HA_Close'] >= c2['HA_Open']
             is_c0_eum = c0['HA_Close'] < c0['HA_Open']
+            is_c2_eum = c2['HA_Close'] < c2['HA_Open']
+            
+            c2_shaved_bottom = ((c2['HA_Open'] - c2['HA_Low']) / c2['HA_Open'] < 0.0005) if c2['HA_Open'] > 0 else False
             is_up_trend = c2['EMA_10'] > c2['EMA_20']
             
             gap_shield_block = False
@@ -164,7 +167,6 @@ async def ha_assassin_loop(client: TossApiClient, bot: Bot, chat_id: int):
 
             stamina_exhausted = (avg_stamina > 0.0) and (current_amp >= avg_stamina * 0.95)
             
-            # MODIFIED: V-REV 4.0 - EMA 20 절대 방어선 락온 (매 캔들마다 갱신)
             if soxl_qty >= 1:
                 dynamic_target = c2['EMA_20']
                 if abs(target_sell_price - dynamic_target) > 0.001:
@@ -176,8 +178,8 @@ async def ha_assassin_loop(client: TossApiClient, bot: Bot, chat_id: int):
             dynamic_sell_signal = False
             
             if last_action_candle_time != current_closed_time:
-                # MODIFIED: V-REV 4.0 - Track 1 소각. 오직 2연속 양봉(Track 2)만 매수 허용
-                raw_buy_signal = (is_c1_yang and is_c2_yang) and is_up_trend
+                # MODIFIED: Track 1(진성 1봉 단독) OR Track 2(2연속 양봉) 매수 로직 전면 복원
+                raw_buy_signal = ((is_c2_yang and c2_shaved_bottom) or (is_c1_yang and is_c2_yang)) and is_up_trend
                 
                 if raw_buy_signal:
                     if gap_shield_block:
@@ -187,7 +189,6 @@ async def ha_assassin_loop(client: TossApiClient, bot: Bot, chat_id: int):
                     else:
                         buy_signal = True
 
-                # MODIFIED: V-REV 4.0 - 닫힌 캔들(c2)이 EMA 20을 하방 이탈할 때만 매도 (휩쏘 노이즈 100% 무시)
                 if soxl_qty >= 1 and target_sell_price > 0.0:
                     if c2['HA_Close'] < target_sell_price:
                         dynamic_sell_signal = True
