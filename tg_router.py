@@ -45,7 +45,7 @@ async def cmd_start(message: types.Message, state: FSMContext):
     
     welcome_text = (
         "🤖 <b>승승장군 퀀트 관제탑 가동</b>\n\n"
-        "▫️ 시스템: Toss Securities V14 / V-REV (Up-Trend Engine)\n"
+        "▫️ 시스템: Toss Securities V14 / V-REV (Hybrid Engine)\n"
         "▫️ 상태: Online 및 API 대기 중\n\n"
         "원하시는 명령을 선택하십시오."
     )
@@ -251,7 +251,7 @@ async def process_scan_asset(callback_query: types.CallbackQuery, state: FSMCont
             f"🔹 <b>매수 가능 달러</b>: ${usd_bp:,.2f}\n"
             f"🔹 <b>SOXL 보유 수량</b>: {holdings['qty']:,.2f}주\n"
             f"🔹 <b>SOXL 타격 목표 수량</b>: {target_qty}주\n"
-            f"🔹 <b>동적 스나이핑 락온가</b>: ${target_sell_price:,.2f} (진성 양봉 중심값)\n"
+            f"🔹 <b>동적 스나이핑 락온가</b>: ${target_sell_price:,.2f} (진성 양봉 시가)\n"
             f"🔹 <b>총 평단가</b>: ${holdings['avg_price']:,.2f}\n"
             f"🔹 <b>실시간 종가</b>: ${current_price:,.2f}\n"
             f"🔹 <b>수익률</b>: {profit_rate_pct:+,.2f}% (${holdings['profit_usd']:+,.2f} / ₩{krw_profit:+,.0f})\n"
@@ -273,7 +273,6 @@ async def process_scan_asset(callback_query: types.CallbackQuery, state: FSMCont
         except Exception:
             pass
 
-# NEW: 대시보드 규격 업데이트 - 5일 평균 진폭 및 세션별 갭 쉴드 렌더링
 @router.callback_query(F.data == "scan_ha")
 async def process_scan_ha(callback_query: types.CallbackQuery, state: FSMContext):
     if callback_query.from_user.id != ADMIN_CHAT_ID:
@@ -397,7 +396,7 @@ async def process_back_to_main(callback_query: types.CallbackQuery, state: FSMCo
     
     welcome_text = (
         "🤖 <b>승승장군 퀀트 관제탑 가동</b>\n\n"
-        "▫️ 시스템: Toss Securities V14 / V-REV (Up-Trend Engine)\n"
+        "▫️ 시스템: Toss Securities V14 / V-REV (Hybrid Engine)\n"
         "▫️ 상태: Online 및 API 대기 중\n\n"
         "원하시는 명령을 선택하십시오."
     )
