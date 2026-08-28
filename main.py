@@ -56,7 +56,8 @@ async def ha_assassin_loop(client: TossApiClient, bot: Bot, chat_id: int):
             pass
         
         try:
-            last_buy_price, target_qty, target_sell_price, last_session_id, is_session_done = await HAStateManager.get_state()
+            # MODIFIED: is_active 상태 추출 동기화
+            last_buy_price, target_qty, target_sell_price, last_session_id, is_session_done, is_active = await HAStateManager.get_state()
             now_est = datetime.now(ZoneInfo('America/New_York'))
             
             is_open, session_end_time, session_name, session_start_time = await client.is_market_open()
@@ -83,6 +84,11 @@ async def ha_assassin_loop(client: TossApiClient, bot: Bot, chat_id: int):
                 print(f"♻️ [HA 암살자] 수동 청산 팩트 교정: 오염된 장부가 0.0 강제 동기화.", flush=True)
 
             if session_end_time and (session_end_time - now_est).total_seconds() <= 120:
+                # NEW: is_active OFF 상태일 경우 Zero-Overnight 청산 매도 100% 락다운
+                if not is_active:
+                    print("🛡️ [HA 암살자] 수면 모드(OFF) 유지. Zero-Overnight 강제 청산(매도) 스킵 및 포지션 홀딩 강제.", flush=True)
+                    continue
+                    
                 try:
                     open_orders = await client.get_orders(status="OPEN", symbol="SOXL")
                     if open_orders:
@@ -193,8 +199,6 @@ async def ha_assassin_loop(client: TossApiClient, bot: Bot, chat_id: int):
             dynamic_sell_signal = False
             
             if last_action_candle_time != current_closed_time:
-                # 📌 교정 완료: 3연속 양봉(V자 반등) 진입 조건 완전 폐기
-                # 오직 거시 장세가 검증된 상승 추세(EMA5 > EMA10)일 때만 타격 허용
                 raw_buy_signal = ((is_c2_yang and c2_shaved_bottom) or (is_c1_yang and is_c2_yang)) and is_up_trend
                 
                 if raw_buy_signal:
@@ -204,12 +208,18 @@ async def ha_assassin_loop(client: TossApiClient, bot: Bot, chat_id: int):
                         print(f"🛡️ [HA 암살자] Track A 방어막 가동: 현재 세션 진폭({current_amp*100:.2f}%)이 5일 평균 체력({avg_stamina*100:.2f}%)의 95% 초과 도달. 타점 소각.", flush=True)
                     elif is_session_done:
                         print(f"🛡️ [HA 암살자] Track D 퇴근 방어막 가동: 금일 세션 수익 1회 이미 달성 완료. 신규 진입 원천 차단.", flush=True)
+                    elif not is_active:
+                        print(f"🛡️ [HA 암살자] Track E 수면 방어막 가동: 관제탑 OFF 상태. 신규 매수 전면 락다운.", flush=True)
                     else:
                         buy_signal = True
 
                 if soxl_qty >= 1 and target_sell_price > 0.0:
                     if c2['HA_Close'] < target_sell_price:
-                        dynamic_sell_signal = True
+                        # NEW: 거시 방어선 이탈 시에도 is_active가 OFF면 매도를 강제 락다운
+                        if not is_active:
+                            print(f"🛡️ [HA 암살자] 수면 모드(OFF) 가동 중. 거시 방어선 이탈 매도 타격 전면 차단.", flush=True)
+                        else:
+                            dynamic_sell_signal = True
             
             need_current_price = buy_signal or dynamic_sell_signal or (soxl_qty >= 1 and last_buy_price <= 0.0)
             if not need_current_price:

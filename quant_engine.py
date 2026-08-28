@@ -14,12 +14,13 @@ from toss_api import GlobalThrottle
 class HAStateManager:
     FILE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ha_state.json")
 
+    # MODIFIED: is_active 상태 락온 추가 (7-Tier 반환)
     @classmethod
-    async def get_state(cls) -> tuple[float, int, float, str, bool]:
+    async def get_state(cls) -> tuple[float, int, float, str, bool, bool]:
         async with GlobalThrottle.get_file_lock(cls.FILE_PATH):
             def _read():
                 if not os.path.exists(cls.FILE_PATH):
-                    return 0.0, 10, 0.0, "", False
+                    return 0.0, 10, 0.0, "", False, True
                 try:
                     with open(cls.FILE_PATH, "r", encoding="utf-8") as f:
                         data = json.load(f)
@@ -28,13 +29,15 @@ class HAStateManager:
                         target_sell_price = float(data.get("target_sell_price", 0.0))
                         last_session_id = str(data.get("last_session_id", ""))
                         is_session_done = bool(data.get("is_session_done", False))
-                        return last_price, target_qty, target_sell_price, last_session_id, is_session_done
+                        is_active = bool(data.get("is_active", True))
+                        return last_price, target_qty, target_sell_price, last_session_id, is_session_done, is_active
                 except Exception:
-                    return 0.0, 10, 0.0, "", False
+                    return 0.0, 10, 0.0, "", False, True
             return await asyncio.to_thread(_read)
 
+    # MODIFIED: is_active 원자적 쓰기 병합
     @classmethod
-    async def save_state(cls, price: float = None, target_qty: int = None, target_sell_price: float = None, last_session_id: str = None, is_session_done: bool = None):
+    async def save_state(cls, price: float = None, target_qty: int = None, target_sell_price: float = None, last_session_id: str = None, is_session_done: bool = None, is_active: bool = None):
         async with GlobalThrottle.get_file_lock(cls.FILE_PATH):
             def _write():
                 data = {}
@@ -55,6 +58,8 @@ class HAStateManager:
                     data["last_session_id"] = last_session_id
                 if is_session_done is not None:
                     data["is_session_done"] = is_session_done
+                if is_active is not None:
+                    data["is_active"] = is_active
                 
                 tmp_path = cls.FILE_PATH + ".tmp"
                 with open(tmp_path, "w", encoding="utf-8") as f:

@@ -38,11 +38,16 @@ async def cmd_start(message: types.Message, state: FSMContext):
         return
         
     await state.clear()
+    
+    _, _, _, _, _, is_active = await HAStateManager.get_state()
+    # MODIFIED: 완전 차단 상태 텍스트 렌더링
+    toggle_text = "🔴 봇 매매 정지 (현재 OFF)" if not is_active else "🟢 봇 매매 가동 (현재 ON)"
         
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="💰 잔고 스캔", callback_data="scan_asset")],
         [InlineKeyboardButton(text="📈 SOXL 타점 및 방어망 스캔", callback_data="scan_ha")],
-        [InlineKeyboardButton(text="⚙️ 타격 목표 수량 설정", callback_data="menu_set_qty")]
+        [InlineKeyboardButton(text="⚙️ 타격 목표 수량 설정", callback_data="menu_set_qty")],
+        [InlineKeyboardButton(text=toggle_text, callback_data="toggle_active")]
     ])
     
     welcome_text = (
@@ -73,6 +78,33 @@ async def cmd_reset(message: types.Message, state: FSMContext):
     except Exception as e:
         try:
             await message.answer(f"🚨 <b>장부 초기화 붕괴</b>: <pre>{html.escape(str(e))}</pre>", parse_mode="HTML")
+        except Exception:
+            pass
+
+@router.callback_query(F.data == "toggle_active")
+async def process_toggle_active(callback_query: types.CallbackQuery, state: FSMContext):
+    if callback_query.from_user.id != ADMIN_CHAT_ID:
+        return
+        
+    try:
+        _, _, _, _, _, is_active = await HAStateManager.get_state()
+        new_state = not is_active
+        await HAStateManager.save_state(is_active=new_state)
+        
+        if wakeup_event:
+            wakeup_event.set()
+            
+        # MODIFIED: 완전 차단 상태 텍스트 렌더링
+        status_text = "🟢 가동 재개 (매수/매도 전면 허용 락온)" if new_state else "🔴 수면 모드 (매수 및 매도 전면 차단 / 관망 모드 락온)"
+        try:
+            await callback_query.answer(f"✅ 상태 전환 완료: {status_text}", show_alert=False)
+        except Exception:
+            pass
+            
+        await process_back_to_main(callback_query, state)
+    except Exception as e:
+        try:
+            await callback_query.message.edit_text(f"🚨 <b>상태 장부 기록 붕괴</b>\n\n▫️ {html.escape(str(e))}", parse_mode="HTML")
         except Exception:
             pass
 
@@ -268,21 +300,23 @@ async def process_scan_asset(callback_query: types.CallbackQuery, state: FSMCont
             holdings_task, rate_task, usd_bp_task, current_price_task, target_qty_task
         )
         
-        _, target_qty, target_sell_price, _, is_session_done = state_tuple
+        _, target_qty, target_sell_price, _, is_session_done, is_active = state_tuple
         
         est_now = datetime.now(ZoneInfo('America/New_York')).strftime("%Y-%m-%d %H:%M:%S")
         
         krw_profit = holdings["profit_usd"] * ex_rate
         profit_rate_pct = holdings["profit_rate"] * 100
         
+        # MODIFIED: 완전 차단 상태 텍스트 렌더링
         result_text = (
             f"📊 <b>계좌 자산 스캔 완료</b>\n\n"
             f"🔹 <b>기준 시각</b>: {html.escape(est_now)} EST\n"
+            f"🔹 <b>봇 매매 상태</b>: {'🟢 ON (매매 허용)' if is_active else '🔴 OFF (매수 및 매도 전면 차단)'}\n"
+            f"🔹 <b>금일 퇴근 여부</b>: {'🔴 업무 종료 (수익 달성)' if is_session_done else '🟢 영업 중'}\n"
             f"🔹 <b>매수 가능 달러</b>: ${usd_bp:,.2f}\n"
             f"🔹 <b>SOXL 보유 수량</b>: {holdings['qty']:,.2f}주\n"
             f"🔹 <b>SOXL 타격 목표 수량</b>: {target_qty}주\n"
             f"🔹 <b>거시 추세 방어선</b>: ${target_sell_price:,.2f} (EMA 10 락온)\n"
-            f"🔹 <b>금일 퇴근 여부</b>: {'🔴 업무 종료 (수익 달성)' if is_session_done else '🟢 영업 중'}\n"
             f"🔹 <b>총 평단가</b>: ${holdings['avg_price']:,.2f}\n"
             f"🔹 <b>실시간 종가</b>: ${current_price:,.2f}\n"
             f"🔹 <b>수익률</b>: {profit_rate_pct:+,.2f}% (${holdings['profit_usd']:+,.2f} / ₩{krw_profit:+,.0f})\n"
@@ -433,11 +467,16 @@ async def process_back_to_main(callback_query: types.CallbackQuery, state: FSMCo
         return
         
     await state.clear()
+    
+    _, _, _, _, _, is_active = await HAStateManager.get_state()
+    # MODIFIED: 완전 차단 상태 텍스트 렌더링
+    toggle_text = "🔴 봇 매매 정지 (현재 OFF)" if not is_active else "🟢 봇 매매 가동 (현재 ON)"
         
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="💰 잔고 스캔", callback_data="scan_asset")],
         [InlineKeyboardButton(text="📈 SOXL 타점 및 방어망 스캔", callback_data="scan_ha")],
-        [InlineKeyboardButton(text="⚙️ 타격 목표 수량 설정", callback_data="menu_set_qty")]
+        [InlineKeyboardButton(text="⚙️ 타격 목표 수량 설정", callback_data="menu_set_qty")],
+        [InlineKeyboardButton(text=toggle_text, callback_data="toggle_active")]
     ])
     
     welcome_text = (
