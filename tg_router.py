@@ -45,9 +45,10 @@ async def cmd_start(message: types.Message, state: FSMContext):
         [InlineKeyboardButton(text="⚙️ 타격 목표 수량 설정", callback_data="menu_set_qty")]
     ])
     
+    # MODIFIED: 시스템 명칭 가속화 표기 (EMA-10 Shield)
     welcome_text = (
         "🤖 <b>승승장군 퀀트 관제탑 가동</b>\n\n"
-        "▫️ 시스템: Toss Securities V14 / V-REV 4.0 (EMA-20 Shield)\n"
+        "▫️ 시스템: Toss Securities V14 / V-REV 4.0 (EMA-10 Shield)\n"
         "▫️ 상태: Online 및 API 대기 중\n\n"
         "원하시는 명령을 선택하십시오."
     )
@@ -256,13 +257,14 @@ async def process_scan_asset(callback_query: types.CallbackQuery, state: FSMCont
         krw_profit = holdings["profit_usd"] * ex_rate
         profit_rate_pct = holdings["profit_rate"] * 100
         
+        # MODIFIED: UI 거시 방어선 EMA 10 표기
         result_text = (
             f"📊 <b>계좌 자산 스캔 완료</b>\n\n"
             f"🔹 <b>기준 시각</b>: {html.escape(est_now)} EST\n"
             f"🔹 <b>매수 가능 달러</b>: ${usd_bp:,.2f}\n"
             f"🔹 <b>SOXL 보유 수량</b>: {holdings['qty']:,.2f}주\n"
             f"🔹 <b>SOXL 타격 목표 수량</b>: {target_qty}주\n"
-            f"🔹 <b>거시 추세 방어선</b>: ${target_sell_price:,.2f} (EMA 20 락온)\n"
+            f"🔹 <b>거시 추세 방어선</b>: ${target_sell_price:,.2f} (EMA 10 락온)\n"
             f"🔹 <b>총 평단가</b>: ${holdings['avg_price']:,.2f}\n"
             f"🔹 <b>실시간 종가</b>: ${current_price:,.2f}\n"
             f"🔹 <b>수익률</b>: {profit_rate_pct:+,.2f}% (${holdings['profit_usd']:+,.2f} / ₩{krw_profit:+,.0f})\n"
@@ -324,7 +326,6 @@ async def process_scan_ha(callback_query: types.CallbackQuery, state: FSMContext
         if ha_df.empty:
             result_text = f"🚨 <b>캔들 데이터 붕괴 (빈 배열)</b>\n\n🔹 <b>기준 시각</b>: {html.escape(est_now)} EST\n🔹 <b>실시간 종가</b>: ${current_price:.2f}"
         else:
-            # MODIFIED: 낡은 데드코드 영구 소각 및 다이내믹 세션 체력 엔진 초기화
             current_amp = 0.0
             gap_shield_active = False
             shield_status_text = "🔴 해제됨 (개장 60분 경과 혹은 진행장 아님)"
@@ -340,11 +341,12 @@ async def process_scan_ha(callback_query: types.CallbackQuery, state: FSMContext
             
             trend_text = "➖ 횡보장 (Neutral)"
             if len(ha_df) >= 2:
+                # MODIFIED: UI 추세장 판별 역시 EMA 5 > EMA 10 가속 벡터 참조
+                c2_ema5 = ha_df.iloc[-2]['EMA_5']
                 c2_ema10 = ha_df.iloc[-2]['EMA_10']
-                c2_ema20 = ha_df.iloc[-2]['EMA_20']
-                if c2_ema10 > c2_ema20:
+                if c2_ema5 > c2_ema10:
                     trend_text = "📈 상승장 (Up-Trend)"
-                elif c2_ema10 < c2_ema20:
+                elif c2_ema5 < c2_ema10:
                     trend_text = "📉 하락장 (Down-Trend)"
             
             if is_open and session_start_time is not None:
@@ -424,7 +426,7 @@ async def process_back_to_main(callback_query: types.CallbackQuery, state: FSMCo
     
     welcome_text = (
         "🤖 <b>승승장군 퀀트 관제탑 가동</b>\n\n"
-        "▫️ 시스템: Toss Securities V14 / V-REV 4.0 (EMA-20 Shield)\n"
+        "▫️ 시스템: Toss Securities V14 / V-REV 4.0 (EMA-10 Shield)\n"
         "▫️ 상태: Online 및 API 대기 중\n\n"
         "원하시는 명령을 선택하십시오."
     )

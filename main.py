@@ -138,7 +138,6 @@ async def ha_assassin_loop(client: TossApiClient, bot: Bot, chat_id: int):
                 if (datetime.now(ZoneInfo('America/New_York')) - ha_df.index[-1]).total_seconds() > 300:
                     continue
 
-            # MODIFIED: 다이내믹 세션 체력 엔진 연동 (오직 현재 세션의 고가/저가 누적치만 산출)
             current_amp = 0.0
             session_open_price = 0.0
             if session_start_time is not None and not ha_df.empty:
@@ -159,7 +158,9 @@ async def ha_assassin_loop(client: TossApiClient, bot: Bot, chat_id: int):
             is_c0_eum = c0['HA_Close'] < c0['HA_Open']
             
             c2_shaved_bottom = ((c2['HA_Open'] - c2['HA_Low']) / c2['HA_Open'] < 0.0005) if c2['HA_Open'] > 0 else False
-            is_up_trend = c2['EMA_10'] > c2['EMA_20']
+            
+            # MODIFIED: 가속 상승장 판별 (EMA 5 > EMA 10) 락온
+            is_up_trend = c2['EMA_5'] > c2['EMA_10']
             
             gap_shield_block = False
             if session_start_time:
@@ -171,11 +172,12 @@ async def ha_assassin_loop(client: TossApiClient, bot: Bot, chat_id: int):
             stamina_exhausted = (avg_stamina > 0.0) and (current_amp >= avg_stamina * 0.95)
             
             if soxl_qty >= 1:
-                dynamic_target = c2['EMA_20']
+                # MODIFIED: 가속 방어선 (EMA 10 Trailing) 락온
+                dynamic_target = c2['EMA_10']
                 if abs(target_sell_price - dynamic_target) > 0.001:
                     target_sell_price = dynamic_target
                     await HAStateManager.save_state(target_sell_price=target_sell_price)
-                    print(f"🎯 [HA 암살자] EMA 20 거시 방어선 갱신: (${target_sell_price:.2f}) 락온 완료.", flush=True)
+                    print(f"🎯 [HA 암살자] EMA 10 거시 방어선 갱신: (${target_sell_price:.2f}) 락온 완료.", flush=True)
 
             buy_signal = False
             dynamic_sell_signal = False
@@ -249,7 +251,8 @@ async def ha_assassin_loop(client: TossApiClient, bot: Bot, chat_id: int):
                 
                 total_amount = ask_1_price * actual_buy_qty
                 
-                dynamic_target_lock = c2['EMA_20']
+                # MODIFIED: 매수 체결 직후 EMA 10 방어선 무지연 락온
+                dynamic_target_lock = c2['EMA_10']
                 await HAStateManager.save_state(price=ask_1_price, target_sell_price=dynamic_target_lock)
                 last_action_candle_time = current_closed_time
                 
@@ -263,7 +266,7 @@ async def ha_assassin_loop(client: TossApiClient, bot: Bot, chat_id: int):
                     f"▫️ <b>시각</b>: {now_est_str}"
                 )
                 await notify_tg(msg)
-                print(f"🎯 [HA 암살자] 진성 시그널 및 방어막 검증 통과. 매도 1호가(${ask_1_price:.2f}) 매수 및 EMA 방어선 무지연 락온 완료.", flush=True)
+                print(f"🎯 [HA 암살자] 진성 시그널 및 방어막 검증 통과. 매도 1호가(${ask_1_price:.2f}) 매수 및 EMA 10 방어선 무지연 락온 완료.", flush=True)
                 
             elif dynamic_sell_signal and soxl_qty >= 1:
                 orderbook = await client.get_orderbook("SOXL")
@@ -299,7 +302,7 @@ async def ha_assassin_loop(client: TossApiClient, bot: Bot, chat_id: int):
                     f"🔴 <b>[HA 암살자] 매도 타격 완료 (거시 추세 이탈)</b>\n\n"
                     f"▫️ <b>종목</b>: SOXL\n"
                     f"▫️ <b>체결 단가</b>: ${bid_1_price:.2f}\n"
-                    f"▫️ <b>EMA 20 붕괴가</b>: ${target_sell_price:.2f}\n"
+                    f"▫️ <b>EMA 10 붕괴가</b>: ${target_sell_price:.2f}\n"
                     f"▫️ <b>타격 수량</b>: {sell_qty}주\n"
                     f"▫️ <b>총 매도 금액</b>: ${sell_amount:,.2f}\n"
                     f"▫️ <b>예상 제비용 (0.2%)</b>: -${commission_usd:,.2f}\n"
@@ -311,7 +314,7 @@ async def ha_assassin_loop(client: TossApiClient, bot: Bot, chat_id: int):
                 
                 await HAStateManager.save_state(price=0.0, target_sell_price=0.0)
                 last_action_candle_time = current_closed_time
-                print(f"🎯 [HA 암살자] EMA 20 거시 방어선 붕괴 격발 완료. 하방 돌파 요격.", flush=True)
+                print(f"🎯 [HA 암살자] EMA 10 거시 방어선 붕괴 격발 완료. 하방 돌파 요격.", flush=True)
                 
         except Exception as e:
             error_msg = str(e)

@@ -56,7 +56,6 @@ class HAStateManager:
                 os.replace(tmp_path, cls.FILE_PATH)
             await asyncio.to_thread(_write)
 
-    # NEW: 세션 고가/저가 보존을 위한 상태 장부 I/O
     @classmethod
     async def get_session_state(cls) -> tuple[str, float, float]:
         async with GlobalThrottle.get_file_lock(cls.FILE_PATH):
@@ -130,8 +129,9 @@ class HeikinAshiEngine:
         ha_df['HA_Low'] = pd.concat([df_3m['lowPrice'], ha_df['HA_Open'], ha_df['HA_Close']], axis=1).min(axis=1)
         ha_df['Volume'] = df_3m['volume']
         
+        # MODIFIED: 가속화된 렌더링 (단기 EMA 5, 중기 EMA 10) 락온
+        ha_df['EMA_5'] = ha_df['HA_Close'].ewm(span=5, adjust=False).mean()
         ha_df['EMA_10'] = ha_df['HA_Close'].ewm(span=10, adjust=False).mean()
-        ha_df['EMA_20'] = ha_df['HA_Close'].ewm(span=20, adjust=False).mean()
         
         return ha_df.sort_index(ascending=True)
 
@@ -150,7 +150,6 @@ class HeikinAshiEngine:
         
         return float(df['amplitude'].mean())
 
-    # NEW: 다이내믹 세션 진폭 추적 (200 캔들 소실 방어 및 세션 고립 연산)
     @staticmethod
     async def get_dynamic_session_amp(session_start_est: datetime, session_name: str, session_candles: pd.DataFrame) -> float:
         if session_candles.empty:
