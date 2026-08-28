@@ -1,6 +1,6 @@
 # =====================================================================
 # 파일명: tg_router.py
-# 목적: 텔레그램 콜백 라우팅 및 온디맨드(On-Demand) 덫 해제 인터럽트 융합
+# 목적: 텔레그램 콜백 라우팅 및 온디맨드(On-Demand) 덫 해제 인터럽트 융합 (5분봉 및 퇴근 시스템 적용)
 # =====================================================================
 
 import asyncio
@@ -63,10 +63,10 @@ async def cmd_reset(message: types.Message, state: FSMContext):
         return
 
     try:
-        await HAStateManager.save_state(price=0.0, target_sell_price=0.0)
+        await HAStateManager.save_state(price=0.0, target_sell_price=0.0, is_session_done=False)
         reset_text = (
             "✅ <b>로컬 장부 원자적 덮어쓰기 완료</b>\n\n"
-            "▫️ <b>조치</b>: 포지션 단가 및 거시 방어선(EMA 10) 강제 0.0 동기화\n"
+            "▫️ <b>조치</b>: 포지션 단가, 방어선 강제 0.0 동기화 및 금일 퇴근 상태 해제\n"
             "▫️ <b>목적</b>: 과거 상태 오염 소각 및 신규 타점 스캔 락아웃 해제"
         )
         await message.answer(reset_text, parse_mode="HTML")
@@ -268,7 +268,7 @@ async def process_scan_asset(callback_query: types.CallbackQuery, state: FSMCont
             holdings_task, rate_task, usd_bp_task, current_price_task, target_qty_task
         )
         
-        _, target_qty, target_sell_price = state_tuple
+        _, target_qty, target_sell_price, _, is_session_done = state_tuple
         
         est_now = datetime.now(ZoneInfo('America/New_York')).strftime("%Y-%m-%d %H:%M:%S")
         
@@ -282,6 +282,7 @@ async def process_scan_asset(callback_query: types.CallbackQuery, state: FSMCont
             f"🔹 <b>SOXL 보유 수량</b>: {holdings['qty']:,.2f}주\n"
             f"🔹 <b>SOXL 타격 목표 수량</b>: {target_qty}주\n"
             f"🔹 <b>거시 추세 방어선</b>: ${target_sell_price:,.2f} (EMA 10 락온)\n"
+            f"🔹 <b>금일 퇴근 여부</b>: {'🔴 업무 종료 (수익 달성)' if is_session_done else '🟢 영업 중'}\n"
             f"🔹 <b>총 평단가</b>: ${holdings['avg_price']:,.2f}\n"
             f"🔹 <b>실시간 종가</b>: ${current_price:,.2f}\n"
             f"🔹 <b>수익률</b>: {profit_rate_pct:+,.2f}% (${holdings['profit_usd']:+,.2f} / ₩{krw_profit:+,.0f})\n"
@@ -335,13 +336,12 @@ async def process_scan_ha(callback_query: types.CallbackQuery, state: FSMContext
         )
         
         is_open, session_end_time, session_name, session_start_time = is_open_tuple
-        ha_df = HeikinAshiEngine.calculate_3m_ha(candles_json)
+        ha_df = HeikinAshiEngine.calculate_5m_ha(candles_json)
         avg_stamina = HeikinAshiEngine.calculate_amplitude_stamina(daily_candles_json)
         
         now_est = datetime.now(ZoneInfo('America/New_York'))
         est_now_str = now_est.strftime("%Y-%m-%d %H:%M:%S")
         
-        # MODIFIED: Case 24 관제탑 렌더링 단락 평가 하드코딩 (len < 4)
         if len(ha_df) < 4:
             result_text = f"🚨 <b>캔들 데이터 붕괴 (최소 4배열 미달)</b>\n\n🔹 <b>기준 시각</b>: {html.escape(est_now_str)} EST\n🔹 <b>실시간 종가</b>: ${current_price:.2f}"
         else:
@@ -367,7 +367,6 @@ async def process_scan_ha(callback_query: types.CallbackQuery, state: FSMContext
                 trend_text = "📉 하락장 (Down-Trend)"
             
             if is_open and session_start_time is not None:
-                # MODIFIED: KST 완전 격리 및 EST 락온
                 session_start_est = session_start_time.astimezone(ZoneInfo('America/New_York'))
                 session_candles = ha_df[ha_df.index >= session_start_est]
                 
@@ -408,7 +407,7 @@ async def process_scan_ha(callback_query: types.CallbackQuery, state: FSMContext
                 f"🔸 <b>현재 세션 진폭 (소진 체력)</b>: {current_amp*100:.2f}%\n"
                 f"🔸 <b>체력 고갈 여부</b>: {stamina_status_text}\n"
                 f"🔸 <b>세션 경계 갭 쉴드</b>: {shield_status_text}\n\n"
-                f"📊 <b>최근 3분봉 HA 흐름 (최대 10개)</b>\n"
+                f"📊 <b>최근 5분봉 HA 흐름 (최대 10개)</b>\n"
                 f"{ha_history_text}"
             )
             

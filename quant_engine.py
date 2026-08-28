@@ -1,6 +1,6 @@
 # =====================================================================
 # 파일명: quant_engine.py
-# 목적: 3분봉 HA 100% 벡터화 연산 및 5일/당일 세션 체력 진폭 산출 엔진
+# 목적: 5분봉 HA 100% 벡터화 연산 및 5일/당일 세션 체력 진폭 산출 엔진
 # =====================================================================
 
 import os
@@ -15,24 +15,26 @@ class HAStateManager:
     FILE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ha_state.json")
 
     @classmethod
-    async def get_state(cls) -> tuple[float, int, float]:
+    async def get_state(cls) -> tuple[float, int, float, str, bool]:
         async with GlobalThrottle.get_file_lock(cls.FILE_PATH):
             def _read():
                 if not os.path.exists(cls.FILE_PATH):
-                    return 0.0, 10, 0.0
+                    return 0.0, 10, 0.0, "", False
                 try:
                     with open(cls.FILE_PATH, "r", encoding="utf-8") as f:
                         data = json.load(f)
                         last_price = float(data.get("last_buy_price", 0.0))
                         target_qty = int(data.get("target_qty", 10))
                         target_sell_price = float(data.get("target_sell_price", 0.0))
-                        return last_price, target_qty, target_sell_price
+                        last_session_id = str(data.get("last_session_id", ""))
+                        is_session_done = bool(data.get("is_session_done", False))
+                        return last_price, target_qty, target_sell_price, last_session_id, is_session_done
                 except Exception:
-                    return 0.0, 10, 0.0
+                    return 0.0, 10, 0.0, "", False
             return await asyncio.to_thread(_read)
 
     @classmethod
-    async def save_state(cls, price: float = None, target_qty: int = None, target_sell_price: float = None):
+    async def save_state(cls, price: float = None, target_qty: int = None, target_sell_price: float = None, last_session_id: str = None, is_session_done: bool = None):
         async with GlobalThrottle.get_file_lock(cls.FILE_PATH):
             def _write():
                 data = {}
@@ -49,6 +51,10 @@ class HAStateManager:
                     data["target_qty"] = target_qty
                 if target_sell_price is not None:
                     data["target_sell_price"] = target_sell_price
+                if last_session_id is not None:
+                    data["last_session_id"] = last_session_id
+                if is_session_done is not None:
+                    data["is_session_done"] = is_session_done
                 
                 tmp_path = cls.FILE_PATH + ".tmp"
                 with open(tmp_path, "w", encoding="utf-8") as f:
@@ -94,7 +100,7 @@ class HAStateManager:
 
 class HeikinAshiEngine:
     @staticmethod
-    def calculate_3m_ha(candles_json: list) -> pd.DataFrame:
+    def calculate_5m_ha(candles_json: list) -> pd.DataFrame:
         if not candles_json:
             return pd.DataFrame()
             
@@ -108,7 +114,7 @@ class HeikinAshiEngine:
         for col in ['openPrice', 'highPrice', 'lowPrice', 'closePrice', 'volume']:
             df[col] = df[col].astype(float)
             
-        df_3m = df.resample('3min', label='left', closed='left').agg({
+        df_5m = df.resample('5min', label='left', closed='left').agg({
             'openPrice': 'first',
             'highPrice': 'max',
             'lowPrice': 'min',
@@ -116,17 +122,17 @@ class HeikinAshiEngine:
             'volume': 'sum'
         }).ffill()
         
-        ha_df = pd.DataFrame(index=df_3m.index)
+        ha_df = pd.DataFrame(index=df_5m.index)
         
-        ha_df['HA_Close'] = (df_3m['openPrice'] + df_3m['highPrice'] + df_3m['lowPrice'] + df_3m['closePrice']) / 4.0
+        ha_df['HA_Close'] = (df_5m['openPrice'] + df_5m['highPrice'] + df_5m['lowPrice'] + df_5m['closePrice']) / 4.0
         
         shifted_ha_close = ha_df['HA_Close'].shift(1)
-        shifted_ha_close.iloc[0] = (df_3m['openPrice'].iloc[0] + df_3m['closePrice'].iloc[0]) / 2.0
+        shifted_ha_close.iloc[0] = (df_5m['openPrice'].iloc[0] + df_5m['closePrice'].iloc[0]) / 2.0
         ha_df['HA_Open'] = shifted_ha_close.ewm(alpha=0.5, adjust=False).mean()
         
-        ha_df['HA_High'] = pd.concat([df_3m['highPrice'], ha_df['HA_Open'], ha_df['HA_Close']], axis=1).max(axis=1)
-        ha_df['HA_Low'] = pd.concat([df_3m['lowPrice'], ha_df['HA_Open'], ha_df['HA_Close']], axis=1).min(axis=1)
-        ha_df['Volume'] = df_3m['volume']
+        ha_df['HA_High'] = pd.concat([df_5m['highPrice'], ha_df['HA_Open'], ha_df['HA_Close']], axis=1).max(axis=1)
+        ha_df['HA_Low'] = pd.concat([df_5m['lowPrice'], ha_df['HA_Open'], ha_df['HA_Close']], axis=1).min(axis=1)
+        ha_df['Volume'] = df_5m['volume']
         
         ha_df['EMA_5'] = ha_df['HA_Close'].ewm(span=5, adjust=False).mean()
         ha_df['EMA_10'] = ha_df['HA_Close'].ewm(span=10, adjust=False).mean()
