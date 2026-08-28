@@ -1,6 +1,6 @@
 # =====================================================================
 # 파일명: main.py
-# 목적: 분리된 플러그인 모듈 의존성 주입 및 V-REV 4.0 (Wake-up Event 기반 실시간 엔진)
+# 목적: 분리된 플러그인 모듈 의존성 주입 및 V-REV 4.0 (EMA-10 Shield / V-Reversal 폐기)
 # =====================================================================
 
 import asyncio
@@ -165,7 +165,6 @@ async def ha_assassin_loop(client: TossApiClient, bot: Bot, chat_id: int):
             c0 = ha_df.iloc[-1]
             current_closed_time = c2.name
             
-            is_c3_yang = c3['HA_Close'] >= c3['HA_Open']
             is_c1_yang = c1['HA_Close'] >= c1['HA_Open']
             is_c2_yang = c2['HA_Close'] >= c2['HA_Open']
             is_c0_eum = c0['HA_Close'] < c0['HA_Open']
@@ -194,9 +193,9 @@ async def ha_assassin_loop(client: TossApiClient, bot: Bot, chat_id: int):
             dynamic_sell_signal = False
             
             if last_action_candle_time != current_closed_time:
-                base_trend_signal = ((is_c2_yang and c2_shaved_bottom) or (is_c1_yang and is_c2_yang)) and is_up_trend
-                v_reversal_signal = is_c3_yang and is_c1_yang and is_c2_yang
-                raw_buy_signal = base_trend_signal or v_reversal_signal
+                # 📌 교정 완료: 3연속 양봉(V자 반등) 진입 조건 완전 폐기
+                # 오직 거시 장세가 검증된 상승 추세(EMA5 > EMA10)일 때만 타격 허용
+                raw_buy_signal = ((is_c2_yang and c2_shaved_bottom) or (is_c1_yang and is_c2_yang)) and is_up_trend
                 
                 if raw_buy_signal:
                     if gap_shield_block:
