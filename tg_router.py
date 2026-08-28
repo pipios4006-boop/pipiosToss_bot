@@ -23,7 +23,6 @@ api_client = None
 ADMIN_CHAT_ID = None
 wakeup_event = None
 
-# MODIFIED: wakeup_event 의존성 추가 수용
 def inject_dependencies(client, admin_id, event):
     global api_client, ADMIN_CHAT_ID, wakeup_event
     api_client = client
@@ -225,7 +224,6 @@ async def process_scan_asset(callback_query: types.CallbackQuery, state: FSMCont
 
     await state.clear()
     
-    # MODIFIED: 수동 새로고침 시 즉각적인 덫 해제 및 메인 루프 기상(Wake-up) 처리
     try:
         open_orders = await api_client.get_orders(status="OPEN", symbol="SOXL")
         if open_orders:
@@ -293,7 +291,6 @@ async def process_scan_ha(callback_query: types.CallbackQuery, state: FSMContext
 
     await state.clear()
     
-    # MODIFIED: 수동 새로고침 시 즉각적인 덫 해제 및 메인 루프 기상(Wake-up) 처리
     try:
         open_orders = await api_client.get_orders(status="OPEN", symbol="SOXL")
         if open_orders:
@@ -327,7 +324,9 @@ async def process_scan_ha(callback_query: types.CallbackQuery, state: FSMContext
         if ha_df.empty:
             result_text = f"🚨 <b>캔들 데이터 붕괴 (빈 배열)</b>\n\n🔹 <b>기준 시각</b>: {html.escape(est_now)} EST\n🔹 <b>실시간 종가</b>: ${current_price:.2f}"
         else:
-            current_amp = 0.0
+            # MODIFIED: 당일 실시간 일봉 기반 누적 진폭(체력) 스캔 (200 캔들 슬라이딩 소실 방어)
+            current_amp = HeikinAshiEngine.calculate_today_amplitude(daily_candles_json)
+            
             gap_shield_active = False
             shield_status_text = "🔴 해제됨 (개장 60분 경과 혹은 진행장 아님)"
             stamina_status_text = "🟢 정상 (진입 가능)"
@@ -355,11 +354,6 @@ async def process_scan_ha(callback_query: types.CallbackQuery, state: FSMContext
                 session_candles = ha_df[ha_df.index >= session_start_est]
                 
                 if not session_candles.empty:
-                    s_high = session_candles['HA_High'].max()
-                    s_low = session_candles['HA_Low'].min()
-                    if s_low > 0:
-                        current_amp = (s_high - s_low) / s_low
-                        
                     elapsed_sec = (now_kst - session_start_time).total_seconds()
                     if elapsed_sec <= 3600:
                         c0 = session_candles.iloc[-1]

@@ -1,6 +1,6 @@
 # =====================================================================
 # 파일명: quant_engine.py
-# 목적: 3분봉 HA 100% 벡터화 연산 및 5일 체력 진폭(Amplitude) 산출 엔진
+# 목적: 3분봉 HA 100% 벡터화 연산 및 5일/당일 체력 진폭(Amplitude) 산출 엔진
 # =====================================================================
 
 import os
@@ -103,7 +103,6 @@ class HeikinAshiEngine:
         
         return ha_df.sort_index(ascending=True)
 
-    # NEW: Track A - 5일 평균 진폭(체력) 산출 (공식: (고가 - 저가) / 저가)
     @staticmethod
     def calculate_amplitude_stamina(daily_candles_json: list) -> float:
         if not daily_candles_json or len(daily_candles_json) < 2:
@@ -113,13 +112,27 @@ class HeikinAshiEngine:
         for col in ['highPrice', 'lowPrice']:
             df[col] = df[col].astype(float)
             
-        # 진행 중인 당일(미완성 캔들)은 오차를 유발하므로 배제 (-1 슬라이싱)
         df = df.iloc[:-1]
-        
-        # 최근 5영업일 데이터만 벡터 추출
         df = df.tail(5)
-        
-        # 진폭 체력 공식: 절대 바닥으로부터의 Max Yield
         df['amplitude'] = (df['highPrice'] - df['lowPrice']) / df['lowPrice']
         
         return float(df['amplitude'].mean())
+
+    # NEW: Track A - 당일 실시간 진폭(체력) 산출 (200 캔들 슬라이딩 소실 방어)
+    @staticmethod
+    def calculate_today_amplitude(daily_candles_json: list) -> float:
+        if not daily_candles_json:
+            return 0.0
+            
+        df = pd.DataFrame(daily_candles_json)
+        if df.empty:
+            return 0.0
+            
+        for col in ['highPrice', 'lowPrice']:
+            df[col] = df[col].astype(float)
+            
+        today_candle = df.iloc[-1]
+        if today_candle['lowPrice'] > 0:
+            return float((today_candle['highPrice'] - today_candle['lowPrice']) / today_candle['lowPrice'])
+            
+        return 0.0

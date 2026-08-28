@@ -31,8 +31,6 @@ if not all([TOSS_CLIENT_ID, TOSS_CLIENT_SECRET, TELEGRAM_BOT_TOKEN, _telegram_ch
     sys.exit(1)
 
 ADMIN_CHAT_ID = int(_telegram_chat_id_str)
-
-# NEW: 메인 루프 강제 기상용 글로벌 이벤트 객체
 wakeup_event = asyncio.Event()
 
 async def ha_assassin_loop(client: TossApiClient, bot: Bot, chat_id: int):
@@ -50,7 +48,6 @@ async def ha_assassin_loop(client: TossApiClient, bot: Bot, chat_id: int):
         print(f"🚨 [HA 암살자] 초기 계좌 정보 로드 실패: {e}", flush=True)
         
     while True:
-        # MODIFIED: 단순 60초 수면이 아닌, 관제탑 인터럽트 시 즉시 기상하도록 구조 개편
         try:
             await asyncio.wait_for(wakeup_event.wait(), timeout=60.0)
             wakeup_event.clear()
@@ -141,17 +138,15 @@ async def ha_assassin_loop(client: TossApiClient, bot: Bot, chat_id: int):
                 if (datetime.now(ZoneInfo('America/New_York')) - ha_df.index[-1]).total_seconds() > 300:
                     continue
 
-            current_amp = 0.0
+            # MODIFIED: 당일 실시간 일봉 기반 누적 진폭(체력) 스캔 (200 캔들 슬라이딩 소실 방어)
+            current_amp = HeikinAshiEngine.calculate_today_amplitude(daily_candles_json)
+            
             session_open_price = 0.0
             if session_start_time is not None and not ha_df.empty:
                 session_start_est = session_start_time.astimezone(ZoneInfo('America/New_York'))
                 session_candles = ha_df[ha_df.index >= session_start_est]
                 
                 if not session_candles.empty:
-                    s_high = session_candles['HA_High'].max()
-                    s_low = session_candles['HA_Low'].min()
-                    if s_low > 0:
-                        current_amp = (s_high - s_low) / s_low
                     session_open_price = session_candles.iloc[0]['HA_Open']
 
             c1 = ha_df.iloc[-3]
@@ -254,8 +249,6 @@ async def ha_assassin_loop(client: TossApiClient, bot: Bot, chat_id: int):
                 
                 total_amount = ask_1_price * actual_buy_qty
                 
-                # MODIFIED: 무지연 락온 (Zero-Latency EMA Lock-on) 
-                # 체결 즉시 c2의 EMA_20 값을 target_sell_price로 장부에 동시 락온하여 0.00 표출 차단
                 dynamic_target_lock = c2['EMA_20']
                 await HAStateManager.save_state(price=ask_1_price, target_sell_price=dynamic_target_lock)
                 last_action_candle_time = current_closed_time
@@ -333,7 +326,6 @@ async def main():
     
     api_client = TossApiClient(client_id=TOSS_CLIENT_ID, client_secret=TOSS_CLIENT_SECRET)
     
-    # MODIFIED: 라우터에 wakeup_event 의존성 주입
     inject_dependencies(api_client, ADMIN_CHAT_ID, wakeup_event)
     dp.include_router(router)
     
