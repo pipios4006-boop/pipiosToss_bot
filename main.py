@@ -1,6 +1,6 @@
 # =====================================================================
 # 파일명: main.py
-# 목적: 분리된 플러그인 모듈 의존성 주입 및 모든 세션 체력/하이브리드 갭 쉴드 방어망 탑재 데몬
+# 목적: 분리된 플러그인 모듈 의존성 주입 및 V-REV 4.0 (EMA-20 Shield) 데몬
 # =====================================================================
 
 import asyncio
@@ -87,7 +87,6 @@ async def ha_assassin_loop(client: TossApiClient, bot: Bot, chat_id: int):
                             client_order_id=f"HAZERO_{datetime.now(ZoneInfo('America/New_York')).strftime('%Y%m%d_%H%M%S')}"
                         )
                         
-                        # MODIFIED: Zero-Overnight 상세 PnL 연산 및 환율 렌더링 복원
                         sell_amount = bid_1_price * soxl_qty
                         buy_amount = last_buy_price * soxl_qty
                         commission_usd = sell_amount * 0.002
@@ -154,9 +153,6 @@ async def ha_assassin_loop(client: TossApiClient, bot: Bot, chat_id: int):
             is_c1_yang = c1['HA_Close'] >= c1['HA_Open']
             is_c2_yang = c2['HA_Close'] >= c2['HA_Open']
             is_c0_eum = c0['HA_Close'] < c0['HA_Open']
-            is_c2_eum = c2['HA_Close'] < c2['HA_Open']
-            
-            c2_shaved_bottom = ((c2['HA_Open'] - c2['HA_Low']) / c2['HA_Open'] < 0.0005) if c2['HA_Open'] > 0 else False
             is_up_trend = c2['EMA_10'] > c2['EMA_20']
             
             gap_shield_block = False
@@ -168,11 +164,20 @@ async def ha_assassin_loop(client: TossApiClient, bot: Bot, chat_id: int):
 
             stamina_exhausted = (avg_stamina > 0.0) and (current_amp >= avg_stamina * 0.95)
             
+            # MODIFIED: V-REV 4.0 - EMA 20 절대 방어선 락온 (매 캔들마다 갱신)
+            if soxl_qty >= 1:
+                dynamic_target = c2['EMA_20']
+                if abs(target_sell_price - dynamic_target) > 0.001:
+                    target_sell_price = dynamic_target
+                    await HAStateManager.save_state(target_sell_price=target_sell_price)
+                    print(f"🎯 [HA 암살자] EMA 20 거시 방어선 갱신: (${target_sell_price:.2f}) 락온 완료.", flush=True)
+
             buy_signal = False
             dynamic_sell_signal = False
             
             if last_action_candle_time != current_closed_time:
-                raw_buy_signal = ((is_c2_yang and c2_shaved_bottom) or (is_c1_yang and is_c2_yang)) and is_up_trend
+                # MODIFIED: V-REV 4.0 - Track 1 소각. 오직 2연속 양봉(Track 2)만 매수 허용
+                raw_buy_signal = (is_c1_yang and is_c2_yang) and is_up_trend
                 
                 if raw_buy_signal:
                     if gap_shield_block:
@@ -182,20 +187,10 @@ async def ha_assassin_loop(client: TossApiClient, bot: Bot, chat_id: int):
                     else:
                         buy_signal = True
 
+                # MODIFIED: V-REV 4.0 - 닫힌 캔들(c2)이 EMA 20을 하방 이탈할 때만 매도 (휩쏘 노이즈 100% 무시)
                 if soxl_qty >= 1 and target_sell_price > 0.0:
-                    if is_c2_eum and (c2['HA_Close'] <= target_sell_price):
+                    if c2['HA_Close'] < target_sell_price:
                         dynamic_sell_signal = True
-
-            if soxl_qty >= 1:
-                closed_ha = ha_df.iloc[:-1]
-                bulls = closed_ha[closed_ha['HA_Close'] >= closed_ha['HA_Open']]
-                if not bulls.empty:
-                    latest_bull = bulls.iloc[-1]
-                    dynamic_target = latest_bull['HA_Open']
-                    if abs(target_sell_price - dynamic_target) > 0.001:
-                        target_sell_price = dynamic_target
-                        await HAStateManager.save_state(target_sell_price=target_sell_price)
-                        print(f"🎯 [HA 암살자] Trailing Stop 갱신: 직전 양봉 시가(${target_sell_price:.2f}) 락온 완료.", flush=True)
             
             need_current_price = buy_signal or dynamic_sell_signal or (soxl_qty >= 1 and last_buy_price <= 0.0)
             if not need_current_price:
@@ -243,7 +238,6 @@ async def ha_assassin_loop(client: TossApiClient, bot: Bot, chat_id: int):
                     client_order_id=f"HABUY_{client_order_id_suffix}"
                 )
                 
-                # MODIFIED: 매수 시 총 결제 금액 렌더링 규격 통일
                 total_amount = ask_1_price * actual_buy_qty
                 
                 msg = (
@@ -277,7 +271,6 @@ async def ha_assassin_loop(client: TossApiClient, bot: Bot, chat_id: int):
                     client_order_id=f"HASELL_{client_order_id_suffix}"
                 )
                 
-                # MODIFIED: 하이브리드 스나이핑 상세 PnL 연산 및 환율 렌더링 전면 복원
                 sell_amount = bid_1_price * sell_qty
                 buy_amount = last_buy_price * sell_qty
                 commission_usd = sell_amount * 0.002
@@ -293,10 +286,10 @@ async def ha_assassin_loop(client: TossApiClient, bot: Bot, chat_id: int):
                 profit_krw = profit_usd * ex_rate
                 
                 msg = (
-                    f"🔴 <b>[HA 암살자] 매도 타격 완료 (하이브리드 스나이핑)</b>\n\n"
+                    f"🔴 <b>[HA 암살자] 매도 타격 완료 (거시 추세 이탈)</b>\n\n"
                     f"▫️ <b>종목</b>: SOXL\n"
                     f"▫️ <b>체결 단가</b>: ${bid_1_price:.2f}\n"
-                    f"▫️ <b>스나이핑 락온가</b>: ${target_sell_price:.2f}\n"
+                    f"▫️ <b>EMA 20 붕괴가</b>: ${target_sell_price:.2f}\n"
                     f"▫️ <b>타격 수량</b>: {sell_qty}주\n"
                     f"▫️ <b>총 매도 금액</b>: ${sell_amount:,.2f}\n"
                     f"▫️ <b>예상 제비용 (0.2%)</b>: -${commission_usd:,.2f}\n"
@@ -308,7 +301,7 @@ async def ha_assassin_loop(client: TossApiClient, bot: Bot, chat_id: int):
                 
                 await HAStateManager.save_state(price=0.0, target_sell_price=0.0)
                 last_action_candle_time = current_closed_time
-                print(f"🎯 [HA 암살자] 하이브리드 스나이핑 격발 완료. 락온가(${target_sell_price:.2f}) 하방 돌파 요격.", flush=True)
+                print(f"🎯 [HA 암살자] EMA 20 거시 방어선 붕괴 격발 완료. 하방 돌파 요격.", flush=True)
                 
         except Exception as e:
             error_msg = str(e)
