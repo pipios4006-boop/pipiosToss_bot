@@ -87,11 +87,33 @@ async def ha_assassin_loop(client: TossApiClient, bot: Bot, chat_id: int):
                             client_order_id=f"HAZERO_{datetime.now(ZoneInfo('America/New_York')).strftime('%Y%m%d_%H%M%S')}"
                         )
                         
+                        # MODIFIED: Zero-Overnight 상세 PnL 연산 및 환율 렌더링 복원
                         sell_amount = bid_1_price * soxl_qty
                         buy_amount = last_buy_price * soxl_qty
-                        profit_usd = (sell_amount - buy_amount) - (sell_amount * 0.002) if last_buy_price > 0 else 0.0
+                        commission_usd = sell_amount * 0.002
                         
-                        await notify_tg(f"⚠️ <b>[HA 암살자] Zero-Overnight 마감 강제 청산</b>\n▫️ 타격 수량: {soxl_qty}주\n▫️ 실현 손익: {profit_usd:+.2f} USD")
+                        if last_buy_price > 0:
+                            profit_usd = (sell_amount - buy_amount) - commission_usd
+                            profit_rate = (profit_usd / buy_amount) * 100
+                        else:
+                            profit_usd = 0.0
+                            profit_rate = 0.0
+                            
+                        ex_rate = await client.get_usd_to_krw_rate()
+                        profit_krw = profit_usd * ex_rate
+                        
+                        msg = (
+                            f"⚠️ <b>[HA 암살자] Zero-Overnight 마감 강제 청산</b>\n\n"
+                            f"▫️ <b>종목</b>: SOXL\n"
+                            f"▫️ <b>체결 예상 단가</b>: ${bid_1_price:.2f}\n"
+                            f"▫️ <b>타격 수량</b>: {soxl_qty}주\n"
+                            f"▫️ <b>총 매도 금액</b>: ${sell_amount:,.2f}\n"
+                            f"▫️ <b>예상 제비용 (0.2%)</b>: -${commission_usd:,.2f}\n"
+                            f"▫️ <b>순 수익률</b>: {profit_rate:+.2f}%\n"
+                            f"▫️ <b>순 실현 손익</b>: {profit_usd:+.2f} USD ({profit_krw:+,.0f} KRW)\n"
+                            f"▫️ <b>시각</b>: {now_est_str}"
+                        )
+                        await notify_tg(msg)
                         await HAStateManager.save_state(price=0.0, target_sell_price=0.0)
                     else:
                         print("⚠️ [HA 암살자] Zero-Overnight 덤핑 호가창 붕괴.", flush=True)
@@ -160,7 +182,6 @@ async def ha_assassin_loop(client: TossApiClient, bot: Bot, chat_id: int):
                     else:
                         buy_signal = True
 
-                # MODIFIED: 대안 B 적용 (완전히 닫힌 직전 캔들 c2 기준 종가로 덤핑 확정. 노이즈 100% 필터링)
                 if soxl_qty >= 1 and target_sell_price > 0.0:
                     if is_c2_eum and (c2['HA_Close'] <= target_sell_price):
                         dynamic_sell_signal = True
@@ -170,7 +191,6 @@ async def ha_assassin_loop(client: TossApiClient, bot: Bot, chat_id: int):
                 bulls = closed_ha[closed_ha['HA_Close'] >= closed_ha['HA_Open']]
                 if not bulls.empty:
                     latest_bull = bulls.iloc[-1]
-                    # MODIFIED: 대안 A 적용 (Trailing Stop 락온가 하향: 중심값 -> 시가)
                     dynamic_target = latest_bull['HA_Open']
                     if abs(target_sell_price - dynamic_target) > 0.001:
                         target_sell_price = dynamic_target
@@ -223,10 +243,15 @@ async def ha_assassin_loop(client: TossApiClient, bot: Bot, chat_id: int):
                     client_order_id=f"HABUY_{client_order_id_suffix}"
                 )
                 
+                # MODIFIED: 매수 시 총 결제 금액 렌더링 규격 통일
+                total_amount = ask_1_price * actual_buy_qty
+                
                 msg = (
                     f"🟢 <b>[HA 암살자] 매수 타격 완료 (상승장 돌파)</b>\n\n"
+                    f"▫️ <b>종목</b>: SOXL\n"
                     f"▫️ <b>체결 단가</b>: ${ask_1_price:.2f}\n"
                     f"▫️ <b>타격 수량</b>: {actual_buy_qty}주\n"
+                    f"▫️ <b>총 결제 금액</b>: ${total_amount:,.2f}\n"
                     f"▫️ <b>잔여 체력 팩트</b>: 진폭 {current_amp*100:.2f}% (Limit: {avg_stamina*100:.2f}%)\n"
                     f"▫️ <b>시각</b>: {now_est_str}"
                 )
@@ -252,16 +277,31 @@ async def ha_assassin_loop(client: TossApiClient, bot: Bot, chat_id: int):
                     client_order_id=f"HASELL_{client_order_id_suffix}"
                 )
                 
+                # MODIFIED: 하이브리드 스나이핑 상세 PnL 연산 및 환율 렌더링 전면 복원
                 sell_amount = bid_1_price * sell_qty
                 buy_amount = last_buy_price * sell_qty
-                profit_usd = (sell_amount - buy_amount) - (sell_amount * 0.002) if last_buy_price > 0 else 0.0
-                profit_rate = (profit_usd / buy_amount) * 100 if last_buy_price > 0 else 0.0
+                commission_usd = sell_amount * 0.002
+                
+                if last_buy_price > 0:
+                    profit_usd = (sell_amount - buy_amount) - commission_usd
+                    profit_rate = (profit_usd / buy_amount) * 100
+                else:
+                    profit_usd = 0.0
+                    profit_rate = 0.0
+                    
+                ex_rate = await client.get_usd_to_krw_rate()
+                profit_krw = profit_usd * ex_rate
                 
                 msg = (
                     f"🔴 <b>[HA 암살자] 매도 타격 완료 (하이브리드 스나이핑)</b>\n\n"
+                    f"▫️ <b>종목</b>: SOXL\n"
                     f"▫️ <b>체결 단가</b>: ${bid_1_price:.2f}\n"
+                    f"▫️ <b>스나이핑 락온가</b>: ${target_sell_price:.2f}\n"
                     f"▫️ <b>타격 수량</b>: {sell_qty}주\n"
+                    f"▫️ <b>총 매도 금액</b>: ${sell_amount:,.2f}\n"
+                    f"▫️ <b>예상 제비용 (0.2%)</b>: -${commission_usd:,.2f}\n"
                     f"▫️ <b>순 수익률</b>: {profit_rate:+.2f}%\n"
+                    f"▫️ <b>순 실현 손익</b>: {profit_usd:+.2f} USD ({profit_krw:+,.0f} KRW)\n"
                     f"▫️ <b>시각</b>: {now_est_str}"
                 )
                 await notify_tg(msg)
