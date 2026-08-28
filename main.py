@@ -1,6 +1,6 @@
 # =====================================================================
 # 파일명: main.py
-# 목적: 분리된 플러그인 모듈 의존성 주입 및 V-REV 4.0 (EMA-20 Shield + Track 1/2 Entry) 데몬
+# 목적: 분리된 플러그인 모듈 의존성 주입 및 V-REV 4.0 (EMA-20 Shield + Track 1/2 Entry + Limit-Trap Sweeper) 데몬
 # =====================================================================
 
 import asyncio
@@ -178,7 +178,6 @@ async def ha_assassin_loop(client: TossApiClient, bot: Bot, chat_id: int):
             dynamic_sell_signal = False
             
             if last_action_candle_time != current_closed_time:
-                # MODIFIED: Track 1(진성 1봉 단독) OR Track 2(2연속 양봉) 매수 로직 전면 복원
                 raw_buy_signal = ((is_c2_yang and c2_shaved_bottom) or (is_c1_yang and is_c2_yang)) and is_up_trend
                 
                 if raw_buy_signal:
@@ -211,7 +210,14 @@ async def ha_assassin_loop(client: TossApiClient, bot: Bot, chat_id: int):
 
             open_orders = await client.get_orders(status="OPEN", symbol="SOXL")
             if open_orders:
-                print("⚠️ [HA 암살자] 미체결 대기 주문 감지. 현재 루프 바이패스.", flush=True)
+                # MODIFIED: Limit-Trap Sweeper 도입 (60초 초과 미체결 주문 강제 찢기)
+                print("⚠️ [HA 암살자] 미체결 대기 주문(Limit-Trap) 감지. 스위퍼(강제 취소) 가동.", flush=True)
+                for order in open_orders:
+                    try:
+                        await client.cancel_order(order["orderId"])
+                        print(f"🧹 [HA 암살자] 덫 해제 완료: 지연 주문({order['orderId']}) 강제 취소 타격.", flush=True)
+                    except Exception as e:
+                        print(f"🚨 [HA 암살자] 덫 해제 실패: {e}", flush=True)
                 continue
                 
             now_est_str = datetime.now(ZoneInfo('America/New_York')).strftime("%Y-%m-%d %H:%M:%S EST")
