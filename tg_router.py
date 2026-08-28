@@ -324,9 +324,8 @@ async def process_scan_ha(callback_query: types.CallbackQuery, state: FSMContext
         if ha_df.empty:
             result_text = f"🚨 <b>캔들 데이터 붕괴 (빈 배열)</b>\n\n🔹 <b>기준 시각</b>: {html.escape(est_now)} EST\n🔹 <b>실시간 종가</b>: ${current_price:.2f}"
         else:
-            # MODIFIED: 당일 실시간 일봉 기반 누적 진폭(체력) 스캔 (200 캔들 슬라이딩 소실 방어)
-            current_amp = HeikinAshiEngine.calculate_today_amplitude(daily_candles_json)
-            
+            # MODIFIED: 낡은 데드코드 영구 소각 및 다이내믹 세션 체력 엔진 초기화
+            current_amp = 0.0
             gap_shield_active = False
             shield_status_text = "🔴 해제됨 (개장 60분 경과 혹은 진행장 아님)"
             stamina_status_text = "🟢 정상 (진입 가능)"
@@ -354,6 +353,8 @@ async def process_scan_ha(callback_query: types.CallbackQuery, state: FSMContext
                 session_candles = ha_df[ha_df.index >= session_start_est]
                 
                 if not session_candles.empty:
+                    current_amp = await HeikinAshiEngine.get_dynamic_session_amp(session_start_est, session_name, session_candles)
+                    
                     elapsed_sec = (now_kst - session_start_time).total_seconds()
                     if elapsed_sec <= 3600:
                         c0 = session_candles.iloc[-1]
