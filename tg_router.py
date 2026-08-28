@@ -317,6 +317,16 @@ async def process_scan_ha(callback_query: types.CallbackQuery, state: FSMContext
             }
             session_display = session_map.get(session_name, "알 수 없음") if is_open else "휴장 (Closed)"
             
+            # MODIFIED: 거시 장세(EMA 10 vs 20) 판별 (완전히 닫힌 c2 캔들 기준)
+            trend_text = "➖ 횡보장 (Neutral)"
+            if len(ha_df) >= 2:
+                c2_ema10 = ha_df.iloc[-2]['EMA_10']
+                c2_ema20 = ha_df.iloc[-2]['EMA_20']
+                if c2_ema10 > c2_ema20:
+                    trend_text = "📈 상승장 (Up-Trend)"
+                elif c2_ema10 < c2_ema20:
+                    trend_text = "📉 하락장 (Down-Trend)"
+            
             if is_open and session_start_time is not None:
                 now_kst = datetime.now(ZoneInfo('Asia/Seoul'))
                 session_start_est = session_start_time.astimezone(ZoneInfo('America/New_York'))
@@ -355,7 +365,9 @@ async def process_scan_ha(callback_query: types.CallbackQuery, state: FSMContext
                 f"📈 <b>SOXL 퀀트 타점 및 체력 스캔 완료</b>\n\n"
                 f"🔹 <b>스캔 시각</b>: {html.escape(est_now)} EST\n"
                 f"🔹 <b>실시간 종가 (Tick)</b>: <b>${current_price:.2f}</b>\n"
-                f"🔹 <b>진행 세션</b>: {session_display}\n\n"
+                f"🔹 <b>진행 세션</b>: {session_display}\n"
+                # NEW: 관제탑 거시 장세 UI 렌더링
+                f"🔹 <b>거시 장세 (EMA)</b>: {trend_text}\n\n"
                 f"🛡️ <b>[HA 암살자 엣지 방어망 상태]</b>\n"
                 f"🔸 <b>5일 평균 진폭 (체력 한계)</b>: {avg_stamina*100:.2f}%\n"
                 f"🔸 <b>현재 세션 진폭 (소진 체력)</b>: {current_amp*100:.2f}%\n"
