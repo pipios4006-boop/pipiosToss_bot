@@ -131,7 +131,8 @@ async def ha_assassin_loop(client: TossApiClient, bot: Bot, chat_id: int):
             ha_df = HeikinAshiEngine.calculate_3m_ha(candles_json)
             avg_stamina = HeikinAshiEngine.calculate_amplitude_stamina(daily_candles_json)
             
-            if len(ha_df) < 3:
+            # MODIFIED: 3연속 닫힌 양봉 판별을 위해 최소 배열 길이 4로 상향 락온 (Case 24 단락 평가 방어)
+            if len(ha_df) < 4:
                 continue
                 
             if session_end_time is None:
@@ -148,18 +149,20 @@ async def ha_assassin_loop(client: TossApiClient, bot: Bot, chat_id: int):
                     session_open_price = session_candles.iloc[0]['HA_Open']
                     current_amp = await HeikinAshiEngine.get_dynamic_session_amp(session_start_est, session_name, session_candles)
 
+            # NEW: 3연속 닫힌 봉 스캔을 위한 c3 변수 전진 배치
+            c3 = ha_df.iloc[-4]
             c1 = ha_df.iloc[-3]
             c2 = ha_df.iloc[-2]
             c0 = ha_df.iloc[-1]
             current_closed_time = c2.name
             
+            is_c3_yang = c3['HA_Close'] >= c3['HA_Open']
             is_c1_yang = c1['HA_Close'] >= c1['HA_Open']
             is_c2_yang = c2['HA_Close'] >= c2['HA_Open']
             is_c0_eum = c0['HA_Close'] < c0['HA_Open']
             
             c2_shaved_bottom = ((c2['HA_Open'] - c2['HA_Low']) / c2['HA_Open'] < 0.0005) if c2['HA_Open'] > 0 else False
             
-            # MODIFIED: 가속 상승장 판별 (EMA 5 > EMA 10) 락온
             is_up_trend = c2['EMA_5'] > c2['EMA_10']
             
             gap_shield_block = False
@@ -172,7 +175,6 @@ async def ha_assassin_loop(client: TossApiClient, bot: Bot, chat_id: int):
             stamina_exhausted = (avg_stamina > 0.0) and (current_amp >= avg_stamina * 0.95)
             
             if soxl_qty >= 1:
-                # MODIFIED: 가속 방어선 (EMA 10 Trailing) 락온
                 dynamic_target = c2['EMA_10']
                 if abs(target_sell_price - dynamic_target) > 0.001:
                     target_sell_price = dynamic_target
@@ -183,7 +185,10 @@ async def ha_assassin_loop(client: TossApiClient, bot: Bot, chat_id: int):
             dynamic_sell_signal = False
             
             if last_action_candle_time != current_closed_time:
-                raw_buy_signal = ((is_c2_yang and c2_shaved_bottom) or (is_c1_yang and is_c2_yang)) and is_up_trend
+                # MODIFIED: Track 1, 2 (순추세) + Track 3 (역추세 3연속 양봉 돌파) 하이브리드 결합 락온
+                base_trend_signal = ((is_c2_yang and c2_shaved_bottom) or (is_c1_yang and is_c2_yang)) and is_up_trend
+                v_reversal_signal = is_c3_yang and is_c1_yang and is_c2_yang
+                raw_buy_signal = base_trend_signal or v_reversal_signal
                 
                 if raw_buy_signal:
                     if gap_shield_block:
@@ -251,7 +256,6 @@ async def ha_assassin_loop(client: TossApiClient, bot: Bot, chat_id: int):
                 
                 total_amount = ask_1_price * actual_buy_qty
                 
-                # MODIFIED: 매수 체결 직후 EMA 10 방어선 무지연 락온
                 dynamic_target_lock = c2['EMA_10']
                 await HAStateManager.save_state(price=ask_1_price, target_sell_price=dynamic_target_lock)
                 last_action_candle_time = current_closed_time
