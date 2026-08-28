@@ -1,6 +1,6 @@
 # =====================================================================
 # 파일명: main.py
-# 목적: 분리된 플러그인 모듈 의존성 주입 및 V-REV 4.0 (EMA-20 Shield + Track 1/2 Entry + Limit-Trap Sweeper) 데몬
+# 목적: 분리된 플러그인 모듈 의존성 주입 및 V-REV 4.0 (Wake-up Event 기반 실시간 엔진)
 # =====================================================================
 
 import asyncio
@@ -32,6 +32,9 @@ if not all([TOSS_CLIENT_ID, TOSS_CLIENT_SECRET, TELEGRAM_BOT_TOKEN, _telegram_ch
 
 ADMIN_CHAT_ID = int(_telegram_chat_id_str)
 
+# NEW: 메인 루프 강제 기상용 글로벌 이벤트 객체
+wakeup_event = asyncio.Event()
+
 async def ha_assassin_loop(client: TossApiClient, bot: Bot, chat_id: int):
     last_action_candle_time = None
     
@@ -47,7 +50,13 @@ async def ha_assassin_loop(client: TossApiClient, bot: Bot, chat_id: int):
         print(f"🚨 [HA 암살자] 초기 계좌 정보 로드 실패: {e}", flush=True)
         
     while True:
-        await asyncio.sleep(60)
+        # MODIFIED: 단순 60초 수면이 아닌, 관제탑 인터럽트 시 즉시 기상하도록 구조 개편
+        try:
+            await asyncio.wait_for(wakeup_event.wait(), timeout=60.0)
+            wakeup_event.clear()
+            print("⚡ [HA 암살자] 관제탑 실시간 인터럽트 수신. 60초 대기 스킵 및 즉시 타점 스캔 가동.", flush=True)
+        except asyncio.TimeoutError:
+            pass
         
         try:
             last_buy_price, target_qty, target_sell_price = await HAStateManager.get_state()
@@ -153,7 +162,6 @@ async def ha_assassin_loop(client: TossApiClient, bot: Bot, chat_id: int):
             is_c1_yang = c1['HA_Close'] >= c1['HA_Open']
             is_c2_yang = c2['HA_Close'] >= c2['HA_Open']
             is_c0_eum = c0['HA_Close'] < c0['HA_Open']
-            is_c2_eum = c2['HA_Close'] < c2['HA_Open']
             
             c2_shaved_bottom = ((c2['HA_Open'] - c2['HA_Low']) / c2['HA_Open'] < 0.0005) if c2['HA_Open'] > 0 else False
             is_up_trend = c2['EMA_10'] > c2['EMA_20']
@@ -210,14 +218,13 @@ async def ha_assassin_loop(client: TossApiClient, bot: Bot, chat_id: int):
 
             open_orders = await client.get_orders(status="OPEN", symbol="SOXL")
             if open_orders:
-                # MODIFIED: Limit-Trap Sweeper 도입 (60초 초과 미체결 주문 강제 찢기)
-                print("⚠️ [HA 암살자] 미체결 대기 주문(Limit-Trap) 감지. 스위퍼(강제 취소) 가동.", flush=True)
+                print("⚠️ [HA 암살자] 미체결 대기 주문(Limit-Trap) 감지. 스위퍼 자동 가동.", flush=True)
                 for order in open_orders:
                     try:
                         await client.cancel_order(order["orderId"])
-                        print(f"🧹 [HA 암살자] 덫 해제 완료: 지연 주문({order['orderId']}) 강제 취소 타격.", flush=True)
+                        print(f"🧹 [HA 암살자] 덫 자동 해제: 지연 주문({order['orderId']}) 강제 취소 타격.", flush=True)
                     except Exception as e:
-                        print(f"🚨 [HA 암살자] 덫 해제 실패: {e}", flush=True)
+                        pass
                 continue
                 
             now_est_str = datetime.now(ZoneInfo('America/New_York')).strftime("%Y-%m-%d %H:%M:%S EST")
@@ -247,6 +254,12 @@ async def ha_assassin_loop(client: TossApiClient, bot: Bot, chat_id: int):
                 
                 total_amount = ask_1_price * actual_buy_qty
                 
+                # MODIFIED: 무지연 락온 (Zero-Latency EMA Lock-on) 
+                # 체결 즉시 c2의 EMA_20 값을 target_sell_price로 장부에 동시 락온하여 0.00 표출 차단
+                dynamic_target_lock = c2['EMA_20']
+                await HAStateManager.save_state(price=ask_1_price, target_sell_price=dynamic_target_lock)
+                last_action_candle_time = current_closed_time
+                
                 msg = (
                     f"🟢 <b>[HA 암살자] 매수 타격 완료 (상승장 돌파)</b>\n\n"
                     f"▫️ <b>종목</b>: SOXL\n"
@@ -257,10 +270,7 @@ async def ha_assassin_loop(client: TossApiClient, bot: Bot, chat_id: int):
                     f"▫️ <b>시각</b>: {now_est_str}"
                 )
                 await notify_tg(msg)
-                
-                await HAStateManager.save_state(price=ask_1_price)
-                last_action_candle_time = current_closed_time
-                print(f"🎯 [HA 암살자] 진성 시그널 및 방어막 검증 통과. 매도 1호가(${ask_1_price:.2f}) 매수 타격 완료.", flush=True)
+                print(f"🎯 [HA 암살자] 진성 시그널 및 방어막 검증 통과. 매도 1호가(${ask_1_price:.2f}) 매수 및 EMA 방어선 무지연 락온 완료.", flush=True)
                 
             elif dynamic_sell_signal and soxl_qty >= 1:
                 orderbook = await client.get_orderbook("SOXL")
@@ -322,7 +332,9 @@ async def main():
     dp = Dispatcher()
     
     api_client = TossApiClient(client_id=TOSS_CLIENT_ID, client_secret=TOSS_CLIENT_SECRET)
-    inject_dependencies(api_client, ADMIN_CHAT_ID)
+    
+    # MODIFIED: 라우터에 wakeup_event 의존성 주입
+    inject_dependencies(api_client, ADMIN_CHAT_ID, wakeup_event)
     dp.include_router(router)
     
     asyncio.create_task(api_client.token_renewal_loop())

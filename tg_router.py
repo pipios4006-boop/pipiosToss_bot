@@ -1,6 +1,6 @@
 # =====================================================================
 # 파일명: tg_router.py
-# 목적: 텔레그램 메인 메뉴, 콜백, FSM 라우팅 및 퀀트 지표 대시보드 직관적 렌더링
+# 목적: 텔레그램 콜백 라우팅 및 온디맨드(On-Demand) 덫 해제 인터럽트 융합
 # =====================================================================
 
 import asyncio
@@ -21,11 +21,14 @@ router = Router()
 
 api_client = None
 ADMIN_CHAT_ID = None
+wakeup_event = None
 
-def inject_dependencies(client, admin_id):
-    global api_client, ADMIN_CHAT_ID
+# MODIFIED: wakeup_event 의존성 추가 수용
+def inject_dependencies(client, admin_id, event):
+    global api_client, ADMIN_CHAT_ID, wakeup_event
     api_client = client
     ADMIN_CHAT_ID = admin_id
+    wakeup_event = event
 
 class ManualQtyState(StatesGroup):
     waiting_for_qty = State()
@@ -222,8 +225,18 @@ async def process_scan_asset(callback_query: types.CallbackQuery, state: FSMCont
 
     await state.clear()
     
+    # MODIFIED: 수동 새로고침 시 즉각적인 덫 해제 및 메인 루프 기상(Wake-up) 처리
     try:
-        await callback_query.answer("⏳ 잔고 원장 동기화 중...", show_alert=False)
+        open_orders = await api_client.get_orders(status="OPEN", symbol="SOXL")
+        if open_orders:
+            for order in open_orders:
+                await api_client.cancel_order(order["orderId"])
+            if wakeup_event:
+                wakeup_event.set()
+                await callback_query.answer("🧹 Limit-Trap 감지 및 강제 해제! 즉각 재타격을 스캔합니다.", show_alert=False)
+            return
+        else:
+            await callback_query.answer("⏳ 잔고 원장 동기화 중...", show_alert=False)
     except Exception:
         pass
     
@@ -280,8 +293,18 @@ async def process_scan_ha(callback_query: types.CallbackQuery, state: FSMContext
 
     await state.clear()
     
+    # MODIFIED: 수동 새로고침 시 즉각적인 덫 해제 및 메인 루프 기상(Wake-up) 처리
     try:
-        await callback_query.answer("⏳ 시세 타격 및 HA 벡터 엔진 가동 중...", show_alert=False)
+        open_orders = await api_client.get_orders(status="OPEN", symbol="SOXL")
+        if open_orders:
+            for order in open_orders:
+                await api_client.cancel_order(order["orderId"])
+            if wakeup_event:
+                wakeup_event.set()
+                await callback_query.answer("🧹 Limit-Trap 감지 및 강제 해제! 즉각 재타격을 스캔합니다.", show_alert=False)
+            return
+        else:
+            await callback_query.answer("⏳ 시세 타격 및 HA 벡터 엔진 가동 중...", show_alert=False)
     except Exception:
         pass
     
@@ -317,7 +340,6 @@ async def process_scan_ha(callback_query: types.CallbackQuery, state: FSMContext
             }
             session_display = session_map.get(session_name, "알 수 없음") if is_open else "휴장 (Closed)"
             
-            # MODIFIED: 거시 장세(EMA 10 vs 20) 판별 (완전히 닫힌 c2 캔들 기준)
             trend_text = "➖ 횡보장 (Neutral)"
             if len(ha_df) >= 2:
                 c2_ema10 = ha_df.iloc[-2]['EMA_10']
@@ -366,7 +388,6 @@ async def process_scan_ha(callback_query: types.CallbackQuery, state: FSMContext
                 f"🔹 <b>스캔 시각</b>: {html.escape(est_now)} EST\n"
                 f"🔹 <b>실시간 종가 (Tick)</b>: <b>${current_price:.2f}</b>\n"
                 f"🔹 <b>진행 세션</b>: {session_display}\n"
-                # NEW: 관제탑 거시 장세 UI 렌더링
                 f"🔹 <b>거시 장세 (EMA)</b>: {trend_text}\n\n"
                 f"🛡️ <b>[HA 암살자 엣지 방어망 상태]</b>\n"
                 f"🔸 <b>5일 평균 진폭 (체력 한계)</b>: {avg_stamina*100:.2f}%\n"
