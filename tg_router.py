@@ -58,6 +58,26 @@ async def cmd_start(message: types.Message, state: FSMContext):
     except Exception as e:
         print(f"⚠️ [텔레그램 통신 붕괴 방어] 메인 메뉴 렌더링 실패: {e}")
 
+# NEW: 로컬 장부 오염 초기화 방어망 (Case 02)
+@router.message(Command("reset"))
+async def cmd_reset(message: types.Message, state: FSMContext):
+    if message.from_user.id != ADMIN_CHAT_ID:
+        return
+
+    try:
+        await HAStateManager.save_state(price=0.0, target_sell_price=0.0)
+        reset_text = (
+            "✅ <b>로컬 장부 원자적 덮어쓰기 완료</b>\n\n"
+            "▫️ <b>조치</b>: 포지션 단가 및 거시 방어선(EMA 10) 강제 0.0 동기화\n"
+            "▫️ <b>목적</b>: 과거 상태 오염 소각 및 신규 타점 스캔 락아웃 해제"
+        )
+        await message.answer(reset_text, parse_mode="HTML")
+    except Exception as e:
+        try:
+            await message.answer(f"🚨 <b>장부 초기화 붕괴</b>: <pre>{html.escape(str(e))}</pre>", parse_mode="HTML")
+        except Exception:
+            pass
+
 @router.callback_query(F.data == "menu_set_qty")
 async def process_menu_set_qty(callback_query: types.CallbackQuery, state: FSMContext):
     if callback_query.from_user.id != ADMIN_CHAT_ID:
