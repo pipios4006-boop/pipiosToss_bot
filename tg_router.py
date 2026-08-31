@@ -386,6 +386,7 @@ async def build_settlement_board() -> tuple[str, InlineKeyboardMarkup]:
         f"🔹 세션: {mode_text_s}"
     )
 
+    # MODIFIED: 장부 초기화(Reset) 컷오프 스위치 결속 (Edge Case 02 대응)
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(text="🔴 롱 정지" if is_active_l else "🟢 롱 가동", callback_data="toggle_set_act_SOXL"),
@@ -402,6 +403,10 @@ async def build_settlement_board() -> tuple[str, InlineKeyboardMarkup]:
         [
             InlineKeyboardButton(text="☀️ 롱 2세션 전환" if mode_l == "PRE_ONLY" else "🌅 롱 1세션 전환", callback_data="toggle_set_mode_SOXL"),
             InlineKeyboardButton(text="☀️ 숏 2세션 전환" if mode_s == "PRE_ONLY" else "🌅 숏 1세션 전환", callback_data="toggle_set_mode_SOXS")
+        ],
+        [
+            InlineKeyboardButton(text="🧹 롱 장부 초기화", callback_data="reset_ledger_SOXL"),
+            InlineKeyboardButton(text="🧹 숏 장부 초기화", callback_data="reset_ledger_SOXS")
         ],
         [InlineKeyboardButton(text="🔫 데이 트레이딩 관제탑", callback_data="open_avwap")],
         [InlineKeyboardButton(text="🔙 메인 메뉴", callback_data="back_to_main")]
@@ -426,7 +431,6 @@ async def process_open_avwap(callback_query: types.CallbackQuery, state: FSMCont
     try:
         text, keyboard = await build_avwap_radar()
         await callback_query.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
-    # MODIFIED: 문법 에러 치유 (as e:)
     except Exception as e:
         if "message is not modified" not in str(e).lower():
             await callback_query.message.answer(f"🚨 <b>관제탑 갱신 실패:</b> {html.escape(str(e))}", parse_mode="HTML")
@@ -548,6 +552,30 @@ async def process_budget_input(message: types.Message, state: FSMContext):
         await message.answer(f"✅ <b>{html.escape(symbol)} 예산 ${budget:,.2f} 락온 완료.</b>", reply_markup=keyboard, parse_mode="HTML")
     except Exception:
         await message.answer("🚨 유효한 숫자를 입력하세요.", parse_mode="HTML")
+
+# NEW: 로컬 장부 영구 소각 콜백 라우터 결속 (수동 조작 시 엣지 케이스 방어망)
+@router.callback_query(F.data.startswith("reset_ledger_"))
+async def process_reset_ledger(callback_query: types.CallbackQuery, state: FSMContext):
+    symbol = callback_query.data.split("_")[2].upper()
+    try:
+        # 상태 0주 원자적 기록 및 낡은 주문 식별자 강제 소각
+        await AssassinLedger.save_state(
+            symbol,
+            price=0.0,
+            target_sell_price=0.0,
+            buy_order_id="",
+            cond_order_id="",
+            is_session_done=False
+        )
+        await callback_query.answer(f"✅ [{symbol}] 장부 영구 소각 및 0점 초기화 완료", show_alert=True)
+        text, keyboard = await build_settlement_board()
+        await callback_query.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
+    except Exception as e:
+        if "message is not modified" not in str(e).lower():
+            try:
+                await callback_query.message.answer(f"🚨 <b>초기화 실패:</b> {html.escape(str(e))}", parse_mode="HTML")
+            except Exception:
+                pass
 
 @router.message(Command("update"))
 async def cmd_update(message: types.Message, state: FSMContext):
