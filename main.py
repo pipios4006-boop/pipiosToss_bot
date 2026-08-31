@@ -19,6 +19,9 @@ from toss_api import TossApiClient
 from quant_engine import AssassinLedger, AVWAPEngine
 from tg_router import router, inject_dependencies
 
+# NEW: 1분봉 데이터 영구 누적 기록 모듈 임포트
+from candle_recorder import record_candles_loop
+
 env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env')
 load_dotenv(dotenv_path=env_path)
 
@@ -127,7 +130,6 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                 session_start_time = fallback_start
                 print(f"🚨 [aVWAP {symbol}] 캘린더 붕괴 방어. 타임쉴드 폴백: {session_name} ({session_start_time})", flush=True)
 
-            # MODIFIED: 03:57~03:59 데이장 및 16:05~16:07 애프터장 초입 덤핑 스윕 방어망 연장
             is_day_moc = (now_est.hour == 3 and 57 <= now_est.minute <= 59)
             is_reg_moc = (now_est.hour == 16 and 5 <= now_est.minute <= 7)
 
@@ -181,7 +183,6 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                                     idempotency_keys[symbol]["MOC"] = None
                                     last_moc_minute = now_est.minute
                                     
-                                    # MODIFIED: 덤핑 알림 태그 변경
                                     tag = "03:57~59 데이장" if is_day_moc else "16:05~07 애프터장"
                                     await notify_tg(f"🔴 <b>[aVWAP {symbol}] {tag} 제로오버나이트 강제 청산 스윕 ({now_est.minute}분 타격)</b>\n▫️ 덤핑 1호가: ${bid_1_price:.2f}\n▫️ 수량: {dump_qty}주")
                                     print(f"🧹 [aVWAP {symbol}] {tag} MOC 순수 1호가 덤핑 스윕 ({now_est.minute}분) 완료.", flush=True)
@@ -368,6 +369,10 @@ async def main():
     asyncio.create_task(assassin_loop(api_client, bot, ADMIN_CHAT_ID, "SOXL"))
     asyncio.create_task(assassin_loop(api_client, bot, ADMIN_CHAT_ID, "SOXS"))
     
+    # NEW: 백그라운드 캔들 수집망 분리 결속
+    asyncio.create_task(record_candles_loop(api_client, "SOXL"))
+    asyncio.create_task(record_candles_loop(api_client, "SOXS"))
+    
     print("시스템 코어 및 듀얼 암살자(SOXL, SOXS) 방어망 결합 완료. 폴링 개시...", flush=True)
     
     try:
@@ -394,3 +399,4 @@ if __name__ == "__main__":
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
         pass
+
