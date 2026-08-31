@@ -358,11 +358,11 @@ async def build_sync_board() -> str:
             f"🔺 수익: {d['profit_rate']:+.2f}% ({profit_sign}${abs(d['profit_usd']):,.2f} | {profit_sign}₩{int(abs(d['profit_krw'])):,})"
         )
         
+    # MODIFIED: RP 투자권장 항목 소각
     text = (
         f"📜 <b>[ 통합 지시서 ({market_state}) ]</b>\n"
         f"📅 {dst_str} ({now_est.strftime('%H:%M')})\n"
         f"💵 주문가능금액: ${bp:,.2f}\n"
-        f"🏛️ RP 투자권장: $0.00\n"
         f"➖➖➖➖➖➖➖➖➖➖➖➖\n\n"
         f"{format_symbol(soxl_data)}\n\n"
         f"{format_symbol(soxs_data)}\n\n"
