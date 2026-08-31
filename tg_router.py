@@ -36,7 +36,6 @@ def get_main_menu_text() -> str:
     is_dst = now_est.dst() is not None and now_est.dst().total_seconds() != 0
     dst_status_text = "🌞서머타임 ON (EDT)" if is_dst else "❄️서머타임 OFF (EST)"
     
-    # MODIFIED: 모바일 환경 1줄 렌더링 최적화를 위한 부연 설명 소각 및 텍스트 압축
     return (
         f"🕒 <b>[ 운영 스케줄 ({dst_status_text}) ]</b>\n"
         "🔹 19:00: ☀️ 데이장 (Day Market) 스캔\n"
@@ -148,11 +147,14 @@ async def build_avwap_radar() -> tuple[str, InlineKeyboardMarkup]:
 
     async def fetch_5ma_amp(symbol):
         try:
-            endpoint = f"/api/v1/candles?symbol={symbol}&interval=1d&count=5"
+            # MODIFIED: 당일 미완성 캔들(Deflation) 배제 및 과거 5거래일 완제 캔들 확보를 위해 count=6 호출
+            endpoint = f"/api/v1/candles?symbol={symbol}&interval=1d&count=6"
             data = await api_client._request("GET", endpoint, "MARKET_DATA_CHART", headers=api_client._get_headers())
             candles = data.get("result", {}).get("candles", [])
             amps = []
-            for c in candles:
+            
+            # MODIFIED: candles[0] (당일 캔들)을 무조건 배제하고 확정된 직전 5일(T-1 ~ T-5) 캔들만 연산
+            for c in candles[1:6]:
                 h = float(c.get("highPrice", 0))
                 l = float(c.get("lowPrice", 0))
                 if l > 0: amps.append((h - l) / l * 100)
