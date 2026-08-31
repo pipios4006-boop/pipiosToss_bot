@@ -1,5 +1,5 @@
 # =====================================================================
-# [통합 방탄 코어] quant_engine.py
+# FILE: quant_engine.py
 # 목적: SOXL, SOXS 듀얼 장부 격리 및 세션별 aVWAP 연산 엔진 (I/O 통제 결속)
 # =====================================================================
 
@@ -41,10 +41,26 @@ class AssassinLedger:
                     return 0.0, 100.0, "", False, True, False, 0.0
             return await asyncio.to_thread(_read)
 
+    # NEW: 하위 호환성 파괴를 막기 위한 주문번호 절대 기억(Amnesia 방어) 조회망 분리
+    @classmethod
+    async def get_buy_order_id(cls, symbol: str) -> str:
+        filepath = cls._get_file_path(symbol)
+        async with GlobalThrottle.get_file_lock(filepath):
+            def _read():
+                if not os.path.exists(filepath):
+                    return ""
+                try:
+                    with open(filepath, "r", encoding="utf-8") as f:
+                        return str(json.load(f).get("buy_order_id", ""))
+                except Exception:
+                    return ""
+            return await asyncio.to_thread(_read)
+
     @classmethod
     async def save_state(cls, symbol: str, price: float = None, budget: float = None, 
                          last_session_id: str = None, is_session_done: bool = None, 
-                         is_active: bool = None, overnight_on: bool = None, target_sell_price: float = None):
+                         is_active: bool = None, overnight_on: bool = None, 
+                         target_sell_price: float = None, buy_order_id: str = None):
         filepath = cls._get_file_path(symbol)
         async with GlobalThrottle.get_file_lock(filepath):
             def _write():
@@ -63,6 +79,7 @@ class AssassinLedger:
                 if is_active is not None: data["is_active"] = is_active
                 if overnight_on is not None: data["overnight_on"] = overnight_on
                 if target_sell_price is not None: data["target_sell_price"] = target_sell_price
+                if buy_order_id is not None: data["buy_order_id"] = buy_order_id
                 
                 tmp_path = filepath + ".tmp"
                 with open(tmp_path, "w", encoding="utf-8") as f:

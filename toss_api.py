@@ -1,5 +1,5 @@
 # =====================================================================
-# [통합 방탄 코어] toss_api.py
+# FILE: toss_api.py
 # 목적: 토스증권 Open API 통신 엣지 케이스 방어 및 중앙 통제소 가동
 # =====================================================================
 
@@ -193,8 +193,14 @@ class TossApiClient:
         if not self.account_seq: await self.fetch_account_seq()
         await self._request("POST", f"/api/v1/orders/{order_id}/cancel", "ORDER", headers=self._get_headers(requires_account=True))
 
-    # 제5헌법: clientOrderId 주입
-    async def create_order(self, symbol: str, side: str, order_type: str, quantity: float, price: str, client_order_id: str):
+    # NEW: Case 35 암살자 순수 체결 단가 역추적망
+    async def get_order_detail(self, order_id: str) -> dict:
+        if not self.account_seq: await self.fetch_account_seq()
+        data = await self._request("GET", f"/api/v1/orders/{order_id}", "ORDER_HISTORY", headers=self._get_headers(requires_account=True))
+        return data.get("result", {})
+
+    # MODIFIED: 제5헌법 & 주문 객체 리턴 배선 연결 (buy_order_id 핀셋 추출용)
+    async def create_order(self, symbol: str, side: str, order_type: str, quantity: float, price: str, client_order_id: str) -> dict:
         if not self.account_seq: await self.fetch_account_seq()
         payload = {
             "clientOrderId": client_order_id,
@@ -205,4 +211,4 @@ class TossApiClient:
             "price": price,
             "timeInForce": "DAY"
         }
-        await self._request("POST", "/api/v1/orders", "ORDER", headers=self._get_headers(requires_account=True), json_data=payload)
+        return await self._request("POST", "/api/v1/orders", "ORDER", headers=self._get_headers(requires_account=True), json_data=payload)
