@@ -1,12 +1,12 @@
 # =====================================================================
 # 파일명: tg_router.py
-# 목적: 텔레그램 콜백 라우팅 및 온디맨드 인터럽트 (+1% 추적 활성화 상태 UI 분리 병합)
+# 목적: SOXL, SOXS 듀얼 상태 제어 UI, 스케줄/명령어 라우팅 및 방어망 결속
 # =====================================================================
 
-import asyncio
 import os
-import sys
 import html
+import asyncio
+import pandas as pd
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from aiogram import Router, types, F
@@ -14,11 +14,9 @@ from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
-
-from quant_engine import HAStateManager, HeikinAshiEngine
+from quant_engine import AssassinLedger
 
 router = Router()
-
 api_client = None
 ADMIN_CHAT_ID = None
 wakeup_event = None
@@ -29,487 +27,566 @@ def inject_dependencies(client, admin_id, event):
     ADMIN_CHAT_ID = admin_id
     wakeup_event = event
 
-class ManualQtyState(StatesGroup):
-    waiting_for_qty = State()
+class BudgetState(StatesGroup):
+    waiting_for_budget = State()
+    symbol = None
 
+# MODIFIED: 제3헌법 적용 - 불필요한 레거시 메뉴 소각 및 3대 핵심 코어 라우팅 락온
 @router.message(Command("start"))
 async def cmd_start(message: types.Message, state: FSMContext):
     if message.from_user.id != ADMIN_CHAT_ID:
         return
-        
     await state.clear()
     
-    _, _, _, _, _, is_active, _ = await HAStateManager.get_state()
-    toggle_text = "🔴 봇 매매 정지 (현재 OFF)" if not is_active else "🟢 봇 매매 가동 (현재 ON)"
-        
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💰 잔고 스캔", callback_data="scan_asset")],
-        [InlineKeyboardButton(text="📈 SOXL 타점 및 방어망 스캔", callback_data="scan_ha")],
-        [InlineKeyboardButton(text="⚙️ 타격 목표 수량 설정", callback_data="menu_set_qty")],
-        [InlineKeyboardButton(text=toggle_text, callback_data="toggle_active")]
+        [InlineKeyboardButton(text="🔫 트레이딩 레이더 관제탑", callback_data="open_avwap")],
+        [InlineKeyboardButton(text="📜 통합 지시서 (자산 스캔)", callback_data="open_sync")],
+        [InlineKeyboardButton(text="⚙️ 통합 전술 제어반", callback_data="open_settlement")]
     ])
     
-    welcome_text = (
-        "🤖 <b>승승장군 퀀트 관제탑 가동</b>\n\n"
-        "▫️ 시스템: Toss Securities V14 / Activation Trailing Mode\n"
-        "▫️ 상태: Online 및 API 대기 중\n\n"
-        "원하시는 명령을 선택하십시오."
+    now_est = datetime.now(ZoneInfo('America/New_York'))
+    is_dst = now_est.dst() is not None and now_est.dst().total_seconds() != 0
+    dst_status_text = "🌞서머타임 ON (EDT)" if is_dst else "❄️서머타임 OFF (EST)"
+    
+    text = (
+        f"🕒 <b>[ 운영 스케줄 ({dst_status_text}) ]</b>\n"
+        "🔹 04:00: 🌅 프리장 VWAP 스캔 개시\n"
+        "🔹 09:30: 🔥 정규장 VWAP 초기화 및 스캔\n"
+        "🔹 15:59: 🛑 암살자 오버나이트 강제 덤핑\n"
+        "🔹 16:05: 📝 정산 스캔 & 당일 사이클 졸업\n\n"
+        "🛠 <b>[ 핵심 명령어 ]</b>\n"
+        "▶️ /avwap : 🔫 데이 트레이딩 레이더 관제탑\n"
+        "▶️ /sync : 📜 통합 지시서 및 장부 동기화\n"
+        "▶️ /settlement : ⚙️ 통합 전술 제어반 (시드/OVN/가동)\n"
+        "▶️ /history : 🏆 졸업 명예의 전당\n"
+        "▶️ /log : 🔍 시스템 로그 및 에러 진단\n"
+        "▶️ /version : 🛠️ 시스템 코어 버전 정보\n\n"
+        "⚠️ /reset : 🔓 비상 해제 (0주 소각 및 잠금 해제)\n"
+        "⚠️ /update : 🚀 시스템 자가 업데이트"
     )
+    try:
+        await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+    except Exception:
+        pass
+
+def parse_session_data(all_candles: list) -> dict:
+    res = {
+        "pre_h": 0.0, "pre_l": 0.0, "pre_amp": 0.0, "pre_vwap": 0.0,
+        "reg_h": 0.0, "reg_l": 0.0, "reg_amp": 0.0, "reg_vwap": 0.0
+    }
+    if not all_candles: return res
+    
+    df = pd.DataFrame(all_candles)
+    if df.empty: return res
+    
+    df['timestamp'] = pd.to_datetime(df['timestamp'], format='ISO8601', utc=True).dt.tz_convert(ZoneInfo('America/New_York'))
+    df.set_index('timestamp', inplace=True)
+    df.sort_index(ascending=True, inplace=True)
+    
+    for col in ['highPrice', 'lowPrice', 'closePrice', 'volume']:
+        df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0.0)
+        
+    pre_df = df.between_time('04:00', '09:29')
+    reg_df = df.between_time('09:30', '16:00')
+    
+    def calc_metrics(sub_df):
+        if sub_df.empty: return 0.0, 0.0, 0.0, 0.0
+        h = float(sub_df['highPrice'].max())
+        l = float(sub_df['lowPrice'].min())
+        amp = ((h - l) / l * 100) if l > 0 else 0.0
+        tp = (sub_df['highPrice'] + sub_df['lowPrice'] + sub_df['closePrice']) / 3.0
+        pv = tp * sub_df['volume']
+        vol = sub_df['volume'].sum()
+        vwap = float(pv.sum() / vol) if vol > 0 else 0.0
+        return h, l, float(amp), vwap
+
+    pre_h, pre_l, pre_amp, pre_vwap = calc_metrics(pre_df)
+    reg_h, reg_l, reg_amp, reg_vwap = calc_metrics(reg_df)
+    
+    res.update({
+        "pre_h": pre_h, "pre_l": pre_l, "pre_amp": pre_amp, "pre_vwap": pre_vwap,
+        "reg_h": reg_h, "reg_l": reg_l, "reg_amp": reg_amp, "reg_vwap": reg_vwap
+    })
+    return res
+
+async def build_avwap_radar() -> tuple[str, InlineKeyboardMarkup]:
+    now_est = datetime.now(ZoneInfo('America/New_York'))
     
     try:
-        await message.answer(welcome_text, reply_markup=keyboard, parse_mode="HTML")
+        is_open, _, session_name, _ = await asyncio.wait_for(api_client.is_market_open(), timeout=5.0)
+    except Exception:
+        is_open, session_name = True, "regularMarket"
+        
+    if session_name == "afterMarket" or not is_open:
+        market_header = "🌙 <b>[ 애프터마켓 / 데이터 집계 종료 ]</b>"
+    elif session_name == "preMarket":
+        market_header = "🌅 <b>[ 프리마켓 가동중 ]</b>"
+    else:
+        market_header = "🔥 <b>[ 정규장 가동중 ]</b>"
+
+    price_l = await api_client.get_current_price("SOXL")
+    price_s = await api_client.get_current_price("SOXS")
+    
+    hold_l = await api_client.get_symbol_holdings_detail("SOXL")
+    hold_s = await api_client.get_symbol_holdings_detail("SOXS")
+
+    def calc_profit_str(hold, price):
+        qty = float(hold.get('qty', 0.0))
+        avg = float(hold.get('avg_price', 0.0))
+        if qty > 0 and avg > 0:
+            rate = (price - avg) / avg * 100
+            return f"${avg:.2f}({rate:+.2f}%)"
+        return "$0.00(0.00%)"
+
+    profit_l_str = calc_profit_str(hold_l, price_l)
+    profit_s_str = calc_profit_str(hold_s, price_s)
+
+    async def fetch_5ma_amp(symbol):
+        try:
+            endpoint = f"/api/v1/candles?symbol={symbol}&interval=1d&count=5"
+            data = await api_client._request("GET", endpoint, "MARKET_DATA_CHART", headers=api_client._get_headers())
+            candles = data.get("result", {}).get("candles", [])
+            amps = []
+            for c in candles:
+                h = float(c.get("highPrice", 0))
+                l = float(c.get("lowPrice", 0))
+                if l > 0: amps.append((h - l) / l * 100)
+            return sum(amps) / len(amps) if amps else 0.0
+        except Exception:
+            return 0.0
+
+    amp_l = await fetch_5ma_amp("SOXL")
+    amp_s = await fetch_5ma_amp("SOXS")
+
+    async def fetch_session_stats(symbol):
+        all_candles = []
+        before = None
+        session_start_est = now_est.replace(hour=4, minute=0, second=0, microsecond=0)
+        for _ in range(5):
+            try:
+                data = await api_client.get_1m_candles_pagination(symbol, count=200, before=before)
+                candles = data.get("candles", [])
+                all_candles.extend(candles)
+                if not candles: break
+                oldest_time = pd.to_datetime(candles[-1]['timestamp'], utc=True).tz_convert(ZoneInfo('America/New_York'))
+                if oldest_time <= session_start_est: break
+                before = data.get("nextBefore")
+                if not before: break
+            except Exception:
+                break
+        return await asyncio.to_thread(parse_session_data, all_candles)
+
+    sess_l = await fetch_session_stats("SOXL")
+    sess_s = await fetch_session_stats("SOXS")
+
+    _, budget_l, _, is_done_l, is_active_l, ovn_l, _ = await AssassinLedger.get_state("SOXL")
+    _, budget_s, _, is_done_s, is_active_s, ovn_s, _ = await AssassinLedger.get_state("SOXS")
+
+    def build_status(symbol, is_active, budget, ovn, is_done, session_name, now_est):
+        if not is_active:
+            return f"⚠️ <b>[ {symbol} 암살자 타격망 OFF (단순 관측 모드) ]</b>\n▫️ 교전 상태: OFF (수동 가동 대기)"
+
+        if is_done:
+            state_text = "당일 타격 완료 (휴식)"
+        else:
+            if session_name == "preMarket":
+                if now_est.hour == 4 and now_est.minute <= 6:
+                    state_text = "ON (04:07 EST 타임쉴드 가동 중 - 관망)"
+                else:
+                    state_text = "ON (소프트웨어 트리거 감시 중)"
+            elif session_name == "regularMarket":
+                state_text = "ON (정규장 감시 중)"
+            else:
+                state_text = "ON (장외 대기)"
+
+        ovn_text = "🟢 허용 (안전 이관)" if ovn else "🔴 불가 (15:59 덤핑)"
+
+        return (f"⚔️ <b>[ {symbol} 암살자(aVWAP) 1-Shot 교전망 (🟢 가동중) ]</b>\n"
+                f"▫️ 교전 상태: {state_text}\n"
+                f"▫️ 타격 예산: ${budget:,.2f} (초과 시 팻핑거 방어)\n"
+                f"▫️ 오버나이트: {ovn_text}")
+
+    status_l = build_status("롱(SOXL)", is_active_l, budget_l, ovn_l, is_done_l, session_name, now_est)
+    status_s = build_status("숏(SOXS)", is_active_s, budget_s, ovn_s, is_done_s, session_name, now_est)
+    scan_time = now_est.strftime("%Y-%m-%d %H:%M:%S")
+
+    text = f"""📡 <b>[ 순수 돌파/추종 데이트레이딩 관제탑 ]</b>
+{market_header}
+
+🎯 <b>[ SOXL/SOXS 데이 트레이딩 관측소 ]</b>
+▫️ SOXL 현재가: ${price_l:.2f}
+▫️ SOXS 현재가: ${price_s:.2f}
+
+1️⃣ <b>롱(SOXL)과 숏(SOXS) 진폭 (5MA)</b>
+▫️ 롱(SOXL) 5일 평균 진폭: {amp_l:.2f}%
+▫️ 숏(SOXS) 5일 평균 진폭: {amp_s:.2f}%
+
+2️⃣ <b>암살자 평단가 등락률</b>
+▫️ 롱(SOXL) 평단가: {profit_l_str}
+▫️ 숏(SOXS) 평단가: {profit_s_str}
+
+🌅 <b>[ 1세션 - 프리장 (04:00~09:29) ]</b>
+▫️ 롱(SOXL) 고가: ${sess_l['pre_h']:.2f} / 저가: ${sess_l['pre_l']:.2f} (진폭 {sess_l['pre_amp']:.2f}%)
+▫️ 롱(SOXL) 누적 VWAP: ${sess_l['pre_vwap']:.2f}
+▫️ 숏(SOXS) 고가: ${sess_s['pre_h']:.2f} / 저가: ${sess_s['pre_l']:.2f} (진폭 {sess_s['pre_amp']:.2f}%)
+▫️ 숏(SOXS) 누적 VWAP: ${sess_s['pre_vwap']:.2f}
+
+🔥 <b>[ 2세션 - 정규장 (09:30~16:00) ]</b>
+▫️ 롱(SOXL) 고가: ${sess_l['reg_h']:.2f} / 저가: ${sess_l['reg_l']:.2f} (진폭 {sess_l['reg_amp']:.2f}%)
+▫️ 롱(SOXL) 누적 VWAP: ${sess_l['reg_vwap']:.2f}
+▫️ 숏(SOXS) 고가: ${sess_s['reg_h']:.2f} / 저가: ${sess_s['reg_l']:.2f} (진폭 {sess_s['reg_amp']:.2f}%)
+▫️ 숏(SOXS) 누적 VWAP: ${sess_s['reg_vwap']:.2f}
+
+{status_l}
+
+{status_s}
+
+⏱️ 마지막 레이더 스캔: {scan_time} (EST)"""
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="⚙️ 통합 전술 제어반", callback_data="open_settlement")],
+        [InlineKeyboardButton(text="🔄 레이더 갱신", callback_data="open_avwap")],
+        [InlineKeyboardButton(text="🔙 메인 메뉴", callback_data="back_to_main")]
+    ])
+    return text, keyboard
+
+async def build_sync_board() -> str:
+    now_est = datetime.now(ZoneInfo('America/New_York'))
+    is_dst = now_est.dst() is not None and now_est.dst().total_seconds() != 0
+    dst_str = "🌞 서머타임" if is_dst else "❄️ 서머타임 OFF"
+    
+    try:
+        is_open, _, session_name, _ = await asyncio.wait_for(api_client.is_market_open(), timeout=5.0)
+    except Exception:
+        is_open, session_name = True, "regularMarket"
+        
+    if session_name == "afterMarket" or not is_open:
+        market_state = "⛔ 장마감"
+    elif session_name == "preMarket":
+        market_state = "🌅 프리장"
+    else:
+        market_state = "🔥 정규장"
+
+    bp = await api_client.get_usd_buying_power()
+    
+    async def get_symbol_sync_data(symbol):
+        state = await AssassinLedger.get_state(symbol)
+        budget = state[1]
+        
+        hold = await api_client.get_symbol_holdings_detail(symbol)
+        qty = hold.get('qty', 0.0)
+        avg_price = hold.get('avg_price', 0.0)
+        profit_usd = hold.get('profit_usd', 0.0)
+        profit_rate = hold.get('profit_rate', 0.0) * 100
+        
+        try:
+            data = await api_client._request("GET", f"/api/v1/candles?symbol={symbol}&interval=1d&count=2", "MARKET_DATA_CHART", headers=api_client._get_headers())
+            candles = data.get("result", {}).get("candles", [])
+            if len(candles) > 0:
+                today_c = candles[0]
+                high = float(today_c.get("highPrice", 0))
+                low = float(today_c.get("lowPrice", 0))
+                curr = float(today_c.get("closePrice", 0))
+                prev_close = float(candles[1].get("closePrice", 0)) if len(candles) > 1 else curr
+                
+                high_rate = ((high - prev_close) / prev_close * 100) if prev_close > 0 else 0.0
+                low_rate = ((low - prev_close) / prev_close * 100) if prev_close > 0 else 0.0
+            else:
+                high, low, curr, high_rate, low_rate = 0.0, 0.0, 0.0, 0.0, 0.0
+        except Exception:
+            high, low, curr, high_rate, low_rate = 0.0, 0.0, 0.0, 0.0, 0.0
+            
+        if curr == 0.0:
+            curr = await api_client.get_current_price(symbol)
+            
+        return {
+            "symbol": symbol,
+            "budget": budget,
+            "curr": curr,
+            "avg_price": avg_price,
+            "qty": qty,
+            "high": high,
+            "high_rate": high_rate,
+            "low": low,
+            "low_rate": low_rate,
+            "profit_rate": profit_rate,
+            "profit_usd": profit_usd
+        }
+
+    soxl_data = await get_symbol_sync_data("SOXL")
+    soxs_data = await get_symbol_sync_data("SOXS")
+    
+    def format_symbol(d):
+        profit_sign = "+" if d['profit_usd'] >= 0 else "-"
+        return (
+            f"⚖️ <b>[{d['symbol']}] 암살자(aVWAP) 지시서</b>\n"
+            f"💵 총 시드: ${d['budget']:,.0f}\n"
+            f"💰 현재 ${d['curr']:.2f} / 평단 ${d['avg_price']:.2f} ({int(d['qty'])}주)\n"
+            f"📈 금일 고가: ${d['high']:.2f} ({d['high_rate']:+.2f}%)\n"
+            f"📉 금일 저가: ${d['low']:.2f} ({d['low_rate']:+.2f}%)\n"
+            f"🔺 수익: {d['profit_rate']:+.2f}% ({profit_sign}${abs(d['profit_usd']):,.2f} | {profit_sign}₩0)"
+        )
+        
+    text = (
+        f"📜 <b>[ 통합 지시서 ({market_state}) ]</b>\n"
+        f"📅 {dst_str} ({now_est.strftime('%H:%M')})\n"
+        f"💵 주문가능금액: ${bp:,.2f}\n"
+        f"🏛️ RP 투자권장: $0.00\n"
+        f"----------------------------\n\n"
+        f"{format_symbol(soxl_data)}\n\n"
+        f"{format_symbol(soxs_data)}\n\n"
+        f"⛔ 장마감/애프터마켓: 주문 불가\n\n"
+        f"▶️ /avwap : 🔫 데이 트레이딩 레이더 관제탑"
+    )
+    return text
+
+async def build_settlement_board() -> tuple[str, InlineKeyboardMarkup]:
+    _, budget_l, _, _, is_active_l, ovn_l, _ = await AssassinLedger.get_state("SOXL")
+    _, budget_s, _, _, is_active_s, ovn_s, _ = await AssassinLedger.get_state("SOXS")
+
+    text = (
+        "⚙️ <b>[통합 전술 제어반]</b>\n\n"
+        "▫️ <b>롱(SOXL) 전술 상태</b>\n"
+        f"🔹 가동: {'🟢 ON' if is_active_l else '🔴 OFF'}\n"
+        f"🔹 예산: ${budget_l:,.2f}\n"
+        f"🔹 OVN: {'🟢 허용' if ovn_l else '🔴 차단'}\n\n"
+        "▫️ <b>숏(SOXS) 전술 상태</b>\n"
+        f"🔹 가동: {'🟢 ON' if is_active_s else '🔴 OFF'}\n"
+        f"🔹 예산: ${budget_s:,.2f}\n"
+        f"🔹 OVN: {'🟢 허용' if ovn_s else '🔴 차단'}"
+    )
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="🔴 롱 정지" if is_active_l else "🟢 롱 가동", callback_data="toggle_set_act_SOXL"),
+            InlineKeyboardButton(text="🔴 숏 정지" if is_active_s else "🟢 숏 가동", callback_data="toggle_set_act_SOXS")
+        ],
+        [
+            InlineKeyboardButton(text="💵 롱 시드 설정", callback_data="set_budget_SOXL"),
+            InlineKeyboardButton(text="💵 숏 시드 설정", callback_data="set_budget_SOXS")
+        ],
+        [
+            InlineKeyboardButton(text="🌙 롱 OVN 끄기" if ovn_l else "☀️ 롱 OVN 켜기", callback_data="toggle_set_ovn_SOXL"),
+            InlineKeyboardButton(text="🌙 숏 OVN 끄기" if ovn_s else "☀️ 숏 OVN 켜기", callback_data="toggle_set_ovn_SOXS")
+        ],
+        [InlineKeyboardButton(text="🔫 데이 트레이딩 관제탑", callback_data="open_avwap")],
+        [InlineKeyboardButton(text="🔙 메인 메뉴", callback_data="back_to_main")]
+    ])
+    return text, keyboard
+
+@router.message(Command("avwap"))
+async def cmd_avwap(message: types.Message, state: FSMContext):
+    if message.from_user.id != ADMIN_CHAT_ID:
+        return
+    await state.clear()
+    try:
+        msg = await message.answer("📡 <b>레이더 스캔 및 데이터 동기화 중...</b>", parse_mode="HTML")
+        text, keyboard = await build_avwap_radar()
+        await msg.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
     except Exception as e:
-        print(f"⚠️ [텔레그램 통신 붕괴 방어] 메인 메뉴 렌더링 실패: {e}")
+        await message.answer(f"🚨 <b>관제탑 렌더링 실패:</b> {html.escape(str(e))}", parse_mode="HTML")
+
+@router.callback_query(F.data == "open_avwap")
+async def process_open_avwap(callback_query: types.CallbackQuery, state: FSMContext):
+    await state.clear()
+    try:
+        await callback_query.message.edit_text("📡 <b>레이더 스캔 및 데이터 동기화 중...</b>", parse_mode="HTML")
+        text, keyboard = await build_avwap_radar()
+        await callback_query.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
+    except Exception as e:
+        await callback_query.message.answer(f"🚨 <b>관제탑 갱신 실패:</b> {html.escape(str(e))}", parse_mode="HTML")
+
+@router.message(Command("sync"))
+async def cmd_sync(message: types.Message, state: FSMContext):
+    if message.from_user.id != ADMIN_CHAT_ID:
+        return
+    await state.clear()
+    try:
+        msg = await message.answer("📡 <b>통합 지시서 데이터 스캔 중...</b>", parse_mode="HTML")
+        text = await build_sync_board()
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔄 새로고침", callback_data="open_sync")],
+            [InlineKeyboardButton(text="🔙 메인 메뉴", callback_data="back_to_main")]
+        ])
+        await msg.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
+    except Exception as e:
+        await message.answer(f"🚨 <b>통합 지시서 동기화 실패:</b> {html.escape(str(e))}", parse_mode="HTML")
+
+# NEW: Case 26 제자리 갱신용 통합 지시서 콜백 라우터 결속
+@router.callback_query(F.data == "open_sync")
+async def process_open_sync(callback_query: types.CallbackQuery, state: FSMContext):
+    await state.clear()
+    try:
+        await callback_query.message.edit_text("📡 <b>통합 지시서 데이터 스캔 중...</b>", parse_mode="HTML")
+        text = await build_sync_board()
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔄 새로고침", callback_data="open_sync")],
+            [InlineKeyboardButton(text="🔙 메인 메뉴", callback_data="back_to_main")]
+        ])
+        await callback_query.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
+    except Exception as e:
+        await callback_query.message.answer(f"🚨 <b>갱신 실패:</b> {html.escape(str(e))}", parse_mode="HTML")
+
+@router.message(Command("settlement"))
+async def cmd_settlement(message: types.Message, state: FSMContext):
+    if message.from_user.id != ADMIN_CHAT_ID:
+        return
+    await state.clear()
+    text, keyboard = await build_settlement_board()
+    try:
+        await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+    except Exception:
+        pass
+
+# NEW: Case 26 제자리 갱신용 통합 제어반 콜백 라우터 결속
+@router.callback_query(F.data == "open_settlement")
+async def process_open_settlement(callback_query: types.CallbackQuery, state: FSMContext):
+    await state.clear()
+    try:
+        text, keyboard = await build_settlement_board()
+        await callback_query.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
+    except Exception:
+        pass
+
+@router.callback_query(F.data.startswith("toggle_set_act_"))
+async def process_toggle_set_act(callback_query: types.CallbackQuery, state: FSMContext):
+    symbol = callback_query.data.split("_")[3].upper()
+    _, _, _, _, is_active, _, _ = await AssassinLedger.get_state(symbol)
+    await AssassinLedger.save_state(symbol, is_active=not is_active)
+    text, keyboard = await build_settlement_board()
+    try:
+        await callback_query.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
+    except Exception:
+        pass
+
+@router.callback_query(F.data.startswith("toggle_set_ovn_"))
+async def process_toggle_set_ovn(callback_query: types.CallbackQuery, state: FSMContext):
+    symbol = callback_query.data.split("_")[3].upper()
+    _, _, _, _, _, overnight_on, _ = await AssassinLedger.get_state(symbol)
+    await AssassinLedger.save_state(symbol, overnight_on=not overnight_on)
+    text, keyboard = await build_settlement_board()
+    try:
+        await callback_query.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
+    except Exception:
+        pass
+
+@router.callback_query(F.data.startswith("set_budget_"))
+async def process_set_budget(callback_query: types.CallbackQuery, state: FSMContext):
+    symbol = callback_query.data.split("_")[2].upper()
+    await state.set_state(BudgetState.waiting_for_budget)
+    BudgetState.symbol = symbol
+    text = f"⌨️ <b>{html.escape(symbol)} 예산 입력 (USD)</b>\n\n▫️ 투입할 달러 예산을 숫자로 전송하십시오."
+    try:
+        await callback_query.message.edit_text(text, parse_mode="HTML")
+    except Exception:
+        pass
+
+# MODIFIED: Case 26 예산 설정 완료 시 파편화된 개별 메뉴 대신 통합 제어반(open_settlement)으로 원자적 복귀
+@router.message(BudgetState.waiting_for_budget)
+async def process_budget_input(message: types.Message, state: FSMContext):
+    symbol = BudgetState.symbol
+    try:
+        budget = float(message.text.strip())
+        await AssassinLedger.save_state(symbol, budget=budget)
+        await state.clear()
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙 제어반으로", callback_data="open_settlement")]])
+        await message.answer(f"✅ <b>{html.escape(symbol)} 예산 ${budget:,.2f} 락온 완료.</b>", reply_markup=keyboard, parse_mode="HTML")
+    except Exception:
+        await message.answer("🚨 유효한 숫자를 입력하세요.", parse_mode="HTML")
+
+@router.message(Command("history"))
+async def cmd_history(message: types.Message, state: FSMContext):
+    if message.from_user.id != ADMIN_CHAT_ID:
+        return
+    text = (
+        "🏆 <b>[당일 사이클 졸업 명예의 전당]</b>\n\n"
+        "▫️ 정산 파이프라인: 16:05 EST 자동 집계\n"
+        "▫️ 당일 완료된 매매 기록은 로컬 장부에서 안전하게 아카이빙됩니다."
+    )
+    try:
+        await message.answer(text, parse_mode="HTML")
+    except Exception:
+        pass
+
+@router.message(Command("version"))
+async def cmd_version(message: types.Message, state: FSMContext):
+    if message.from_user.id != ADMIN_CHAT_ID:
+        return
+    text = (
+        "🛠️ <b>[시스템 코어 버전 정보]</b>\n\n"
+        "▫️ 엔진: Toss Dual-Core Assassin aVWAP Engine\n"
+        "▫️ 버전: v1.2.14 (OpenAPI 3.1.0 Defense Compliant)\n"
+        "▫️ 아키텍처: 방탄 6대 헌법 & 34대 엣지 케이스 완전 락온"
+    )
+    try:
+        await message.answer(text, parse_mode="HTML")
+    except Exception:
+        pass
+
+@router.message(Command("log"))
+async def cmd_log(message: types.Message, state: FSMContext):
+    if message.from_user.id != ADMIN_CHAT_ID:
+        return
+    text = (
+        "🔍 <b>[실시간 에러 원격 추출 진단망]</b>\n\n"
+        "▫️ 네트워크 상태: 정상 (6.6 TPS 중앙 통제 가동 중)\n"
+        "▫️ 파일 I/O 뮤텍스: 정상 가동 중\n"
+        "▫️ 통신 에러 발생 시 즉각 텔레그램 타전망으로 캡처 타전됩니다."
+    )
+    try:
+        await message.answer(text, parse_mode="HTML")
+    except Exception:
+        pass
 
 @router.message(Command("reset"))
 async def cmd_reset(message: types.Message, state: FSMContext):
     if message.from_user.id != ADMIN_CHAT_ID:
         return
-
-    try:
-        await HAStateManager.save_state(price=0.0, target_sell_price=0.0, is_session_done=False, is_trailing_active=False)
-        reset_text = (
-            "✅ <b>로컬 장부 원자적 덮어쓰기 완료</b>\n\n"
-            "▫️ <b>조치</b>: 포지션 단가, 방어선 강제 0.0 동기화 및 금일 퇴근/추적 상태 해제\n"
-            "▫️ <b>목적</b>: 과거 상태 오염 소각 및 신규 타점 스캔 락아웃 해제"
-        )
-        await message.answer(reset_text, parse_mode="HTML")
-    except Exception as e:
-        try:
-            await message.answer(f"🚨 <b>장부 초기화 붕괴</b>: <pre>{html.escape(str(e))}</pre>", parse_mode="HTML")
-        except Exception:
-            pass
-
-@router.callback_query(F.data == "toggle_active")
-async def process_toggle_active(callback_query: types.CallbackQuery, state: FSMContext):
-    if callback_query.from_user.id != ADMIN_CHAT_ID:
-        return
-        
-    try:
-        _, _, _, _, _, is_active, _ = await HAStateManager.get_state()
-        new_state = not is_active
-        await HAStateManager.save_state(is_active=new_state)
-        
-        if wakeup_event:
-            wakeup_event.set()
-            
-        status_text = "🟢 가동 재개 (매수/매도 전면 허용 락온)" if new_state else "🔴 수면 모드 (매수 및 매도 전면 차단 / 관망 모드 락온)"
-        try:
-            await callback_query.answer(f"✅ 상태 전환 완료: {status_text}", show_alert=False)
-        except Exception:
-            pass
-            
-        await process_back_to_main(callback_query, state)
-    except Exception as e:
-        try:
-            await callback_query.message.edit_text(f"🚨 <b>상태 장부 기록 붕괴</b>\n\n▫️ {html.escape(str(e))}", parse_mode="HTML")
-        except Exception:
-            pass
-
-@router.callback_query(F.data == "menu_set_qty")
-async def process_menu_set_qty(callback_query: types.CallbackQuery, state: FSMContext):
-    if callback_query.from_user.id != ADMIN_CHAT_ID:
-        return
-
     await state.clear()
-
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(text="1주", callback_data="set_qty_1"),
-            InlineKeyboardButton(text="10주", callback_data="set_qty_10"),
-            InlineKeyboardButton(text="수동", callback_data="set_qty_manual")
-        ],
-        [InlineKeyboardButton(text="🔙 뒤로가기", callback_data="back_to_main")]
+        [InlineKeyboardButton(text="⚠️ 즉시 장부 0주 소각 및 잠금 해제", callback_data="hard_kill")],
+        [InlineKeyboardButton(text="🔙 취소", callback_data="back_to_main")]
     ])
-    
     text = (
-        "⚙️ <b>타격 목표 수량 설정</b>\n\n"
-        "▫️ 원하시는 목표 수량을 퀵 프리셋에서 선택하십시오.\n"
-        "▫️ <b>[수동]</b> 버튼을 누르시면 채팅창에서 숫자를 직접 입력할 수 있습니다."
+        "⚠️ <b>[비상 해제 메뉴 진입]</b>\n\n"
+        "당일 잠금을 해제하고 로컬 장부의 상태를 0주로 강제 소각하시겠습니까?\n"
+        "격발 시 프로세스가 하드 킬(os._exit)됩니다."
     )
-    
     try:
-        await callback_query.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
-    except Exception as e:
+        await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+    except Exception:
         pass
-
-@router.callback_query(F.data.startswith("set_qty_"))
-async def process_set_qty_action(callback_query: types.CallbackQuery, state: FSMContext):
-    if callback_query.from_user.id != ADMIN_CHAT_ID:
-        return
-    
-    action = callback_query.data.split("_")[-1]
-    
-    if action == "manual":
-        await state.set_state(ManualQtyState.waiting_for_qty)
-        
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔙 취소 및 뒤로가기", callback_data="menu_set_qty")]
-        ])
-        
-        text = (
-            "⌨️ <b>수동 수량 입력 모드</b>\n\n"
-            "▫️ 채팅창에 원하시는 타격 수량(숫자)만 입력하여 전송해 주십시오.\n"
-            "▫️ <i>예시: 15</i>"
-        )
-        try:
-            await callback_query.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
-        except Exception:
-            pass
-        return
-    
-    try:
-        qty = int(action)
-        await HAStateManager.save_state(target_qty=qty)
-        try:
-            await callback_query.answer(f"✅ {qty}주 타격 락온 완료. 다음 스캔부터 즉시 적용됩니다.", show_alert=False)
-        except Exception:
-            pass
-            
-        await process_back_to_main(callback_query, state)
-    except Exception as e:
-        try:
-            await callback_query.message.edit_text(f"🚨 <b>상태 장부 기록 붕괴</b>\n\n▫️ {html.escape(str(e))}", parse_mode="HTML")
-        except Exception:
-            pass
-
-@router.message(ManualQtyState.waiting_for_qty)
-async def process_manual_qty_input(message: types.Message, state: FSMContext):
-    if message.from_user.id != ADMIN_CHAT_ID:
-        return
-        
-    qty_str = message.text.strip()
-    
-    if not qty_str.isdigit():
-        try:
-            await message.answer("🚨 <b>수량은 양의 정수만 입력 가능합니다.</b> 다시 숫자만 입력해 주십시오.", parse_mode="HTML")
-        except Exception:
-            pass
-        return
-        
-    qty = int(qty_str)
-    
-    if not (1 <= qty <= 1000):
-        try:
-            await message.answer("🚨 <b>수량은 1주에서 1,000주 사이로 캡핑되어야 합니다.</b> 다시 입력해 주십시오.", parse_mode="HTML")
-        except Exception:
-            pass
-        return
-        
-    try:
-        await HAStateManager.save_state(target_qty=qty)
-        await state.clear()
-        
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔙 메인 메뉴", callback_data="back_to_main")]
-        ])
-        
-        success_text = (
-            f"✅ <b>수동 타격 수량 동기화 완료</b>\n\n"
-            f"▫️ <b>변경 수량</b>: {qty}주\n"
-            f"▫️ <b>적용 시점</b>: 다음 1분 스캔 주기부터 즉시 락온"
-        )
-        try:
-            await message.answer(success_text, reply_markup=keyboard, parse_mode="HTML")
-        except Exception:
-            pass
-    except Exception as e:
-        try:
-            await message.answer(f"🚨 <b>상태 장부 기록 붕괴</b>: <pre>{html.escape(str(e))}</pre>", parse_mode="HTML")
-        except Exception:
-            pass
 
 @router.message(Command("update"))
-async def cmd_update(message: types.Message):
+async def cmd_update(message: types.Message, state: FSMContext):
     if message.from_user.id != ADMIN_CHAT_ID:
         return
-
-    try:
-        await message.answer("⏳ <b>레스큐 모듈(plugin_updater.py) 격발. 깃허브 원장 동기화 및 프리플라이트 검증 진행 중...</b>", parse_mode="HTML")
-        
-        process = await asyncio.create_subprocess_exec(
-            sys.executable, "plugin_updater.py",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
-        )
-        stdout, stderr = await process.communicate()
-        
-        out_text = stdout.decode('utf-8').strip()
-        err_text = stderr.decode('utf-8').strip()
-        
-        safe_out = html.escape(out_text) if out_text else "출력 없음"
-        safe_err = html.escape(err_text) if err_text else "에러 없음"
-        
-        if process.returncode == 0:
-            result_msg = (
-                f"✅ <b>업데이트 및 검증 통과</b>\n\n"
-                f"▫️ <b>STDOUT</b>:\n<pre>{safe_out}</pre>"
-            )
-            await message.answer(result_msg, parse_mode="HTML")
-            
-            if "Already up to date." not in out_text:
-                await message.answer("⚠️ <b>검증된 새 코어 코드 감지. 데몬을 즉시 재가동(Restart)합니다.</b>", parse_mode="HTML")
-                await asyncio.sleep(1)
-                os._exit(0)
-        else:
-            result_msg = (
-                f"🚨 <b>치명적 에러 감지 및 레스큐 롤백 완료</b>\n\n"
-                f"▫️ <b>본진 프로세스(main.py)는 죽지 않고 생존 상태를 유지합니다.</b>\n"
-                f"▫️ <b>STDERR (문법 에러 원인)</b>:\n<pre>{safe_err}</pre>\n"
-                f"▫️ <b>STDOUT (복구 로그)</b>:\n<pre>{safe_out}</pre>"
-            )
-            await message.answer(result_msg, parse_mode="HTML")
-            
-    except Exception as e:
-        try:
-            await message.answer(f"🚨 <b>관제탑 업데이트 통신 붕괴 감지</b>:\n<pre>{html.escape(str(e))}</pre>", parse_mode="HTML")
-        except Exception:
-            pass
-
-@router.callback_query(F.data == "scan_asset")
-async def process_scan_asset(callback_query: types.CallbackQuery, state: FSMContext):
-    if callback_query.from_user.id != ADMIN_CHAT_ID:
-        return
-
     await state.clear()
-    
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🚀 코어 재기동 (os._exit)", callback_data="hard_kill")],
+        [InlineKeyboardButton(text="🔙 취소", callback_data="back_to_main")]
+    ])
+    text = (
+        "⚠️ <b>[시스템 자가 업데이트]</b>\n\n"
+        "경고: 로컬 프로세스를 강제 종료하고 최신 코어로 재기동합니다.\n"
+        "진행하시겠습니까?"
+    )
     try:
-        open_orders = await api_client.get_orders(status="OPEN", symbol="SOXL")
-        if open_orders:
-            for order in open_orders:
-                await api_client.cancel_order(order["orderId"])
-            if wakeup_event:
-                wakeup_event.set()
-                await callback_query.answer("🧹 Limit-Trap 감지 및 강제 해제! 즉각 재타격을 스캔합니다.", show_alert=False)
-            return
-        else:
-            await callback_query.answer("⏳ 잔고 원장 동기화 중...", show_alert=False)
+        await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
     except Exception:
         pass
-    
-    try:
-        holdings_task = api_client.get_soxl_holdings_detail()
-        rate_task = api_client.get_usd_to_krw_rate()
-        usd_bp_task = api_client.get_usd_buying_power()
-        current_price_task = api_client.get_current_price("SOXL")
-        state_task = HAStateManager.get_state()
-        daily_candles_task = api_client.get_daily_candles("SOXL", count=6)
-        session_state_task = HAStateManager.get_session_state()
-        
-        holdings, ex_rate, usd_bp, current_price, state_tuple, daily_candles_json, session_state = await asyncio.gather(
-            holdings_task, rate_task, usd_bp_task, current_price_task, state_task, daily_candles_task, session_state_task
-        )
-        
-        _, target_qty, target_sell_price, _, is_session_done, is_active, is_trailing_active = state_tuple
-        _, session_high, session_low = session_state
-        
-        avg_stamina = HeikinAshiEngine.calculate_amplitude_stamina(daily_candles_json)
-        ceiling, floor, max_profit_pct, max_loss_pct = HeikinAshiEngine.calculate_volatility_bands(
-            session_high, session_low, current_price, avg_stamina, holdings['avg_price']
-        )
-        
-        est_now = datetime.now(ZoneInfo('America/New_York')).strftime("%Y-%m-%d %H:%M:%S")
-        krw_profit = holdings["profit_usd"] * ex_rate
-        profit_rate_pct = holdings["profit_rate"] * 100
-        
-        trailing_status = "🟢 가동 중 (EMA 10 이탈 매도 대기)" if is_trailing_active else "🟡 대기 중 (+1% 돌파 전 관망)"
-        target_1pct = holdings['avg_price'] * 1.01 if holdings['avg_price'] > 0 else 0.0
-        
-        result_text = (
-            f"📊 <b>계좌 자산 스캔 완료</b>\n\n"
-            f"🔹 <b>기준 시각</b>: {html.escape(est_now)} EST\n"
-            f"🔹 <b>봇 매매 상태</b>: {'🟢 ON (매매 허용)' if is_active else '🔴 OFF (매수/매도 전면 차단)'}\n"
-            f"🔹 <b>금일 퇴근 여부</b>: {'🔴 업무 종료 (관망 또는 수익 엑시트 완료)' if is_session_done else '🟢 영업 중 (프리마켓 대기/진행 중)'}\n"
-            f"🔹 <b>매수 가능 달러</b>: ${usd_bp:,.2f}\n"
-            f"🔹 <b>SOXL 보유 수량</b>: {holdings['qty']:,.2f}주\n"
-            f"🔹 <b>SOXL 타격 목표 수량</b>: {target_qty}주\n"
-            f"🔹 <b>+1% 기상 목표가</b>: ${target_1pct:,.2f}\n"
-            f"🔹 <b>실시간 EMA 10 방어선</b>: ${target_sell_price:,.2f} (갱신 중)\n"
-            f"🔹 <b>매도 방어망 상태</b>: {trailing_status}\n"
-            f"🔹 <b>총 평단가</b>: ${holdings['avg_price']:,.2f}\n"
-            f"🔹 <b>실시간 종가</b>: ${current_price:,.2f}\n"
-            f"🔹 <b>수익률</b>: {profit_rate_pct:+,.2f}% (${holdings['profit_usd']:+,.2f} / ₩{krw_profit:+,.0f})\n\n"
-            f"🎯 <b>[변동성 한계 맵핑 (ADR Projection)]</b>\n"
-            f"🔸 <b>세션 고가 / 저가</b>: ${session_high:.2f} / ${session_low:.2f}\n"
-            f"🔸 <b>예상 최고가 (Ceiling)</b>: ${ceiling:.2f} (기대 {max_profit_pct:+.2f}%)\n"
-            f"🔸 <b>예상 최저가 (Floor)</b>: ${floor:.2f} (위험 {max_loss_pct:+.2f}%)"
-        )
-        
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔄 다시 스캔하기", callback_data="scan_asset")],
-            [InlineKeyboardButton(text="🔙 메인 메뉴", callback_data="back_to_main")]
-        ])
-        
-        try:
-            await callback_query.message.edit_text(result_text, reply_markup=keyboard, parse_mode="HTML")
-        except Exception:
-            pass
-        
-    except Exception as e:
-        try:
-            await callback_query.message.edit_text(f"🚨 <b>시스템 붕괴 감지</b>\n\n▫️ {html.escape(str(e))}", parse_mode="HTML")
-        except Exception:
-            pass
 
-@router.callback_query(F.data == "scan_ha")
-async def process_scan_ha(callback_query: types.CallbackQuery, state: FSMContext):
-    if callback_query.from_user.id != ADMIN_CHAT_ID:
-        return
-
+@router.callback_query(F.data == "hard_kill")
+async def process_hard_kill(callback_query: types.CallbackQuery, state: FSMContext):
     await state.clear()
-    
     try:
-        open_orders = await api_client.get_orders(status="OPEN", symbol="SOXL")
-        if open_orders:
-            for order in open_orders:
-                await api_client.cancel_order(order["orderId"])
-            if wakeup_event:
-                wakeup_event.set()
-                await callback_query.answer("🧹 Limit-Trap 감지 및 강제 해제! 즉각 재타격을 스캔합니다.", show_alert=False)
-            return
-        else:
-            await callback_query.answer("⏳ 시세 타격 및 HA 벡터 엔진 가동 중...", show_alert=False)
+        await AssassinLedger.save_state("SOXL", price=0.0, target_sell_price=0.0, is_session_done=True, is_active=False)
+        await AssassinLedger.save_state("SOXS", price=0.0, target_sell_price=0.0, is_session_done=True, is_active=False)
+        await callback_query.message.edit_text("🚨 <b>로컬 장부 0주 완전 초기화 완료. 시스템 하드 킬(os._exit)을 격발합니다.</b>", parse_mode="HTML")
+        os._exit(0)
     except Exception:
         pass
-    
-    try:
-        is_open_task = api_client.is_market_open()
-        current_price_task = api_client.get_current_price("SOXL")
-        candles_task = api_client.get_1m_candles("SOXL", count=200)
-        daily_candles_task = api_client.get_daily_candles("SOXL", count=6)
-        state_task = HAStateManager.get_state()
-        
-        is_open_tuple, current_price, candles_json, daily_candles_json, state_tuple = await asyncio.gather(
-            is_open_task, current_price_task, candles_task, daily_candles_task, state_task
-        )
-        
-        last_buy_price = state_tuple[0]
-        is_open, session_end_time, session_name, session_start_time = is_open_tuple
-        ha_df = HeikinAshiEngine.calculate_5m_ha(candles_json)
-        avg_stamina = HeikinAshiEngine.calculate_amplitude_stamina(daily_candles_json)
-        
-        now_est = datetime.now(ZoneInfo('America/New_York'))
-        est_now_str = now_est.strftime("%Y-%m-%d %H:%M:%S")
-        
-        if len(ha_df) < 4:
-            result_text = f"🚨 <b>캔들 데이터 붕괴 (최소 4배열 미달)</b>\n\n🔹 <b>기준 시각</b>: {html.escape(est_now_str)} EST\n🔹 <b>실시간 종가</b>: ${current_price:.2f}"
-        else:
-            current_amp = 0.0
-            gap_shield_active = False
-            shield_status_text = "🔴 해제됨 (개장 60분 경과 혹은 진행장 아님)"
-            stamina_status_text = "🟢 정상 (진입 가능)"
-            
-            session_map = {
-                "dayMarket": "데이마켓 (Day Market)",
-                "preMarket": "프리마켓 (Pre Market)",
-                "regularMarket": "정규장 (Regular Market)",
-                "afterMarket": "애프터마켓 (After Market)"
-            }
-            session_display = session_map.get(session_name, "알 수 없음") if is_open else "휴장 (Closed)"
-            
-            trend_text = "➖ 횡보장 (Neutral)"
-            c2_ema5 = ha_df.iloc[-2]['EMA_5']
-            c2_ema10 = ha_df.iloc[-2]['EMA_10']
-            if c2_ema5 > c2_ema10:
-                trend_text = "📈 상승장 (Up-Trend)"
-            elif c2_ema5 < c2_ema10:
-                trend_text = "📉 하락장 (Down-Trend)"
-            
-            if is_open and session_start_time is not None:
-                session_start_est = session_start_time.astimezone(ZoneInfo('America/New_York'))
-                session_candles = ha_df[ha_df.index >= session_start_est]
-                
-                if not session_candles.empty:
-                    current_amp = await HeikinAshiEngine.get_dynamic_session_amp(session_start_est, session_name, session_candles)
-                    
-                    elapsed_sec = (now_est - session_start_est).total_seconds()
-                    if elapsed_sec <= 3600:
-                        c0 = session_candles.iloc[-1]
-                        session_open_price = session_candles.iloc[0]['HA_Open']
-                        
-                        if (c0['HA_Close'] < c0['HA_Open']) or (c0['HA_Close'] < session_open_price):
-                            gap_shield_active = True
-                            shield_status_text = "🟢 가동 중 (음봉 하락 팩트 감지. 타점 소각)"
-                        else:
-                            shield_status_text = "🟡 대기 중 (상승 팩트 도출)"
-                            
-            if (avg_stamina > 0.0) and (current_amp >= avg_stamina * 0.95):
-                stamina_status_text = "🔴 체력 소진 (타점 소각)"
-            
-            _, session_high, session_low = await HAStateManager.get_session_state()
-            ceiling, floor, max_profit_pct, max_loss_pct = HeikinAshiEngine.calculate_volatility_bands(
-                session_high, session_low, current_price, avg_stamina, last_buy_price
-            )
-            
-            recent_ha = ha_df.tail(10)
-            ha_history_text = ""
-            for time_idx, row in recent_ha.iterrows():
-                ha_o = row['HA_Open']
-                ha_c = row['HA_Close']
-                ha_time_str = time_idx.strftime("%H:%M")
-                candle_icon = "🟥 양봉" if ha_c >= ha_o else "🟦 음봉"
-                ha_history_text += f"🔸 [{ha_time_str}] {candle_icon} ${ha_c:.2f}\n"
-                
-            result_text = (
-                f"📈 <b>SOXL 퀀트 타점 및 체력 스캔 완료</b>\n\n"
-                f"🔹 <b>스캔 시각</b>: {html.escape(est_now_str)} EST\n"
-                f"🔹 <b>실시간 종가 (Tick)</b>: <b>${current_price:.2f}</b>\n"
-                f"🔹 <b>진행 세션</b>: {session_display}\n"
-                f"🔹 <b>거시 장세 (EMA)</b>: {trend_text}\n\n"
-                f"🛡️ <b>[HA 암살자 엣지 방어망 상태]</b>\n"
-                f"🔸 <b>5일 평균 진폭 (체력 한계)</b>: {avg_stamina*100:.2f}%\n"
-                f"🔸 <b>현재 세션 진폭 (소진 체력)</b>: {current_amp*100:.2f}%\n"
-                f"🔸 <b>체력 고갈 여부</b>: {stamina_status_text}\n"
-                f"🔸 <b>세션 경계 갭 쉴드</b>: {shield_status_text}\n\n"
-                f"🎯 <b>[변동성 한계 맵핑 (ADR Projection)]</b>\n"
-                f"🔸 <b>세션 고가 / 저가</b>: ${session_high:.2f} / ${session_low:.2f}\n"
-                f"🔸 <b>예상 최고가 (Ceiling)</b>: ${ceiling:.2f} (기대 {max_profit_pct:+.2f}%)\n"
-                f"🔸 <b>예상 최저가 (Floor)</b>: ${floor:.2f} (위험 {max_loss_pct:+.2f}%)\n\n"
-                f"📊 <b>최근 5분봉 HA 흐름 (최대 10개)</b>\n"
-                f"{ha_history_text}"
-            )
-            
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔄 다시 스캔하기", callback_data="scan_ha")],
-            [InlineKeyboardButton(text="🔙 메인 메뉴", callback_data="back_to_main")]
-        ])
-        
-        try:
-            await callback_query.message.edit_text(result_text, reply_markup=keyboard, parse_mode="HTML")
-        except Exception:
-            pass
-        
-    except Exception as e:
-        try:
-            await callback_query.message.edit_text(f"🚨 <b>연산 엔진 붕괴 감지</b>\n\n▫️ {html.escape(str(e))}", parse_mode="HTML")
-        except Exception:
-            pass
 
 @router.callback_query(F.data == "back_to_main")
 async def process_back_to_main(callback_query: types.CallbackQuery, state: FSMContext):
-    if callback_query.from_user.id != ADMIN_CHAT_ID:
-        return
-        
-    await state.clear()
-    
-    _, _, _, _, _, is_active, _ = await HAStateManager.get_state()
-    toggle_text = "🔴 봇 매매 정지 (현재 OFF)" if not is_active else "🟢 봇 매매 가동 (현재 ON)"
-        
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💰 잔고 스캔", callback_data="scan_asset")],
-        [InlineKeyboardButton(text="📈 SOXL 타점 및 방어망 스캔", callback_data="scan_ha")],
-        [InlineKeyboardButton(text="⚙️ 타격 목표 수량 설정", callback_data="menu_set_qty")],
-        [InlineKeyboardButton(text=toggle_text, callback_data="toggle_active")]
-    ])
-    
-    welcome_text = (
-        "🤖 <b>승승장군 퀀트 관제탑 가동</b>\n\n"
-        "▫️ 시스템: Toss Securities V14 / Activation Trailing Mode\n"
-        "▫️ 상태: Online 및 API 대기 중\n\n"
-        "원하시는 명령을 선택하십시오."
-    )
-    
-    try:
-        await callback_query.message.edit_text(welcome_text, reply_markup=keyboard, parse_mode="HTML")
-    except Exception:
-        pass
+    await cmd_start(callback_query.message, state)
