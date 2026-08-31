@@ -571,7 +571,6 @@ async def cmd_reset(message: types.Message, state: FSMContext):
     except Exception:
         pass
 
-# MODIFIED: /update 명령어 콜백 대상을 hard_kill에서 execute_update로 격리
 @router.message(Command("update"))
 async def cmd_update(message: types.Message, state: FSMContext):
     if message.from_user.id != ADMIN_CHAT_ID:
@@ -583,7 +582,7 @@ async def cmd_update(message: types.Message, state: FSMContext):
     ])
     text = (
         "⚠️ <b>[시스템 자가 업데이트]</b>\n\n"
-        "경고: GitHub 원격 저장소(main) 코드를 Pull 하고 무결성 검증 후 시스템을 하드 킬(os._exit)합니다.\n"
+        "경고: GitHub 원격 저장소(main) 코드를 강제 동기화(Hard Reset) 하고 무결성 검증 후 시스템을 하드 킬(os._exit)합니다.\n"
         "진행하시겠습니까?"
     )
     try:
@@ -591,12 +590,12 @@ async def cmd_update(message: types.Message, state: FSMContext):
     except Exception:
         pass
 
-# NEW: 깃허브 코드 동기화 및 프리플라이트 롤백 방어망 결속
+# MODIFIED: Git 충돌 원천 차단(Hard Reset) 및 블로킹 타임아웃(20s) 전면 주입
 @router.callback_query(F.data == "execute_update")
 async def process_execute_update(callback_query: types.CallbackQuery, state: FSMContext):
     await state.clear()
     try:
-        await callback_query.message.edit_text("🔄 <b>GitHub 저장소 코드 동기화 및 락온 검증 중...</b>", parse_mode="HTML")
+        await callback_query.message.edit_text("🔄 <b>GitHub 저장소 코드 강제 동기화 및 락온 검증 중...</b>", parse_mode="HTML")
 
         def _run_git_update():
             import subprocess
@@ -604,21 +603,38 @@ async def process_execute_update(callback_query: types.CallbackQuery, state: FSM
             
             def run_cmd(cmd):
                 proc = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-                out, err = proc.communicate()
-                return proc.returncode, out.strip(), err.strip()
+                try:
+                    # NEW: Case 31 무한 대기 블로킹 방어용 timeout 20초 주입
+                    out, err = proc.communicate(timeout=20)
+                    return proc.returncode, out.strip(), err.strip()
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    return -1, "", "Subprocess Timeout Expired (Git Credential Prompt 락다운 의심)"
             
+            # 1. 롤백용 로컬 해시 백업
             code, current_hash, err = run_cmd("git rev-parse HEAD")
             if code != 0:
                 return False, f"해시 백업 실패: {err}"
             
-            code, pull_out, pull_err = run_cmd("git pull origin main")
+            # 2. 원격 저장소 상태 Fetch (충돌 방지)
+            code, fetch_out, fetch_err = run_cmd("git fetch origin main")
+            if code != 0:
+                return False, f"Fetch 실패 (권한/네트워크/토큰 만료 확인 요망):\n{fetch_err}"
+                
+            # 3. 로컬 vs 원격 해시 비교 (업데이트 필요 여부 판별)
+            code, local_hash, _ = run_cmd("git rev-parse HEAD")
+            code, remote_hash, _ = run_cmd("git rev-parse origin/main")
+            
+            if local_hash == remote_hash:
+                return True, "Already up to date."
+            
+            # 4. 로컬 변형 무시 강제 Hard Reset (단순 Pull 오작동 완전 봉쇄)
+            code, reset_out, reset_err = run_cmd("git reset --hard origin/main")
             if code != 0:
                 run_cmd(f"git reset --hard {current_hash}")
-                return False, f"Pull 실패 및 롤백됨: {pull_err}"
+                return False, f"Hard Reset 붕괴 (원상 복구됨):\n{reset_err}"
                 
-            if "Already up to date." in pull_out:
-                return True, "Already up to date."
-                
+            # 5. 문법 에러 프리플라이트 검증
             try:
                 py_compile.compile('main.py', doraise=True)
                 py_compile.compile('tg_router.py', doraise=True)
@@ -628,7 +644,7 @@ async def process_execute_update(callback_query: types.CallbackQuery, state: FSM
                 run_cmd(f"git reset --hard {current_hash}")
                 return False, f"문법 에러 감지. 롤백 완료:\n{str(e)}"
                 
-            return True, f"업데이트 성공:\n{pull_out}"
+            return True, f"업데이트 성공:\n{reset_out}"
 
         success, msg = await asyncio.to_thread(_run_git_update)
         
@@ -640,7 +656,7 @@ async def process_execute_update(callback_query: types.CallbackQuery, state: FSM
                 await asyncio.sleep(1.0)
                 os._exit(0)
         else:
-            await callback_query.message.edit_text(f"🚨 <b>업데이트 실패 (롤백됨)</b>\n<pre>{html.escape(msg)}</pre>", parse_mode="HTML")
+            await callback_query.message.edit_text(f"🚨 <b>업데이트 실패 (롤백됨)</b>\n<pre>{html.escape(msg)}</pre>\n\n⚠️ <b>관리자 조치 요망</b>:\n▫️ 서버 터미널에서 Git 권한(PAT 토큰 만료 또는 SSH)을 확인하십시오.", parse_mode="HTML")
 
     except Exception as e:
         await callback_query.message.edit_text(f"🚨 <b>업데이트 붕괴 방어:</b> {html.escape(str(e))}", parse_mode="HTML")
