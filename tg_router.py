@@ -7,7 +7,7 @@ import os
 import html
 import asyncio
 import pandas as pd
-from datetime import datetime, timedelta # MODIFIED: timedelta 추가
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from aiogram import Router, types, F
 from aiogram.filters import Command
@@ -49,6 +49,7 @@ async def cmd_start(message: types.Message, state: FSMContext):
     
     text = (
         f"🕒 <b>[ 운영 스케줄 ({dst_status_text}) ]</b>\n"
+        "🔹 19:00: 🌃 데이장 (Day Market) 스캔 개시\n"
         "🔹 04:00: 🌅 프리장 VWAP 스캔 개시\n"
         "🔹 09:30: 🔥 정규장 VWAP 초기화 및 스캔\n"
         "🔹 15:59: 🛑 암살자 오버나이트 강제 덤핑\n"
@@ -70,7 +71,7 @@ async def cmd_start(message: types.Message, state: FSMContext):
 
 def parse_session_data(all_candles: list) -> dict:
     res = {
-        "day_h": 0.0, "day_l": 0.0, "day_amp": 0.0, "day_vwap": 0.0, # NEW: 0세션 데이장 지표 초기화
+        "day_h": 0.0, "day_l": 0.0, "day_amp": 0.0, "day_vwap": 0.0,
         "pre_h": 0.0, "pre_l": 0.0, "pre_amp": 0.0, "pre_vwap": 0.0,
         "reg_h": 0.0, "reg_l": 0.0, "reg_amp": 0.0, "reg_vwap": 0.0
     }
@@ -86,7 +87,7 @@ def parse_session_data(all_candles: list) -> dict:
     for col in ['highPrice', 'lowPrice', 'closePrice', 'volume']:
         df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0.0)
         
-    # MODIFIED: 세션별 데이터프레임 원자적 분리 (데이장 격리 추가)
+    # MODIFIED: 19:00~03:59 데이장 자정 랩어라운드 윈도우 원자적 추출
     day_df = df.between_time('19:00', '03:59') 
     pre_df = df.between_time('04:00', '09:29')
     reg_df = df.between_time('09:30', '16:00')
@@ -116,16 +117,22 @@ def parse_session_data(all_candles: list) -> dict:
 async def build_avwap_radar() -> tuple[str, InlineKeyboardMarkup]:
     now_est = datetime.now(ZoneInfo('America/New_York'))
     
-    try:
-        is_open, _, session_name, _ = await asyncio.wait_for(api_client.is_market_open(), timeout=5.0)
-    except Exception:
-        is_open, session_name = True, "regularMarket"
-        
-    if session_name == "afterMarket" or not is_open:
+    # MODIFIED: 캘린더 API 버그 우회용 EST 기반 동적 세션 추론 엔진 가동
+    t = now_est.hour * 100 + now_est.minute
+    if 400 <= t <= 929:
+        session_name_ui = "preMarket"
+    elif 930 <= t <= 1559:
+        session_name_ui = "regularMarket"
+    elif 1600 <= t <= 1859:
+        session_name_ui = "afterMarket"
+    else:
+        session_name_ui = "dayMarket"
+
+    if session_name_ui == "afterMarket":
         market_header = "🌙 <b>[ 애프터마켓 / 데이터 집계 종료 ]</b>"
-    elif session_name == "preMarket":
+    elif session_name_ui == "preMarket":
         market_header = "🌅 <b>[ 프리마켓 가동중 ]</b>"
-    elif session_name == "dayMarket":
+    elif session_name_ui == "dayMarket":
         market_header = "🌃 <b>[ 데이마켓 가동중 ]</b>"
     else:
         market_header = "🔥 <b>[ 정규장 가동중 ]</b>"
@@ -167,10 +174,14 @@ async def build_avwap_radar() -> tuple[str, InlineKeyboardMarkup]:
     async def fetch_session_stats(symbol):
         all_candles = []
         before = None
-        # MODIFIED: 데이장(Day Market) 캔들 확보를 위해 기준점을 전일 19:00 EST로 소급 연장
-        session_start_est = (now_est - timedelta(days=1)).replace(hour=19, minute=0, second=0, microsecond=0)
         
-        for _ in range(8): # MODIFIED: 결측치 방어를 위해 Pagination 루프 한도를 5회에서 8회로 증설
+        # MODIFIED: 당일/전일 19:00 EST 기준점 동적 스위칭 (결측치 및 페이지네이션 오버플로우 방어)
+        if now_est.hour >= 19:
+            session_start_est = now_est.replace(hour=19, minute=0, second=0, microsecond=0)
+        else:
+            session_start_est = (now_est - timedelta(days=1)).replace(hour=19, minute=0, second=0, microsecond=0)
+        
+        for _ in range(8):
             try:
                 data = await api_client.get_1m_candles_pagination(symbol, count=200, before=before)
                 candles = data.get("candles", [])
@@ -190,21 +201,21 @@ async def build_avwap_radar() -> tuple[str, InlineKeyboardMarkup]:
     _, budget_l, _, is_done_l, is_active_l, ovn_l, _ = await AssassinLedger.get_state("SOXL")
     _, budget_s, _, is_done_s, is_active_s, ovn_s, _ = await AssassinLedger.get_state("SOXS")
 
-    def build_status(symbol, is_active, budget, ovn, is_done, session_name, now_est):
+    def build_status(symbol, is_active, budget, ovn, is_done, current_session, est_time):
         if not is_active:
             return f"⚠️ <b>[ {symbol} 암살자 타격망 OFF (단순 관측 모드) ]</b>\n▫️ 교전 상태: OFF (수동 가동 대기)"
 
         if is_done:
             state_text = "당일 타격 완료 (휴식)"
         else:
-            if session_name == "preMarket":
-                if now_est.hour == 4 and now_est.minute <= 6:
+            if current_session == "preMarket":
+                if est_time.hour == 4 and est_time.minute <= 6:
                     state_text = "ON (04:07 EST 타임쉴드 가동 중 - 관망)"
                 else:
                     state_text = "ON (소프트웨어 트리거 감시 중)"
-            elif session_name == "dayMarket":
+            elif current_session == "dayMarket":
                 state_text = "ON (데이장 관망 대기 중)"
-            elif session_name == "regularMarket":
+            elif current_session == "regularMarket":
                 state_text = "ON (정규장 감시 중)"
             else:
                 state_text = "ON (장외 대기)"
@@ -216,11 +227,11 @@ async def build_avwap_radar() -> tuple[str, InlineKeyboardMarkup]:
                 f"▫️ 타격 예산: ${budget:,.2f} (초과 시 팻핑거 방어)\n"
                 f"▫️ 오버나이트: {ovn_text}")
 
-    status_l = build_status("롱(SOXL)", is_active_l, budget_l, ovn_l, is_done_l, session_name, now_est)
-    status_s = build_status("숏(SOXS)", is_active_s, budget_s, ovn_s, is_done_s, session_name, now_est)
+    # MODIFIED: 동적 추론된 session_name_ui 주입
+    status_l = build_status("롱(SOXL)", is_active_l, budget_l, ovn_l, is_done_l, session_name_ui, now_est)
+    status_s = build_status("숏(SOXS)", is_active_s, budget_s, ovn_s, is_done_s, session_name_ui, now_est)
     scan_time = now_est.strftime("%Y-%m-%d %H:%M:%S")
 
-    # MODIFIED: 0세션 데이장 UI 블록 주입 완료
     text = f"""📡 <b>[ 순수 돌파/추종 데이트레이딩 관제탑 ]</b>
 {market_header}
 
@@ -272,19 +283,16 @@ async def build_sync_board() -> str:
     is_dst = now_est.dst() is not None and now_est.dst().total_seconds() != 0
     dst_str = "🌞 서머타임" if is_dst else "❄️ 서머타임 OFF"
     
-    try:
-        is_open, _, session_name, _ = await asyncio.wait_for(api_client.is_market_open(), timeout=5.0)
-    except Exception:
-        is_open, session_name = True, "regularMarket"
-        
-    if session_name == "afterMarket" or not is_open:
-        market_state = "⛔ 장마감"
-    elif session_name == "preMarket":
+    # MODIFIED: 동기화 보드 역시 EST 기반 동적 세션 추론 엔진 적용
+    t = now_est.hour * 100 + now_est.minute
+    if 400 <= t <= 929:
         market_state = "🌅 프리장"
-    elif session_name == "dayMarket":
-        market_state = "🌃 데이장"
-    else:
+    elif 930 <= t <= 1559:
         market_state = "🔥 정규장"
+    elif 1600 <= t <= 1859:
+        market_state = "⛔ 장마감"
+    else:
+        market_state = "🌃 데이장"
 
     bp = await api_client.get_usd_buying_power()
     
