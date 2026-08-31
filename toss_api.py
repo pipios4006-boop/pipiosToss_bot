@@ -40,16 +40,43 @@ class TossApiClient:
         self.account_seq = None
         self._calendar_cache = None
         self._calendar_cache_time = 0.0
+        # NEW: 401 레이스 컨디션 붕괴 방어용 인증 전용 뮤텍스 락온
+        self._auth_lock = asyncio.Lock()
 
     async def _request(self, method: str, endpoint: str, rate_limit_group: str, headers: dict = None, json_data: dict = None, timeout: float = 10.0):
         url = f"{self.base_url}{endpoint}"
         
+        # MODIFIED: 헤더 객체 오염 방지 및 401 치유 시 동적 재주입을 위한 얕은 복사
+        req_headers = dict(headers) if headers else {}
+        
         for attempt in range(3):
             await GlobalThrottle.wait_api_sync()
+            
+            # NEW: 매 시도마다 시스템 최신 토큰을 동적으로 주입 (401 재발사 요격망)
+            if self.token:
+                req_headers["Authorization"] = f"Bearer {self.token}"
+
             try:
                 async with aiohttp.ClientSession() as session:
-                    async with session.request(method, url, headers=headers, json=json_data, timeout=timeout) as resp:
+                    async with session.request(method, url, headers=req_headers, json=json_data, timeout=timeout) as resp:
+                        
+                        # NEW: 401 Unauthorized 레이스 컨디션 방어 및 3단 자동 치유
+                        if resp.status == 401:
+                            if attempt == 2:
+                                raise Exception("API HTTP 401: Unauthorized (Max retries exceeded)")
+                            
+                            async with self._auth_lock:
+                                # 다른 비동기 태스크가 이미 토큰을 갱신했는지 검증하여 중복 발급 차단
+                                failed_auth = req_headers.get("Authorization")
+                                current_system_auth = f"Bearer {self.token}" if self.token else None
+                                if failed_auth == current_system_auth or not failed_auth:
+                                    await self._do_authenticate()
+                            continue
+                            
+                        # MODIFIED: 429 한도 초과 시 남은 시도 횟수 소진 예외 처리 명시
                         if resp.status == 429:
+                            if attempt == 2:
+                                raise Exception("API HTTP 429: Rate Limit Exceeded (Max retries)")
                             retry_after = int(resp.headers.get("Retry-After", 2 ** attempt))
                             await asyncio.sleep(retry_after)
                             continue
@@ -63,21 +90,30 @@ class TossApiClient:
                             except Exception:
                                 safe_err = html.escape(err_text)
                             raise Exception(f"API HTTP {resp.status}: {safe_err}")
+                        
                         return await resp.json()
             except asyncio.TimeoutError:
                 if attempt == 2: raise Exception("API Timeout")
                 await asyncio.sleep(2 ** attempt)
             except Exception as e:
+                # 401, 429 방어 로직은 위에서 continue 하므로 여기 도달하는 것은 통신 단절 등 치명적 에러임
                 if attempt == 2: raise e
                 await asyncio.sleep(2 ** attempt)
 
     def _get_headers(self, requires_account: bool = False) -> dict:
-        headers = {"Authorization": f"Bearer {self.token}"}
+        headers = {}
+        if self.token:
+            headers["Authorization"] = f"Bearer {self.token}"
         if requires_account and self.account_seq:
             headers["X-Tossinvest-Account"] = str(self.account_seq)
         return headers
 
+    # MODIFIED: 인증 뮤텍스 락온 적용 및 실제 발급 로직 분리
     async def authenticate(self):
+        async with self._auth_lock:
+            await self._do_authenticate()
+
+    async def _do_authenticate(self):
         url = f"{self.base_url}/oauth2/token"
         payload = {
             "grant_type": "client_credentials",
@@ -93,8 +129,9 @@ class TossApiClient:
     async def token_renewal_loop(self):
         while True:
             try:
-                await self.authenticate()
+                # MODIFIED: 기동 직후 2중 발급으로 인한 토큰 증발(Amnesia) 원천 방어 (전진 배치)
                 await asyncio.sleep(40000)
+                await self.authenticate()
             except Exception:
                 await asyncio.sleep(60)
 
@@ -204,7 +241,6 @@ class TossApiClient:
         }
         return await self._request("POST", "/api/v1/orders", "ORDER", headers=self._get_headers(requires_account=True), json_data=payload)
 
-    # MODIFIED: 조건주문 API 생성망 결속
     async def create_conditional_order(self, symbol: str, quantity: int, price: str, client_order_id: str, expire_date: str) -> dict:
         if not self.account_seq: await self.fetch_account_seq()
         payload = {
@@ -222,7 +258,7 @@ class TossApiClient:
         }
         return await self._request("POST", "/api/v1/conditional-orders", "CONDITIONAL_ORDER", headers=self._get_headers(requires_account=True), json_data=payload)
 
-    # MODIFIED: 조건주문 API 취소망 결속
     async def cancel_conditional_order(self, cond_order_id: str):
         if not self.account_seq: await self.fetch_account_seq()
         await self._request("DELETE", f"/api/v1/conditional-orders/{cond_order_id}", "CONDITIONAL_ORDER", headers=self._get_headers(requires_account=True))
+
