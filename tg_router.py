@@ -7,7 +7,7 @@ import os
 import html
 import asyncio
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timedelta # MODIFIED: timedelta 추가
 from zoneinfo import ZoneInfo
 from aiogram import Router, types, F
 from aiogram.filters import Command
@@ -31,7 +31,6 @@ class BudgetState(StatesGroup):
     waiting_for_budget = State()
     symbol = None
 
-# MODIFIED: 제3헌법 적용 - 불필요한 레거시 메뉴 소각 및 3대 핵심 코어 라우팅 락온
 @router.message(Command("start"))
 async def cmd_start(message: types.Message, state: FSMContext):
     if message.from_user.id != ADMIN_CHAT_ID:
@@ -71,6 +70,7 @@ async def cmd_start(message: types.Message, state: FSMContext):
 
 def parse_session_data(all_candles: list) -> dict:
     res = {
+        "day_h": 0.0, "day_l": 0.0, "day_amp": 0.0, "day_vwap": 0.0, # NEW: 0세션 데이장 지표 초기화
         "pre_h": 0.0, "pre_l": 0.0, "pre_amp": 0.0, "pre_vwap": 0.0,
         "reg_h": 0.0, "reg_l": 0.0, "reg_amp": 0.0, "reg_vwap": 0.0
     }
@@ -86,6 +86,8 @@ def parse_session_data(all_candles: list) -> dict:
     for col in ['highPrice', 'lowPrice', 'closePrice', 'volume']:
         df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0.0)
         
+    # MODIFIED: 세션별 데이터프레임 원자적 분리 (데이장 격리 추가)
+    day_df = df.between_time('19:00', '03:59') 
     pre_df = df.between_time('04:00', '09:29')
     reg_df = df.between_time('09:30', '16:00')
     
@@ -100,10 +102,12 @@ def parse_session_data(all_candles: list) -> dict:
         vwap = float(pv.sum() / vol) if vol > 0 else 0.0
         return h, l, float(amp), vwap
 
+    day_h, day_l, day_amp, day_vwap = calc_metrics(day_df)
     pre_h, pre_l, pre_amp, pre_vwap = calc_metrics(pre_df)
     reg_h, reg_l, reg_amp, reg_vwap = calc_metrics(reg_df)
     
     res.update({
+        "day_h": day_h, "day_l": day_l, "day_amp": day_amp, "day_vwap": day_vwap,
         "pre_h": pre_h, "pre_l": pre_l, "pre_amp": pre_amp, "pre_vwap": pre_vwap,
         "reg_h": reg_h, "reg_l": reg_l, "reg_amp": reg_amp, "reg_vwap": reg_vwap
     })
@@ -121,6 +125,8 @@ async def build_avwap_radar() -> tuple[str, InlineKeyboardMarkup]:
         market_header = "🌙 <b>[ 애프터마켓 / 데이터 집계 종료 ]</b>"
     elif session_name == "preMarket":
         market_header = "🌅 <b>[ 프리마켓 가동중 ]</b>"
+    elif session_name == "dayMarket":
+        market_header = "🌃 <b>[ 데이마켓 가동중 ]</b>"
     else:
         market_header = "🔥 <b>[ 정규장 가동중 ]</b>"
 
@@ -161,8 +167,10 @@ async def build_avwap_radar() -> tuple[str, InlineKeyboardMarkup]:
     async def fetch_session_stats(symbol):
         all_candles = []
         before = None
-        session_start_est = now_est.replace(hour=4, minute=0, second=0, microsecond=0)
-        for _ in range(5):
+        # MODIFIED: 데이장(Day Market) 캔들 확보를 위해 기준점을 전일 19:00 EST로 소급 연장
+        session_start_est = (now_est - timedelta(days=1)).replace(hour=19, minute=0, second=0, microsecond=0)
+        
+        for _ in range(8): # MODIFIED: 결측치 방어를 위해 Pagination 루프 한도를 5회에서 8회로 증설
             try:
                 data = await api_client.get_1m_candles_pagination(symbol, count=200, before=before)
                 candles = data.get("candles", [])
@@ -194,6 +202,8 @@ async def build_avwap_radar() -> tuple[str, InlineKeyboardMarkup]:
                     state_text = "ON (04:07 EST 타임쉴드 가동 중 - 관망)"
                 else:
                     state_text = "ON (소프트웨어 트리거 감시 중)"
+            elif session_name == "dayMarket":
+                state_text = "ON (데이장 관망 대기 중)"
             elif session_name == "regularMarket":
                 state_text = "ON (정규장 감시 중)"
             else:
@@ -210,6 +220,7 @@ async def build_avwap_radar() -> tuple[str, InlineKeyboardMarkup]:
     status_s = build_status("숏(SOXS)", is_active_s, budget_s, ovn_s, is_done_s, session_name, now_est)
     scan_time = now_est.strftime("%Y-%m-%d %H:%M:%S")
 
+    # MODIFIED: 0세션 데이장 UI 블록 주입 완료
     text = f"""📡 <b>[ 순수 돌파/추종 데이트레이딩 관제탑 ]</b>
 {market_header}
 
@@ -224,6 +235,12 @@ async def build_avwap_radar() -> tuple[str, InlineKeyboardMarkup]:
 2️⃣ <b>암살자 평단가 등락률</b>
 ▫️ 롱(SOXL) 평단가: {profit_l_str}
 ▫️ 숏(SOXS) 평단가: {profit_s_str}
+
+🌃 <b>[ 0세션 - 데이장 (19:00~03:59) ]</b>
+▫️ 롱(SOXL) 고가: ${sess_l['day_h']:.2f} / 저가: ${sess_l['day_l']:.2f} (진폭 {sess_l['day_amp']:.2f}%)
+▫️ 롱(SOXL) 누적 VWAP: ${sess_l['day_vwap']:.2f}
+▫️ 숏(SOXS) 고가: ${sess_s['day_h']:.2f} / 저가: ${sess_s['day_l']:.2f} (진폭 {sess_s['day_amp']:.2f}%)
+▫️ 숏(SOXS) 누적 VWAP: ${sess_s['day_vwap']:.2f}
 
 🌅 <b>[ 1세션 - 프리장 (04:00~09:29) ]</b>
 ▫️ 롱(SOXL) 고가: ${sess_l['pre_h']:.2f} / 저가: ${sess_l['pre_l']:.2f} (진폭 {sess_l['pre_amp']:.2f}%)
@@ -264,6 +281,8 @@ async def build_sync_board() -> str:
         market_state = "⛔ 장마감"
     elif session_name == "preMarket":
         market_state = "🌅 프리장"
+    elif session_name == "dayMarket":
+        market_state = "🌃 데이장"
     else:
         market_state = "🔥 정규장"
 
@@ -412,7 +431,6 @@ async def cmd_sync(message: types.Message, state: FSMContext):
     except Exception as e:
         await message.answer(f"🚨 <b>통합 지시서 동기화 실패:</b> {html.escape(str(e))}", parse_mode="HTML")
 
-# NEW: Case 26 제자리 갱신용 통합 지시서 콜백 라우터 결속
 @router.callback_query(F.data == "open_sync")
 async def process_open_sync(callback_query: types.CallbackQuery, state: FSMContext):
     await state.clear()
@@ -438,7 +456,6 @@ async def cmd_settlement(message: types.Message, state: FSMContext):
     except Exception:
         pass
 
-# NEW: Case 26 제자리 갱신용 통합 제어반 콜백 라우터 결속
 @router.callback_query(F.data == "open_settlement")
 async def process_open_settlement(callback_query: types.CallbackQuery, state: FSMContext):
     await state.clear()
@@ -481,7 +498,6 @@ async def process_set_budget(callback_query: types.CallbackQuery, state: FSMCont
     except Exception:
         pass
 
-# MODIFIED: Case 26 예산 설정 완료 시 파편화된 개별 메뉴 대신 통합 제어반(open_settlement)으로 원자적 복귀
 @router.message(BudgetState.waiting_for_budget)
 async def process_budget_input(message: types.Message, state: FSMContext):
     symbol = BudgetState.symbol
