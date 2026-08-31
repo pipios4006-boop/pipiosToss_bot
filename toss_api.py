@@ -1,5 +1,5 @@
 # =====================================================================
-# 파일명: toss_api.py
+# [통합 방탄 코어] toss_api.py
 # 목적: 토스증권 Open API 통신 엣지 케이스 방어 및 중앙 통제소 가동
 # =====================================================================
 
@@ -44,7 +44,7 @@ class TossApiClient:
         self._calendar_cache = None
         self._calendar_cache_time = 0.0
 
-    # MODIFIED: Case 17 텔레그램 HTML 붕괴 방어를 위한 JSON 정밀 파싱 주입
+    # MODIFIED: Case 17 & Case 21 텔레그램 HTML 붕괴 방어 및 3단 지수 백오프
     async def _request(self, method: str, endpoint: str, rate_limit_group: str, headers: dict = None, json_data: dict = None, timeout: float = 10.0):
         url = f"{self.base_url}{endpoint}"
         
@@ -53,10 +53,14 @@ class TossApiClient:
             try:
                 async with aiohttp.ClientSession() as session:
                     async with session.request(method, url, headers=headers, json=json_data, timeout=timeout) as resp:
+                        if resp.status == 429:
+                            retry_after = int(resp.headers.get("Retry-After", 2 ** attempt))
+                            await asyncio.sleep(retry_after)
+                            continue
+                            
                         if resp.status >= 400:
                             err_text = await resp.text()
                             try:
-                                # NEW: 토스증권 API JSON 에러 메시지 정밀 추출
                                 err_json = json.loads(err_text)
                                 err_msg = err_json.get("error", {}).get("message", err_text)
                                 safe_err = str(err_msg)

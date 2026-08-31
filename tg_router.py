@@ -1,5 +1,5 @@
 # =====================================================================
-# 파일명: tg_router.py
+# [통합 방탄 코어] tg_router.py
 # 목적: SOXL, SOXS 듀얼 상태 제어 UI, 스케줄/명령어 라우팅 및 방어망 결속
 # =====================================================================
 
@@ -468,7 +468,7 @@ async def process_open_settlement(callback_query: types.CallbackQuery, state: FS
     try:
         text, keyboard = await build_settlement_board()
         await callback_query.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
-    except Exception:
+    except Exception as e:
         pass
 
 @router.callback_query(F.data.startswith("toggle_set_act_"))
@@ -539,7 +539,7 @@ async def cmd_update(message: types.Message, state: FSMContext):
 async def process_execute_update(callback_query: types.CallbackQuery, state: FSMContext):
     await state.clear()
     try:
-        await callback_query.message.edit_text("🔄 <b>GitHub 파이썬 코드 다운로드 및 구글 클라우드 서버 탑재 검증 중...</b>", parse_mode="HTML")
+        await callback_query.message.edit_text("🔄 <b>GitHub 파이썬 코드를 다운로드 및 구글 클라우드 서버 탑재 검증 중...</b>", parse_mode="HTML")
 
         def _run_git_update():
             import subprocess

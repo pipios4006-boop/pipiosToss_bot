@@ -1,5 +1,5 @@
 # =====================================================================
-# 파일명: main.py
+# [통합 방탄 코어] main.py
 # 목적: SOXL, SOXS 듀얼 코어 암살자 엔진 가동 (aVWAP + 제로오버나잇) - 메인 통제소
 # =====================================================================
 
@@ -80,6 +80,7 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
         try:
             now_est = datetime.now(ZoneInfo('America/New_York'))
             est_today_str = now_est.strftime("%Y-%m-%d")
+            est_time_int = now_est.hour * 100 + now_est.minute
 
             # Case 22: 17:00 EST 가비지 컬렉션 (GC) 파이프라인
             if now_est.hour == 17 and now_est.minute == 0:
@@ -105,7 +106,7 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                 is_open, session_end_time, session_name, session_start_time = await asyncio.wait_for(client.is_market_open(), timeout=10.0)
             except Exception:
                 is_open = True
-                session_name = "regularMarket" if 9 <= now_est.hour < 16 else "preMarket"
+                session_name = "regularMarket" if 930 <= est_time_int < 1600 else "preMarket"
                 session_start_time = None
                 print(f"🚨 [aVWAP {symbol}] 캘린더 응답 지연. Fail-Open 정규장 간주 진입.", flush=True)
 
@@ -186,8 +187,8 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
             candles_json = await fetch_full_session_candles(client, symbol, session_baseline_est)
             vwap_price = AVWAPEngine.calculate_vwap(candles_json, session_baseline_est)
 
-            # 09:30 정규장 오픈 시 잔고 0이면 신규 진입 원천 차단 (퇴근 락온)
-            if now_est.hour >= 9 and now_est.minute >= 30:
+            # MODIFIED: 09:30 정규장 오픈 시 잔고 0이면 신규 진입 원천 차단 (정수 비교 락온)
+            if est_time_int >= 930:
                 if holdings_qty == 0 and not is_session_done:
                     await AssassinLedger.save_state(symbol, is_session_done=True)
                     is_session_done = True
@@ -196,11 +197,11 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
             open_orders = await client.get_orders(status="OPEN", symbol=symbol)
             has_open_sell = any(o["side"] == "SELL" for o in open_orders)
             
-            # MODIFIED: 보유 물량 존재 시, +1.0% 고정 익절 덫 장전 (is_active 락온 추가: 매도 전면 차단 방어)
+            # MODIFIED: 보유 물량 존재 시 +1.0% 고정 익절 덫 장전 (소수점 둘째 자리 수학적 올림 락온)
             if holdings_qty > 0 and target_sell_price <= 0.0 and not has_open_sell and not in_memory_ordering_lock[symbol] and is_active:
                 avg_price = holdings_detail.get('avg_price', current_price)
                 if avg_price <= 0.0: avg_price = current_price
-                calculated_target = round(avg_price * 1.01, 2)
+                calculated_target = math.ceil(avg_price * 1.01 * 100) / 100.0
                 
                 in_memory_ordering_lock[symbol] = True
                 try:
