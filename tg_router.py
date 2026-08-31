@@ -37,17 +37,12 @@ async def cmd_start(message: types.Message, state: FSMContext):
         return
     await state.clear()
     
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔫 트레이딩 레이더 관제탑", callback_data="open_avwap")],
-        [InlineKeyboardButton(text="📜 통합 지시서 (자산 스캔)", callback_data="open_sync")],
-        [InlineKeyboardButton(text="⚙️ 통합 전술 제어반", callback_data="open_settlement")]
-    ])
+    # MODIFIED: /start 명령어 화면 인라인 버튼 3개 소각 및 텍스트 전용 출력 락온
     
     now_est = datetime.now(ZoneInfo('America/New_York'))
     is_dst = now_est.dst() is not None and now_est.dst().total_seconds() != 0
     dst_status_text = "🌞서머타임 ON (EDT)" if is_dst else "❄️서머타임 OFF (EST)"
     
-    # MODIFIED: /reset, /history, /log, /version 소각 및 /update 명세 Google Cloud 서버 탑재로 변경
     text = (
         f"🕒 <b>[ 운영 스케줄 ({dst_status_text}) ]</b>\n"
         "🔹 19:00: 🌅 데이장 (Day Market) 스캔 개시\n"
@@ -62,7 +57,8 @@ async def cmd_start(message: types.Message, state: FSMContext):
         "⚠️ /update : 🚀 깃허브 게시판 파이썬 코드 다운로드 및 구글 클라우드 서버 탑재"
     )
     try:
-        await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+        # MODIFIED: reply_markup 바인딩 해제
+        await message.answer(text, parse_mode="HTML")
     except Exception:
         pass
 
@@ -509,7 +505,6 @@ async def process_budget_input(message: types.Message, state: FSMContext):
     except Exception:
         await message.answer("🚨 유효한 숫자를 입력하세요.", parse_mode="HTML")
 
-# MODIFIED: /update 명령어 메시지 설명 구글 클라우드 서버 탑재 명시
 @router.message(Command("update"))
 async def cmd_update(message: types.Message, state: FSMContext):
     if message.from_user.id != ADMIN_CHAT_ID:
@@ -533,7 +528,6 @@ async def cmd_update(message: types.Message, state: FSMContext):
 async def process_execute_update(callback_query: types.CallbackQuery, state: FSMContext):
     await state.clear()
     try:
-        # MODIFIED: 프로그레스 메시지 변경
         await callback_query.message.edit_text("🔄 <b>GitHub 파이썬 코드 다운로드 및 구글 클라우드 서버 탑재 검증 중...</b>", parse_mode="HTML")
 
         def _run_git_update():
