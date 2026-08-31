@@ -1,5 +1,5 @@
 # =====================================================================
-# [통합 방탄 코어] tg_router.py
+# FILE: tg_router.py
 # 목적: SOXL, SOXS 듀얼 상태 제어 UI, 스케줄/명령어 라우팅 및 방어망 결속
 # =====================================================================
 
@@ -42,12 +42,12 @@ def get_main_menu_text() -> str:
         "🔹 04:00: 🌅 프리장 VWAP 스캔 개시\n"
         "🔹 09:30: 🔥 정규장 VWAP 초기화 및 스캔\n"
         "🔹 15:59: 🛑 암살자 오버나이트 강제 덤핑\n"
-        "🔹 16:05: 📝 정산 스캔 & 당일 사이클 졸업\n\n"
+        "🔹 17:00: 🧹 정산 스캔 & 당일 사이클 졸업\n\n"
         "🛠 <b>[ 핵심 명령어 ]</b>\n"
         "▶️ /avwap : 🔫 데이 트레이딩 레이더 관제탑\n"
         "▶️ /sync : 📜 통합 지시서 및 장부 동기화\n"
         "▶️ /settlement : ⚙️ 통합 전술 제어반 (시드/OVN/가동)\n\n"
-        "⚠️ /update : 🚀 깃허브 게시판 파이썬 코드 다운로드 및 구글 클라우드 서버 탑재"
+        "⚠️ /update : 🚀 깃허브 게시판 파이썬 코드 다운로드 및 탑재"
     )
 
 @router.message(Command("start"))
@@ -186,8 +186,8 @@ async def build_avwap_radar() -> tuple[str, InlineKeyboardMarkup]:
     sess_l = await fetch_session_stats("SOXL")
     sess_s = await fetch_session_stats("SOXS")
 
-    _, budget_l, _, is_done_l, is_active_l, ovn_l, _ = await AssassinLedger.get_state("SOXL")
-    _, budget_s, _, is_done_s, is_active_s, ovn_s, _ = await AssassinLedger.get_state("SOXS")
+    _, budget_l, _, is_done_l, is_active_l, ovn_l, _, _ = await AssassinLedger.get_state("SOXL")
+    _, budget_s, _, is_done_s, is_active_s, ovn_s, _, _ = await AssassinLedger.get_state("SOXS")
 
     def build_compact_status(symbol_short, is_active, budget, ovn, is_done, current_session, est_time):
         if not is_active:
@@ -216,7 +216,6 @@ async def build_avwap_radar() -> tuple[str, InlineKeyboardMarkup]:
     
     scan_time = now_est.strftime("%Y-%m-%d %H:%M:%S")
 
-    # MODIFIED: 모바일 가변폭 렌더링 완벽 정렬을 위한 7-Space 강제 들여쓰기 락온
     text = f"""📡 <b>[ 관제탑: {market_header} 가동중 ]</b>
 
 🎯 <b>[ 현황: 현재가 / 5MA / 평단(수익) ]</b>
@@ -356,8 +355,8 @@ async def build_sync_board() -> str:
     return text
 
 async def build_settlement_board() -> tuple[str, InlineKeyboardMarkup]:
-    _, budget_l, _, _, is_active_l, ovn_l, _ = await AssassinLedger.get_state("SOXL")
-    _, budget_s, _, _, is_active_s, ovn_s, _ = await AssassinLedger.get_state("SOXS")
+    _, budget_l, _, _, is_active_l, ovn_l, _, _ = await AssassinLedger.get_state("SOXL")
+    _, budget_s, _, _, is_active_s, ovn_s, _, _ = await AssassinLedger.get_state("SOXS")
 
     text = (
         "⚙️ <b>[통합 전술 제어반]</b>\n\n"
@@ -474,7 +473,7 @@ async def process_open_settlement(callback_query: types.CallbackQuery, state: FS
 @router.callback_query(F.data.startswith("toggle_set_act_"))
 async def process_toggle_set_act(callback_query: types.CallbackQuery, state: FSMContext):
     symbol = callback_query.data.split("_")[3].upper()
-    _, _, _, _, is_active, _, _ = await AssassinLedger.get_state(symbol)
+    _, _, _, _, is_active, _, _, _ = await AssassinLedger.get_state(symbol)
     await AssassinLedger.save_state(symbol, is_active=not is_active)
     text, keyboard = await build_settlement_board()
     try:
@@ -485,7 +484,7 @@ async def process_toggle_set_act(callback_query: types.CallbackQuery, state: FSM
 @router.callback_query(F.data.startswith("toggle_set_ovn_"))
 async def process_toggle_set_ovn(callback_query: types.CallbackQuery, state: FSMContext):
     symbol = callback_query.data.split("_")[3].upper()
-    _, _, _, _, _, overnight_on, _ = await AssassinLedger.get_state(symbol)
+    _, _, _, _, _, overnight_on, _, _ = await AssassinLedger.get_state(symbol)
     await AssassinLedger.save_state(symbol, overnight_on=not overnight_on)
     text, keyboard = await build_settlement_board()
     try:

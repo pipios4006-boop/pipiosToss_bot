@@ -11,7 +11,6 @@ import json
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-# 제1헌법 및 Case 20 방어용 전역 중앙 통제소
 class GlobalThrottle:
     _api_lock = asyncio.Lock()
     _file_locks = {}
@@ -19,11 +18,10 @@ class GlobalThrottle:
 
     @classmethod
     async def wait_api_sync(cls):
-        # Case 32: 전역 락 임계 구역 최소화
         async with cls._api_lock:
             now = time.time()
             elapsed = now - cls._last_api_time
-            if elapsed < 0.15:  # 약 6.6 TPS 제한 락온
+            if elapsed < 0.15:  
                 await asyncio.sleep(0.15 - elapsed)
             cls._last_api_time = time.time()
 
@@ -40,11 +38,9 @@ class TossApiClient:
         self.base_url = "https://openapi.tossinvest.com"
         self.token = None
         self.account_seq = None
-        # Case 33 캘린더 인메모리 캐시 선언
         self._calendar_cache = None
         self._calendar_cache_time = 0.0
 
-    # MODIFIED: Case 17 & Case 21 텔레그램 HTML 붕괴 방어 및 3단 지수 백오프
     async def _request(self, method: str, endpoint: str, rate_limit_group: str, headers: dict = None, json_data: dict = None, timeout: float = 10.0):
         url = f"{self.base_url}{endpoint}"
         
@@ -63,9 +59,9 @@ class TossApiClient:
                             try:
                                 err_json = json.loads(err_text)
                                 err_msg = err_json.get("error", {}).get("message", err_text)
-                                safe_err = str(err_msg)
+                                safe_err = html.escape(str(err_msg))
                             except Exception:
-                                safe_err = err_text
+                                safe_err = html.escape(err_text)
                             raise Exception(f"API HTTP {resp.status}: {safe_err}")
                         return await resp.json()
             except asyncio.TimeoutError:
@@ -102,7 +98,6 @@ class TossApiClient:
             except Exception:
                 await asyncio.sleep(60)
 
-    # 제2헌법: AccountSeq 원자적 락온
     async def fetch_account_seq(self):
         if not self.token: await self.authenticate()
         data = await self._request("GET", "/api/v1/accounts", "ACCOUNT", headers=self._get_headers())
@@ -128,7 +123,6 @@ class TossApiClient:
             return {"qty": 0.0, "avg_price": 0.0, "profit_rate": 0.0, "profit_usd": 0.0}
         item = items[0]
         
-        # Case 03/04: Null 결측치 하드 킬 방어
         qty_raw = item.get("quantity")
         avg_price_raw = item.get("averagePurchasePrice")
         return {
@@ -144,7 +138,6 @@ class TossApiClient:
         bp_raw = data.get("result", {}).get("cashBuyingPower")
         return float(bp_raw) if bp_raw is not None else 0.0
 
-    # Case 33 캘린더 인메모리 캐싱 파이프라인 결속
     async def is_market_open(self) -> tuple[bool, datetime, str, datetime]:
         now_ts = time.time()
         if now_ts - self._calendar_cache_time < 60.0 and self._calendar_cache:
@@ -193,13 +186,11 @@ class TossApiClient:
         if not self.account_seq: await self.fetch_account_seq()
         await self._request("POST", f"/api/v1/orders/{order_id}/cancel", "ORDER", headers=self._get_headers(requires_account=True))
 
-    # NEW: Case 35 암살자 순수 체결 단가 역추적망
     async def get_order_detail(self, order_id: str) -> dict:
         if not self.account_seq: await self.fetch_account_seq()
         data = await self._request("GET", f"/api/v1/orders/{order_id}", "ORDER_HISTORY", headers=self._get_headers(requires_account=True))
         return data.get("result", {})
 
-    # MODIFIED: 제5헌법 & 주문 객체 리턴 배선 연결 (buy_order_id 핀셋 추출용)
     async def create_order(self, symbol: str, side: str, order_type: str, quantity: float, price: str, client_order_id: str) -> dict:
         if not self.account_seq: await self.fetch_account_seq()
         payload = {
@@ -212,3 +203,26 @@ class TossApiClient:
             "timeInForce": "DAY"
         }
         return await self._request("POST", "/api/v1/orders", "ORDER", headers=self._get_headers(requires_account=True), json_data=payload)
+
+    # MODIFIED: 조건주문 API 생성망 결속
+    async def create_conditional_order(self, symbol: str, quantity: int, price: str, client_order_id: str, expire_date: str) -> dict:
+        if not self.account_seq: await self.fetch_account_seq()
+        payload = {
+            "clientOrderId": client_order_id,
+            "symbol": symbol,
+            "type": "SINGLE",
+            "quantity": str(quantity),
+            "orderType": "LIMIT",
+            "expireDate": expire_date,
+            "first": {
+                "orderSide": "SELL",
+                "triggerPrice": price,
+                "orderPrice": price
+            }
+        }
+        return await self._request("POST", "/api/v1/conditional-orders", "CONDITIONAL_ORDER", headers=self._get_headers(requires_account=True), json_data=payload)
+
+    # MODIFIED: 조건주문 API 취소망 결속
+    async def cancel_conditional_order(self, cond_order_id: str):
+        if not self.account_seq: await self.fetch_account_seq()
+        await self._request("DELETE", f"/api/v1/conditional-orders/{cond_order_id}", "CONDITIONAL_ORDER", headers=self._get_headers(requires_account=True))

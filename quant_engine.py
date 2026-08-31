@@ -18,13 +18,12 @@ class AssassinLedger:
         return os.path.join(os.path.dirname(os.path.abspath(__file__)), f"AssassinLedger_{symbol}.json")
 
     @classmethod
-    async def get_state(cls, symbol: str) -> tuple[float, float, str, bool, bool, bool, float]:
+    async def get_state(cls, symbol: str) -> tuple[float, float, str, bool, bool, bool, float, str]:
         filepath = cls._get_file_path(symbol)
-        # 제1헌법: 파일 I/O 스레드 밀어내기 및 락온 (Case 30)
         async with GlobalThrottle.get_file_lock(filepath):
             def _read():
                 if not os.path.exists(filepath):
-                    return 0.0, 100.0, "", False, True, False, 0.0
+                    return 0.0, 100.0, "", False, True, False, 0.0, ""
                 try:
                     with open(filepath, "r", encoding="utf-8") as f:
                         data = json.load(f)
@@ -35,13 +34,13 @@ class AssassinLedger:
                             bool(data.get("is_session_done", False)),
                             bool(data.get("is_active", True)),
                             bool(data.get("overnight_on", False)),
-                            float(data.get("target_sell_price", 0.0))
+                            float(data.get("target_sell_price", 0.0)),
+                            str(data.get("cond_order_id", ""))
                         )
                 except Exception:
-                    return 0.0, 100.0, "", False, True, False, 0.0
+                    return 0.0, 100.0, "", False, True, False, 0.0, ""
             return await asyncio.to_thread(_read)
 
-    # NEW: 하위 호환성 파괴를 막기 위한 주문번호 절대 기억(Amnesia 방어) 조회망 분리
     @classmethod
     async def get_buy_order_id(cls, symbol: str) -> str:
         filepath = cls._get_file_path(symbol)
@@ -60,7 +59,8 @@ class AssassinLedger:
     async def save_state(cls, symbol: str, price: float = None, budget: float = None, 
                          last_session_id: str = None, is_session_done: bool = None, 
                          is_active: bool = None, overnight_on: bool = None, 
-                         target_sell_price: float = None, buy_order_id: str = None):
+                         target_sell_price: float = None, buy_order_id: str = None,
+                         cond_order_id: str = None):
         filepath = cls._get_file_path(symbol)
         async with GlobalThrottle.get_file_lock(filepath):
             def _write():
@@ -80,11 +80,11 @@ class AssassinLedger:
                 if overnight_on is not None: data["overnight_on"] = overnight_on
                 if target_sell_price is not None: data["target_sell_price"] = target_sell_price
                 if buy_order_id is not None: data["buy_order_id"] = buy_order_id
+                if cond_order_id is not None: data["cond_order_id"] = cond_order_id
                 
                 tmp_path = filepath + ".tmp"
                 with open(tmp_path, "w", encoding="utf-8") as f:
                     json.dump(data, f)
-                # Case 06: 원자적 덮어쓰기 사수 (EAFP 패턴)
                 os.replace(tmp_path, filepath) 
             await asyncio.to_thread(_write)
 
@@ -97,7 +97,6 @@ class AVWAPEngine:
         df = pd.DataFrame(candles_json)
         if df.empty: return 0.0
         
-        # MODIFIED: Case 08 & 제4헌법 타임존 파싱 안정성 강화를 위한 utc=True 강제 주입
         df['timestamp'] = pd.to_datetime(df['timestamp'], format='ISO8601', utc=True)
         df['timestamp'] = df['timestamp'].dt.tz_convert(ZoneInfo('America/New_York'))
         df.set_index('timestamp', inplace=True)
@@ -116,7 +115,6 @@ class AVWAPEngine:
         cumulative_pv = pv.sum()
         cumulative_vol = session_df['volume'].sum()
         
-        # Case 23: 섀도우 렌더링 멱등성 사수 (ZeroDivision 방어)
         if cumulative_vol <= 0:
             return 0.0
             
