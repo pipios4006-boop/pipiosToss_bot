@@ -69,7 +69,7 @@ async def cmd_start(message: types.Message, state: FSMContext):
     except Exception:
         pass
 
-def parse_session_data(all_candles: list) -> dict:
+def parse_session_data(all_candles: list, session_start_est: datetime) -> dict:
     res = {
         "day_h": 0.0, "day_l": 0.0, "day_amp": 0.0, "day_vwap": 0.0,
         "pre_h": 0.0, "pre_l": 0.0, "pre_amp": 0.0, "pre_vwap": 0.0,
@@ -84,9 +84,10 @@ def parse_session_data(all_candles: list) -> dict:
     df.set_index('timestamp', inplace=True)
     df.sort_index(ascending=True, inplace=True)
     
-    for col in ['highPrice', 'lowPrice', 'closePrice', 'volume']:
-        df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0.0)
-        
+    # MODIFIED: 강력한 시계열 결속 (이전 사이클의 데이장 데이터 섞임 원천 차단)
+    df = df[df.index >= session_start_est]
+    if df.empty: return res
+    
     # MODIFIED: 19:00~03:59 데이장 자정 랩어라운드 윈도우 원자적 추출
     day_df = df.between_time('19:00', '03:59') 
     pre_df = df.between_time('04:00', '09:29')
@@ -121,21 +122,16 @@ async def build_avwap_radar() -> tuple[str, InlineKeyboardMarkup]:
     t = now_est.hour * 100 + now_est.minute
     if 400 <= t <= 929:
         session_name_ui = "preMarket"
+        market_header = "🌅 <b>[ 프리마켓 가동중 ]</b>"
     elif 930 <= t <= 1559:
         session_name_ui = "regularMarket"
+        market_header = "🔥 <b>[ 정규장 가동중 ]</b>"
     elif 1600 <= t <= 1859:
         session_name_ui = "afterMarket"
+        market_header = "🌙 <b>[ 애프터마켓 / 데이터 집계 종료 ]</b>"
     else:
         session_name_ui = "dayMarket"
-
-    if session_name_ui == "afterMarket":
-        market_header = "🌙 <b>[ 애프터마켓 / 데이터 집계 종료 ]</b>"
-    elif session_name_ui == "preMarket":
-        market_header = "🌅 <b>[ 프리마켓 가동중 ]</b>"
-    elif session_name_ui == "dayMarket":
         market_header = "🌃 <b>[ 데이마켓 가동중 ]</b>"
-    else:
-        market_header = "🔥 <b>[ 정규장 가동중 ]</b>"
 
     price_l = await api_client.get_current_price("SOXL")
     price_s = await api_client.get_current_price("SOXS")
@@ -181,7 +177,8 @@ async def build_avwap_radar() -> tuple[str, InlineKeyboardMarkup]:
         else:
             session_start_est = (now_est - timedelta(days=1)).replace(hour=19, minute=0, second=0, microsecond=0)
         
-        for _ in range(8):
+        # 200봉 * 10페이지 = 2,000봉 (약 33시간 분량 확보)
+        for _ in range(10):
             try:
                 data = await api_client.get_1m_candles_pagination(symbol, count=200, before=before)
                 candles = data.get("candles", [])
@@ -193,7 +190,7 @@ async def build_avwap_radar() -> tuple[str, InlineKeyboardMarkup]:
                 if not before: break
             except Exception:
                 break
-        return await asyncio.to_thread(parse_session_data, all_candles)
+        return await asyncio.to_thread(parse_session_data, all_candles, session_start_est)
 
     sess_l = await fetch_session_stats("SOXL")
     sess_s = await fetch_session_stats("SOXS")
