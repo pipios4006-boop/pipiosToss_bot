@@ -31,19 +31,12 @@ class BudgetState(StatesGroup):
     waiting_for_budget = State()
     symbol = None
 
-@router.message(Command("start"))
-async def cmd_start(message: types.Message, state: FSMContext):
-    if message.from_user.id != ADMIN_CHAT_ID:
-        return
-    await state.clear()
-    
-    # MODIFIED: /start 명령어 화면 인라인 버튼 3개 소각 및 텍스트 전용 출력 락온
-    
+def get_main_menu_text() -> str:
     now_est = datetime.now(ZoneInfo('America/New_York'))
     is_dst = now_est.dst() is not None and now_est.dst().total_seconds() != 0
     dst_status_text = "🌞서머타임 ON (EDT)" if is_dst else "❄️서머타임 OFF (EST)"
     
-    text = (
+    return (
         f"🕒 <b>[ 운영 스케줄 ({dst_status_text}) ]</b>\n"
         "🔹 19:00: 🌅 데이장 (Day Market) 스캔 개시\n"
         "🔹 04:00: 🌅 프리장 VWAP 스캔 개시\n"
@@ -56,9 +49,15 @@ async def cmd_start(message: types.Message, state: FSMContext):
         "▶️ /settlement : ⚙️ 통합 전술 제어반 (시드/OVN/가동)\n\n"
         "⚠️ /update : 🚀 깃허브 게시판 파이썬 코드 다운로드 및 구글 클라우드 서버 탑재"
     )
+
+@router.message(Command("start"))
+async def cmd_start(message: types.Message, state: FSMContext):
+    if message.from_user.id != ADMIN_CHAT_ID:
+        return
+    await state.clear()
+    
     try:
-        # MODIFIED: reply_markup 바인딩 해제
-        await message.answer(text, parse_mode="HTML")
+        await message.answer(get_main_menu_text(), parse_mode="HTML")
     except Exception:
         pass
 
@@ -283,6 +282,19 @@ async def build_sync_board() -> str:
 
     bp = await api_client.get_usd_buying_power()
     
+    # NEW: 토스증권 API 기반 실시간 환율 조회망 결속 (원화 환산용)
+    exchange_rate = 1400.0
+    try:
+        ex_data = await api_client._request(
+            "GET", 
+            "/api/v1/exchange-rate?baseCurrency=USD&quoteCurrency=KRW", 
+            "MARKET_INFO", 
+            headers=api_client._get_headers()
+        )
+        exchange_rate = float(ex_data.get("result", {}).get("rate", 1400.0))
+    except Exception:
+        pass
+    
     async def get_symbol_sync_data(symbol):
         state = await AssassinLedger.get_state(symbol)
         budget = state[1]
@@ -292,6 +304,9 @@ async def build_sync_board() -> str:
         avg_price = hold.get('avg_price', 0.0)
         profit_usd = hold.get('profit_usd', 0.0)
         profit_rate = hold.get('profit_rate', 0.0) * 100
+        
+        # NEW: 실시간 환율 기반 원화 수익금 동적 연산
+        profit_krw = profit_usd * exchange_rate
         
         try:
             data = await api_client._request("GET", f"/api/v1/candles?symbol={symbol}&interval=1d&count=2", "MARKET_DATA_CHART", headers=api_client._get_headers())
@@ -324,12 +339,14 @@ async def build_sync_board() -> str:
             "low": low,
             "low_rate": low_rate,
             "profit_rate": profit_rate,
-            "profit_usd": profit_usd
+            "profit_usd": profit_usd,
+            "profit_krw": profit_krw
         }
 
     soxl_data = await get_symbol_sync_data("SOXL")
     soxs_data = await get_symbol_sync_data("SOXS")
     
+    # MODIFIED: profit_krw를 활용한 원화 수익금 동적 포맷팅
     def format_symbol(d):
         profit_sign = "+" if d['profit_usd'] >= 0 else "-"
         return (
@@ -338,7 +355,7 @@ async def build_sync_board() -> str:
             f"💰 현재 ${d['curr']:.2f} / 평단 ${d['avg_price']:.2f} ({int(d['qty'])}주)\n"
             f"📈 금일 고가: ${d['high']:.2f} ({d['high_rate']:+.2f}%)\n"
             f"📉 금일 저가: ${d['low']:.2f} ({d['low_rate']:+.2f}%)\n"
-            f"🔺 수익: {d['profit_rate']:+.2f}% ({profit_sign}${abs(d['profit_usd']):,.2f} | {profit_sign}₩0)"
+            f"🔺 수익: {d['profit_rate']:+.2f}% ({profit_sign}${abs(d['profit_usd']):,.2f} | {profit_sign}₩{int(abs(d['profit_krw'])):,})"
         )
         
     text = (
@@ -590,4 +607,11 @@ async def process_execute_update(callback_query: types.CallbackQuery, state: FSM
 
 @router.callback_query(F.data == "back_to_main")
 async def process_back_to_main(callback_query: types.CallbackQuery, state: FSMContext):
-    await cmd_start(callback_query.message, state)
+    if callback_query.from_user.id != ADMIN_CHAT_ID:
+        return
+    await state.clear()
+    try:
+        await callback_query.answer()
+        await callback_query.message.edit_text(get_main_menu_text(), reply_markup=None, parse_mode="HTML")
+    except Exception:
+        pass
