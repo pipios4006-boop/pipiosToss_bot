@@ -209,42 +209,51 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
             open_orders = await client.get_orders(status="OPEN", symbol=symbol)
             has_open_sell = any(o["side"] == "SELL" for o in open_orders)
             
-            # MODIFIED: 암살자 순수 체결 단가 핀셋 추출 및 1% 지정가 락온 (Price Pollution 원천 방어)
-            if buy_order_id and target_sell_price <= 0.0 and not has_open_sell and not in_memory_ordering_lock[symbol] and is_active:
-                order_detail = await client.get_order_detail(buy_order_id)
-                status = order_detail.get("status", "")
+            # MODIFIED: 암살자 1% 지정가 익절 덫 최초 장전 및 익일(오버나이트) 자동 재장전 락온
+            if holdings_qty > 0 and not has_open_sell and not in_memory_ordering_lock[symbol] and is_active:
+                calculated_target = target_sell_price
+                trap_qty = holdings_qty
+                avg_price = last_buy_price
+                is_rearm = True
                 
-                if status in ["FILLED", "PARTIAL_FILLED", "CANCELED", "REJECTED"]:
-                    filled_qty = int(math.floor(float(order_detail.get("execution", {}).get("filledQuantity", 0.0))))
-                    avg_price = float(order_detail.get("execution", {}).get("averageFilledPrice", 0.0))
+                if calculated_target <= 0.0 and buy_order_id:
+                    order_detail = await client.get_order_detail(buy_order_id)
+                    status = order_detail.get("status", "")
                     
-                    if filled_qty > 0 and avg_price > 0.0:
-                        trap_qty = min(holdings_qty, filled_qty)
+                    if status in ["FILLED", "PARTIAL_FILLED", "CANCELED", "REJECTED"]:
+                        filled_qty = int(math.floor(float(order_detail.get("execution", {}).get("filledQuantity", 0.0))))
+                        avg_price = float(order_detail.get("execution", {}).get("averageFilledPrice", 0.0))
                         
-                        if trap_qty > 0:
+                        if filled_qty > 0 and avg_price > 0.0:
+                            trap_qty = min(holdings_qty, filled_qty)
                             calculated_target = math.ceil(avg_price * 1.01 * 100) / 100.0
-                            
-                            in_memory_ordering_lock[symbol] = True
-                            try:
-                                client_id = idempotency_keys[symbol]["TRAP"]
-                                if not client_id:
-                                    client_id = f"TRAP_{symbol}_{now_est.strftime('%Y%m%d_%H%M%S')}"
-                                    idempotency_keys[symbol]["TRAP"] = client_id
+                            is_rearm = False
 
-                                await client.create_order(
-                                    symbol=symbol, side="SELL", order_type="LIMIT",
-                                    quantity=trap_qty, price=f"{calculated_target:.2f}",
-                                    client_order_id=client_id
-                                )
-                                idempotency_keys[symbol]["TRAP"] = None
-                                
-                                await AssassinLedger.save_state(symbol, price=avg_price, target_sell_price=calculated_target)
-                                await notify_tg(f"🟢 <b>[aVWAP {symbol}] +1% 기계적 매도 덫 장전</b>\n▫️ 팩트 평단가: ${avg_price:.2f}\n▫️ 익절 덫: ${calculated_target:.2f}\n▫️ 수량: {trap_qty}주")
-                            except Exception as e:
-                                print(f"🚨 [TRAP Timeout 방어] {e}", flush=True)
-                                await notify_tg(f"🚨 <b>[TRAP 에러 {symbol}]</b> {html.escape(str(e))}")
-                            finally:
-                                in_memory_ordering_lock[symbol] = False
+                if calculated_target > 0.0 and trap_qty > 0:
+                    in_memory_ordering_lock[symbol] = True
+                    try:
+                        client_id = idempotency_keys[symbol]["TRAP"]
+                        if not client_id:
+                            client_id = f"TRAP_{symbol}_{now_est.strftime('%Y%m%d_%H%M%S')}"
+                            idempotency_keys[symbol]["TRAP"] = client_id
+
+                        await client.create_order(
+                            symbol=symbol, side="SELL", order_type="LIMIT",
+                            quantity=trap_qty, price=f"{calculated_target:.2f}",
+                            client_order_id=client_id
+                        )
+                        idempotency_keys[symbol]["TRAP"] = None
+                        
+                        if not is_rearm:
+                            await AssassinLedger.save_state(symbol, price=avg_price, target_sell_price=calculated_target)
+                            await notify_tg(f"🟢 <b>[aVWAP {symbol}] +1% 기계적 매도 덫 장전</b>\n▫️ 팩트 평단가: ${avg_price:.2f}\n▫️ 익절 덫: ${calculated_target:.2f}\n▫️ 수량: {trap_qty}주")
+                        else:
+                            await notify_tg(f"🟢 <b>[aVWAP {symbol}] 오버나이트 매도 덫 재장전</b>\n▫️ 유지 평단가: ${avg_price:.2f}\n▫️ 익절 덫: ${calculated_target:.2f}\n▫️ 수량: {trap_qty}주")
+                    except Exception as e:
+                        print(f"🚨 [TRAP Timeout 방어] {e}", flush=True)
+                        await notify_tg(f"🚨 <b>[TRAP 에러 {symbol}]</b> {html.escape(str(e))}")
+                    finally:
+                        in_memory_ordering_lock[symbol] = False
                 continue
 
             # aVWAP 돌파 감시 및 매수 요격 (소프트웨어 트리거)
