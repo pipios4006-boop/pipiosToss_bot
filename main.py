@@ -62,6 +62,9 @@ async def fetch_full_session_candles(client: TossApiClient, symbol: str, session
     return all_candles
 
 async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: str):
+    # MODIFIED: MOC 덤핑 시 1분 단위 스윕을 추적하기 위한 로컬 상태
+    last_moc_minute = -1
+    
     async def notify_tg(text: str):
         try:
             await bot.send_message(chat_id=chat_id, text=text, parse_mode="HTML")
@@ -87,7 +90,6 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                 await asyncio.sleep(5)
                 continue
 
-            # MODIFIED: session_mode 확장 추출
             last_buy_price, budget, last_session_id, is_session_done, is_active, overnight_on, target_sell_price, cond_order_id, session_mode = await AssassinLedger.get_state(symbol)
             buy_order_id = await AssassinLedger.get_buy_order_id(symbol)
 
@@ -95,79 +97,103 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
             if now_est.hour == 17 and now_est.minute == 0:
                 in_memory_ordering_lock[symbol] = False
                 idempotency_keys[symbol] = {"BUY": None, "TRAP": None, "MOC": None}
+                last_moc_minute = -1
                 if holdings_qty == 0:
                     await AssassinLedger.save_state(symbol, buy_order_id="", cond_order_id="")
                 print(f"🧹 [GC {symbol}] 17:00 EST 락 해제 및 자정 초기화 완료.", flush=True)
                 await asyncio.sleep(60)
                 continue
             
+            # Case 10 & 취약점 A 방어: 캘린더 응답 결측 및 Fail-Open 하드코딩 폴백
             try:
                 is_open, session_end_time, session_name, session_start_time = await asyncio.wait_for(client.is_market_open(), timeout=10.0)
+                if not session_start_time:
+                    raise ValueError("session_start_time is None")
             except Exception:
                 is_open = True
-                session_name = "regularMarket" if 930 <= est_time_int < 1600 else "preMarket"
-                session_start_time = None
-                print(f"🚨 [aVWAP {symbol}] 캘린더 응답 지연. Fail-Open 정규장 간주 진입.", flush=True)
+                if 400 <= est_time_int < 930:
+                    session_name = "preMarket"
+                    base_h, base_m = 4, 0
+                elif 930 <= est_time_int < 1600:
+                    session_name = "regularMarket"
+                    base_h, base_m = 9, 30
+                elif 1600 <= est_time_int < 1859:
+                    session_name = "afterMarket"
+                    base_h, base_m = 16, 0
+                else:
+                    session_name = "dayMarket"
+                    base_h, base_m = 19, 0
+                
+                fallback_start = now_est.replace(hour=base_h, minute=base_m, second=0, microsecond=0)
+                if session_name == "dayMarket" and now_est.hour < 19:
+                    fallback_start -= timedelta(days=1)
+                session_start_time = fallback_start
+                print(f"🚨 [aVWAP {symbol}] 캘린더 붕괴 방어. 타임쉴드 폴백: {session_name} ({session_start_time})", flush=True)
 
-            # MODIFIED: 03:59(Day) 및 15:59(Reg) 듀얼 MOC 제로-오버나이트 덤핑 사수
-            is_day_moc = (now_est.hour == 3 and now_est.minute >= 59)
-            is_reg_moc = (now_est.hour == 15 and now_est.minute >= 59)
+            # MODIFIED: 03:57~03:59 및 15:57~15:59 3분 전향 덤핑 스윕 방어망
+            is_day_moc = (now_est.hour == 3 and 57 <= now_est.minute <= 59)
+            is_reg_moc = (now_est.hour == 15 and 57 <= now_est.minute <= 59)
 
             if (is_day_moc or is_reg_moc) and not overnight_on and is_active:
                 if buy_order_id and not in_memory_ordering_lock[symbol]:
-                    in_memory_ordering_lock[symbol] = True
-                    try:
-                        # 🚨 덤핑 격발 전 로컬 장부에 기록된 조건주문을 선취소 (공통)
-                        if cond_order_id:
-                            try:
-                                await client.cancel_conditional_order(cond_order_id)
-                                await asyncio.sleep(0.5)
-                            except Exception as e:
-                                print(f"🚨 [조건주문 취소 붕괴 방어] {e}", flush=True)
+                    if last_moc_minute != now_est.minute:
+                        in_memory_ordering_lock[symbol] = True
+                        try:
+                            # 🚨 덤핑 격발 전 로컬 장부에 기록된 조건주문을 선취소 (공통)
+                            if cond_order_id:
+                                try:
+                                    await client.cancel_conditional_order(cond_order_id)
+                                    await asyncio.sleep(0.5)
+                                except Exception as e:
+                                    print(f"🚨 [조건주문 취소 붕괴 방어] {e}", flush=True)
 
-                        order_detail = await client.get_order_detail(buy_order_id)
-                        filled_qty = int(math.floor(float(order_detail.get("execution", {}).get("filledQuantity", 0.0))))
-                        
-                        dump_qty = min(holdings_qty, filled_qty) if holdings_qty > 0 else 0
-                        
-                        if dump_qty > 0:
-                            open_orders = await client.get_orders(status="OPEN", symbol=symbol)
-                            if open_orders:
-                                for order in open_orders:
-                                    await client.cancel_order(order["orderId"])
-                                await asyncio.sleep(0.5)
-                                
-                            orderbook = await client.get_orderbook(symbol)
-                            bids = orderbook.get("bids", [])
+                            dump_qty = holdings_qty
                             
-                            if bids:
-                                bid_1_price = float(bids[0]["price"])
-                            else:
-                                bid_1_price = await client.get_current_price(symbol)
+                            if dump_qty > 0:
+                                open_orders = await client.get_orders(status="OPEN", symbol=symbol)
+                                if open_orders:
+                                    for order in open_orders:
+                                        await client.cancel_order(order["orderId"])
+                                    await asyncio.sleep(0.5)
+                                    
+                                orderbook = await client.get_orderbook(symbol)
+                                bids = orderbook.get("bids", [])
+                                current_price = await client.get_current_price(symbol)
                                 
-                            if bid_1_price > 0.0:
-                                client_id = idempotency_keys[symbol]["MOC"]
-                                if not client_id:
-                                    client_id = f"MOC_{symbol}_{now_est.strftime('%Y%m%d_%H%M%S')}"
-                                    idempotency_keys[symbol]["MOC"] = client_id
+                                # MODIFIED: 매수 1호가 순수 락온 및 -2% 슬리피지 전면 소각
+                                if bids and float(bids[0]["price"]) > 0.0:
+                                    bid_1_price = float(bids[0]["price"])
+                                elif current_price > 0.0:
+                                    bid_1_price = current_price
+                                else:
+                                    bid_1_price = 0.0
+                                    
+                                if bid_1_price > 0.0:
+                                    client_id = idempotency_keys[symbol]["MOC"]
+                                    if not client_id:
+                                        client_id = f"MOC_{symbol}_{now_est.strftime('%Y%m%d_%H%M%S')}"
+                                        idempotency_keys[symbol]["MOC"] = client_id
 
-                                await client.create_order(
-                                    symbol=symbol, side="SELL", order_type="LIMIT",
-                                    quantity=dump_qty, price=f"{bid_1_price:.2f}",
-                                    client_order_id=client_id
-                                )
-                                
-                                await AssassinLedger.save_state(symbol, price=0.0, target_sell_price=0.0, is_session_done=True, buy_order_id="", cond_order_id="")
-                                idempotency_keys[symbol]["MOC"] = None
-                                
-                                tag = "03:59 데이장" if is_day_moc else "15:59 정규장"
-                                await notify_tg(f"🔴 <b>[aVWAP {symbol}] {tag} 제로오버나이트 강제 청산</b>\n▫️ 타격가: ${bid_1_price:.2f}\n▫️ 수량: {dump_qty}주")
-                                print(f"🧹 [aVWAP {symbol}] {tag} MOC 덤핑 스윕 완료.", flush=True)
-                    except Exception as e:
-                        print(f"🚨 [MOC Timeout 방어] {e}", flush=True)
-                        await notify_tg(f"🚨 <b>[MOC 에러 {symbol}]</b> {html.escape(str(e))}")
-                    finally:
-                        in_memory_ordering_lock[symbol] = False
+                                    await client.create_order(
+                                        symbol=symbol, side="SELL", order_type="LIMIT",
+                                        quantity=dump_qty, price=f"{bid_1_price:.2f}",
+                                        client_order_id=client_id
+                                    )
+                                    
+                                    await AssassinLedger.save_state(symbol, price=0.0, target_sell_price=0.0, is_session_done=True, buy_order_id="", cond_order_id="")
+                                    
+                                    # 성공 시에만 멱등성 키 해제 및 시간 락온
+                                    idempotency_keys[symbol]["MOC"] = None
+                                    last_moc_minute = now_est.minute
+                                    
+                                    tag = "03:57~59 데이장" if is_day_moc else "15:57~59 정규장"
+                                    await notify_tg(f"🔴 <b>[aVWAP {symbol}] {tag} 제로오버나이트 강제 청산 스윕</b>\n▫️ 덤핑 1호가: ${bid_1_price:.2f}\n▫️ 수량: {dump_qty}주")
+                                    print(f"🧹 [aVWAP {symbol}] {tag} MOC 순수 1호가 덤핑 스윕 ({now_est.minute}분) 완료.", flush=True)
+                        except Exception as e:
+                            print(f"🚨 [MOC Timeout 방어] {e}", flush=True)
+                            await notify_tg(f"🚨 <b>[MOC 에러 {symbol}]</b> {html.escape(str(e))}")
+                        finally:
+                            in_memory_ordering_lock[symbol] = False
                 continue
 
             if not is_open:
@@ -177,7 +203,6 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
             if current_price <= 0.0:
                 continue
 
-            # MODIFIED: Midnight Crossover 방어를 위해 session_start_time 기반 절대 세션 ID 생성
             if session_start_time:
                 session_start_est = session_start_time.astimezone(ZoneInfo('America/New_York'))
                 current_session_id = f"{session_start_est.strftime('%Y%m%d_%H%M')}_{session_name}"
@@ -209,7 +234,6 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
             candles_json = await fetch_full_session_candles(client, symbol, session_baseline_est)
             vwap_price = AVWAPEngine.calculate_vwap(candles_json, session_baseline_est)
 
-            # 정규장 신규 진입 원천 소각 (100% 락온)
             if est_time_int >= 930 and est_time_int < 1600:
                 if not buy_order_id and not is_session_done:
                     await AssassinLedger.save_state(symbol, is_session_done=True)
@@ -262,7 +286,7 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                         else:
                             await AssassinLedger.save_state(symbol, cond_order_id=new_cond_id)
                             await notify_tg(f"🟢 <b>[aVWAP {symbol}] 오버나이트 조건주문 덫 재장전</b>\n▫️ 유지 평단가: ${avg_price:.2f}\n▫️ 익절 덫: ${calculated_target:.2f}\n▫️ 수량: {trap_qty}주")
-                            
+                        
                         idempotency_keys[symbol]["TRAP"] = None
                     except Exception as e:
                         print(f"🚨 [TRAP Timeout 방어] {e}", flush=True)
@@ -272,8 +296,6 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                 continue
 
             if not buy_order_id and not is_session_done and is_active and vwap_price > 0.0:
-                
-                # MODIFIED: DST 변동을 무시하는 Dynamic Time Shield (+6분 절대 방어막)
                 is_time_shield = False
                 if session_start_time:
                     session_start_est_check = session_start_time.astimezone(ZoneInfo('America/New_York'))
@@ -281,7 +303,6 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                     if 0 <= elapsed <= 360:
                         is_time_shield = True
                 
-                # MODIFIED: 세션 진입 조건 확장 (session_mode 연동)
                 can_enter = False
                 if session_name == "preMarket" and not is_time_shield:
                     can_enter = True
