@@ -288,6 +288,12 @@ async def main():
     
     try:
         await bot.delete_webhook(drop_pending_updates=True)
+        # NEW: 서버 재기동(업데이트 후 부팅) 알림망 결속. 프로세스 기동 시 단 1회 타전.
+        await bot.send_message(
+            chat_id=ADMIN_CHAT_ID, 
+            text="✅ <b>[시스템 기동 완료]</b>\n▫️ 서버 재부팅 및 듀얼 암살자 코어 결속\n▫️ 방어망 락온 및 폴링을 개시합니다.", 
+            parse_mode="HTML"
+        )
     except Exception:
         pass
         
