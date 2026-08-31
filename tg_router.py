@@ -216,32 +216,32 @@ async def build_avwap_radar() -> tuple[str, InlineKeyboardMarkup]:
     
     scan_time = now_est.strftime("%Y-%m-%d %H:%M:%S")
 
-    # MODIFIED: 서브 뎁스 정렬 일치를 위한 5-Space 강제 들여쓰기 락온
+    # MODIFIED: 모바일 가변폭 렌더링 완벽 정렬을 위한 7-Space 강제 들여쓰기 락온
     text = f"""📡 <b>[ 관제탑: {market_header} 가동중 ]</b>
 
 🎯 <b>[ 현황: 현재가 / 5MA / 평단(수익) ]</b>
 ▫️ 롱(SOXL): ${price_l:.2f} / {amp_l:.2f}%
-     평단(수익): {profit_l_str}
+       평단(수익): {profit_l_str}
 ▫️ 숏(SOXS): ${price_s:.2f} / {amp_s:.2f}%
-     평단(수익): {profit_s_str}
+       평단(수익): {profit_s_str}
 
 ☀️ <b>[ 0세션 - 데이장 (19:00~03:59) ]</b>
 ▫️ 롱: {sess_l['day_amp']:.2f}% (${sess_l['day_l']:.2f}~${sess_l['day_h']:.2f})
-     VWAP: ${sess_l['day_vwap']:.2f}
+       VWAP: ${sess_l['day_vwap']:.2f}
 ▫️ 숏: {sess_s['day_amp']:.2f}% (${sess_s['day_l']:.2f}~${sess_s['day_h']:.2f})
-     VWAP: ${sess_s['day_vwap']:.2f}
+       VWAP: ${sess_s['day_vwap']:.2f}
 
 🌅 <b>[ 1세션 - 프리장 (04:00~09:29) ]</b>
 ▫️ 롱: {sess_l['pre_amp']:.2f}% (${sess_l['pre_l']:.2f}~${sess_l['pre_h']:.2f})
-     VWAP: ${sess_l['pre_vwap']:.2f}
+       VWAP: ${sess_l['pre_vwap']:.2f}
 ▫️ 숏: {sess_s['pre_amp']:.2f}% (${sess_s['pre_l']:.2f}~${sess_s['pre_h']:.2f})
-     VWAP: ${sess_s['pre_vwap']:.2f}
+       VWAP: ${sess_s['pre_vwap']:.2f}
 
 🔥 <b>[ 2세션 - 정규장 (09:30~16:00) ]</b>
 ▫️ 롱: {sess_l['reg_amp']:.2f}% (${sess_l['reg_l']:.2f}~${sess_l['reg_h']:.2f})
-     VWAP: ${sess_l['reg_vwap']:.2f}
+       VWAP: ${sess_l['reg_vwap']:.2f}
 ▫️ 숏: {sess_s['reg_amp']:.2f}% (${sess_s['reg_l']:.2f}~${sess_s['reg_h']:.2f})
-     VWAP: ${sess_s['reg_vwap']:.2f}
+       VWAP: ${sess_s['reg_vwap']:.2f}
 
 {status_l}
 {status_s}
