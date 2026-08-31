@@ -124,7 +124,6 @@ async def build_avwap_radar() -> tuple[str, InlineKeyboardMarkup]:
         market_header = "🌙 장마감"
     else:
         session_name_ui = "dayMarket"
-        # MODIFIED: 데이장 이모지 독립화 (☀️ 적용)
         market_header = "☀️ 데이마켓"
 
     price_l = await api_client.get_current_price("SOXL")
@@ -215,10 +214,8 @@ async def build_avwap_radar() -> tuple[str, InlineKeyboardMarkup]:
     status_l = build_compact_status("롱(SOXL)", is_active_l, budget_l, ovn_l, is_done_l, session_name_ui, now_est)
     status_s = build_compact_status("숏(SOXS)", is_active_s, budget_s, ovn_s, is_done_s, session_name_ui, now_est)
     
-    # MODIFIED: 로깅 최적화를 위한 YYYY-MM-DD HH:MM:SS 풀 포맷 갱신 시간 복구
     scan_time = now_est.strftime("%Y-%m-%d %H:%M:%S")
 
-    # MODIFIED: 줄바꿈 방어를 위한 VWAP 변수 두 줄 분리 렌더링 및 이모지(데이마켓 ☀️) 적용
     text = f"""📡 <b>[ 관제탑: {market_header} 가동중 ]</b>
 
 🎯 <b>[ 현황: 현재가 / 5MA / 평단(수익) ]</b>
@@ -248,10 +245,9 @@ async def build_avwap_radar() -> tuple[str, InlineKeyboardMarkup]:
 
 ⏱️ 갱신: {scan_time} (EST)"""
 
+    # MODIFIED: 모바일 1페이지 렌더링 락온을 위한 불필요 버튼 소각 (레이더 갱신 단일화)
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="⚙️ 통합 전술 제어반", callback_data="open_settlement")],
-        [InlineKeyboardButton(text="🔄 레이더 갱신", callback_data="open_avwap")],
-        [InlineKeyboardButton(text="🔙 메인 메뉴", callback_data="back_to_main")]
+        [InlineKeyboardButton(text="🔄 레이더 갱신", callback_data="open_avwap")]
     ])
     return text, keyboard
 
