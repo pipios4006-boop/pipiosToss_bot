@@ -84,11 +84,9 @@ def parse_session_data(all_candles: list, session_start_est: datetime) -> dict:
     df.set_index('timestamp', inplace=True)
     df.sort_index(ascending=True, inplace=True)
     
-    # MODIFIED: 강력한 시계열 결속 (이전 사이클의 데이장 데이터 섞임 원천 차단)
     df = df[df.index >= session_start_est]
     if df.empty: return res
     
-    # MODIFIED: 19:00~03:59 데이장 자정 랩어라운드 윈도우 원자적 추출
     day_df = df.between_time('19:00', '03:59') 
     pre_df = df.between_time('04:00', '09:29')
     reg_df = df.between_time('09:30', '16:00')
@@ -101,7 +99,6 @@ def parse_session_data(all_candles: list, session_start_est: datetime) -> dict:
         tp = (sub_df['highPrice'] + sub_df['lowPrice'] + sub_df['closePrice']) / 3.0
         pv = tp * sub_df['volume']
         vol = sub_df['volume'].sum()
-        # Case 23: 섀도우 렌더링 멱등성 사수 (ZeroDivision 방어)
         vwap = float(pv.sum() / vol) if vol > 0 else 0.0
         return h, l, float(amp), vwap
 
@@ -119,7 +116,6 @@ def parse_session_data(all_candles: list, session_start_est: datetime) -> dict:
 async def build_avwap_radar() -> tuple[str, InlineKeyboardMarkup]:
     now_est = datetime.now(ZoneInfo('America/New_York'))
     
-    # MODIFIED: 캘린더 API 버그 우회용 EST 기반 동적 세션 추론 엔진 가동
     t = now_est.hour * 100 + now_est.minute
     if 400 <= t <= 929:
         session_name_ui = "preMarket"
@@ -172,13 +168,11 @@ async def build_avwap_radar() -> tuple[str, InlineKeyboardMarkup]:
         all_candles = []
         before = None
         
-        # MODIFIED: 당일/전일 19:00 EST 기준점 동적 스위칭 (결측치 및 페이지네이션 오버플로우 방어)
         if now_est.hour >= 19:
             session_start_est = now_est.replace(hour=19, minute=0, second=0, microsecond=0)
         else:
             session_start_est = (now_est - timedelta(days=1)).replace(hour=19, minute=0, second=0, microsecond=0)
         
-        # 200봉 * 10페이지 = 2,000봉 (약 33시간 분량 확보)
         for _ in range(10):
             try:
                 data = await api_client.get_1m_candles_pagination(symbol, count=200, before=before)
@@ -225,7 +219,6 @@ async def build_avwap_radar() -> tuple[str, InlineKeyboardMarkup]:
                 f"▫️ 타격 예산: ${budget:,.2f} (초과 시 팻핑거 방어)\n"
                 f"▫️ 오버나이트: {ovn_text}")
 
-    # MODIFIED: 동적 추론된 session_name_ui 주입 및 사용자 요청 데이장 UI 레이아웃 동기화
     status_l = build_status("롱(SOXL)", is_active_l, budget_l, ovn_l, is_done_l, session_name_ui, now_est)
     status_s = build_status("숏(SOXS)", is_active_s, budget_s, ovn_s, is_done_s, session_name_ui, now_est)
     scan_time = now_est.strftime("%Y-%m-%d %H:%M:%S")
@@ -281,7 +274,6 @@ async def build_sync_board() -> str:
     is_dst = now_est.dst() is not None and now_est.dst().total_seconds() != 0
     dst_str = "🌞 서머타임" if is_dst else "❄️ 서머타임 OFF"
     
-    # MODIFIED: 동기화 보드 역시 EST 기반 동적 세션 추론 엔진 적용
     t = now_est.hour * 100 + now_est.minute
     if 400 <= t <= 929:
         market_state = "🌅 프리장"
@@ -579,24 +571,79 @@ async def cmd_reset(message: types.Message, state: FSMContext):
     except Exception:
         pass
 
+# MODIFIED: /update 명령어 콜백 대상을 hard_kill에서 execute_update로 격리
 @router.message(Command("update"))
 async def cmd_update(message: types.Message, state: FSMContext):
     if message.from_user.id != ADMIN_CHAT_ID:
         return
     await state.clear()
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🚀 코어 재기동 (os._exit)", callback_data="hard_kill")],
+        [InlineKeyboardButton(text="🚀 GitHub 동기화 및 재기동", callback_data="execute_update")],
         [InlineKeyboardButton(text="🔙 취소", callback_data="back_to_main")]
     ])
     text = (
         "⚠️ <b>[시스템 자가 업데이트]</b>\n\n"
-        "경고: 로컬 프로세스를 강제 종료하고 최신 코어로 재기동합니다.\n"
+        "경고: GitHub 원격 저장소(main) 코드를 Pull 하고 무결성 검증 후 시스템을 하드 킬(os._exit)합니다.\n"
         "진행하시겠습니까?"
     )
     try:
         await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
     except Exception:
         pass
+
+# NEW: 깃허브 코드 동기화 및 프리플라이트 롤백 방어망 결속
+@router.callback_query(F.data == "execute_update")
+async def process_execute_update(callback_query: types.CallbackQuery, state: FSMContext):
+    await state.clear()
+    try:
+        await callback_query.message.edit_text("🔄 <b>GitHub 저장소 코드 동기화 및 락온 검증 중...</b>", parse_mode="HTML")
+
+        def _run_git_update():
+            import subprocess
+            import py_compile
+            
+            def run_cmd(cmd):
+                proc = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                out, err = proc.communicate()
+                return proc.returncode, out.strip(), err.strip()
+            
+            code, current_hash, err = run_cmd("git rev-parse HEAD")
+            if code != 0:
+                return False, f"해시 백업 실패: {err}"
+            
+            code, pull_out, pull_err = run_cmd("git pull origin main")
+            if code != 0:
+                run_cmd(f"git reset --hard {current_hash}")
+                return False, f"Pull 실패 및 롤백됨: {pull_err}"
+                
+            if "Already up to date." in pull_out:
+                return True, "Already up to date."
+                
+            try:
+                py_compile.compile('main.py', doraise=True)
+                py_compile.compile('tg_router.py', doraise=True)
+                py_compile.compile('quant_engine.py', doraise=True)
+                py_compile.compile('toss_api.py', doraise=True)
+            except Exception as e:
+                run_cmd(f"git reset --hard {current_hash}")
+                return False, f"문법 에러 감지. 롤백 완료:\n{str(e)}"
+                
+            return True, f"업데이트 성공:\n{pull_out}"
+
+        success, msg = await asyncio.to_thread(_run_git_update)
+        
+        if success:
+            if "Already up to date." in msg:
+                await callback_query.message.edit_text(f"✅ <b>업데이트 완료</b>\n▫️ 이미 최신 버전입니다.", parse_mode="HTML")
+            else:
+                await callback_query.message.edit_text(f"🚀 <b>업데이트 성공. 코어 재기동(os._exit) 격발.</b>\n<pre>{html.escape(msg)}</pre>", parse_mode="HTML")
+                await asyncio.sleep(1.0)
+                os._exit(0)
+        else:
+            await callback_query.message.edit_text(f"🚨 <b>업데이트 실패 (롤백됨)</b>\n<pre>{html.escape(msg)}</pre>", parse_mode="HTML")
+
+    except Exception as e:
+        await callback_query.message.edit_text(f"🚨 <b>업데이트 붕괴 방어:</b> {html.escape(str(e))}", parse_mode="HTML")
 
 @router.callback_query(F.data == "hard_kill")
 async def process_hard_kill(callback_query: types.CallbackQuery, state: FSMContext):
