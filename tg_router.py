@@ -49,7 +49,7 @@ async def cmd_start(message: types.Message, state: FSMContext):
     
     text = (
         f"🕒 <b>[ 운영 스케줄 ({dst_status_text}) ]</b>\n"
-        "🔹 19:00: 🌃 데이장 (Day Market) 스캔 개시\n"
+        "🔹 19:00: 🌅 데이장 (Day Market) 스캔 개시\n"
         "🔹 04:00: 🌅 프리장 VWAP 스캔 개시\n"
         "🔹 09:30: 🔥 정규장 VWAP 초기화 및 스캔\n"
         "🔹 15:59: 🛑 암살자 오버나이트 강제 덤핑\n"
@@ -101,6 +101,7 @@ def parse_session_data(all_candles: list, session_start_est: datetime) -> dict:
         tp = (sub_df['highPrice'] + sub_df['lowPrice'] + sub_df['closePrice']) / 3.0
         pv = tp * sub_df['volume']
         vol = sub_df['volume'].sum()
+        # Case 23: 섀도우 렌더링 멱등성 사수 (ZeroDivision 방어)
         vwap = float(pv.sum() / vol) if vol > 0 else 0.0
         return h, l, float(amp), vwap
 
@@ -224,7 +225,7 @@ async def build_avwap_radar() -> tuple[str, InlineKeyboardMarkup]:
                 f"▫️ 타격 예산: ${budget:,.2f} (초과 시 팻핑거 방어)\n"
                 f"▫️ 오버나이트: {ovn_text}")
 
-    # MODIFIED: 동적 추론된 session_name_ui 주입
+    # MODIFIED: 동적 추론된 session_name_ui 주입 및 사용자 요청 데이장 UI 레이아웃 동기화
     status_l = build_status("롱(SOXL)", is_active_l, budget_l, ovn_l, is_done_l, session_name_ui, now_est)
     status_s = build_status("숏(SOXS)", is_active_s, budget_s, ovn_s, is_done_s, session_name_ui, now_est)
     scan_time = now_est.strftime("%Y-%m-%d %H:%M:%S")
@@ -244,7 +245,7 @@ async def build_avwap_radar() -> tuple[str, InlineKeyboardMarkup]:
 ▫️ 롱(SOXL) 평단가: {profit_l_str}
 ▫️ 숏(SOXS) 평단가: {profit_s_str}
 
-🌃 <b>[ 0세션 - 데이장 (19:00~03:59) ]</b>
+🌅 <b>[ 0세션 - 데이장 (19:00~03:59) ]</b>
 ▫️ 롱(SOXL) 고가: ${sess_l['day_h']:.2f} / 저가: ${sess_l['day_l']:.2f} (진폭 {sess_l['day_amp']:.2f}%)
 ▫️ 롱(SOXL) 누적 VWAP: ${sess_l['day_vwap']:.2f}
 ▫️ 숏(SOXS) 고가: ${sess_s['day_h']:.2f} / 저가: ${sess_s['day_l']:.2f} (진폭 {sess_s['day_amp']:.2f}%)
@@ -289,7 +290,7 @@ async def build_sync_board() -> str:
     elif 1600 <= t <= 1859:
         market_state = "⛔ 장마감"
     else:
-        market_state = "🌃 데이장"
+        market_state = "🌅 데이장"
 
     bp = await api_client.get_usd_buying_power()
     
@@ -356,7 +357,7 @@ async def build_sync_board() -> str:
         f"📅 {dst_str} ({now_est.strftime('%H:%M')})\n"
         f"💵 주문가능금액: ${bp:,.2f}\n"
         f"🏛️ RP 투자권장: $0.00\n"
-        f"----------------------------\n\n"
+        f"➖➖➖➖➖➖➖➖➖➖➖➖\n\n"
         f"{format_symbol(soxl_data)}\n\n"
         f"{format_symbol(soxs_data)}\n\n"
         f"⛔ 장마감/애프터마켓: 주문 불가\n\n"
