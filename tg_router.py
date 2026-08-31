@@ -47,6 +47,7 @@ async def cmd_start(message: types.Message, state: FSMContext):
     is_dst = now_est.dst() is not None and now_est.dst().total_seconds() != 0
     dst_status_text = "🌞서머타임 ON (EDT)" if is_dst else "❄️서머타임 OFF (EST)"
     
+    # MODIFIED: /reset, /history, /log, /version 소각 및 /update 명세 Google Cloud 서버 탑재로 변경
     text = (
         f"🕒 <b>[ 운영 스케줄 ({dst_status_text}) ]</b>\n"
         "🔹 19:00: 🌅 데이장 (Day Market) 스캔 개시\n"
@@ -57,12 +58,8 @@ async def cmd_start(message: types.Message, state: FSMContext):
         "🛠 <b>[ 핵심 명령어 ]</b>\n"
         "▶️ /avwap : 🔫 데이 트레이딩 레이더 관제탑\n"
         "▶️ /sync : 📜 통합 지시서 및 장부 동기화\n"
-        "▶️ /settlement : ⚙️ 통합 전술 제어반 (시드/OVN/가동)\n"
-        "▶️ /history : 🏆 졸업 명예의 전당\n"
-        "▶️ /log : 🔍 시스템 로그 및 에러 진단\n"
-        "▶️ /version : 🛠️ 시스템 코어 버전 정보\n\n"
-        "⚠️ /reset : 🔓 비상 해제 (0주 소각 및 잠금 해제)\n"
-        "⚠️ /update : 🚀 시스템 자가 업데이트"
+        "▶️ /settlement : ⚙️ 통합 전술 제어반 (시드/OVN/가동)\n\n"
+        "⚠️ /update : 🚀 깃허브 게시판 파이썬 코드 다운로드 및 구글 클라우드 서버 탑재"
     )
     try:
         await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
@@ -84,6 +81,10 @@ def parse_session_data(all_candles: list, session_start_est: datetime) -> dict:
     df.set_index('timestamp', inplace=True)
     df.sort_index(ascending=True, inplace=True)
     
+    for col in ['openPrice', 'highPrice', 'lowPrice', 'closePrice', 'volume']:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0.0)
+            
     df = df[df.index >= session_start_est]
     if df.empty: return res
     
@@ -508,81 +509,19 @@ async def process_budget_input(message: types.Message, state: FSMContext):
     except Exception:
         await message.answer("🚨 유효한 숫자를 입력하세요.", parse_mode="HTML")
 
-@router.message(Command("history"))
-async def cmd_history(message: types.Message, state: FSMContext):
-    if message.from_user.id != ADMIN_CHAT_ID:
-        return
-    text = (
-        "🏆 <b>[당일 사이클 졸업 명예의 전당]</b>\n\n"
-        "▫️ 정산 파이프라인: 16:05 EST 자동 집계\n"
-        "▫️ 당일 완료된 매매 기록은 로컬 장부에서 안전하게 아카이빙됩니다."
-    )
-    try:
-        await message.answer(text, parse_mode="HTML")
-    except Exception:
-        pass
-
-@router.message(Command("version"))
-async def cmd_version(message: types.Message, state: FSMContext):
-    if message.from_user.id != ADMIN_CHAT_ID:
-        return
-    text = (
-        "🛠️ <b>[시스템 코어 버전 정보]</b>\n\n"
-        "▫️ 엔진: Toss Dual-Core Assassin aVWAP Engine\n"
-        "▫️ 버전: v1.2.14 (OpenAPI 3.1.0 Defense Compliant)\n"
-        "▫️ 아키텍처: 방탄 6대 헌법 & 34대 엣지 케이스 완전 락온"
-    )
-    try:
-        await message.answer(text, parse_mode="HTML")
-    except Exception:
-        pass
-
-@router.message(Command("log"))
-async def cmd_log(message: types.Message, state: FSMContext):
-    if message.from_user.id != ADMIN_CHAT_ID:
-        return
-    text = (
-        "🔍 <b>[실시간 에러 원격 추출 진단망]</b>\n\n"
-        "▫️ 네트워크 상태: 정상 (6.6 TPS 중앙 통제 가동 중)\n"
-        "▫️ 파일 I/O 뮤텍스: 정상 가동 중\n"
-        "▫️ 통신 에러 발생 시 즉각 텔레그램 타전망으로 캡처 타전됩니다."
-    )
-    try:
-        await message.answer(text, parse_mode="HTML")
-    except Exception:
-        pass
-
-@router.message(Command("reset"))
-async def cmd_reset(message: types.Message, state: FSMContext):
-    if message.from_user.id != ADMIN_CHAT_ID:
-        return
-    await state.clear()
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="⚠️ 즉시 장부 0주 소각 및 잠금 해제", callback_data="hard_kill")],
-        [InlineKeyboardButton(text="🔙 취소", callback_data="back_to_main")]
-    ])
-    text = (
-        "⚠️ <b>[비상 해제 메뉴 진입]</b>\n\n"
-        "당일 잠금을 해제하고 로컬 장부의 상태를 0주로 강제 소각하시겠습니까?\n"
-        "격발 시 프로세스가 하드 킬(os._exit)됩니다."
-    )
-    try:
-        await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
-    except Exception:
-        pass
-
+# MODIFIED: /update 명령어 메시지 설명 구글 클라우드 서버 탑재 명시
 @router.message(Command("update"))
 async def cmd_update(message: types.Message, state: FSMContext):
     if message.from_user.id != ADMIN_CHAT_ID:
         return
     await state.clear()
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🚀 GitHub 동기화 및 재기동", callback_data="execute_update")],
+        [InlineKeyboardButton(text="🚀 구글 클라우드 서버 탑재", callback_data="execute_update")],
         [InlineKeyboardButton(text="🔙 취소", callback_data="back_to_main")]
     ])
     text = (
         "⚠️ <b>[시스템 자가 업데이트]</b>\n\n"
-        "경고: GitHub 원격 저장소(main) 코드를 강제 동기화(Hard Reset) 하고 무결성 검증 후 시스템을 하드 킬(os._exit)합니다.\n"
+        "경고: 깃허브 게시판(main)에 탑재되어 있는 파이썬 코드를 다운로드 받아 구글 클라우드 서버에 강제 탑재(동기화)하고 시스템을 하드 킬(os._exit)합니다.\n"
         "진행하시겠습니까?"
     )
     try:
@@ -590,12 +529,12 @@ async def cmd_update(message: types.Message, state: FSMContext):
     except Exception:
         pass
 
-# MODIFIED: Git 충돌 원천 차단(Hard Reset) 및 블로킹 타임아웃(20s) 전면 주입
 @router.callback_query(F.data == "execute_update")
 async def process_execute_update(callback_query: types.CallbackQuery, state: FSMContext):
     await state.clear()
     try:
-        await callback_query.message.edit_text("🔄 <b>GitHub 저장소 코드 강제 동기화 및 락온 검증 중...</b>", parse_mode="HTML")
+        # MODIFIED: 프로그레스 메시지 변경
+        await callback_query.message.edit_text("🔄 <b>GitHub 파이썬 코드 다운로드 및 구글 클라우드 서버 탑재 검증 중...</b>", parse_mode="HTML")
 
         def _run_git_update():
             import subprocess
@@ -604,37 +543,31 @@ async def process_execute_update(callback_query: types.CallbackQuery, state: FSM
             def run_cmd(cmd):
                 proc = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
                 try:
-                    # NEW: Case 31 무한 대기 블로킹 방어용 timeout 20초 주입
                     out, err = proc.communicate(timeout=20)
                     return proc.returncode, out.strip(), err.strip()
                 except subprocess.TimeoutExpired:
                     proc.kill()
                     return -1, "", "Subprocess Timeout Expired (Git Credential Prompt 락다운 의심)"
             
-            # 1. 롤백용 로컬 해시 백업
             code, current_hash, err = run_cmd("git rev-parse HEAD")
             if code != 0:
                 return False, f"해시 백업 실패: {err}"
             
-            # 2. 원격 저장소 상태 Fetch (충돌 방지)
             code, fetch_out, fetch_err = run_cmd("git fetch origin main")
             if code != 0:
                 return False, f"Fetch 실패 (권한/네트워크/토큰 만료 확인 요망):\n{fetch_err}"
                 
-            # 3. 로컬 vs 원격 해시 비교 (업데이트 필요 여부 판별)
             code, local_hash, _ = run_cmd("git rev-parse HEAD")
             code, remote_hash, _ = run_cmd("git rev-parse origin/main")
             
             if local_hash == remote_hash:
                 return True, "Already up to date."
             
-            # 4. 로컬 변형 무시 강제 Hard Reset (단순 Pull 오작동 완전 봉쇄)
             code, reset_out, reset_err = run_cmd("git reset --hard origin/main")
             if code != 0:
                 run_cmd(f"git reset --hard {current_hash}")
                 return False, f"Hard Reset 붕괴 (원상 복구됨):\n{reset_err}"
                 
-            # 5. 문법 에러 프리플라이트 검증
             try:
                 py_compile.compile('main.py', doraise=True)
                 py_compile.compile('tg_router.py', doraise=True)
@@ -650,27 +583,16 @@ async def process_execute_update(callback_query: types.CallbackQuery, state: FSM
         
         if success:
             if "Already up to date." in msg:
-                await callback_query.message.edit_text(f"✅ <b>업데이트 완료</b>\n▫️ 이미 최신 버전입니다.", parse_mode="HTML")
+                await callback_query.message.edit_text(f"✅ <b>서버 탑재 완료</b>\n▫️ 구글 클라우드 서버가 이미 최신 버전입니다.", parse_mode="HTML")
             else:
-                await callback_query.message.edit_text(f"🚀 <b>업데이트 성공. 코어 재기동(os._exit) 격발.</b>\n<pre>{html.escape(msg)}</pre>", parse_mode="HTML")
+                await callback_query.message.edit_text(f"🚀 <b>탑재 성공. 구글 클라우드 코어 재기동(os._exit) 격발.</b>\n<pre>{html.escape(msg)}</pre>", parse_mode="HTML")
                 await asyncio.sleep(1.0)
                 os._exit(0)
         else:
             await callback_query.message.edit_text(f"🚨 <b>업데이트 실패 (롤백됨)</b>\n<pre>{html.escape(msg)}</pre>\n\n⚠️ <b>관리자 조치 요망</b>:\n▫️ 서버 터미널에서 Git 권한(PAT 토큰 만료 또는 SSH)을 확인하십시오.", parse_mode="HTML")
 
     except Exception as e:
-        await callback_query.message.edit_text(f"🚨 <b>업데이트 붕괴 방어:</b> {html.escape(str(e))}", parse_mode="HTML")
-
-@router.callback_query(F.data == "hard_kill")
-async def process_hard_kill(callback_query: types.CallbackQuery, state: FSMContext):
-    await state.clear()
-    try:
-        await AssassinLedger.save_state("SOXL", price=0.0, target_sell_price=0.0, is_session_done=True, is_active=False)
-        await AssassinLedger.save_state("SOXS", price=0.0, target_sell_price=0.0, is_session_done=True, is_active=False)
-        await callback_query.message.edit_text("🚨 <b>로컬 장부 0주 완전 초기화 완료. 시스템 하드 킬(os._exit)을 격발합니다.</b>", parse_mode="HTML")
-        os._exit(0)
-    except Exception:
-        pass
+        await callback_query.message.edit_text(f"🚨 <b>서버 탑재 붕괴 방어:</b> {html.escape(str(e))}", parse_mode="HTML")
 
 @router.callback_query(F.data == "back_to_main")
 async def process_back_to_main(callback_query: types.CallbackQuery, state: FSMContext):
