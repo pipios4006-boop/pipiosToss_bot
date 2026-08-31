@@ -18,8 +18,6 @@ from dotenv import load_dotenv
 from toss_api import TossApiClient
 from quant_engine import AssassinLedger, AVWAPEngine
 from tg_router import router, inject_dependencies
-
-# NEW: 1분봉 데이터 영구 누적 기록 모듈 임포트
 from candle_recorder import record_candles_loop
 
 env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env')
@@ -107,7 +105,8 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
             
             try:
                 is_open, session_end_time, session_name, session_start_time = await asyncio.wait_for(client.is_market_open(), timeout=10.0)
-                if not session_start_time:
+                # MODIFIED: 장 마감(CLOSED) 상태일 때 session_start_time=None을 에러로 오판하는 데드 로직 소각
+                if is_open and not session_start_time:
                     raise ValueError("session_start_time is None")
             except Exception:
                 is_open = True
@@ -368,8 +367,6 @@ async def main():
     asyncio.create_task(api_client.token_renewal_loop())
     asyncio.create_task(assassin_loop(api_client, bot, ADMIN_CHAT_ID, "SOXL"))
     asyncio.create_task(assassin_loop(api_client, bot, ADMIN_CHAT_ID, "SOXS"))
-    
-    # NEW: 백그라운드 캔들 수집망 분리 결속
     asyncio.create_task(record_candles_loop(api_client, "SOXL"))
     asyncio.create_task(record_candles_loop(api_client, "SOXS"))
     
