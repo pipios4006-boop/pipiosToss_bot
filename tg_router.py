@@ -216,36 +216,38 @@ async def build_avwap_radar() -> tuple[str, InlineKeyboardMarkup]:
     
     scan_time = now_est.strftime("%Y-%m-%d %H:%M:%S")
 
+    # MODIFIED: 모바일 가독성(뷰포트) 최적화를 위한 보조 지표(평단, VWAP) 이모지 소각 및 하위 계층(들여쓰기) 렌더링 결속
     text = f"""📡 <b>[ 관제탑: {market_header} 가동중 ]</b>
 
 🎯 <b>[ 현황: 현재가 / 5MA / 평단(수익) ]</b>
-▫️ 롱(SOXL): ${price_l:.2f} / {amp_l:.2f}% / {profit_l_str}
-▫️ 숏(SOXS): ${price_s:.2f} / {amp_s:.2f}% / {profit_s_str}
+▫️ 롱(SOXL): ${price_l:.2f} / {amp_l:.2f}%
+   평단(수익): {profit_l_str}
+▫️ 숏(SOXS): ${price_s:.2f} / {amp_s:.2f}%
+   평단(수익): {profit_s_str}
 
 ☀️ <b>[ 0세션 - 데이장 (19:00~03:59) ]</b>
 ▫️ 롱: {sess_l['day_amp']:.2f}% (${sess_l['day_l']:.2f}~${sess_l['day_h']:.2f})
-▫️ VWAP: ${sess_l['day_vwap']:.2f}
+   VWAP: ${sess_l['day_vwap']:.2f}
 ▫️ 숏: {sess_s['day_amp']:.2f}% (${sess_s['day_l']:.2f}~${sess_s['day_h']:.2f})
-▫️ VWAP: ${sess_s['day_vwap']:.2f}
+   VWAP: ${sess_s['day_vwap']:.2f}
 
 🌅 <b>[ 1세션 - 프리장 (04:00~09:29) ]</b>
 ▫️ 롱: {sess_l['pre_amp']:.2f}% (${sess_l['pre_l']:.2f}~${sess_l['pre_h']:.2f})
-▫️ VWAP: ${sess_l['pre_vwap']:.2f}
+   VWAP: ${sess_l['pre_vwap']:.2f}
 ▫️ 숏: {sess_s['pre_amp']:.2f}% (${sess_s['pre_l']:.2f}~${sess_s['pre_h']:.2f})
-▫️ VWAP: ${sess_s['pre_vwap']:.2f}
+   VWAP: ${sess_s['pre_vwap']:.2f}
 
 🔥 <b>[ 2세션 - 정규장 (09:30~16:00) ]</b>
 ▫️ 롱: {sess_l['reg_amp']:.2f}% (${sess_l['reg_l']:.2f}~${sess_l['reg_h']:.2f})
-▫️ VWAP: ${sess_l['reg_vwap']:.2f}
+   VWAP: ${sess_l['reg_vwap']:.2f}
 ▫️ 숏: {sess_s['reg_amp']:.2f}% (${sess_s['reg_l']:.2f}~${sess_s['reg_h']:.2f})
-▫️ VWAP: ${sess_s['reg_vwap']:.2f}
+   VWAP: ${sess_s['reg_vwap']:.2f}
 
 {status_l}
 {status_s}
 
 ⏱️ 갱신: {scan_time} (EST)"""
 
-    # MODIFIED: 모바일 1페이지 렌더링 락온을 위한 불필요 버튼 소각 (레이더 갱신 단일화)
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🔄 레이더 갱신", callback_data="open_avwap")]
     ])
