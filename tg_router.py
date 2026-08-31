@@ -421,11 +421,17 @@ async def cmd_avwap(message: types.Message, state: FSMContext):
 async def process_open_avwap(callback_query: types.CallbackQuery, state: FSMContext):
     await state.clear()
     try:
-        await callback_query.message.edit_text("📡 <b>레이더 스캔 및 데이터 동기화 중...</b>", parse_mode="HTML")
+        # MODIFIED: Case 26 제자리 갱신 사수 (중간 로딩 텍스트 삭제 및 네이티브 스피너 유지)
         text, keyboard = await build_avwap_radar()
         await callback_query.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
     except Exception as e:
-        await callback_query.message.answer(f"🚨 <b>관제탑 갱신 실패:</b> {html.escape(str(e))}", parse_mode="HTML")
+        if "message is not modified" not in str(e).lower():
+            await callback_query.message.answer(f"🚨 <b>관제탑 갱신 실패:</b> {html.escape(str(e))}", parse_mode="HTML")
+    finally:
+        try:
+            await callback_query.answer("레이더 갱신 완료")
+        except Exception:
+            pass
 
 @router.message(Command("sync"))
 async def cmd_sync(message: types.Message, state: FSMContext):
@@ -447,7 +453,7 @@ async def cmd_sync(message: types.Message, state: FSMContext):
 async def process_open_sync(callback_query: types.CallbackQuery, state: FSMContext):
     await state.clear()
     try:
-        await callback_query.message.edit_text("📡 <b>통합 지시서 데이터 스캔 중...</b>", parse_mode="HTML")
+        # MODIFIED: Case 26 제자리 갱신 사수 (중간 로딩 텍스트 삭제 및 네이티브 스피너 유지)
         text = await build_sync_board()
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🔄 새로고침", callback_data="open_sync")],
@@ -455,7 +461,13 @@ async def process_open_sync(callback_query: types.CallbackQuery, state: FSMConte
         ])
         await callback_query.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
     except Exception as e:
-        await callback_query.message.answer(f"🚨 <b>갱신 실패:</b> {html.escape(str(e))}", parse_mode="HTML")
+        if "message is not modified" not in str(e).lower():
+            await callback_query.message.answer(f"🚨 <b>갱신 실패:</b> {html.escape(str(e))}", parse_mode="HTML")
+    finally:
+        try:
+            await callback_query.answer("동기화 완료")
+        except Exception:
+            pass
 
 @router.message(Command("settlement"))
 async def cmd_settlement(message: types.Message, state: FSMContext):
