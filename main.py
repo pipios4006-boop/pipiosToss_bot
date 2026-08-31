@@ -248,6 +248,7 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                 trap_qty = holdings_qty
                 avg_price = last_buy_price
                 is_rearm = True
+                trap_tag = "" # NEW: 스코프 전진 배치 (UnboundLocalError 방어)
                 
                 if calculated_target <= 0.0 and buy_order_id:
                     order_detail = await client.get_order_detail(buy_order_id)
@@ -259,7 +260,13 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                         
                         if filled_qty > 0 and avg_price > 0.0:
                             trap_qty = min(holdings_qty, filled_qty)
-                            calculated_target = math.ceil(avg_price * 1.01 * 100) / 100.0
+                            # MODIFIED: 데이장 0.7% / 그 외 1.0% 타점 동적 분기
+                            if session_name == "dayMarket":
+                                calculated_target = math.ceil(avg_price * 1.007 * 100) / 100.0
+                                trap_tag = "+0.7%"
+                            else:
+                                calculated_target = math.ceil(avg_price * 1.01 * 100) / 100.0
+                                trap_tag = "+1.0%"
                             is_rearm = False
 
                 if calculated_target > 0.0 and trap_qty > 0:
@@ -282,7 +289,7 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                         
                         if not is_rearm:
                             await AssassinLedger.save_state(symbol, price=avg_price, target_sell_price=calculated_target, cond_order_id=new_cond_id)
-                            await notify_tg(f"🟢 <b>[aVWAP {symbol}] +1% 기계적 조건주문 덫 장전</b>\n▫️ 팩트 평단가: ${avg_price:.2f}\n▫️ 익절 덫: ${calculated_target:.2f}\n▫️ 수량: {trap_qty}주")
+                            await notify_tg(f"🟢 <b>[aVWAP {symbol}] {trap_tag} 기계적 조건주문 덫 장전</b>\n▫️ 팩트 평단가: ${avg_price:.2f}\n▫️ 익절 덫: ${calculated_target:.2f}\n▫️ 수량: {trap_qty}주")
                         else:
                             await AssassinLedger.save_state(symbol, cond_order_id=new_cond_id)
                             await notify_tg(f"🟢 <b>[aVWAP {symbol}] 오버나이트 조건주문 덫 재장전</b>\n▫️ 유지 평단가: ${avg_price:.2f}\n▫️ 익절 덫: ${calculated_target:.2f}\n▫️ 수량: {trap_qty}주")
