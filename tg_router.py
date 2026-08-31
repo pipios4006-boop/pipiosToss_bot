@@ -147,13 +147,11 @@ async def build_avwap_radar() -> tuple[str, InlineKeyboardMarkup]:
 
     async def fetch_5ma_amp(symbol):
         try:
-            # MODIFIED: 당일 미완성 캔들(Deflation) 배제 및 과거 5거래일 완제 캔들 확보를 위해 count=6 호출
             endpoint = f"/api/v1/candles?symbol={symbol}&interval=1d&count=6"
             data = await api_client._request("GET", endpoint, "MARKET_DATA_CHART", headers=api_client._get_headers())
             candles = data.get("result", {}).get("candles", [])
             amps = []
             
-            # MODIFIED: candles[0] (당일 캔들)을 무조건 배제하고 확정된 직전 5일(T-1 ~ T-5) 캔들만 연산
             for c in candles[1:6]:
                 h = float(c.get("highPrice", 0))
                 l = float(c.get("lowPrice", 0))
@@ -303,28 +301,63 @@ async def build_sync_board() -> str:
         avg_price = hold.get('avg_price', 0.0)
         profit_usd = hold.get('profit_usd', 0.0)
         profit_rate = hold.get('profit_rate', 0.0) * 100
-        
         profit_krw = profit_usd * exchange_rate
         
+        curr = await api_client.get_current_price(symbol)
+        prev_close = curr
+        
+        # MODIFIED: 1d 캔들은 오직 '전일 정규장 종가' 추출 용도로만 제한적 락온
         try:
-            data = await api_client._request("GET", f"/api/v1/candles?symbol={symbol}&interval=1d&count=2", "MARKET_DATA_CHART", headers=api_client._get_headers())
-            candles = data.get("result", {}).get("candles", [])
-            if len(candles) > 0:
-                today_c = candles[0]
-                high = float(today_c.get("highPrice", 0))
-                low = float(today_c.get("lowPrice", 0))
-                curr = float(today_c.get("closePrice", 0))
-                prev_close = float(candles[1].get("closePrice", 0)) if len(candles) > 1 else curr
-                
-                high_rate = ((high - prev_close) / prev_close * 100) if prev_close > 0 else 0.0
-                low_rate = ((low - prev_close) / prev_close * 100) if prev_close > 0 else 0.0
-            else:
-                high, low, curr, high_rate, low_rate = 0.0, 0.0, 0.0, 0.0, 0.0
+            data_1d = await api_client._request("GET", f"/api/v1/candles?symbol={symbol}&interval=1d&count=2", "MARKET_DATA_CHART", headers=api_client._get_headers())
+            candles_1d = data_1d.get("result", {}).get("candles", [])
+            if len(candles_1d) > 1:
+                prev_close = float(candles_1d[1].get("closePrice", 0))
+            elif len(candles_1d) == 1:
+                prev_close = float(candles_1d[0].get("closePrice", 0))
         except Exception:
-            high, low, curr, high_rate, low_rate = 0.0, 0.0, 0.0, 0.0, 0.0
+            pass
+
+        # MODIFIED: 당일 전체 세션(데이+프리+정규) 통합 1m 캔들 스윕을 통한 절대 고가/저가 연산
+        if now_est.hour >= 19:
+            session_start_est = now_est.replace(hour=19, minute=0, second=0, microsecond=0)
+        else:
+            session_start_est = (now_est - timedelta(days=1)).replace(hour=19, minute=0, second=0, microsecond=0)
             
-        if curr == 0.0:
-            curr = await api_client.get_current_price(symbol)
+        all_candles = []
+        before = None
+        for _ in range(10):
+            try:
+                c_data = await api_client.get_1m_candles_pagination(symbol, count=200, before=before)
+                c_list = c_data.get("candles", [])
+                all_candles.extend(c_list)
+                if not c_list: break
+                oldest_time = pd.to_datetime(c_list[-1]['timestamp'], utc=True).tz_convert(ZoneInfo('America/New_York'))
+                if oldest_time <= session_start_est: break
+                before = c_data.get("nextBefore")
+                if not before: break
+            except Exception:
+                break
+                
+        high, low = 0.0, 0.0
+        if all_candles:
+            df = pd.DataFrame(all_candles)
+            if not df.empty:
+                df['timestamp'] = pd.to_datetime(df['timestamp'], format='ISO8601', utc=True).dt.tz_convert(ZoneInfo('America/New_York'))
+                df.set_index('timestamp', inplace=True)
+                df = df[df.index >= session_start_est]
+                if not df.empty:
+                    df['highPrice'] = pd.to_numeric(df['highPrice'], errors='coerce').fillna(0.0)
+                    df['lowPrice'] = pd.to_numeric(df['lowPrice'], errors='coerce').fillna(0.0)
+                    h_max = float(df['highPrice'].max())
+                    l_min = float(df['lowPrice'].min())
+                    if h_max > 0: high = h_max
+                    if l_min > 0: low = l_min
+                    
+        if high == 0.0: high = curr
+        if low == 0.0: low = curr
+
+        high_rate = ((high - prev_close) / prev_close * 100) if prev_close > 0 else 0.0
+        low_rate = ((low - prev_close) / prev_close * 100) if prev_close > 0 else 0.0
             
         return {
             "symbol": symbol,
@@ -347,7 +380,7 @@ async def build_sync_board() -> str:
     
     def format_symbol(d):
         profit_sign = "+" if d['profit_usd'] >= 0 else "-"
-        mode_str = "☀️+🌅 데이+프리 2세션" if d['session_mode'] == "BOTH" else "🌅 프리장 1세션"
+        mode_str = "☀️+🌅 데이+프리" if d['session_mode'] == "BOTH" else "🌅 프리장"
         return (
             f"⚖️ <b>[{d['symbol']}] 암살자(aVWAP) 지시서</b>\n"
             f"💵 총 시드: ${d['budget']:,.0f} | 🎯 {mode_str}\n"
