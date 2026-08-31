@@ -8,6 +8,7 @@ import os
 import math
 import asyncio
 import html
+import logging  # NEW: 로깅 모듈 결속
 import pandas as pd
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -19,6 +20,10 @@ from toss_api import TossApiClient
 from quant_engine import AssassinLedger, AVWAPEngine
 from tg_router import router, inject_dependencies
 from candle_recorder import record_candles_loop
+
+# NEW: aiogram 및 aiohttp 통신 단절 가비지 로그 영구 소각 (CRITICAL 격상)
+logging.getLogger("aiogram").setLevel(logging.CRITICAL)
+logging.getLogger("aiohttp").setLevel(logging.CRITICAL)
 
 env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env')
 load_dotenv(dotenv_path=env_path)
@@ -105,7 +110,6 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
             
             try:
                 is_open, session_end_time, session_name, session_start_time = await asyncio.wait_for(client.is_market_open(), timeout=10.0)
-                # MODIFIED: 장 마감(CLOSED) 상태일 때 session_start_time=None을 에러로 오판하는 데드 로직 소각
                 if is_open and not session_start_time:
                     raise ValueError("session_start_time is None")
             except Exception:
