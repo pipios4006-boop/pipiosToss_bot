@@ -109,8 +109,8 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                 session_start_time = None
                 print(f"🚨 [aVWAP {symbol}] 캘린더 응답 지연. Fail-Open 정규장 간주 진입.", flush=True)
 
-            # 15:59 MOC 제로-오버나이트 덤핑 (시장 오픈 변수 무시하고 시간 도달 시 즉각 격발)
-            if now_est.hour == 15 and now_est.minute >= 59 and not overnight_on:
+            # MODIFIED: 15:59 MOC 제로-오버나이트 덤핑 (is_active 락온 추가: 매도 전면 차단 방어)
+            if now_est.hour == 15 and now_est.minute >= 59 and not overnight_on and is_active:
                 if holdings_qty > 0 and not in_memory_ordering_lock[symbol]:
                     in_memory_ordering_lock[symbol] = True
                     try:
@@ -196,8 +196,8 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
             open_orders = await client.get_orders(status="OPEN", symbol=symbol)
             has_open_sell = any(o["side"] == "SELL" for o in open_orders)
             
-            # 보유 물량 존재 시, +1.0% 고정 익절 덫 장전
-            if holdings_qty > 0 and target_sell_price <= 0.0 and not has_open_sell and not in_memory_ordering_lock[symbol]:
+            # MODIFIED: 보유 물량 존재 시, +1.0% 고정 익절 덫 장전 (is_active 락온 추가: 매도 전면 차단 방어)
+            if holdings_qty > 0 and target_sell_price <= 0.0 and not has_open_sell and not in_memory_ordering_lock[symbol] and is_active:
                 avg_price = holdings_detail.get('avg_price', current_price)
                 if avg_price <= 0.0: avg_price = current_price
                 calculated_target = round(avg_price * 1.01, 2)
