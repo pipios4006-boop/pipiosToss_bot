@@ -17,13 +17,14 @@ class AssassinLedger:
     def _get_file_path(cls, symbol: str) -> str:
         return os.path.join(os.path.dirname(os.path.abspath(__file__)), f"AssassinLedger_{symbol}.json")
 
+    # MODIFIED: session_mode 추가 (기본값 PRE_ONLY)
     @classmethod
-    async def get_state(cls, symbol: str) -> tuple[float, float, str, bool, bool, bool, float, str]:
+    async def get_state(cls, symbol: str) -> tuple[float, float, str, bool, bool, bool, float, str, str]:
         filepath = cls._get_file_path(symbol)
         async with GlobalThrottle.get_file_lock(filepath):
             def _read():
                 if not os.path.exists(filepath):
-                    return 0.0, 100.0, "", False, True, False, 0.0, ""
+                    return 0.0, 100.0, "", False, True, False, 0.0, "", "PRE_ONLY"
                 try:
                     with open(filepath, "r", encoding="utf-8") as f:
                         data = json.load(f)
@@ -35,10 +36,11 @@ class AssassinLedger:
                             bool(data.get("is_active", True)),
                             bool(data.get("overnight_on", False)),
                             float(data.get("target_sell_price", 0.0)),
-                            str(data.get("cond_order_id", ""))
+                            str(data.get("cond_order_id", "")),
+                            str(data.get("session_mode", "PRE_ONLY"))
                         )
                 except Exception:
-                    return 0.0, 100.0, "", False, True, False, 0.0, ""
+                    return 0.0, 100.0, "", False, True, False, 0.0, "", "PRE_ONLY"
             return await asyncio.to_thread(_read)
 
     @classmethod
@@ -55,12 +57,13 @@ class AssassinLedger:
                     return ""
             return await asyncio.to_thread(_read)
 
+    # MODIFIED: session_mode 매개변수 추가
     @classmethod
     async def save_state(cls, symbol: str, price: float = None, budget: float = None, 
                          last_session_id: str = None, is_session_done: bool = None, 
                          is_active: bool = None, overnight_on: bool = None, 
                          target_sell_price: float = None, buy_order_id: str = None,
-                         cond_order_id: str = None):
+                         cond_order_id: str = None, session_mode: str = None):
         filepath = cls._get_file_path(symbol)
         async with GlobalThrottle.get_file_lock(filepath):
             def _write():
@@ -81,6 +84,7 @@ class AssassinLedger:
                 if target_sell_price is not None: data["target_sell_price"] = target_sell_price
                 if buy_order_id is not None: data["buy_order_id"] = buy_order_id
                 if cond_order_id is not None: data["cond_order_id"] = cond_order_id
+                if session_mode is not None: data["session_mode"] = session_mode
                 
                 tmp_path = filepath + ".tmp"
                 with open(tmp_path, "w", encoding="utf-8") as f:

@@ -39,14 +39,15 @@ def get_main_menu_text() -> str:
     return (
         f"🕒 <b>[ 운영 스케줄 ({dst_status_text}) ]</b>\n"
         "🔹 19:00: ☀️ 데이장 (Day Market) 스캔 개시\n"
+        "🔹 03:59: 🛑 데이장 MOC 덤핑 (OVN OFF 시)\n"
         "🔹 04:00: 🌅 프리장 VWAP 스캔 개시\n"
         "🔹 09:30: 🔥 정규장 VWAP 초기화 및 스캔\n"
-        "🔹 15:59: 🛑 암살자 오버나이트 강제 덤핑\n"
+        "🔹 15:59: 🛑 정규장 MOC 강제 덤핑\n"
         "🔹 17:00: 🧹 정산 스캔 & 당일 사이클 졸업\n\n"
         "🛠 <b>[ 핵심 명령어 ]</b>\n"
         "▶️ /avwap : 🔫 데이 트레이딩 레이더 관제탑\n"
         "▶️ /sync : 📜 통합 지시서 및 장부 동기화\n"
-        "▶️ /settlement : ⚙️ 통합 전술 제어반 (시드/OVN/가동)\n\n"
+        "▶️ /settlement : ⚙️ 통합 전술 제어반 (시드/OVN/세션)\n\n"
         "⚠️ /update : 🚀 깃허브 게시판 파이썬 코드 다운로드 및 탑재"
     )
 
@@ -186,10 +187,11 @@ async def build_avwap_radar() -> tuple[str, InlineKeyboardMarkup]:
     sess_l = await fetch_session_stats("SOXL")
     sess_s = await fetch_session_stats("SOXS")
 
-    _, budget_l, _, is_done_l, is_active_l, ovn_l, _, _ = await AssassinLedger.get_state("SOXL")
-    _, budget_s, _, is_done_s, is_active_s, ovn_s, _, _ = await AssassinLedger.get_state("SOXS")
+    _, budget_l, _, is_done_l, is_active_l, ovn_l, _, _, session_mode_l = await AssassinLedger.get_state("SOXL")
+    _, budget_s, _, is_done_s, is_active_s, ovn_s, _, _, session_mode_s = await AssassinLedger.get_state("SOXS")
 
-    def build_compact_status(symbol_short, is_active, budget, ovn, is_done, current_session, est_time):
+    # MODIFIED: session_mode 에 따른 동적 상태 표출 락온
+    def build_compact_status(symbol_short, is_active, budget, ovn, is_done, current_session, est_time, session_mode):
         if not is_active:
             return f"⚠️ <b>[{symbol_short} OFF]</b> 대기 중"
 
@@ -200,19 +202,26 @@ async def build_avwap_radar() -> tuple[str, InlineKeyboardMarkup]:
                 if est_time.hour == 4 and est_time.minute <= 6:
                     state_text = "04:07 타임쉴드"
                 else:
-                    state_text = "SW 요격 감시"
+                    state_text = "🌅 프리장 요격 감시"
             elif current_session == "dayMarket":
-                state_text = "데이장 관망"
+                if session_mode == "BOTH":
+                    if est_time.hour >= 19 and est_time.minute <= 6:
+                        state_text = "19:07 타임쉴드"
+                    else:
+                        state_text = "☀️ 데이장 요격 감시"
+                else:
+                    state_text = "데이장 관망 (프리 대기)"
             elif current_session == "regularMarket":
                 state_text = "정규장 감시"
             else:
                 state_text = "장외 대기"
 
         ovn_text = "🟢허용" if ovn else "🔴불가"
-        return f"⚔️ <b>[{symbol_short} ON]</b> {state_text} | 💵${budget:,.0f} | 🌙{ovn_text}"
+        mode_text = "☀️+🌅" if session_mode == "BOTH" else "🌅단일"
+        return f"⚔️ <b>[{symbol_short} ON]</b> {mode_text} | {state_text} | 💵${budget:,.0f} | 🌙{ovn_text}"
 
-    status_l = build_compact_status("롱(SOXL)", is_active_l, budget_l, ovn_l, is_done_l, session_name_ui, now_est)
-    status_s = build_compact_status("숏(SOXS)", is_active_s, budget_s, ovn_s, is_done_s, session_name_ui, now_est)
+    status_l = build_compact_status("롱(SOXL)", is_active_l, budget_l, ovn_l, is_done_l, session_name_ui, now_est, session_mode_l)
+    status_s = build_compact_status("숏(SOXS)", is_active_s, budget_s, ovn_s, is_done_s, session_name_ui, now_est, session_mode_s)
     
     scan_time = now_est.strftime("%Y-%m-%d %H:%M:%S")
 
@@ -284,6 +293,7 @@ async def build_sync_board() -> str:
     async def get_symbol_sync_data(symbol):
         state = await AssassinLedger.get_state(symbol)
         budget = state[1]
+        session_mode = state[8]
         
         hold = await api_client.get_symbol_holdings_detail(symbol)
         qty = hold.get('qty', 0.0)
@@ -316,6 +326,7 @@ async def build_sync_board() -> str:
         return {
             "symbol": symbol,
             "budget": budget,
+            "session_mode": session_mode,
             "curr": curr,
             "avg_price": avg_price,
             "qty": qty,
@@ -333,9 +344,10 @@ async def build_sync_board() -> str:
     
     def format_symbol(d):
         profit_sign = "+" if d['profit_usd'] >= 0 else "-"
+        mode_str = "☀️+🌅 데이+프리 2세션" if d['session_mode'] == "BOTH" else "🌅 프리장 1세션"
         return (
             f"⚖️ <b>[{d['symbol']}] 암살자(aVWAP) 지시서</b>\n"
-            f"💵 총 시드: ${d['budget']:,.0f}\n"
+            f"💵 총 시드: ${d['budget']:,.0f} | 🎯 {mode_str}\n"
             f"💰 현재 ${d['curr']:.2f} / 평단 ${d['avg_price']:.2f} ({int(d['qty'])}주)\n"
             f"📈 금일 고가: ${d['high']:.2f} ({d['high_rate']:+.2f}%)\n"
             f"📉 금일 저가: ${d['low']:.2f} ({d['low_rate']:+.2f}%)\n"
@@ -354,20 +366,26 @@ async def build_sync_board() -> str:
     )
     return text
 
+# MODIFIED: session_mode 토글 버튼 탑재 결속
 async def build_settlement_board() -> tuple[str, InlineKeyboardMarkup]:
-    _, budget_l, _, _, is_active_l, ovn_l, _, _ = await AssassinLedger.get_state("SOXL")
-    _, budget_s, _, _, is_active_s, ovn_s, _, _ = await AssassinLedger.get_state("SOXS")
+    _, budget_l, _, _, is_active_l, ovn_l, _, _, mode_l = await AssassinLedger.get_state("SOXL")
+    _, budget_s, _, _, is_active_s, ovn_s, _, _, mode_s = await AssassinLedger.get_state("SOXS")
+
+    mode_text_l = "☀️+🌅 데이+프리" if mode_l == "BOTH" else "🌅 프리장 전용"
+    mode_text_s = "☀️+🌅 데이+프리" if mode_s == "BOTH" else "🌅 프리장 전용"
 
     text = (
         "⚙️ <b>[통합 전술 제어반]</b>\n\n"
         "▫️ <b>롱(SOXL) 전술 상태</b>\n"
         f"🔹 가동: {'🟢 ON' if is_active_l else '🔴 OFF'}\n"
         f"🔹 예산: ${budget_l:,.2f}\n"
-        f"🔹 OVN: {'🟢 허용' if ovn_l else '🔴 차단'}\n\n"
+        f"🔹 OVN: {'🟢 허용' if ovn_l else '🔴 차단'}\n"
+        f"🔹 세션: {mode_text_l}\n\n"
         "▫️ <b>숏(SOXS) 전술 상태</b>\n"
         f"🔹 가동: {'🟢 ON' if is_active_s else '🔴 OFF'}\n"
         f"🔹 예산: ${budget_s:,.2f}\n"
-        f"🔹 OVN: {'🟢 허용' if ovn_s else '🔴 차단'}"
+        f"🔹 OVN: {'🟢 허용' if ovn_s else '🔴 차단'}\n"
+        f"🔹 세션: {mode_text_s}"
     )
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -382,6 +400,10 @@ async def build_settlement_board() -> tuple[str, InlineKeyboardMarkup]:
         [
             InlineKeyboardButton(text="🌙 롱 OVN 끄기" if ovn_l else "☀️ 롱 OVN 켜기", callback_data="toggle_set_ovn_SOXL"),
             InlineKeyboardButton(text="🌙 숏 OVN 끄기" if ovn_s else "☀️ 숏 OVN 켜기", callback_data="toggle_set_ovn_SOXS")
+        ],
+        [
+            InlineKeyboardButton(text="☀️ 롱 2세션 전환" if mode_l == "PRE_ONLY" else "🌅 롱 1세션 전환", callback_data="toggle_set_mode_SOXL"),
+            InlineKeyboardButton(text="☀️ 숏 2세션 전환" if mode_s == "PRE_ONLY" else "🌅 숏 1세션 전환", callback_data="toggle_set_mode_SOXS")
         ],
         [InlineKeyboardButton(text="🔫 데이 트레이딩 관제탑", callback_data="open_avwap")],
         [InlineKeyboardButton(text="🔙 메인 메뉴", callback_data="back_to_main")]
@@ -406,7 +428,7 @@ async def process_open_avwap(callback_query: types.CallbackQuery, state: FSMCont
     try:
         text, keyboard = await build_avwap_radar()
         await callback_query.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
-    except Exception as e:
+    except Exception e:
         if "message is not modified" not in str(e).lower():
             await callback_query.message.answer(f"🚨 <b>관제탑 갱신 실패:</b> {html.escape(str(e))}", parse_mode="HTML")
     finally:
@@ -467,14 +489,14 @@ async def process_open_settlement(callback_query: types.CallbackQuery, state: FS
     try:
         text, keyboard = await build_settlement_board()
         await callback_query.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
-    except Exception as e:
+    except Exception:
         pass
 
 @router.callback_query(F.data.startswith("toggle_set_act_"))
 async def process_toggle_set_act(callback_query: types.CallbackQuery, state: FSMContext):
     symbol = callback_query.data.split("_")[3].upper()
-    _, _, _, _, is_active, _, _, _ = await AssassinLedger.get_state(symbol)
-    await AssassinLedger.save_state(symbol, is_active=not is_active)
+    state_data = await AssassinLedger.get_state(symbol)
+    await AssassinLedger.save_state(symbol, is_active=not state_data[4])
     text, keyboard = await build_settlement_board()
     try:
         await callback_query.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
@@ -484,8 +506,22 @@ async def process_toggle_set_act(callback_query: types.CallbackQuery, state: FSM
 @router.callback_query(F.data.startswith("toggle_set_ovn_"))
 async def process_toggle_set_ovn(callback_query: types.CallbackQuery, state: FSMContext):
     symbol = callback_query.data.split("_")[3].upper()
-    _, _, _, _, _, overnight_on, _, _ = await AssassinLedger.get_state(symbol)
-    await AssassinLedger.save_state(symbol, overnight_on=not overnight_on)
+    state_data = await AssassinLedger.get_state(symbol)
+    await AssassinLedger.save_state(symbol, overnight_on=not state_data[5])
+    text, keyboard = await build_settlement_board()
+    try:
+        await callback_query.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
+    except Exception:
+        pass
+
+# NEW: 세션 모드 토글 로직 추가
+@router.callback_query(F.data.startswith("toggle_set_mode_"))
+async def process_toggle_set_mode(callback_query: types.CallbackQuery, state: FSMContext):
+    symbol = callback_query.data.split("_")[3].upper()
+    state_data = await AssassinLedger.get_state(symbol)
+    current_mode = state_data[8]
+    new_mode = "BOTH" if current_mode == "PRE_ONLY" else "PRE_ONLY"
+    await AssassinLedger.save_state(symbol, session_mode=new_mode)
     text, keyboard = await build_settlement_board()
     try:
         await callback_query.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
@@ -593,7 +629,7 @@ async def process_execute_update(callback_query: types.CallbackQuery, state: FSM
                 await asyncio.sleep(1.0)
                 os._exit(0)
         else:
-            await callback_query.message.edit_text(f"🚨 <b>업데이트 실패 (롤백됨)</b>\n<pre>{html.escape(msg)}</pre>\n\n⚠️ <b>관리자 조치 요망</b>:\n▫️ 서버 터미널에서 Git 권한(PAT 토큰 만료 또는 SSH)을 확인하십시오.", parse_mode="HTML")
+            await callback_query.message.edit_text(f"🚨 <b>업데이트 실패 (롤백됨)</b>\n<pre>{html.escape(msg)}</pre>\n\n⚠️ <b>관리자 조치 요망</b>:\n▫️ 서버 터미널에서 Git 권한(PAT 토큰 만료 또는 정지)을 확인하십시오.", parse_mode="HTML")
 
     except Exception as e:
         await callback_query.message.edit_text(f"🚨 <b>서버 탑재 붕괴 방어:</b> {html.escape(str(e))}", parse_mode="HTML")

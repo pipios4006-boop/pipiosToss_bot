@@ -77,10 +77,8 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
         
         try:
             now_est = datetime.now(ZoneInfo('America/New_York'))
-            est_today_str = now_est.strftime("%Y-%m-%d")
             est_time_int = now_est.hour * 100 + now_est.minute
 
-            # MODIFIED: 잔고 조회망 전진 배치 (17:00 GC 병목 해소 및 유령 잔고 방어)
             try:
                 holdings_detail = await client.get_symbol_holdings_detail(symbol)
                 holdings_qty = int(math.floor(holdings_detail['qty']))
@@ -89,14 +87,14 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                 await asyncio.sleep(5)
                 continue
 
-            last_buy_price, budget, last_session_id, is_session_done, is_active, overnight_on, target_sell_price, cond_order_id = await AssassinLedger.get_state(symbol)
+            # MODIFIED: session_mode 확장 추출
+            last_buy_price, budget, last_session_id, is_session_done, is_active, overnight_on, target_sell_price, cond_order_id, session_mode = await AssassinLedger.get_state(symbol)
             buy_order_id = await AssassinLedger.get_buy_order_id(symbol)
 
             # Case 22: 17:00 EST 가비지 컬렉션 (GC) 파이프라인
             if now_est.hour == 17 and now_est.minute == 0:
                 in_memory_ordering_lock[symbol] = False
                 idempotency_keys[symbol] = {"BUY": None, "TRAP": None, "MOC": None}
-                # MODIFIED: 포지션이 0일 때만 팩트 주문 기록 소각 (OVN 방어망 유지)
                 if holdings_qty == 0:
                     await AssassinLedger.save_state(symbol, buy_order_id="", cond_order_id="")
                 print(f"🧹 [GC {symbol}] 17:00 EST 락 해제 및 자정 초기화 완료.", flush=True)
@@ -111,12 +109,15 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                 session_start_time = None
                 print(f"🚨 [aVWAP {symbol}] 캘린더 응답 지연. Fail-Open 정규장 간주 진입.", flush=True)
 
-            # MODIFIED: 15:59 MOC 제로-오버나이트 덤핑 (조건주문 선취소 락온)
-            if now_est.hour == 15 and now_est.minute >= 59 and not overnight_on and is_active:
+            # MODIFIED: 03:59(Day) 및 15:59(Reg) 듀얼 MOC 제로-오버나이트 덤핑 사수
+            is_day_moc = (now_est.hour == 3 and now_est.minute >= 59)
+            is_reg_moc = (now_est.hour == 15 and now_est.minute >= 59)
+
+            if (is_day_moc or is_reg_moc) and not overnight_on and is_active:
                 if buy_order_id and not in_memory_ordering_lock[symbol]:
                     in_memory_ordering_lock[symbol] = True
                     try:
-                        # 🚨 15:59 덤핑 격발 전 반드시 로컬 장부에 기록된 조건주문을 선취소
+                        # 🚨 덤핑 격발 전 로컬 장부에 기록된 조건주문을 선취소 (공통)
                         if cond_order_id:
                             try:
                                 await client.cancel_conditional_order(cond_order_id)
@@ -159,8 +160,9 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                                 await AssassinLedger.save_state(symbol, price=0.0, target_sell_price=0.0, is_session_done=True, buy_order_id="", cond_order_id="")
                                 idempotency_keys[symbol]["MOC"] = None
                                 
-                                await notify_tg(f"🔴 <b>[aVWAP {symbol}] 15:59 제로오버나이트 강제 청산</b>\n▫️ 타격가: ${bid_1_price:.2f}\n▫️ 수량: {dump_qty}주")
-                                print(f"🧹 [aVWAP {symbol}] 15:59 MOC 덤핑 스윕 완료.", flush=True)
+                                tag = "03:59 데이장" if is_day_moc else "15:59 정규장"
+                                await notify_tg(f"🔴 <b>[aVWAP {symbol}] {tag} 제로오버나이트 강제 청산</b>\n▫️ 타격가: ${bid_1_price:.2f}\n▫️ 수량: {dump_qty}주")
+                                print(f"🧹 [aVWAP {symbol}] {tag} MOC 덤핑 스윕 완료.", flush=True)
                     except Exception as e:
                         print(f"🚨 [MOC Timeout 방어] {e}", flush=True)
                         await notify_tg(f"🚨 <b>[MOC 에러 {symbol}]</b> {html.escape(str(e))}")
@@ -175,8 +177,10 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
             if current_price <= 0.0:
                 continue
 
+            # MODIFIED: Midnight Crossover 방어를 위해 session_start_time 기반 절대 세션 ID 생성
             if session_start_time:
-                current_session_id = f"{est_today_str}_{session_name}"
+                session_start_est = session_start_time.astimezone(ZoneInfo('America/New_York'))
+                current_session_id = f"{session_start_est.strftime('%Y%m%d_%H%M')}_{session_name}"
                 if current_session_id != last_session_id:
                     if holdings_qty == 0:
                         await AssassinLedger.save_state(symbol, price=0.0, target_sell_price=0.0, last_session_id=current_session_id, is_session_done=False, buy_order_id="", cond_order_id="")
@@ -197,7 +201,7 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
             
             session_baseline_est = session_start_time.astimezone(ZoneInfo('America/New_York')) if session_start_time else now_est
             if session_name in ["regularMarket", "afterMarket"]:
-                reg_start_str = f"{est_today_str} 09:30:00"
+                reg_start_str = f"{now_est.strftime('%Y-%m-%d')} 09:30:00"
                 reg_start_est = datetime.strptime(reg_start_str, "%Y-%m-%d %H:%M:%S").replace(tzinfo=ZoneInfo('America/New_York'))
                 if now_est >= reg_start_est:
                     session_baseline_est = reg_start_est
@@ -205,7 +209,8 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
             candles_json = await fetch_full_session_candles(client, symbol, session_baseline_est)
             vwap_price = AVWAPEngine.calculate_vwap(candles_json, session_baseline_est)
 
-            if est_time_int >= 930:
+            # 정규장 신규 진입 원천 소각 (100% 락온)
+            if est_time_int >= 930 and est_time_int < 1600:
                 if not buy_order_id and not is_session_done:
                     await AssassinLedger.save_state(symbol, is_session_done=True)
                     is_session_done = True
@@ -214,7 +219,6 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
             open_orders = await client.get_orders(status="OPEN", symbol=symbol)
             has_open_sell = any(o["side"] == "SELL" for o in open_orders)
             
-            # MODIFIED: 기계적 +1% 익절 조건주문 덫 장전 및 추적 (Case 14)
             if holdings_qty > 0 and not has_open_sell and not cond_order_id and not in_memory_ordering_lock[symbol] and is_active:
                 calculated_target = target_sell_price
                 trap_qty = holdings_qty
@@ -268,8 +272,23 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                 continue
 
             if not buy_order_id and not is_session_done and is_active and vwap_price > 0.0:
-                is_time_shield = (now_est.hour == 4 and now_est.minute <= 6)
-                if session_name == "preMarket" and not is_time_shield and current_price >= vwap_price:
+                
+                # MODIFIED: DST 변동을 무시하는 Dynamic Time Shield (+6분 절대 방어막)
+                is_time_shield = False
+                if session_start_time:
+                    session_start_est_check = session_start_time.astimezone(ZoneInfo('America/New_York'))
+                    elapsed = (now_est - session_start_est_check).total_seconds()
+                    if 0 <= elapsed <= 360:
+                        is_time_shield = True
+                
+                # MODIFIED: 세션 진입 조건 확장 (session_mode 연동)
+                can_enter = False
+                if session_name == "preMarket" and not is_time_shield:
+                    can_enter = True
+                elif session_name == "dayMarket" and session_mode == "BOTH" and not is_time_shield:
+                    can_enter = True
+                
+                if can_enter and current_price >= vwap_price:
                     if not in_memory_ordering_lock[symbol]:
                         in_memory_ordering_lock[symbol] = True
                         try:
