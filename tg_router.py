@@ -353,6 +353,7 @@ async def build_sync_board() -> str:
             f"🔺 수익: {d['profit_rate']:+.2f}% ({profit_sign}${abs(d['profit_usd']):,.2f} | {profit_sign}₩{int(abs(d['profit_krw'])):,})"
         )
         
+    # MODIFIED: 장마감/애프터마켓 하드코딩 텍스트 영구 소각 완료
     text = (
         f"📜 <b>[ 통합 지시서 ({market_state}) ]</b>\n"
         f"📅 {dst_str} ({now_est.strftime('%H:%M')})\n"
@@ -360,7 +361,6 @@ async def build_sync_board() -> str:
         f"➖➖➖➖➖➖➖➖➖➖➖➖\n\n"
         f"{format_symbol(soxl_data)}\n\n"
         f"{format_symbol(soxs_data)}\n\n"
-        f"⛔ 장마감/애프터마켓: 주문 불가\n\n"
         f"▶️ /avwap : 🔫 데이 트레이딩 레이더 관제탑"
     )
     return text
@@ -386,7 +386,6 @@ async def build_settlement_board() -> tuple[str, InlineKeyboardMarkup]:
         f"🔹 세션: {mode_text_s}"
     )
 
-    # MODIFIED: 장부 초기화(Reset) 컷오프 스위치 결속 (Edge Case 02 대응)
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(text="🔴 롱 정지" if is_active_l else "🟢 롱 가동", callback_data="toggle_set_act_SOXL"),
@@ -553,12 +552,10 @@ async def process_budget_input(message: types.Message, state: FSMContext):
     except Exception:
         await message.answer("🚨 유효한 숫자를 입력하세요.", parse_mode="HTML")
 
-# NEW: 로컬 장부 영구 소각 콜백 라우터 결속 (수동 조작 시 엣지 케이스 방어망)
 @router.callback_query(F.data.startswith("reset_ledger_"))
 async def process_reset_ledger(callback_query: types.CallbackQuery, state: FSMContext):
     symbol = callback_query.data.split("_")[2].upper()
     try:
-        # 상태 0주 원자적 기록 및 낡은 주문 식별자 강제 소각
         await AssassinLedger.save_state(
             symbol,
             price=0.0,
