@@ -115,16 +115,16 @@ async def build_avwap_radar() -> tuple[str, InlineKeyboardMarkup]:
     t = now_est.hour * 100 + now_est.minute
     if 400 <= t <= 929:
         session_name_ui = "preMarket"
-        market_header = "🌅 <b>[ 프리마켓 가동중 ]</b>"
+        market_header = "🌅 프리마켓"
     elif 930 <= t <= 1559:
         session_name_ui = "regularMarket"
-        market_header = "🔥 <b>[ 정규장 가동중 ]</b>"
+        market_header = "🔥 정규장"
     elif 1600 <= t <= 1859:
         session_name_ui = "afterMarket"
-        market_header = "🌙 <b>[ 애프터마켓 / 데이터 집계 종료 ]</b>"
+        market_header = "🌙 장마감"
     else:
         session_name_ui = "dayMarket"
-        market_header = "🌃 <b>[ 데이마켓 가동중 ]</b>"
+        market_header = "🌃 데이마켓"
 
     price_l = await api_client.get_current_price("SOXL")
     price_s = await api_client.get_current_price("SOXS")
@@ -189,74 +189,56 @@ async def build_avwap_radar() -> tuple[str, InlineKeyboardMarkup]:
     _, budget_l, _, is_done_l, is_active_l, ovn_l, _ = await AssassinLedger.get_state("SOXL")
     _, budget_s, _, is_done_s, is_active_s, ovn_s, _ = await AssassinLedger.get_state("SOXS")
 
-    def build_status(symbol, is_active, budget, ovn, is_done, current_session, est_time):
+    # MODIFIED: 모바일 가독성 및 세로 폭 최적화를 위한 인라인 텍스트 압축 렌더링 결속
+    def build_compact_status(symbol_short, is_active, budget, ovn, is_done, current_session, est_time):
         if not is_active:
-            return f"⚠️ <b>[ {symbol} 암살자 타격망 OFF (단순 관측 모드) ]</b>\n▫️ 교전 상태: OFF (수동 가동 대기)"
+            return f"⚠️ <b>[{symbol_short} OFF]</b> 대기 중"
 
         if is_done:
-            state_text = "당일 타격 완료 (휴식)"
+            state_text = "당일 타격 완료"
         else:
             if current_session == "preMarket":
                 if est_time.hour == 4 and est_time.minute <= 6:
-                    state_text = "ON (04:07 EST 타임쉴드 가동 중 - 관망)"
+                    state_text = "04:07 타임쉴드"
                 else:
-                    state_text = "ON (소프트웨어 트리거 감시 중)"
+                    state_text = "SW 요격 감시"
             elif current_session == "dayMarket":
-                state_text = "ON (데이장 관망 대기 중)"
+                state_text = "데이장 관망"
             elif current_session == "regularMarket":
-                state_text = "ON (정규장 감시 중)"
+                state_text = "정규장 감시"
             else:
-                state_text = "ON (장외 대기)"
+                state_text = "장외 대기"
 
-        ovn_text = "🟢 허용 (안전 이관)" if ovn else "🔴 불가 (15:59 덤핑)"
+        ovn_text = "🟢허용" if ovn else "🔴불가"
+        return f"⚔️ <b>[{symbol_short} ON]</b> {state_text} | 💵${budget:,.0f} | 🌙{ovn_text}"
 
-        return (f"⚔️ <b>[ {symbol} 암살자(aVWAP) 1-Shot 교전망 (🟢 가동중) ]</b>\n"
-                f"▫️ 교전 상태: {state_text}\n"
-                f"▫️ 타격 예산: ${budget:,.2f} (초과 시 팻핑거 방어)\n"
-                f"▫️ 오버나이트: {ovn_text}")
+    status_l = build_compact_status("롱(SOXL)", is_active_l, budget_l, ovn_l, is_done_l, session_name_ui, now_est)
+    status_s = build_compact_status("숏(SOXS)", is_active_s, budget_s, ovn_s, is_done_s, session_name_ui, now_est)
+    scan_time = now_est.strftime("%H:%M:%S")
 
-    status_l = build_status("롱(SOXL)", is_active_l, budget_l, ovn_l, is_done_l, session_name_ui, now_est)
-    status_s = build_status("숏(SOXS)", is_active_s, budget_s, ovn_s, is_done_s, session_name_ui, now_est)
-    scan_time = now_est.strftime("%Y-%m-%d %H:%M:%S")
+    # MODIFIED: 팩트 손실 없이 라인 수를 40% 삭감한 고집적 UI 포맷
+    text = f"""📡 <b>[ 관제탑: {market_header} 가동중 ]</b>
 
-    text = f"""📡 <b>[ 순수 돌파/추종 데이트레이딩 관제탑 ]</b>
-{market_header}
-
-🎯 <b>[ SOXL/SOXS 데이 트레이딩 관측소 ]</b>
-▫️ SOXL 현재가: ${price_l:.2f}
-▫️ SOXS 현재가: ${price_s:.2f}
-
-1️⃣ <b>롱(SOXL)과 숏(SOXS) 진폭 (5MA)</b>
-▫️ 롱(SOXL) 5일 평균 진폭: {amp_l:.2f}%
-▫️ 숏(SOXS) 5일 평균 진폭: {amp_s:.2f}%
-
-2️⃣ <b>암살자 평단가 등락률</b>
-▫️ 롱(SOXL) 평단가: {profit_l_str}
-▫️ 숏(SOXS) 평단가: {profit_s_str}
+🎯 <b>[ 현황: 현재가 / 5MA / 평단(수익) ]</b>
+▫️ 롱(SOXL): ${price_l:.2f} / {amp_l:.2f}% / {profit_l_str}
+▫️ 숏(SOXS): ${price_s:.2f} / {amp_s:.2f}% / {profit_s_str}
 
 🌅 <b>[ 0세션 - 데이장 (19:00~03:59) ]</b>
-▫️ 롱(SOXL) 고가: ${sess_l['day_h']:.2f} / 저가: ${sess_l['day_l']:.2f} (진폭 {sess_l['day_amp']:.2f}%)
-▫️ 롱(SOXL) 누적 VWAP: ${sess_l['day_vwap']:.2f}
-▫️ 숏(SOXS) 고가: ${sess_s['day_h']:.2f} / 저가: ${sess_s['day_l']:.2f} (진폭 {sess_s['day_amp']:.2f}%)
-▫️ 숏(SOXS) 누적 VWAP: ${sess_s['day_vwap']:.2f}
+▫️ 롱: {sess_l['day_amp']:.2f}% (${sess_l['day_l']:.2f}~${sess_l['day_h']:.2f}) | V: ${sess_l['day_vwap']:.2f}
+▫️ 숏: {sess_s['day_amp']:.2f}% (${sess_s['day_l']:.2f}~${sess_s['day_h']:.2f}) | V: ${sess_s['day_vwap']:.2f}
 
 🌅 <b>[ 1세션 - 프리장 (04:00~09:29) ]</b>
-▫️ 롱(SOXL) 고가: ${sess_l['pre_h']:.2f} / 저가: ${sess_l['pre_l']:.2f} (진폭 {sess_l['pre_amp']:.2f}%)
-▫️ 롱(SOXL) 누적 VWAP: ${sess_l['pre_vwap']:.2f}
-▫️ 숏(SOXS) 고가: ${sess_s['pre_h']:.2f} / 저가: ${sess_s['pre_l']:.2f} (진폭 {sess_s['pre_amp']:.2f}%)
-▫️ 숏(SOXS) 누적 VWAP: ${sess_s['pre_vwap']:.2f}
+▫️ 롱: {sess_l['pre_amp']:.2f}% (${sess_l['pre_l']:.2f}~${sess_l['pre_h']:.2f}) | V: ${sess_l['pre_vwap']:.2f}
+▫️ 숏: {sess_s['pre_amp']:.2f}% (${sess_s['pre_l']:.2f}~${sess_s['pre_h']:.2f}) | V: ${sess_s['pre_vwap']:.2f}
 
 🔥 <b>[ 2세션 - 정규장 (09:30~16:00) ]</b>
-▫️ 롱(SOXL) 고가: ${sess_l['reg_h']:.2f} / 저가: ${sess_l['reg_l']:.2f} (진폭 {sess_l['reg_amp']:.2f}%)
-▫️ 롱(SOXL) 누적 VWAP: ${sess_l['reg_vwap']:.2f}
-▫️ 숏(SOXS) 고가: ${sess_s['reg_h']:.2f} / 저가: ${sess_s['reg_l']:.2f} (진폭 {sess_s['reg_amp']:.2f}%)
-▫️ 숏(SOXS) 누적 VWAP: ${sess_s['reg_vwap']:.2f}
+▫️ 롱: {sess_l['reg_amp']:.2f}% (${sess_l['reg_l']:.2f}~${sess_l['reg_h']:.2f}) | V: ${sess_l['reg_vwap']:.2f}
+▫️ 숏: {sess_s['reg_amp']:.2f}% (${sess_s['reg_l']:.2f}~${sess_s['reg_h']:.2f}) | V: ${sess_s['reg_vwap']:.2f}
 
 {status_l}
-
 {status_s}
 
-⏱️ 마지막 레이더 스캔: {scan_time} (EST)"""
+⏱️ 갱신: {scan_time} (EST)"""
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="⚙️ 통합 전술 제어반", callback_data="open_settlement")],
@@ -282,7 +264,6 @@ async def build_sync_board() -> str:
 
     bp = await api_client.get_usd_buying_power()
     
-    # NEW: 토스증권 API 기반 실시간 환율 조회망 결속 (원화 환산용)
     exchange_rate = 1400.0
     try:
         ex_data = await api_client._request(
@@ -305,7 +286,6 @@ async def build_sync_board() -> str:
         profit_usd = hold.get('profit_usd', 0.0)
         profit_rate = hold.get('profit_rate', 0.0) * 100
         
-        # NEW: 실시간 환율 기반 원화 수익금 동적 연산
         profit_krw = profit_usd * exchange_rate
         
         try:
@@ -346,7 +326,6 @@ async def build_sync_board() -> str:
     soxl_data = await get_symbol_sync_data("SOXL")
     soxs_data = await get_symbol_sync_data("SOXS")
     
-    # MODIFIED: profit_krw를 활용한 원화 수익금 동적 포맷팅
     def format_symbol(d):
         profit_sign = "+" if d['profit_usd'] >= 0 else "-"
         return (
@@ -358,7 +337,6 @@ async def build_sync_board() -> str:
             f"🔺 수익: {d['profit_rate']:+.2f}% ({profit_sign}${abs(d['profit_usd']):,.2f} | {profit_sign}₩{int(abs(d['profit_krw'])):,})"
         )
         
-    # MODIFIED: RP 투자권장 항목 소각
     text = (
         f"📜 <b>[ 통합 지시서 ({market_state}) ]</b>\n"
         f"📅 {dst_str} ({now_est.strftime('%H:%M')})\n"
@@ -421,7 +399,6 @@ async def cmd_avwap(message: types.Message, state: FSMContext):
 async def process_open_avwap(callback_query: types.CallbackQuery, state: FSMContext):
     await state.clear()
     try:
-        # MODIFIED: Case 26 제자리 갱신 사수 (중간 로딩 텍스트 삭제 및 네이티브 스피너 유지)
         text, keyboard = await build_avwap_radar()
         await callback_query.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
     except Exception as e:
@@ -453,7 +430,6 @@ async def cmd_sync(message: types.Message, state: FSMContext):
 async def process_open_sync(callback_query: types.CallbackQuery, state: FSMContext):
     await state.clear()
     try:
-        # MODIFIED: Case 26 제자리 갱신 사수 (중간 로딩 텍스트 삭제 및 네이티브 스피너 유지)
         text = await build_sync_board()
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🔄 새로고침", callback_data="open_sync")],
