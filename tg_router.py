@@ -36,13 +36,14 @@ def get_main_menu_text() -> str:
     is_dst = now_est.dst() is not None and now_est.dst().total_seconds() != 0
     dst_status_text = "🌞서머타임 ON (EDT)" if is_dst else "❄️서머타임 OFF (EST)"
     
+    # MODIFIED: 15:59 정규장 덤핑 안내를 16:05 애프터장 덤핑으로 교체
     return (
         f"🕒 <b>[ 운영 스케줄 ({dst_status_text}) ]</b>\n"
         "🔹 19:00: ☀️ 데이장 (Day Market) 스캔\n"
         "🔹 03:59: 🛑 데이장 MOC 덤핑\n"
         "🔹 04:00: 🌅 프리장 VWAP 스캔\n"
         "🔹 09:30: 🔥 정규장 VWAP 스캔\n"
-        "🔹 15:59: 🛑 정규장 MOC 덤핑\n"
+        "🔹 16:05: 🛑 애프터장 MOC 덤핑\n"
         "🔹 17:00: 🧹 정산 스캔\n\n"
         "🛠 <b>[ 핵심 명령어 ]</b>\n"
         "▶️ /avwap : 🔫 트레이딩 레이더 관제탑\n"
@@ -306,7 +307,6 @@ async def build_sync_board() -> str:
         curr = await api_client.get_current_price(symbol)
         prev_close = curr
         
-        # MODIFIED: 1d 캔들은 오직 '전일 정규장 종가' 추출 용도로만 제한적 락온
         try:
             data_1d = await api_client._request("GET", f"/api/v1/candles?symbol={symbol}&interval=1d&count=2", "MARKET_DATA_CHART", headers=api_client._get_headers())
             candles_1d = data_1d.get("result", {}).get("candles", [])
@@ -317,7 +317,6 @@ async def build_sync_board() -> str:
         except Exception:
             pass
 
-        # MODIFIED: 당일 전체 세션(데이+프리+정규) 통합 1m 캔들 스윕을 통한 절대 고가/저가 연산
         if now_est.hour >= 19:
             session_start_est = now_est.replace(hour=19, minute=0, second=0, microsecond=0)
         else:

@@ -62,7 +62,6 @@ async def fetch_full_session_candles(client: TossApiClient, symbol: str, session
     return all_candles
 
 async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: str):
-    # MODIFIED: MOC 덤핑 시 1분 단위 스윕을 추적하기 위한 로컬 상태
     last_moc_minute = -1
     
     async def notify_tg(text: str):
@@ -93,7 +92,6 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
             last_buy_price, budget, last_session_id, is_session_done, is_active, overnight_on, target_sell_price, cond_order_id, session_mode = await AssassinLedger.get_state(symbol)
             buy_order_id = await AssassinLedger.get_buy_order_id(symbol)
 
-            # Case 22: 17:00 EST 가비지 컬렉션 (GC) 파이프라인
             if now_est.hour == 17 and now_est.minute == 0:
                 in_memory_ordering_lock[symbol] = False
                 idempotency_keys[symbol] = {"BUY": None, "TRAP": None, "MOC": None}
@@ -104,7 +102,6 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                 await asyncio.sleep(60)
                 continue
             
-            # Case 10 & 취약점 A 방어: 캘린더 응답 결측 및 Fail-Open 하드코딩 폴백
             try:
                 is_open, session_end_time, session_name, session_start_time = await asyncio.wait_for(client.is_market_open(), timeout=10.0)
                 if not session_start_time:
@@ -130,17 +127,15 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                 session_start_time = fallback_start
                 print(f"🚨 [aVWAP {symbol}] 캘린더 붕괴 방어. 타임쉴드 폴백: {session_name} ({session_start_time})", flush=True)
 
-            # MODIFIED: 03:57~03:59 및 15:57~15:59 3분 전향 덤핑 스윕 방어망
+            # MODIFIED: 03:57~03:59 데이장 및 16:05~16:07 애프터장 초입 덤핑 스윕 방어망 연장
             is_day_moc = (now_est.hour == 3 and 57 <= now_est.minute <= 59)
-            is_reg_moc = (now_est.hour == 15 and 57 <= now_est.minute <= 59)
+            is_reg_moc = (now_est.hour == 16 and 5 <= now_est.minute <= 7)
 
             if (is_day_moc or is_reg_moc) and not overnight_on and is_active:
-                # MODIFIED: buy_order_id 의존성을 폐기하고 실시간 팩트 보유 수량(holdings_qty > 0) 기반 3연속 스윕 강제 락온
                 if holdings_qty > 0 and not in_memory_ordering_lock[symbol]:
                     if last_moc_minute != now_est.minute:
                         in_memory_ordering_lock[symbol] = True
                         try:
-                            # 🚨 덤핑 격발 전 로컬 장부에 기록된 조건주문을 선취소 (공통)
                             if cond_order_id:
                                 try:
                                     await client.cancel_conditional_order(cond_order_id)
@@ -152,7 +147,6 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                             dump_qty = holdings_qty
                             
                             if dump_qty > 0:
-                                # 이전 분(minute)에 발사한 덤핑이 미체결 상태라면 선취소
                                 open_orders = await client.get_orders(status="OPEN", symbol=symbol)
                                 if open_orders:
                                     for order in open_orders:
@@ -163,7 +157,6 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                                 bids = orderbook.get("bids", [])
                                 current_price = await client.get_current_price(symbol)
                                 
-                                # 매수 1호가 순수 락온 및 재조준
                                 if bids and float(bids[0]["price"]) > 0.0:
                                     bid_1_price = float(bids[0]["price"])
                                 elif current_price > 0.0:
@@ -183,14 +176,13 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                                         client_order_id=client_id
                                     )
                                     
-                                    # MODIFIED: 장부 전면 초기화를 폐기하고 당일 진입 금지(is_session_done)만 락온하여 58분, 59분 재타격 보장
                                     await AssassinLedger.save_state(symbol, is_session_done=True)
                                     
-                                    # 성공 시에만 멱등성 키 해제 및 시간 락온
                                     idempotency_keys[symbol]["MOC"] = None
                                     last_moc_minute = now_est.minute
                                     
-                                    tag = "03:57~59 데이장" if is_day_moc else "15:57~59 정규장"
+                                    # MODIFIED: 덤핑 알림 태그 변경
+                                    tag = "03:57~59 데이장" if is_day_moc else "16:05~07 애프터장"
                                     await notify_tg(f"🔴 <b>[aVWAP {symbol}] {tag} 제로오버나이트 강제 청산 스윕 ({now_est.minute}분 타격)</b>\n▫️ 덤핑 1호가: ${bid_1_price:.2f}\n▫️ 수량: {dump_qty}주")
                                     print(f"🧹 [aVWAP {symbol}] {tag} MOC 순수 1호가 덤핑 스윕 ({now_est.minute}분) 완료.", flush=True)
                         except Exception as e:
@@ -199,7 +191,6 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                         finally:
                             in_memory_ordering_lock[symbol] = False
                 
-                # MOC 덤핑 윈도우(3분) 동안은 신규 매수 로직 진입을 전면 차단
                 continue
 
             if not is_open:
