@@ -38,7 +38,7 @@ def get_main_menu_text() -> str:
     
     return (
         f"🕒 <b>[ 운영 스케줄 ({dst_status_text}) ]</b>\n"
-        "🔹 19:00: 🌅 데이장 (Day Market) 스캔 개시\n"
+        "🔹 19:00: ☀️ 데이장 (Day Market) 스캔 개시\n"
         "🔹 04:00: 🌅 프리장 VWAP 스캔 개시\n"
         "🔹 09:30: 🔥 정규장 VWAP 초기화 및 스캔\n"
         "🔹 15:59: 🛑 암살자 오버나이트 강제 덤핑\n"
@@ -124,7 +124,8 @@ async def build_avwap_radar() -> tuple[str, InlineKeyboardMarkup]:
         market_header = "🌙 장마감"
     else:
         session_name_ui = "dayMarket"
-        market_header = "🌃 데이마켓"
+        # MODIFIED: 데이장 이모지 독립화 (☀️ 적용)
+        market_header = "☀️ 데이마켓"
 
     price_l = await api_client.get_current_price("SOXL")
     price_s = await api_client.get_current_price("SOXS")
@@ -189,7 +190,6 @@ async def build_avwap_radar() -> tuple[str, InlineKeyboardMarkup]:
     _, budget_l, _, is_done_l, is_active_l, ovn_l, _ = await AssassinLedger.get_state("SOXL")
     _, budget_s, _, is_done_s, is_active_s, ovn_s, _ = await AssassinLedger.get_state("SOXS")
 
-    # MODIFIED: 모바일 가독성 및 세로 폭 최적화를 위한 인라인 텍스트 압축 렌더링 결속
     def build_compact_status(symbol_short, is_active, budget, ovn, is_done, current_session, est_time):
         if not is_active:
             return f"⚠️ <b>[{symbol_short} OFF]</b> 대기 중"
@@ -214,26 +214,34 @@ async def build_avwap_radar() -> tuple[str, InlineKeyboardMarkup]:
 
     status_l = build_compact_status("롱(SOXL)", is_active_l, budget_l, ovn_l, is_done_l, session_name_ui, now_est)
     status_s = build_compact_status("숏(SOXS)", is_active_s, budget_s, ovn_s, is_done_s, session_name_ui, now_est)
-    scan_time = now_est.strftime("%H:%M:%S")
+    
+    # MODIFIED: 로깅 최적화를 위한 YYYY-MM-DD HH:MM:SS 풀 포맷 갱신 시간 복구
+    scan_time = now_est.strftime("%Y-%m-%d %H:%M:%S")
 
-    # MODIFIED: 팩트 손실 없이 라인 수를 40% 삭감한 고집적 UI 포맷
+    # MODIFIED: 줄바꿈 방어를 위한 VWAP 변수 두 줄 분리 렌더링 및 이모지(데이마켓 ☀️) 적용
     text = f"""📡 <b>[ 관제탑: {market_header} 가동중 ]</b>
 
 🎯 <b>[ 현황: 현재가 / 5MA / 평단(수익) ]</b>
 ▫️ 롱(SOXL): ${price_l:.2f} / {amp_l:.2f}% / {profit_l_str}
 ▫️ 숏(SOXS): ${price_s:.2f} / {amp_s:.2f}% / {profit_s_str}
 
-🌅 <b>[ 0세션 - 데이장 (19:00~03:59) ]</b>
-▫️ 롱: {sess_l['day_amp']:.2f}% (${sess_l['day_l']:.2f}~${sess_l['day_h']:.2f}) | V: ${sess_l['day_vwap']:.2f}
-▫️ 숏: {sess_s['day_amp']:.2f}% (${sess_s['day_l']:.2f}~${sess_s['day_h']:.2f}) | V: ${sess_s['day_vwap']:.2f}
+☀️ <b>[ 0세션 - 데이장 (19:00~03:59) ]</b>
+▫️ 롱: {sess_l['day_amp']:.2f}% (${sess_l['day_l']:.2f}~${sess_l['day_h']:.2f})
+▫️ VWAP: ${sess_l['day_vwap']:.2f}
+▫️ 숏: {sess_s['day_amp']:.2f}% (${sess_s['day_l']:.2f}~${sess_s['day_h']:.2f})
+▫️ VWAP: ${sess_s['day_vwap']:.2f}
 
 🌅 <b>[ 1세션 - 프리장 (04:00~09:29) ]</b>
-▫️ 롱: {sess_l['pre_amp']:.2f}% (${sess_l['pre_l']:.2f}~${sess_l['pre_h']:.2f}) | V: ${sess_l['pre_vwap']:.2f}
-▫️ 숏: {sess_s['pre_amp']:.2f}% (${sess_s['pre_l']:.2f}~${sess_s['pre_h']:.2f}) | V: ${sess_s['pre_vwap']:.2f}
+▫️ 롱: {sess_l['pre_amp']:.2f}% (${sess_l['pre_l']:.2f}~${sess_l['pre_h']:.2f})
+▫️ VWAP: ${sess_l['pre_vwap']:.2f}
+▫️ 숏: {sess_s['pre_amp']:.2f}% (${sess_s['pre_l']:.2f}~${sess_s['pre_h']:.2f})
+▫️ VWAP: ${sess_s['pre_vwap']:.2f}
 
 🔥 <b>[ 2세션 - 정규장 (09:30~16:00) ]</b>
-▫️ 롱: {sess_l['reg_amp']:.2f}% (${sess_l['reg_l']:.2f}~${sess_l['reg_h']:.2f}) | V: ${sess_l['reg_vwap']:.2f}
-▫️ 숏: {sess_s['reg_amp']:.2f}% (${sess_s['reg_l']:.2f}~${sess_s['reg_h']:.2f}) | V: ${sess_s['reg_vwap']:.2f}
+▫️ 롱: {sess_l['reg_amp']:.2f}% (${sess_l['reg_l']:.2f}~${sess_l['reg_h']:.2f})
+▫️ VWAP: ${sess_l['reg_vwap']:.2f}
+▫️ 숏: {sess_s['reg_amp']:.2f}% (${sess_s['reg_l']:.2f}~${sess_s['reg_h']:.2f})
+▫️ VWAP: ${sess_s['reg_vwap']:.2f}
 
 {status_l}
 {status_s}
@@ -260,7 +268,7 @@ async def build_sync_board() -> str:
     elif 1600 <= t <= 1859:
         market_state = "⛔ 장마감"
     else:
-        market_state = "🌅 데이장"
+        market_state = "☀️ 데이장"
 
     bp = await api_client.get_usd_buying_power()
     
