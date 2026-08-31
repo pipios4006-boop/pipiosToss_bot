@@ -190,7 +190,6 @@ async def build_avwap_radar() -> tuple[str, InlineKeyboardMarkup]:
     _, budget_l, _, is_done_l, is_active_l, ovn_l, _, _, session_mode_l = await AssassinLedger.get_state("SOXL")
     _, budget_s, _, is_done_s, is_active_s, ovn_s, _, _, session_mode_s = await AssassinLedger.get_state("SOXS")
 
-    # MODIFIED: session_mode 에 따른 동적 상태 표출 락온
     def build_compact_status(symbol_short, is_active, budget, ovn, is_done, current_session, est_time, session_mode):
         if not is_active:
             return f"⚠️ <b>[{symbol_short} OFF]</b> 대기 중"
@@ -366,7 +365,6 @@ async def build_sync_board() -> str:
     )
     return text
 
-# MODIFIED: session_mode 토글 버튼 탑재 결속
 async def build_settlement_board() -> tuple[str, InlineKeyboardMarkup]:
     _, budget_l, _, _, is_active_l, ovn_l, _, _, mode_l = await AssassinLedger.get_state("SOXL")
     _, budget_s, _, _, is_active_s, ovn_s, _, _, mode_s = await AssassinLedger.get_state("SOXS")
@@ -428,7 +426,8 @@ async def process_open_avwap(callback_query: types.CallbackQuery, state: FSMCont
     try:
         text, keyboard = await build_avwap_radar()
         await callback_query.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
-    except Exception e:
+    # MODIFIED: 문법 에러 치유 (as e:)
+    except Exception as e:
         if "message is not modified" not in str(e).lower():
             await callback_query.message.answer(f"🚨 <b>관제탑 갱신 실패:</b> {html.escape(str(e))}", parse_mode="HTML")
     finally:
@@ -514,7 +513,6 @@ async def process_toggle_set_ovn(callback_query: types.CallbackQuery, state: FSM
     except Exception:
         pass
 
-# NEW: 세션 모드 토글 로직 추가
 @router.callback_query(F.data.startswith("toggle_set_mode_"))
 async def process_toggle_set_mode(callback_query: types.CallbackQuery, state: FSMContext):
     symbol = callback_query.data.split("_")[3].upper()
