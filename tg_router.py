@@ -36,6 +36,7 @@ def get_main_menu_text() -> str:
     is_dst = now_est.dst() is not None and now_est.dst().total_seconds() != 0
     dst_status_text = "🌞서머타임 ON (EDT)" if is_dst else "❄️서머타임 OFF (EST)"
     
+    # MODIFIED: 메인 메뉴 텍스트에 /reset 명령어 추가 및 정렬
     return (
         f"🕒 <b>[ 운영 스케줄 ({dst_status_text}) ]</b>\n"
         "🔹 19:00: ☀️ 데이장 (Day Market) 스캔 개시\n"
@@ -48,6 +49,7 @@ def get_main_menu_text() -> str:
         "▶️ /avwap : 🔫 데이 트레이딩 레이더 관제탑\n"
         "▶️ /sync : 📜 통합 지시서 및 장부 동기화\n"
         "▶️ /settlement : ⚙️ 통합 전술 제어반 (시드/OVN/세션)\n\n"
+        "⚠️ /reset : 🧹 롱/숏 장부 초기화\n\n"
         "⚠️ /update : 🚀 깃허브 게시판 파이썬 코드 다운로드 및 탑재"
     )
 
@@ -353,7 +355,6 @@ async def build_sync_board() -> str:
             f"🔺 수익: {d['profit_rate']:+.2f}% ({profit_sign}${abs(d['profit_usd']):,.2f} | {profit_sign}₩{int(abs(d['profit_krw'])):,})"
         )
         
-    # MODIFIED: 장마감/애프터마켓 하드코딩 텍스트 영구 소각 완료
     text = (
         f"📜 <b>[ 통합 지시서 ({market_state}) ]</b>\n"
         f"📅 {dst_str} ({now_est.strftime('%H:%M')})\n"
@@ -386,6 +387,7 @@ async def build_settlement_board() -> tuple[str, InlineKeyboardMarkup]:
         f"🔹 세션: {mode_text_s}"
     )
 
+    # MODIFIED: 장부 초기화 버튼 전면 소각
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(text="🔴 롱 정지" if is_active_l else "🟢 롱 가동", callback_data="toggle_set_act_SOXL"),
@@ -402,10 +404,6 @@ async def build_settlement_board() -> tuple[str, InlineKeyboardMarkup]:
         [
             InlineKeyboardButton(text="☀️ 롱 2세션 전환" if mode_l == "PRE_ONLY" else "🌅 롱 1세션 전환", callback_data="toggle_set_mode_SOXL"),
             InlineKeyboardButton(text="☀️ 숏 2세션 전환" if mode_s == "PRE_ONLY" else "🌅 숏 1세션 전환", callback_data="toggle_set_mode_SOXS")
-        ],
-        [
-            InlineKeyboardButton(text="🧹 롱 장부 초기화", callback_data="reset_ledger_SOXL"),
-            InlineKeyboardButton(text="🧹 숏 장부 초기화", callback_data="reset_ledger_SOXS")
         ],
         [InlineKeyboardButton(text="🔫 데이 트레이딩 관제탑", callback_data="open_avwap")],
         [InlineKeyboardButton(text="🔙 메인 메뉴", callback_data="back_to_main")]
@@ -552,21 +550,39 @@ async def process_budget_input(message: types.Message, state: FSMContext):
     except Exception:
         await message.answer("🚨 유효한 숫자를 입력하세요.", parse_mode="HTML")
 
-@router.callback_query(F.data.startswith("reset_ledger_"))
-async def process_reset_ledger(callback_query: types.CallbackQuery, state: FSMContext):
-    symbol = callback_query.data.split("_")[2].upper()
+# NEW: 글로벌 듀얼 장부 강제 초기화 명령어 결속 (2단계 락다운)
+@router.message(Command("reset"))
+async def cmd_reset(message: types.Message, state: FSMContext):
+    if message.from_user.id != ADMIN_CHAT_ID:
+        return
+    await state.clear()
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ 동시 초기화 진행", callback_data="execute_dual_reset")],
+        [InlineKeyboardButton(text="🔙 취소", callback_data="back_to_main")]
+    ])
+    text = (
+        "⚠️ <b>[듀얼 장부 동시 초기화]</b>\n\n"
+        "경고: SOXL 및 SOXS의 로컬 장부(평단가, 목표가, 주문 ID, 세션 락)를 100% 영구 소각하고 0점으로 원자적 초기화를 수행합니다.\n"
+        "진행하시겠습니까?"
+    )
     try:
-        await AssassinLedger.save_state(
-            symbol,
-            price=0.0,
-            target_sell_price=0.0,
-            buy_order_id="",
-            cond_order_id="",
-            is_session_done=False
-        )
-        await callback_query.answer(f"✅ [{symbol}] 장부 영구 소각 및 0점 초기화 완료", show_alert=True)
-        text, keyboard = await build_settlement_board()
-        await callback_query.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
+        await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+    except Exception:
+        pass
+
+# NEW: 글로벌 듀얼 장부 강제 초기화 실행부 결속
+@router.callback_query(F.data == "execute_dual_reset")
+async def process_execute_dual_reset(callback_query: types.CallbackQuery, state: FSMContext):
+    await state.clear()
+    try:
+        await AssassinLedger.save_state("SOXL", price=0.0, target_sell_price=0.0, buy_order_id="", cond_order_id="", is_session_done=False)
+        await AssassinLedger.save_state("SOXS", price=0.0, target_sell_price=0.0, buy_order_id="", cond_order_id="", is_session_done=False)
+        
+        await callback_query.answer("✅ 듀얼 장부 영구 소각 완료", show_alert=True)
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔙 메인 메뉴", callback_data="back_to_main")]
+        ])
+        await callback_query.message.edit_text("✅ <b>[듀얼 장부 영구 소각 완료]</b>\n▫️ SOXL, SOXS 장부가 0점으로 초기화되었습니다.", reply_markup=keyboard, parse_mode="HTML")
     except Exception as e:
         if "message is not modified" not in str(e).lower():
             try:
