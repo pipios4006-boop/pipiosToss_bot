@@ -108,28 +108,32 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                 await asyncio.sleep(60)
                 continue
             
-            # MODIFIED: 견고한 세션 획득 및 Fail-Safe 결속
+            # API 캘린더 통신망 (is_open 여부만 참조, 시간은 로컬 하드코딩으로 대체)
             try:
-                is_open, session_end_time, session_name, session_start_time = await asyncio.wait_for(client.is_market_open(), timeout=10.0)
+                is_open, _, _, _ = await asyncio.wait_for(client.is_market_open(), timeout=10.0)
             except Exception:
                 is_open = True
-                if 400 <= est_time_int < 930:
-                    session_name = "preMarket"
-                    base_h, base_m = 4, 0
-                elif 930 <= est_time_int < 1600:
-                    session_name = "regularMarket"
-                    base_h, base_m = 9, 30
-                elif 1600 <= est_time_int <= 1859:
-                    session_name = "afterMarket"
-                    base_h, base_m = 16, 0
-                else:
-                    session_name = "dayMarket"
-                    base_h, base_m = 19, 0
+
+            # MODIFIED: 제4헌법 100% 로컬 하드코딩 락온 (토스 API VWAP 왜곡 방어)
+            if 400 <= est_time_int < 930:
+                hardcoded_session = "preMarket"
+                base_h, base_m = 4, 0
+                base_date = now_est
+            elif 930 <= est_time_int < 1600:
+                hardcoded_session = "regularMarket"
+                base_h, base_m = 9, 30
+                base_date = now_est
+            elif 1600 <= est_time_int <= 1859:
+                hardcoded_session = "afterMarket"
+                base_h, base_m = 16, 0
+                base_date = now_est
+            else:
+                hardcoded_session = "dayMarket"
+                base_h, base_m = 19, 0
+                base_date = now_est if now_est.hour >= 19 else now_est - timedelta(days=1)
                 
-                fallback_start = now_est.replace(hour=base_h, minute=base_m, second=0, microsecond=0)
-                if session_name == "dayMarket" and now_est.hour < 19:
-                    fallback_start -= timedelta(days=1)
-                session_start_time = fallback_start
+            session_baseline_est = base_date.replace(hour=base_h, minute=base_m, second=0, microsecond=0)
+            current_session_id = f"{session_baseline_est.strftime('%Y%m%d_%H%M')}_{hardcoded_session}"
 
             is_day_moc = (now_est.hour == 3 and 57 <= now_est.minute <= 59)
             is_reg_moc = (now_est.hour == 16 and 5 <= now_est.minute <= 7)
@@ -202,34 +206,46 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
             if current_price <= 0.0:
                 continue
 
-            # 세션 전환 시 장부 초기화
-            if session_start_time:
-                session_start_est = session_start_time.astimezone(ZoneInfo('America/New_York'))
-                current_session_id = f"{session_start_est.strftime('%Y%m%d_%H%M')}_{session_name}"
-                if current_session_id != last_session_id:
-                    if holdings_qty == 0:
+            # 세션 전환 시 장부 초기화 (MODIFIED: 매수 ID 증발 방어망 결속)
+            if current_session_id != last_session_id:
+                if holdings_qty == 0:
+                    can_reset = True
+                    if buy_order_id:
+                        try:
+                            od = await client.get_order_detail(buy_order_id)
+                            if od.get("status") in ["PENDING", "PARTIAL_FILLED"]:
+                                can_reset = False
+                        except Exception:
+                            can_reset = False
+                            
+                    if can_reset:
                         await AssassinLedger.save_state(symbol, price=0.0, target_sell_price=0.0, last_session_id=current_session_id, is_session_done=False, buy_order_id="", cond_order_id="")
                         is_session_done = False
                         target_sell_price = 0.0
                         buy_order_id = ""
                         cond_order_id = ""
-                    else:
-                        await AssassinLedger.save_state(symbol, last_session_id=current_session_id)
-                    last_session_id = current_session_id
+                else:
+                    await AssassinLedger.save_state(symbol, last_session_id=current_session_id)
+                last_session_id = current_session_id
 
+            # 보유 물량 0 & 장부 잔여물 소각 (MODIFIED: 매수 ID 증발 원자적 방어)
             if holdings_qty == 0 and (target_sell_price > 0.0 or buy_order_id or cond_order_id):
                 if not in_memory_ordering_lock[symbol]:
-                    await AssassinLedger.save_state(symbol, price=0.0, target_sell_price=0.0, buy_order_id="", cond_order_id="")
-                    target_sell_price = 0.0
-                    buy_order_id = ""
-                    cond_order_id = ""
-            
-            session_baseline_est = session_start_time.astimezone(ZoneInfo('America/New_York')) if session_start_time else now_est
-            if session_name in ["regularMarket", "afterMarket"]:
-                reg_start_str = f"{now_est.strftime('%Y-%m-%d')} 09:30:00"
-                reg_start_est = datetime.strptime(reg_start_str, "%Y-%m-%d %H:%M:%S").replace(tzinfo=ZoneInfo('America/New_York'))
-                if now_est >= reg_start_est:
-                    session_baseline_est = reg_start_est
+                    can_clear = True
+                    if buy_order_id:
+                        try:
+                            od = await client.get_order_detail(buy_order_id)
+                            st = od.get("status", "")
+                            if st in ["PENDING", "PARTIAL_FILLED", "PENDING_CANCEL", "PENDING_REPLACE"]:
+                                can_clear = False
+                        except Exception:
+                            can_clear = False
+                            
+                    if can_clear:
+                        await AssassinLedger.save_state(symbol, price=0.0, target_sell_price=0.0, buy_order_id="", cond_order_id="")
+                        target_sell_price = 0.0
+                        buy_order_id = ""
+                        cond_order_id = ""
 
             candles_json = await fetch_full_session_candles(client, symbol, session_baseline_est)
             vwap_price = AVWAPEngine.calculate_vwap(candles_json, session_baseline_est)
@@ -243,9 +259,10 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
 
             open_orders = await client.get_orders(status="OPEN", symbol=symbol)
             has_open_sell = any(o["side"] == "SELL" for o in open_orders)
+            has_open_buy = any(o["side"] == "BUY" for o in open_orders)
             
-            # 보유 물량 확인 즉시 익절 조건주문 덫 장전
-            if holdings_qty > 0 and not has_open_sell and not cond_order_id and not in_memory_ordering_lock[symbol] and is_active:
+            # 보유 물량 확인 즉시 익절 조건주문 덫 장전 (MODIFIED: 체결 100% 검증 락온)
+            if holdings_qty > 0 and not has_open_sell and not has_open_buy and not cond_order_id and not in_memory_ordering_lock[symbol] and is_active:
                 calculated_target = target_sell_price
                 trap_qty = holdings_qty
                 avg_price = last_buy_price
@@ -262,7 +279,7 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                         
                         if filled_qty > 0 and avg_price > 0.0:
                             trap_qty = min(holdings_qty, filled_qty)
-                            if session_name == "dayMarket":
+                            if hardcoded_session == "dayMarket":
                                 calculated_target = math.ceil(avg_price * 1.007 * 100) / 100.0
                                 trap_tag = "+0.7%"
                             else:
@@ -313,16 +330,14 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
             # 돌파/추종 매수 트리거 감시
             if not buy_order_id and not is_session_done and is_active and vwap_price > 0.0:
                 is_time_shield = False
-                if session_start_time:
-                    session_start_est_check = session_start_time.astimezone(ZoneInfo('America/New_York'))
-                    elapsed = (now_est - session_start_est_check).total_seconds()
-                    if 0 <= elapsed <= 360:
-                        is_time_shield = True
+                elapsed = (now_est - session_baseline_est).total_seconds()
+                if 0 <= elapsed <= 360:
+                    is_time_shield = True
                 
                 can_enter = False
-                if session_name == "preMarket" and not is_time_shield:
+                if hardcoded_session == "preMarket" and not is_time_shield:
                     can_enter = True
-                elif session_name == "dayMarket" and session_mode == "BOTH" and not is_time_shield:
+                elif hardcoded_session == "dayMarket" and session_mode == "BOTH" and not is_time_shield:
                     can_enter = True
                 
                 if can_enter and current_price >= vwap_price:
