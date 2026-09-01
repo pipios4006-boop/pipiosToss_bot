@@ -132,10 +132,10 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
             session_baseline_est = base_date.replace(hour=base_h, minute=base_m, second=0, microsecond=0)
             current_session_id = f"{session_baseline_est.strftime('%Y%m%d_%H%M')}_{hardcoded_session}"
 
-            is_day_moc = (now_est.hour == 3 and 57 <= now_est.minute <= 59)
+            # MODIFIED: 초과 Case 16 데이장 MOC 스윕 전면 소각 (정규장 MOC 덤핑 단일화)
             is_reg_moc = (now_est.hour == 16 and 5 <= now_est.minute <= 7)
 
-            if (is_day_moc or is_reg_moc) and not overnight_on and is_active:
+            if is_reg_moc and not overnight_on and is_active:
                 if holdings_qty > 0 and not in_memory_ordering_lock[symbol]:
                     if last_moc_minute != now_est.minute:
                         in_memory_ordering_lock[symbol] = True
@@ -185,7 +185,7 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                                     idempotency_keys[symbol]["MOC"] = None
                                     last_moc_minute = now_est.minute
                                     
-                                    tag = "03:57~59 데이장" if is_day_moc else "16:05~07 애프터장"
+                                    tag = "16:05~07 애프터장"
                                     await notify_tg(f"🔴 <b>[aVWAP {symbol}] {tag} 제로오버나이트 강제 청산 스윕 ({now_est.minute}분 타격)</b>\n▫️ 덤핑 1호가: ${bid_1_price:.2f}\n▫️ 수량: {dump_qty}주")
                         except Exception as e:
                             print(f"🚨 [MOC 방어] {e}", flush=True)
@@ -246,8 +246,12 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                         if is_take_profit_exit:
                             await notify_tg(f"🎉 <b>[aVWAP {symbol}] 거래 종료 (퇴근 락온 완료)</b>\n▫️ 잔고 0주 (조건주문 체결 확인)\n▫️ 당일 신규 진입 권한 영구 소각")
 
-            candles_json = await fetch_full_session_candles(client, symbol, session_baseline_est)
-            vwap_price = AVWAPEngine.calculate_vwap(candles_json, session_baseline_est)
+            # MODIFIED: 데이장 캔들 API 호출 전면 소각 (불필요한 Rate Limit 낭비 방어)
+            if hardcoded_session == "dayMarket":
+                vwap_price = 0.0
+            else:
+                candles_json = await fetch_full_session_candles(client, symbol, session_baseline_est)
+                vwap_price = AVWAPEngine.calculate_vwap(candles_json, session_baseline_est)
 
             if est_time_int >= 930 and est_time_int < 1600:
                 if not buy_order_id and not is_session_done:
@@ -326,6 +330,7 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                         avg_price = float(holdings_detail.get('avg_price', 0.0))
 
                     if avg_price > 0.0:
+                        # MODIFIED: 구 장부에 잔존할 수 있는 데이장 물량 대비용 Fall-safe TRAP 유지
                         if entry_session == "dayMarket":
                             calculated_target = math.ceil(avg_price * 1.007 * 100) / 100.0
                             trap_tag = "+0.7%"
@@ -379,10 +384,9 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                 if 0 <= elapsed <= 360:
                     is_time_shield = True
                 
+                # MODIFIED: 동적 매수 타점 진입 플래그 (데이장 진입 권한 100% 소각)
                 can_enter = False
                 if hardcoded_session == "preMarket" and not is_time_shield:
-                    can_enter = True
-                elif hardcoded_session == "dayMarket" and session_mode == "BOTH" and not is_time_shield:
                     can_enter = True
                 
                 if can_enter and current_price >= vwap_price:
