@@ -112,6 +112,7 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
             except Exception:
                 is_open = True
 
+            # MODIFIED: 세션별 정확한 타임라인 및 캔들 누적 기준 시각(session_baseline_est) 락온 결속
             if 400 <= est_time_int < 930:
                 hardcoded_session = "preMarket"
                 base_h, base_m = 4, 0
@@ -236,7 +237,6 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                             can_clear = False
                             
                     if can_clear:
-                        # MODIFIED: 익절 체결 후 무한 진입 방어 (퇴근 락온 처리 결속)
                         is_take_profit_exit = bool(target_sell_price > 0.0 or cond_order_id)
                         await AssassinLedger.save_state(symbol, price=0.0, target_sell_price=0.0, buy_order_id="", cond_order_id="", is_session_done=True)
                         target_sell_price = 0.0
@@ -247,6 +247,7 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                         if is_take_profit_exit:
                             await notify_tg(f"🎉 <b>[aVWAP {symbol}] 거래 종료 (퇴근 락온 완료)</b>\n▫️ 잔고 0주 (조건주문 체결 확인)\n▫️ 당일 신규 진입 권한 영구 소각")
 
+            # MODIFIED: 엄격하게 분기된 session_baseline_est를 활용하여 해당 세션 고유 1분봉 캔들 동적 수집
             candles_json = await fetch_full_session_candles(client, symbol, session_baseline_est)
             vwap_price = AVWAPEngine.calculate_vwap(candles_json, session_baseline_est)
 
