@@ -190,10 +190,10 @@ async def build_avwap_radar() -> tuple[str, InlineKeyboardMarkup]:
             return f"⚠️ <b>[{symbol_short} OFF]</b> 대기 중"
 
         if qty > 0:
-            if entry_session == "preMarket":
-                state_text = "🌅 보유 (PRE 1타점 +2.0%)" if pre_first_flag else "🌅 보유 (PRE 듀얼 +1.0%)"
+            if pre_first_flag:
+                state_text = "🌅 보유 (PRE 1타점 +2.0%)"
             else:
-                state_text = "🔥 보유 (REG +1.0%)"
+                state_text = "🌅 보유 (PRE 듀얼 +1.0%)"
         elif is_done:
             state_text = "당일 타격 완료"
         else:
@@ -210,8 +210,7 @@ async def build_avwap_radar() -> tuple[str, InlineKeyboardMarkup]:
                 state_text = "장외 대기"
 
         ovn_text = "🟢허용" if ovn else "🔴불가"
-        mode_text = "🌅프리장 전용"
-        return f"⚔️ <b>[{symbol_short} ON]</b> {mode_text} | {state_text} | 💵${budget:,.0f} | 🌙{ovn_text}"
+        return f"⚔️ <b>[{symbol_short} ON]</b> {state_text} | 💵${budget:,.0f} | 🌙{ovn_text}"
 
     status_l = build_compact_status("롱(SOXL)", is_active_l, budget_l, ovn_l, is_done_l, session_name_ui, now_est, session_mode_l, hold_l['qty'], entry_l, first_l)
     status_s = build_compact_status("숏(SOXS)", is_active_s, budget_s, ovn_s, is_done_s, session_name_ui, now_est, session_mode_s, hold_s['qty'], entry_s, first_s)
@@ -368,21 +367,17 @@ async def build_sync_board() -> str:
     
     def format_symbol(d):
         profit_sign = "+" if d['profit_usd'] >= 0 else "-"
-        mode_str = "🌅 프리장 전용"
         
         flag_str = "⏳ 대기"
         if d['qty'] > 0:
-            if d['entry_session'] == "preMarket":
-                if d['pre_first_flag']:
-                    flag_str = "🌅 [PRE 1타점: +2.0%]"
-                else:
-                    flag_str = "🌅 [PRE 듀얼: +1.0%]"
+            if d['pre_first_flag']:
+                flag_str = "🌅 [PRE 1타점: +2.0%]"
             else:
-                flag_str = "🔥 [REG 진입: +1.0%]"
+                flag_str = "🌅 [PRE 듀얼: +1.0%]"
 
         return (
             f"⚖️ <b>[{d['symbol']}] 암살자(aVWAP) 지시서</b>\n"
-            f"💵 총 시드: ${d['budget']:,.0f} | 🎯 {mode_str} | {flag_str}\n"
+            f"💵 총 시드: ${d['budget']:,.0f} | 🎯 {flag_str}\n"
             f"💰 현재 ${d['curr']:.2f} / 평단 ${d['avg_price']:.2f} ({int(d['qty'])}주)\n"
             f"📈 금일 고가: ${d['high']:.2f} ({d['high_rate']:+.2f}%)\n"
             f"📉 금일 저가: ${d['low']:.2f} ({d['low_rate']:+.2f}%)\n"
@@ -404,21 +399,16 @@ async def build_settlement_board() -> tuple[str, InlineKeyboardMarkup]:
     _, budget_l, _, _, is_active_l, ovn_l, _, _, mode_l, _, _, _ = await AssassinLedger.get_state("SOXL")
     _, budget_s, _, _, is_active_s, ovn_s, _, _, mode_s, _, _, _ = await AssassinLedger.get_state("SOXS")
 
-    mode_text_l = "🌅 프리장 전용"
-    mode_text_s = "🌅 프리장 전용"
-
     text = (
         "⚙️ <b>[통합 전술 제어반]</b>\n\n"
         "▫️ <b>롱(SOXL) 전술 상태</b>\n"
         f"🔹 가동: {'🟢 ON' if is_active_l else '🔴 OFF'}\n"
         f"🔹 예산: ${budget_l:,.2f}\n"
-        f"🔹 OVN: {'🟢 허용' if ovn_l else '🔴 차단'}\n"
-        f"🔹 세션: {mode_text_l}\n\n"
+        f"🔹 OVN: {'🟢 허용' if ovn_l else '🔴 차단'}\n\n"
         "▫️ <b>숏(SOXS) 전술 상태</b>\n"
         f"🔹 가동: {'🟢 ON' if is_active_s else '🔴 OFF'}\n"
         f"🔹 예산: ${budget_s:,.2f}\n"
-        f"🔹 OVN: {'🟢 허용' if ovn_s else '🔴 차단'}\n"
-        f"🔹 세션: {mode_text_s}"
+        f"🔹 OVN: {'🟢 허용' if ovn_s else '🔴 차단'}"
     )
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[

@@ -245,7 +245,6 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                         if is_take_profit_exit:
                             await notify_tg(f"🎉 <b>[aVWAP {symbol}] 거래 종료 (퇴근 락온 완료)</b>\n▫️ 잔고 0주 (조건주문 체결 확인)\n▫️ 당일 신규 진입 권한 영구 소각")
 
-            # MODIFIED: 장외 대기 시간(구 데이장) 캔들 API 호출 원천 차단
             if hardcoded_session == "dayMarket":
                 vwap_price = 0.0
             else:
@@ -329,7 +328,6 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                         avg_price = float(holdings_detail.get('avg_price', 0.0))
 
                     if avg_price > 0.0:
-                        # MODIFIED: 불필요해진 +0.7% TRAP 분기 로직 완전 소각
                         if entry_session == "preMarket":
                             if pre_first_flag:
                                 calculated_target = math.ceil(avg_price * 1.02 * 100) / 100.0
@@ -404,13 +402,18 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                                     other_state = await AssassinLedger.get_state(other_symbol)
                                     other_buy_id = await AssassinLedger.get_buy_order_id(other_symbol)
                                     
+                                    # MODIFIED: 초과 Case 43 선행 종목 퇴근 식별 1% 타점 락온 및 독립 진입 보장
                                     new_pre_first = False
                                     if hardcoded_session == "preMarket":
-                                        other_entry = other_state[9]
-                                        if other_entry == "preMarket" and (other_state[0] > 0 or other_buy_id): 
+                                        other_price = other_state[0]
+                                        other_is_done = other_state[3]
+                                        
+                                        if other_price > 0 or other_buy_id: 
                                             new_pre_first = False
                                             await AssassinLedger.save_state(other_symbol, force_downgrade=True)
                                             await notify_tg(f"⚠️ <b>[aVWAP {symbol}] 프리장 듀얼 동시 가동 포착</b>\n▫️ 타점 하향(1.0%) 소프트웨어 인터럽트 발송 완료")
+                                        elif other_is_done:
+                                            new_pre_first = False
                                         else:
                                             new_pre_first = True
 
