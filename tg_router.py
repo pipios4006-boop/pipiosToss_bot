@@ -31,7 +31,6 @@ class BudgetState(StatesGroup):
     waiting_for_budget = State()
     symbol = None
 
-# MODIFIED: 운영 스케줄 내 데이장 개입 전면 폐기 반영
 def get_main_menu_text() -> str:
     now_est = datetime.now(ZoneInfo('America/New_York'))
     is_dst = now_est.dst() is not None and now_est.dst().total_seconds() != 0
@@ -39,11 +38,10 @@ def get_main_menu_text() -> str:
     
     return (
         f"🕒 <b>[ 운영 스케줄 ({dst_status_text}) ]</b>\n"
-        "🔹 19:00: ☀️ 데이장 (시세 미제공/스캔 중지)\n"
+        "🔹 17:00: 🧹 정산 스캔 및 시스템 대기\n"
         "🔹 04:00: 🌅 프리장 VWAP 스캔\n"
         "🔹 09:30: 🔥 정규장 VWAP 스캔\n"
-        "🔹 16:05: 🛑 애프터장 MOC 덤핑\n"
-        "🔹 17:00: 🧹 정산 스캔\n\n"
+        "🔹 16:05: 🛑 애프터장 MOC 덤핑\n\n"
         "🛠 <b>[ 핵심 명령어 ]</b>\n"
         "▶️ /avwap : 🔫 트레이딩 레이더 관제탑\n"
         "▶️ /sync : 📜 통합 지시서 및 장부 동기화\n"
@@ -62,7 +60,6 @@ async def cmd_start(message: types.Message, state: FSMContext):
     except Exception:
         pass
 
-# MODIFIED: 불필요해진 데이장 캔들 연산 완전 분리(Dead code 제거)
 def parse_session_data(all_candles: list, session_start_est: datetime) -> dict:
     res = {
         "pre_h": 0.0, "pre_l": 0.0, "pre_amp": 0.0, "pre_vwap": 0.0,
@@ -122,7 +119,7 @@ async def build_avwap_radar() -> tuple[str, InlineKeyboardMarkup]:
         market_header = "🌙 장마감"
     else:
         session_name_ui = "dayMarket"
-        market_header = "☀️ 데이마켓 (휴식)"
+        market_header = "🌙 시스템 대기"
 
     price_l = await api_client.get_current_price("SOXL")
     price_s = await api_client.get_current_price("SOXS")
@@ -188,15 +185,12 @@ async def build_avwap_radar() -> tuple[str, InlineKeyboardMarkup]:
     _, budget_l, _, is_done_l, is_active_l, ovn_l, _, _, session_mode_l, entry_l, first_l, _ = await AssassinLedger.get_state("SOXL")
     _, budget_s, _, is_done_s, is_active_s, ovn_s, _, _, session_mode_s, entry_s, first_s, _ = await AssassinLedger.get_state("SOXS")
 
-    # MODIFIED: 섀도우 렌더링 멱등성을 위한 데이장 출력 제외 및 프리장 전용 표출 하드코딩
     def build_compact_status(symbol_short, is_active, budget, ovn, is_done, current_session, est_time, session_mode, qty, entry_session, pre_first_flag):
         if not is_active:
             return f"⚠️ <b>[{symbol_short} OFF]</b> 대기 중"
 
         if qty > 0:
-            if entry_session == "dayMarket":
-                state_text = "☀️ 보유 (DAY 잔존물량: +0.7%)"
-            elif entry_session == "preMarket":
+            if entry_session == "preMarket":
                 state_text = "🌅 보유 (PRE 1타점 +2.0%)" if pre_first_flag else "🌅 보유 (PRE 듀얼 +1.0%)"
             else:
                 state_text = "🔥 보유 (REG +1.0%)"
@@ -209,14 +203,14 @@ async def build_avwap_radar() -> tuple[str, InlineKeyboardMarkup]:
                 else:
                     state_text = "🌅 프리장 요격 감시"
             elif current_session == "dayMarket":
-                state_text = "☀️ 데이장 (시세 미제공/관망)"
+                state_text = "🌙 장외 대기"
             elif current_session == "regularMarket":
                 state_text = "정규장 감시"
             else:
                 state_text = "장외 대기"
 
         ovn_text = "🟢허용" if ovn else "🔴불가"
-        mode_text = "🌅프리단일"
+        mode_text = "🌅프리장 전용"
         return f"⚔️ <b>[{symbol_short} ON]</b> {mode_text} | {state_text} | 💵${budget:,.0f} | 🌙{ovn_text}"
 
     status_l = build_compact_status("롱(SOXL)", is_active_l, budget_l, ovn_l, is_done_l, session_name_ui, now_est, session_mode_l, hold_l['qty'], entry_l, first_l)
@@ -231,9 +225,6 @@ async def build_avwap_radar() -> tuple[str, InlineKeyboardMarkup]:
        평단(수익): {profit_l_str}
 ▫️ 숏(SOXS): ${price_s:.2f} / {amp_s:.2f}%
        평단(수익): {profit_s_str}
-
-☀️ <b>[ 0세션 - 데이장 (19:00~03:59) ]</b>
-▫️ 토스증권 SOXL 시세 미제공 (매매 전면 폐기)
 
 🌅 <b>[ 1세션 - 프리장 (04:00~09:29) ]</b>
 ▫️ 롱: {sess_l['pre_amp']:.2f}% (${sess_l['pre_l']:.2f}~${sess_l['pre_h']:.2f})
@@ -270,7 +261,7 @@ async def build_sync_board() -> str:
     elif 1600 <= t <= 1859:
         market_state = "⛔ 장마감"
     else:
-        market_state = "☀️ 데이장 (휴식)"
+        market_state = "🌙 시스템 대기"
 
     bp = await api_client.get_usd_buying_power()
     
@@ -377,13 +368,11 @@ async def build_sync_board() -> str:
     
     def format_symbol(d):
         profit_sign = "+" if d['profit_usd'] >= 0 else "-"
-        mode_str = "🌅 프리장 전용 (데이장 폐기)"
+        mode_str = "🌅 프리장 전용"
         
         flag_str = "⏳ 대기"
         if d['qty'] > 0:
-            if d['entry_session'] == "dayMarket":
-                flag_str = "☀️ [DAY 잔존물량: +0.7%]"
-            elif d['entry_session'] == "preMarket":
+            if d['entry_session'] == "preMarket":
                 if d['pre_first_flag']:
                     flag_str = "🌅 [PRE 1타점: +2.0%]"
                 else:
@@ -415,8 +404,8 @@ async def build_settlement_board() -> tuple[str, InlineKeyboardMarkup]:
     _, budget_l, _, _, is_active_l, ovn_l, _, _, mode_l, _, _, _ = await AssassinLedger.get_state("SOXL")
     _, budget_s, _, _, is_active_s, ovn_s, _, _, mode_s, _, _, _ = await AssassinLedger.get_state("SOXS")
 
-    mode_text_l = "🌅 프리장 전용 (데이장 폐기)"
-    mode_text_s = "🌅 프리장 전용 (데이장 폐기)"
+    mode_text_l = "🌅 프리장 전용"
+    mode_text_s = "🌅 프리장 전용"
 
     text = (
         "⚙️ <b>[통합 전술 제어반]</b>\n\n"
@@ -432,7 +421,6 @@ async def build_settlement_board() -> tuple[str, InlineKeyboardMarkup]:
         f"🔹 세션: {mode_text_s}"
     )
 
-    # MODIFIED: 데이장 토글 버튼 100% 영구 삭제
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(text="🔴 롱 정지" if is_active_l else "🟢 롱 가동", callback_data="toggle_set_act_SOXL"),

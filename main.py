@@ -132,7 +132,6 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
             session_baseline_est = base_date.replace(hour=base_h, minute=base_m, second=0, microsecond=0)
             current_session_id = f"{session_baseline_est.strftime('%Y%m%d_%H%M')}_{hardcoded_session}"
 
-            # MODIFIED: 초과 Case 16 데이장 MOC 스윕 전면 소각 (정규장 MOC 덤핑 단일화)
             is_reg_moc = (now_est.hour == 16 and 5 <= now_est.minute <= 7)
 
             if is_reg_moc and not overnight_on and is_active:
@@ -246,7 +245,7 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                         if is_take_profit_exit:
                             await notify_tg(f"🎉 <b>[aVWAP {symbol}] 거래 종료 (퇴근 락온 완료)</b>\n▫️ 잔고 0주 (조건주문 체결 확인)\n▫️ 당일 신규 진입 권한 영구 소각")
 
-            # MODIFIED: 데이장 캔들 API 호출 전면 소각 (불필요한 Rate Limit 낭비 방어)
+            # MODIFIED: 장외 대기 시간(구 데이장) 캔들 API 호출 원천 차단
             if hardcoded_session == "dayMarket":
                 vwap_price = 0.0
             else:
@@ -330,11 +329,8 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                         avg_price = float(holdings_detail.get('avg_price', 0.0))
 
                     if avg_price > 0.0:
-                        # MODIFIED: 구 장부에 잔존할 수 있는 데이장 물량 대비용 Fall-safe TRAP 유지
-                        if entry_session == "dayMarket":
-                            calculated_target = math.ceil(avg_price * 1.007 * 100) / 100.0
-                            trap_tag = "+0.7%"
-                        elif entry_session == "preMarket":
+                        # MODIFIED: 불필요해진 +0.7% TRAP 분기 로직 완전 소각
+                        if entry_session == "preMarket":
                             if pre_first_flag:
                                 calculated_target = math.ceil(avg_price * 1.02 * 100) / 100.0
                                 trap_tag = "+2.0%"
@@ -384,7 +380,6 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                 if 0 <= elapsed <= 360:
                     is_time_shield = True
                 
-                # MODIFIED: 동적 매수 타점 진입 플래그 (데이장 진입 권한 100% 소각)
                 can_enter = False
                 if hardcoded_session == "preMarket" and not is_time_shield:
                     can_enter = True
