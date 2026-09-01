@@ -236,10 +236,16 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                             can_clear = False
                             
                     if can_clear:
-                        await AssassinLedger.save_state(symbol, price=0.0, target_sell_price=0.0, buy_order_id="", cond_order_id="")
+                        # MODIFIED: 익절 체결 후 무한 진입 방어 (퇴근 락온 처리 결속)
+                        is_take_profit_exit = bool(target_sell_price > 0.0 or cond_order_id)
+                        await AssassinLedger.save_state(symbol, price=0.0, target_sell_price=0.0, buy_order_id="", cond_order_id="", is_session_done=True)
                         target_sell_price = 0.0
                         buy_order_id = ""
                         cond_order_id = ""
+                        is_session_done = True
+                        
+                        if is_take_profit_exit:
+                            await notify_tg(f"🎉 <b>[aVWAP {symbol}] 거래 종료 (퇴근 락온 완료)</b>\n▫️ 잔고 0주 (조건주문 체결 확인)\n▫️ 당일 신규 진입 권한 영구 소각")
 
             candles_json = await fetch_full_session_candles(client, symbol, session_baseline_est)
             vwap_price = AVWAPEngine.calculate_vwap(candles_json, session_baseline_est)
@@ -254,7 +260,6 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
             has_open_sell = any(o["side"] == "SELL" for o in open_orders)
             has_open_buy = any(o["side"] == "BUY" for o in open_orders)
             
-            # MODIFIED: 초과 Case 35 유령 덫 추적망(Self-Healing) 결속
             if holdings_qty > 0 and cond_order_id and is_active:
                 try:
                     cond_detail = await client.get_conditional_order_detail(cond_order_id)
