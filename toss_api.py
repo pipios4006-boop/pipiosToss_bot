@@ -74,7 +74,6 @@ class TossApiClient:
                             await asyncio.sleep(retry_after)
                             continue
 
-                        # NEW: 204 No Content 응답 시 JSON 디코딩 크래시 원천 방어
                         if resp.status == 204:
                             return {}
                             
@@ -169,7 +168,6 @@ class TossApiClient:
         bp_raw = data.get("result", {}).get("cashBuyingPower")
         return float(bp_raw) if bp_raw is not None else 0.0
 
-    # MODIFIED: today / nextBusinessDay / previousBusinessDay 전수 스캔 및 Fail-Safe 폴백 결합
     async def is_market_open(self) -> tuple[bool, datetime, str, datetime]:
         now_ts = time.time()
         if now_ts - self._calendar_cache_time < 30.0 and self._calendar_cache:
@@ -212,9 +210,8 @@ class TossApiClient:
         except Exception as e:
             print(f"🚨 [캘린더 API 호출 붕괴 방어] {e}", flush=True)
 
-        # Fail-Safe: 주중 고정 세션 폴백
         est_time_int = now_est.hour * 100 + now_est.minute
-        weekday = now_est.weekday()  # 0: Mon, ..., 6: Sun
+        weekday = now_est.weekday() 
         
         is_fallback_open = False
         session_name = "CLOSED"
@@ -316,3 +313,9 @@ class TossApiClient:
     async def cancel_conditional_order(self, cond_order_id: str):
         if not self.account_seq: await self.fetch_account_seq()
         await self._request("DELETE", f"/api/v1/conditional-orders/{cond_order_id}", "CONDITIONAL_ORDER", headers=self._get_headers(requires_account=True))
+
+    # MODIFIED: 초과 Case 35 유령 덫 추적망용 API 추가
+    async def get_conditional_order_detail(self, cond_order_id: str) -> dict:
+        if not self.account_seq: await self.fetch_account_seq()
+        data = await self._request("GET", f"/api/v1/conditional-orders/{cond_order_id}", "CONDITIONAL_ORDER_HISTORY", headers=self._get_headers(requires_account=True))
+        return data.get("result", {})

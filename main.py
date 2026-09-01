@@ -97,7 +97,6 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
             last_buy_price, budget, last_session_id, is_session_done, is_active, overnight_on, target_sell_price, cond_order_id, session_mode = await AssassinLedger.get_state(symbol)
             buy_order_id = await AssassinLedger.get_buy_order_id(symbol)
 
-            # 17:00 EST 가비지 컬렉션
             if now_est.hour == 17 and now_est.minute == 0:
                 in_memory_ordering_lock[symbol] = False
                 idempotency_keys[symbol] = {"BUY": None, "TRAP": None, "MOC": None}
@@ -108,13 +107,11 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                 await asyncio.sleep(60)
                 continue
             
-            # API 캘린더 통신망 (is_open 여부만 참조, 시간은 로컬 하드코딩으로 대체)
             try:
                 is_open, _, _, _ = await asyncio.wait_for(client.is_market_open(), timeout=10.0)
             except Exception:
                 is_open = True
 
-            # MODIFIED: 제4헌법 100% 로컬 하드코딩 락온 (토스 API VWAP 왜곡 방어)
             if 400 <= est_time_int < 930:
                 hardcoded_session = "preMarket"
                 base_h, base_m = 4, 0
@@ -138,7 +135,6 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
             is_day_moc = (now_est.hour == 3 and 57 <= now_est.minute <= 59)
             is_reg_moc = (now_est.hour == 16 and 5 <= now_est.minute <= 7)
 
-            # MOC 3-Step 강제 덤핑 스윕
             if (is_day_moc or is_reg_moc) and not overnight_on and is_active:
                 if holdings_qty > 0 and not in_memory_ordering_lock[symbol]:
                     if last_moc_minute != now_est.minute:
@@ -206,7 +202,6 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
             if current_price <= 0.0:
                 continue
 
-            # 세션 전환 시 장부 초기화 (MODIFIED: 매수 ID 증발 방어망 결속)
             if current_session_id != last_session_id:
                 if holdings_qty == 0:
                     can_reset = True
@@ -228,7 +223,6 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                     await AssassinLedger.save_state(symbol, last_session_id=current_session_id)
                 last_session_id = current_session_id
 
-            # 보유 물량 0 & 장부 잔여물 소각 (MODIFIED: 매수 ID 증발 원자적 방어)
             if holdings_qty == 0 and (target_sell_price > 0.0 or buy_order_id or cond_order_id):
                 if not in_memory_ordering_lock[symbol]:
                     can_clear = True
@@ -250,7 +244,6 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
             candles_json = await fetch_full_session_candles(client, symbol, session_baseline_est)
             vwap_price = AVWAPEngine.calculate_vwap(candles_json, session_baseline_est)
 
-            # 정규장 진입 시 신규 매수 권한 소각
             if est_time_int >= 930 and est_time_int < 1600:
                 if not buy_order_id and not is_session_done:
                     await AssassinLedger.save_state(symbol, is_session_done=True)
@@ -261,7 +254,22 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
             has_open_sell = any(o["side"] == "SELL" for o in open_orders)
             has_open_buy = any(o["side"] == "BUY" for o in open_orders)
             
-            # 보유 물량 확인 즉시 익절 조건주문 덫 장전 (MODIFIED: 체결 100% 검증 락온)
+            # MODIFIED: 초과 Case 35 유령 덫 추적망(Self-Healing) 결속
+            if holdings_qty > 0 and cond_order_id and is_active:
+                try:
+                    cond_detail = await client.get_conditional_order_detail(cond_order_id)
+                    cond_status = cond_detail.get("status", "")
+                    if cond_status in ["EXPIRED", "CANCELED", "REJECTED"]:
+                        await notify_tg(f"🚨 <b>[aVWAP {symbol}] 유령 덫 증발 감지</b>\n▫️ 사유: 상태 변이({cond_status})\n▫️ 조치: 덫 파기 및 자동 재장전 가동")
+                        await AssassinLedger.save_state(symbol, cond_order_id="")
+                        cond_order_id = ""
+                except Exception as e:
+                    err_str = str(e).lower()
+                    if "404" in err_str or "not-found" in err_str:
+                        await notify_tg(f"🚨 <b>[aVWAP {symbol}] 유령 덫 증발 감지</b>\n▫️ 사유: 서버 404 (수동 취소 추정)\n▫️ 조치: 덫 파기 및 자동 재장전 가동")
+                        await AssassinLedger.save_state(symbol, cond_order_id="")
+                        cond_order_id = ""
+            
             if holdings_qty > 0 and not has_open_sell and not has_open_buy and not cond_order_id and not in_memory_ordering_lock[symbol] and is_active:
                 calculated_target = target_sell_price
                 trap_qty = holdings_qty
@@ -287,7 +295,6 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                                 trap_tag = "+1.0%"
                             is_rearm = False
 
-                # Fallback: 기존 보유 포지션 재장전
                 if calculated_target <= 0.0 and avg_price <= 0.0:
                     avg_price = float(holdings_detail.get('avg_price', 0.0))
                     if avg_price > 0.0:
@@ -327,7 +334,6 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                         in_memory_ordering_lock[symbol] = False
                 continue
 
-            # 돌파/추종 매수 트리거 감시
             if not buy_order_id and not is_session_done and is_active and vwap_price > 0.0:
                 is_time_shield = False
                 elapsed = (now_est - session_baseline_est).total_seconds()
