@@ -188,14 +188,21 @@ async def build_avwap_radar() -> tuple[str, InlineKeyboardMarkup]:
     sess_l = await fetch_session_stats("SOXL")
     sess_s = await fetch_session_stats("SOXS")
 
-    _, budget_l, _, is_done_l, is_active_l, ovn_l, _, _, session_mode_l = await AssassinLedger.get_state("SOXL")
-    _, budget_s, _, is_done_s, is_active_s, ovn_s, _, _, session_mode_s = await AssassinLedger.get_state("SOXS")
+    _, budget_l, _, is_done_l, is_active_l, ovn_l, _, _, session_mode_l, entry_l, first_l, _ = await AssassinLedger.get_state("SOXL")
+    _, budget_s, _, is_done_s, is_active_s, ovn_s, _, _, session_mode_s, entry_s, first_s, _ = await AssassinLedger.get_state("SOXS")
 
-    def build_compact_status(symbol_short, is_active, budget, ovn, is_done, current_session, est_time, session_mode):
+    def build_compact_status(symbol_short, is_active, budget, ovn, is_done, current_session, est_time, session_mode, qty, entry_session, pre_first_flag):
         if not is_active:
             return f"⚠️ <b>[{symbol_short} OFF]</b> 대기 중"
 
-        if is_done:
+        if qty > 0:
+            if entry_session == "dayMarket":
+                state_text = "☀️ 보유 (DAY +0.7%)"
+            elif entry_session == "preMarket":
+                state_text = "🌅 보유 (PRE 1타점 +2.0%)" if pre_first_flag else "🌅 보유 (PRE 듀얼 +1.0%)"
+            else:
+                state_text = "🔥 보유 (REG +1.0%)"
+        elif is_done:
             state_text = "당일 타격 완료"
         else:
             if current_session == "preMarket":
@@ -220,8 +227,8 @@ async def build_avwap_radar() -> tuple[str, InlineKeyboardMarkup]:
         mode_text = "☀️+🌅" if session_mode == "BOTH" else "🌅단일"
         return f"⚔️ <b>[{symbol_short} ON]</b> {mode_text} | {state_text} | 💵${budget:,.0f} | 🌙{ovn_text}"
 
-    status_l = build_compact_status("롱(SOXL)", is_active_l, budget_l, ovn_l, is_done_l, session_name_ui, now_est, session_mode_l)
-    status_s = build_compact_status("숏(SOXS)", is_active_s, budget_s, ovn_s, is_done_s, session_name_ui, now_est, session_mode_s)
+    status_l = build_compact_status("롱(SOXL)", is_active_l, budget_l, ovn_l, is_done_l, session_name_ui, now_est, session_mode_l, hold_l['qty'], entry_l, first_l)
+    status_s = build_compact_status("숏(SOXS)", is_active_s, budget_s, ovn_s, is_done_s, session_name_ui, now_est, session_mode_s, hold_s['qty'], entry_s, first_s)
     
     scan_time = now_est.strftime("%Y-%m-%d %H:%M:%S")
 
@@ -294,6 +301,8 @@ async def build_sync_board() -> str:
         state = await AssassinLedger.get_state(symbol)
         budget = state[1]
         session_mode = state[8]
+        entry_session = state[9]
+        pre_first_flag = state[10]
         
         hold = await api_client.get_symbol_holdings_detail(symbol)
         qty = hold.get('qty', 0.0)
@@ -360,6 +369,8 @@ async def build_sync_board() -> str:
             "symbol": symbol,
             "budget": budget,
             "session_mode": session_mode,
+            "entry_session": entry_session,
+            "pre_first_flag": pre_first_flag,
             "curr": curr,
             "avg_price": avg_price,
             "qty": qty,
@@ -378,9 +389,22 @@ async def build_sync_board() -> str:
     def format_symbol(d):
         profit_sign = "+" if d['profit_usd'] >= 0 else "-"
         mode_str = "☀️+🌅 데이+프리" if d['session_mode'] == "BOTH" else "🌅 프리장"
+        
+        flag_str = "⏳ 대기"
+        if d['qty'] > 0:
+            if d['entry_session'] == "dayMarket":
+                flag_str = "☀️ [DAY 진입: +0.7%]"
+            elif d['entry_session'] == "preMarket":
+                if d['pre_first_flag']:
+                    flag_str = "🌅 [PRE 1타점: +2.0%]"
+                else:
+                    flag_str = "🌅 [PRE 듀얼: +1.0%]"
+            else:
+                flag_str = "🔥 [REG 진입: +1.0%]"
+
         return (
             f"⚖️ <b>[{d['symbol']}] 암살자(aVWAP) 지시서</b>\n"
-            f"💵 총 시드: ${d['budget']:,.0f} | 🎯 {mode_str}\n"
+            f"💵 총 시드: ${d['budget']:,.0f} | 🎯 {mode_str} | {flag_str}\n"
             f"💰 현재 ${d['curr']:.2f} / 평단 ${d['avg_price']:.2f} ({int(d['qty'])}주)\n"
             f"📈 금일 고가: ${d['high']:.2f} ({d['high_rate']:+.2f}%)\n"
             f"📉 금일 저가: ${d['low']:.2f} ({d['low_rate']:+.2f}%)\n"
@@ -399,8 +423,8 @@ async def build_sync_board() -> str:
     return text
 
 async def build_settlement_board() -> tuple[str, InlineKeyboardMarkup]:
-    _, budget_l, _, _, is_active_l, ovn_l, _, _, mode_l = await AssassinLedger.get_state("SOXL")
-    _, budget_s, _, _, is_active_s, ovn_s, _, _, mode_s = await AssassinLedger.get_state("SOXS")
+    _, budget_l, _, _, is_active_l, ovn_l, _, _, mode_l, _, _, _ = await AssassinLedger.get_state("SOXL")
+    _, budget_s, _, _, is_active_s, ovn_s, _, _, mode_s, _, _, _ = await AssassinLedger.get_state("SOXS")
 
     mode_text_l = "☀️+🌅 데이+프리" if mode_l == "BOTH" else "🌅 프리장 전용"
     mode_text_s = "☀️+🌅 데이+프리" if mode_s == "BOTH" else "🌅 프리장 전용"
@@ -604,8 +628,8 @@ async def cmd_reset(message: types.Message, state: FSMContext):
 async def process_execute_dual_reset(callback_query: types.CallbackQuery, state: FSMContext):
     await state.clear()
     try:
-        await AssassinLedger.save_state("SOXL", price=0.0, target_sell_price=0.0, buy_order_id="", cond_order_id="", is_session_done=False)
-        await AssassinLedger.save_state("SOXS", price=0.0, target_sell_price=0.0, buy_order_id="", cond_order_id="", is_session_done=False)
+        await AssassinLedger.save_state("SOXL", price=0.0, target_sell_price=0.0, buy_order_id="", cond_order_id="", is_session_done=False, entry_session="", pre_first_flag=False, force_downgrade=False)
+        await AssassinLedger.save_state("SOXS", price=0.0, target_sell_price=0.0, buy_order_id="", cond_order_id="", is_session_done=False, entry_session="", pre_first_flag=False, force_downgrade=False)
         
         await callback_query.answer("✅ 듀얼 장부 영구 소각 완료", show_alert=True)
         keyboard = InlineKeyboardMarkup(inline_keyboard=[

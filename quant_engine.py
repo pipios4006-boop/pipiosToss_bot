@@ -17,12 +17,12 @@ class AssassinLedger:
         return os.path.join(os.path.dirname(os.path.abspath(__file__)), f"AssassinLedger_{symbol}.json")
 
     @classmethod
-    async def get_state(cls, symbol: str) -> tuple[float, float, str, bool, bool, bool, float, str, str]:
+    async def get_state(cls, symbol: str) -> tuple[float, float, str, bool, bool, bool, float, str, str, str, bool, bool]:
         filepath = cls._get_file_path(symbol)
         async with GlobalThrottle.get_file_lock(filepath):
             def _read():
                 if not os.path.exists(filepath):
-                    return 0.0, 100.0, "", False, True, False, 0.0, "", "PRE_ONLY"
+                    return 0.0, 100.0, "", False, True, False, 0.0, "", "PRE_ONLY", "", False, False
                 try:
                     with open(filepath, "r", encoding="utf-8") as f:
                         data = json.load(f)
@@ -35,10 +35,13 @@ class AssassinLedger:
                             bool(data.get("overnight_on", False)),
                             float(data.get("target_sell_price", 0.0)),
                             str(data.get("cond_order_id", "")),
-                            str(data.get("session_mode", "PRE_ONLY"))
+                            str(data.get("session_mode", "PRE_ONLY")),
+                            str(data.get("entry_session", "")),
+                            bool(data.get("pre_first_flag", False)),
+                            bool(data.get("force_downgrade", False))
                         )
                 except Exception:
-                    return 0.0, 100.0, "", False, True, False, 0.0, "", "PRE_ONLY"
+                    return 0.0, 100.0, "", False, True, False, 0.0, "", "PRE_ONLY", "", False, False
             return await asyncio.to_thread(_read)
 
     @classmethod
@@ -60,7 +63,9 @@ class AssassinLedger:
                          last_session_id: str = None, is_session_done: bool = None, 
                          is_active: bool = None, overnight_on: bool = None, 
                          target_sell_price: float = None, buy_order_id: str = None,
-                         cond_order_id: str = None, session_mode: str = None):
+                         cond_order_id: str = None, session_mode: str = None,
+                         entry_session: str = None, pre_first_flag: bool = None,
+                         force_downgrade: bool = None):
         filepath = cls._get_file_path(symbol)
         async with GlobalThrottle.get_file_lock(filepath):
             def _write():
@@ -82,6 +87,9 @@ class AssassinLedger:
                 if buy_order_id is not None: data["buy_order_id"] = buy_order_id
                 if cond_order_id is not None: data["cond_order_id"] = cond_order_id
                 if session_mode is not None: data["session_mode"] = session_mode
+                if entry_session is not None: data["entry_session"] = entry_session
+                if pre_first_flag is not None: data["pre_first_flag"] = pre_first_flag
+                if force_downgrade is not None: data["force_downgrade"] = force_downgrade
                 
                 tmp_path = filepath + ".tmp"
                 with open(tmp_path, "w", encoding="utf-8") as f:

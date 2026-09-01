@@ -94,7 +94,7 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                 await asyncio.sleep(5)
                 continue
 
-            last_buy_price, budget, last_session_id, is_session_done, is_active, overnight_on, target_sell_price, cond_order_id, session_mode = await AssassinLedger.get_state(symbol)
+            last_buy_price, budget, last_session_id, is_session_done, is_active, overnight_on, target_sell_price, cond_order_id, session_mode, entry_session, pre_first_flag, force_downgrade = await AssassinLedger.get_state(symbol)
             buy_order_id = await AssassinLedger.get_buy_order_id(symbol)
 
             if now_est.hour == 17 and now_est.minute == 0:
@@ -102,7 +102,7 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                 idempotency_keys[symbol] = {"BUY": None, "TRAP": None, "MOC": None}
                 last_moc_minute = -1
                 if holdings_qty == 0:
-                    await AssassinLedger.save_state(symbol, buy_order_id="", cond_order_id="")
+                    await AssassinLedger.save_state(symbol, buy_order_id="", cond_order_id="", entry_session="", pre_first_flag=False, force_downgrade=False)
                 print(f"🧹 [GC {symbol}] 17:00 EST 락 해제 및 자정 초기화 완료.", flush=True)
                 await asyncio.sleep(60)
                 continue
@@ -112,7 +112,6 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
             except Exception:
                 is_open = True
 
-            # MODIFIED: 세션별 정확한 타임라인 및 캔들 누적 기준 시각(session_baseline_est) 락온 결속
             if 400 <= est_time_int < 930:
                 hardcoded_session = "preMarket"
                 base_h, base_m = 4, 0
@@ -215,7 +214,7 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                             can_reset = False
                             
                     if can_reset:
-                        await AssassinLedger.save_state(symbol, price=0.0, target_sell_price=0.0, last_session_id=current_session_id, is_session_done=False, buy_order_id="", cond_order_id="")
+                        await AssassinLedger.save_state(symbol, price=0.0, target_sell_price=0.0, last_session_id=current_session_id, is_session_done=False, buy_order_id="", cond_order_id="", entry_session="", pre_first_flag=False, force_downgrade=False)
                         is_session_done = False
                         target_sell_price = 0.0
                         buy_order_id = ""
@@ -238,7 +237,7 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                             
                     if can_clear:
                         is_take_profit_exit = bool(target_sell_price > 0.0 or cond_order_id)
-                        await AssassinLedger.save_state(symbol, price=0.0, target_sell_price=0.0, buy_order_id="", cond_order_id="", is_session_done=True)
+                        await AssassinLedger.save_state(symbol, price=0.0, target_sell_price=0.0, buy_order_id="", cond_order_id="", is_session_done=True, entry_session="", pre_first_flag=False, force_downgrade=False)
                         target_sell_price = 0.0
                         buy_order_id = ""
                         cond_order_id = ""
@@ -247,7 +246,6 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                         if is_take_profit_exit:
                             await notify_tg(f"🎉 <b>[aVWAP {symbol}] 거래 종료 (퇴근 락온 완료)</b>\n▫️ 잔고 0주 (조건주문 체결 확인)\n▫️ 당일 신규 진입 권한 영구 소각")
 
-            # MODIFIED: 엄격하게 분기된 session_baseline_est를 활용하여 해당 세션 고유 1분봉 캔들 동적 수집
             candles_json = await fetch_full_session_candles(client, symbol, session_baseline_est)
             vwap_price = AVWAPEngine.calculate_vwap(candles_json, session_baseline_est)
 
@@ -275,6 +273,30 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                         await notify_tg(f"🚨 <b>[aVWAP {symbol}] 유령 덫 증발 감지</b>\n▫️ 사유: 서버 404 (수동 취소 추정)\n▫️ 조치: 덫 파기 및 자동 재장전 가동")
                         await AssassinLedger.save_state(symbol, cond_order_id="")
                         cond_order_id = ""
+                        
+            if holdings_qty > 0 and cond_order_id and force_downgrade and is_active:
+                if not in_memory_ordering_lock[symbol]:
+                    in_memory_ordering_lock[symbol] = True
+                    try:
+                        await client.cancel_conditional_order(cond_order_id)
+                        await AssassinLedger.save_state(symbol, cond_order_id="", target_sell_price=0.0, force_downgrade=False, pre_first_flag=False)
+                        cond_order_id = ""
+                        target_sell_price = 0.0
+                        pre_first_flag = False
+                        force_downgrade = False
+                        await notify_tg(f"🚨 <b>[aVWAP {symbol}] 익절 덫 하향 인터럽트 발동</b>\n▫️ 사유: 프리장 듀얼 진입 시그널 감지\n▫️ 조치: +2.0% 덫 강제 파기 및 +1.0% 타점 자동 재장전")
+                        await asyncio.sleep(0.5)
+                    except Exception as e:
+                        print(f"🚨 [인터럽트 붕괴 방어] {e}", flush=True)
+                        err_str = str(e).lower()
+                        if "404" in err_str or "not-found" in err_str:
+                            await AssassinLedger.save_state(symbol, cond_order_id="", target_sell_price=0.0, force_downgrade=False, pre_first_flag=False)
+                            cond_order_id = ""
+                            target_sell_price = 0.0
+                            pre_first_flag = False
+                            force_downgrade = False
+                    finally:
+                        in_memory_ordering_lock[symbol] = False
             
             if holdings_qty > 0 and not has_open_sell and not has_open_buy and not cond_order_id and not in_memory_ordering_lock[symbol] and is_active:
                 calculated_target = target_sell_price
@@ -283,29 +305,40 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                 is_rearm = True
                 trap_tag = "" 
                 
-                if calculated_target <= 0.0 and buy_order_id:
-                    order_detail = await client.get_order_detail(buy_order_id)
-                    status = order_detail.get("status", "")
-                    
-                    if status in ["FILLED", "PARTIAL_FILLED", "CANCELED", "REJECTED"]:
-                        filled_qty = int(math.floor(float(order_detail.get("execution", {}).get("filledQuantity", 0.0))))
-                        avg_price = float(order_detail.get("execution", {}).get("averageFilledPrice", 0.0))
-                        
-                        if filled_qty > 0 and avg_price > 0.0:
-                            trap_qty = min(holdings_qty, filled_qty)
-                            if hardcoded_session == "dayMarket":
-                                calculated_target = math.ceil(avg_price * 1.007 * 100) / 100.0
-                                trap_tag = "+0.7%"
+                if calculated_target <= 0.0:
+                    if buy_order_id:
+                        try:
+                            order_detail = await client.get_order_detail(buy_order_id)
+                            status = order_detail.get("status", "")
+                            
+                            if status in ["FILLED", "PARTIAL_FILLED", "CANCELED", "REJECTED"]:
+                                filled_qty = int(math.floor(float(order_detail.get("execution", {}).get("filledQuantity", 0.0))))
+                                exec_price = float(order_detail.get("execution", {}).get("averageFilledPrice", 0.0))
+                                
+                                if filled_qty > 0 and exec_price > 0.0:
+                                    trap_qty = min(holdings_qty, filled_qty)
+                                    avg_price = exec_price
+                                    is_rearm = False
+                        except Exception:
+                            pass
+
+                    if avg_price <= 0.0:
+                        avg_price = float(holdings_detail.get('avg_price', 0.0))
+
+                    if avg_price > 0.0:
+                        if entry_session == "dayMarket":
+                            calculated_target = math.ceil(avg_price * 1.007 * 100) / 100.0
+                            trap_tag = "+0.7%"
+                        elif entry_session == "preMarket":
+                            if pre_first_flag:
+                                calculated_target = math.ceil(avg_price * 1.02 * 100) / 100.0
+                                trap_tag = "+2.0%"
                             else:
                                 calculated_target = math.ceil(avg_price * 1.01 * 100) / 100.0
                                 trap_tag = "+1.0%"
-                            is_rearm = False
-
-                if calculated_target <= 0.0 and avg_price <= 0.0:
-                    avg_price = float(holdings_detail.get('avg_price', 0.0))
-                    if avg_price > 0.0:
-                        calculated_target = math.ceil(avg_price * 1.01 * 100) / 100.0
-                        trap_tag = "+1.0%"
+                        else:
+                            calculated_target = math.ceil(avg_price * 1.01 * 100) / 100.0
+                            trap_tag = "+1.0%"
 
                 if calculated_target > 0.0 and trap_qty > 0:
                     in_memory_ordering_lock[symbol] = True
@@ -368,6 +401,20 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                                 target_qty = int(math.floor(budget / ask_1_price))
                                 
                                 if target_qty > 0:
+                                    other_symbol = "SOXS" if symbol == "SOXL" else "SOXL"
+                                    other_state = await AssassinLedger.get_state(other_symbol)
+                                    other_buy_id = await AssassinLedger.get_buy_order_id(other_symbol)
+                                    
+                                    new_pre_first = False
+                                    if hardcoded_session == "preMarket":
+                                        other_entry = other_state[9]
+                                        if other_entry == "preMarket" and (other_state[0] > 0 or other_buy_id): 
+                                            new_pre_first = False
+                                            await AssassinLedger.save_state(other_symbol, force_downgrade=True)
+                                            await notify_tg(f"⚠️ <b>[aVWAP {symbol}] 프리장 듀얼 동시 가동 포착</b>\n▫️ 타점 하향(1.0%) 소프트웨어 인터럽트 발송 완료")
+                                        else:
+                                            new_pre_first = True
+
                                     client_id = idempotency_keys[symbol]["BUY"]
                                     if not client_id:
                                         client_id = f"BUY_{symbol}_{now_est.strftime('%Y%m%d_%H%M%S')}"
@@ -380,10 +427,10 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                                     )
                                     
                                     if res and isinstance(res, dict) and res.get("result", {}).get("orderId"):
-                                        await AssassinLedger.save_state(symbol, buy_order_id=str(res["result"]["orderId"]))
+                                        await AssassinLedger.save_state(symbol, buy_order_id=str(res["result"]["orderId"]), entry_session=hardcoded_session, pre_first_flag=new_pre_first)
                                     
                                     idempotency_keys[symbol]["BUY"] = None
-                                    await notify_tg(f"🚀 <b>[aVWAP {symbol}] 돌파 요격 매수</b>\n▫️ aVWAP: ${vwap_price:.2f}\n▫️ 타격가: ${ask_1_price:.2f}\n▫️ 수량: {target_qty}주")
+                                    await notify_tg(f"🚀 <b>[aVWAP {symbol}] 돌파 요격 매수 (세션: {hardcoded_session})</b>\n▫️ aVWAP: ${vwap_price:.2f}\n▫️ 타격가: ${ask_1_price:.2f}\n▫️ 수량: {target_qty}주")
                         except Exception as e:
                             print(f"🚨 [BUY 방어] {e}", flush=True)
                             await notify_tg(f"🚨 <b>[BUY 에러 {symbol}]</b> {html.escape(str(e))}")
