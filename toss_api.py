@@ -8,7 +8,7 @@ import aiohttp
 import time
 import html
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 class GlobalThrottle:
@@ -40,19 +40,15 @@ class TossApiClient:
         self.account_seq = None
         self._calendar_cache = None
         self._calendar_cache_time = 0.0
-        # NEW: 401 레이스 컨디션 붕괴 방어용 인증 전용 뮤텍스 락온
         self._auth_lock = asyncio.Lock()
 
     async def _request(self, method: str, endpoint: str, rate_limit_group: str, headers: dict = None, json_data: dict = None, timeout: float = 10.0):
         url = f"{self.base_url}{endpoint}"
-        
-        # MODIFIED: 헤더 객체 오염 방지 및 401 치유 시 동적 재주입을 위한 얕은 복사
         req_headers = dict(headers) if headers else {}
         
         for attempt in range(3):
             await GlobalThrottle.wait_api_sync()
             
-            # NEW: 매 시도마다 시스템 최신 토큰을 동적으로 주입 (401 재발사 요격망)
             if self.token:
                 req_headers["Authorization"] = f"Bearer {self.token}"
 
@@ -60,26 +56,27 @@ class TossApiClient:
                 async with aiohttp.ClientSession() as session:
                     async with session.request(method, url, headers=req_headers, json=json_data, timeout=timeout) as resp:
                         
-                        # NEW: 401 Unauthorized 레이스 컨디션 방어 및 3단 자동 치유
                         if resp.status == 401:
                             if attempt == 2:
                                 raise Exception("API HTTP 401: Unauthorized (Max retries exceeded)")
                             
                             async with self._auth_lock:
-                                # 다른 비동기 태스크가 이미 토큰을 갱신했는지 검증하여 중복 발급 차단
                                 failed_auth = req_headers.get("Authorization")
                                 current_system_auth = f"Bearer {self.token}" if self.token else None
                                 if failed_auth == current_system_auth or not failed_auth:
                                     await self._do_authenticate()
                             continue
                             
-                        # MODIFIED: 429 한도 초과 시 남은 시도 횟수 소진 예외 처리 명시
                         if resp.status == 429:
                             if attempt == 2:
                                 raise Exception("API HTTP 429: Rate Limit Exceeded (Max retries)")
                             retry_after = int(resp.headers.get("Retry-After", 2 ** attempt))
                             await asyncio.sleep(retry_after)
                             continue
+
+                        # NEW: 204 No Content 응답 시 JSON 디코딩 크래시 원천 방어
+                        if resp.status == 204:
+                            return {}
                             
                         if resp.status >= 400:
                             err_text = await resp.text()
@@ -96,7 +93,6 @@ class TossApiClient:
                 if attempt == 2: raise Exception("API Timeout")
                 await asyncio.sleep(2 ** attempt)
             except Exception as e:
-                # 401, 429 방어 로직은 위에서 continue 하므로 여기 도달하는 것은 통신 단절 등 치명적 에러임
                 if attempt == 2: raise e
                 await asyncio.sleep(2 ** attempt)
 
@@ -108,7 +104,6 @@ class TossApiClient:
             headers["X-Tossinvest-Account"] = str(self.account_seq)
         return headers
 
-    # MODIFIED: 인증 뮤텍스 락온 적용 및 실제 발급 로직 분리
     async def authenticate(self):
         async with self._auth_lock:
             await self._do_authenticate()
@@ -129,7 +124,6 @@ class TossApiClient:
     async def token_renewal_loop(self):
         while True:
             try:
-                # MODIFIED: 기동 직후 2중 발급으로 인한 토큰 증발(Amnesia) 원천 방어 (전진 배치)
                 await asyncio.sleep(40000)
                 await self.authenticate()
             except Exception:
@@ -175,28 +169,89 @@ class TossApiClient:
         bp_raw = data.get("result", {}).get("cashBuyingPower")
         return float(bp_raw) if bp_raw is not None else 0.0
 
+    # MODIFIED: today / nextBusinessDay / previousBusinessDay 전수 스캔 및 Fail-Safe 폴백 결합
     async def is_market_open(self) -> tuple[bool, datetime, str, datetime]:
         now_ts = time.time()
-        if now_ts - self._calendar_cache_time < 60.0 and self._calendar_cache:
+        if now_ts - self._calendar_cache_time < 30.0 and self._calendar_cache:
             return self._calendar_cache
 
-        if not self.token: await self.authenticate()
         now_est = datetime.now(ZoneInfo('America/New_York'))
         est_today_str = now_est.strftime("%Y-%m-%d")
-        endpoint = f"/api/v1/market-calendar/US?date={est_today_str}"
-        data = await self._request("GET", endpoint, "MARKET_INFO", headers=self._get_headers())
-        today_data = data.get("result", {}).get("today", {})
         
-        for session_name in ["dayMarket", "preMarket", "regularMarket", "afterMarket"]:
-            session = today_data.get(session_name)
-            if session:
-                start = datetime.fromisoformat(session["startTime"]).astimezone(ZoneInfo('America/New_York'))
-                end = datetime.fromisoformat(session["endTime"]).astimezone(ZoneInfo('America/New_York'))
-                if start <= now_est <= end:
-                    self._calendar_cache = (True, end, session_name, start)
-                    self._calendar_cache_time = now_ts
-                    return self._calendar_cache
+        try:
+            if not self.token: await self.authenticate()
+            endpoint = f"/api/v1/market-calendar/US?date={est_today_str}"
+            data = await self._request("GET", endpoint, "MARKET_INFO", headers=self._get_headers())
+            result_data = data.get("result", {})
+            
+            for day_key in ["today", "nextBusinessDay", "previousBusinessDay"]:
+                day_obj = result_data.get(day_key)
+                if not day_obj or not isinstance(day_obj, dict):
+                    continue
                     
+                for session_name in ["dayMarket", "preMarket", "regularMarket", "afterMarket"]:
+                    session = day_obj.get(session_name)
+                    if session and isinstance(session, dict):
+                        start_str = session.get("startTime")
+                        end_str = session.get("endTime")
+                        if start_str and end_str:
+                            start = datetime.fromisoformat(start_str).astimezone(ZoneInfo('America/New_York'))
+                            end = datetime.fromisoformat(end_str).astimezone(ZoneInfo('America/New_York'))
+                            
+                            if session_name == "dayMarket":
+                                if start.hour >= 19:
+                                    end = (start + timedelta(days=1)).replace(hour=3, minute=59, second=59, microsecond=0)
+                                else:
+                                    end = start.replace(hour=3, minute=59, second=59, microsecond=0)
+                                    
+                            if start <= now_est <= end:
+                                self._calendar_cache = (True, end, session_name, start)
+                                self._calendar_cache_time = now_ts
+                                return self._calendar_cache
+
+        except Exception as e:
+            print(f"🚨 [캘린더 API 호출 붕괴 방어] {e}", flush=True)
+
+        # Fail-Safe: 주중 고정 세션 폴백
+        est_time_int = now_est.hour * 100 + now_est.minute
+        weekday = now_est.weekday()  # 0: Mon, ..., 6: Sun
+        
+        is_fallback_open = False
+        session_name = "CLOSED"
+        fallback_start = now_est
+        fallback_end = now_est
+
+        if (weekday == 6 and est_time_int >= 1900) or (0 <= weekday <= 3) or (weekday == 4 and est_time_int <= 1859):
+            if est_time_int >= 1900 or est_time_int < 400:
+                is_fallback_open = True
+                session_name = "dayMarket"
+                if est_time_int >= 1900:
+                    fallback_start = now_est.replace(hour=19, minute=0, second=0, microsecond=0)
+                    fallback_end = (now_est + timedelta(days=1)).replace(hour=3, minute=59, second=59, microsecond=0)
+                else:
+                    fallback_start = (now_est - timedelta(days=1)).replace(hour=19, minute=0, second=0, microsecond=0)
+                    fallback_end = now_est.replace(hour=3, minute=59, second=59, microsecond=0)
+            elif 400 <= est_time_int < 930:
+                is_fallback_open = True
+                session_name = "preMarket"
+                fallback_start = now_est.replace(hour=4, minute=0, second=0, microsecond=0)
+                fallback_end = now_est.replace(hour=9, minute=29, second=59, microsecond=0)
+            elif 930 <= est_time_int < 1600:
+                is_fallback_open = True
+                session_name = "regularMarket"
+                fallback_start = now_est.replace(hour=9, minute=30, second=0, microsecond=0)
+                fallback_end = now_est.replace(hour=16, minute=0, second=0, microsecond=0)
+            elif 1600 <= est_time_int <= 1859:
+                is_fallback_open = True
+                session_name = "afterMarket"
+                fallback_start = now_est.replace(hour=16, minute=0, second=0, microsecond=0)
+                fallback_end = now_est.replace(hour=18, minute=59, second=59, microsecond=0)
+
+        if is_fallback_open:
+            self._calendar_cache = (True, fallback_end, session_name, fallback_start)
+            self._calendar_cache_time = now_ts
+            return self._calendar_cache
+
         self._calendar_cache = (False, None, "CLOSED", None)
         self._calendar_cache_time = now_ts
         return self._calendar_cache
@@ -261,4 +316,3 @@ class TossApiClient:
     async def cancel_conditional_order(self, cond_order_id: str):
         if not self.account_seq: await self.fetch_account_seq()
         await self._request("DELETE", f"/api/v1/conditional-orders/{cond_order_id}", "CONDITIONAL_ORDER", headers=self._get_headers(requires_account=True))
-

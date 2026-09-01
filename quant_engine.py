@@ -6,7 +6,6 @@
 import os
 import json
 import pandas as pd
-import math
 import asyncio
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -17,7 +16,6 @@ class AssassinLedger:
     def _get_file_path(cls, symbol: str) -> str:
         return os.path.join(os.path.dirname(os.path.abspath(__file__)), f"AssassinLedger_{symbol}.json")
 
-    # MODIFIED: session_mode 추가 (기본값 PRE_ONLY)
     @classmethod
     async def get_state(cls, symbol: str) -> tuple[float, float, str, bool, bool, bool, float, str, str]:
         filepath = cls._get_file_path(symbol)
@@ -57,7 +55,6 @@ class AssassinLedger:
                     return ""
             return await asyncio.to_thread(_read)
 
-    # MODIFIED: session_mode 매개변수 추가
     @classmethod
     async def save_state(cls, symbol: str, price: float = None, budget: float = None, 
                          last_session_id: str = None, is_session_done: bool = None, 

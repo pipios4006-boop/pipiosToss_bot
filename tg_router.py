@@ -36,7 +36,6 @@ def get_main_menu_text() -> str:
     is_dst = now_est.dst() is not None and now_est.dst().total_seconds() != 0
     dst_status_text = "🌞서머타임 ON (EDT)" if is_dst else "❄️서머타임 OFF (EST)"
     
-    # MODIFIED: 15:59 정규장 덤핑 안내를 16:05 애프터장 덤핑으로 교체
     return (
         f"🕒 <b>[ 운영 스케줄 ({dst_status_text}) ]</b>\n"
         "🔹 19:00: ☀️ 데이장 (Day Market) 스캔\n"
@@ -58,7 +57,6 @@ async def cmd_start(message: types.Message, state: FSMContext):
     if message.from_user.id != ADMIN_CHAT_ID:
         return
     await state.clear()
-    
     try:
         await message.answer(get_main_menu_text(), parse_mode="HTML")
     except Exception:
@@ -207,7 +205,7 @@ async def build_avwap_radar() -> tuple[str, InlineKeyboardMarkup]:
                     state_text = "🌅 프리장 요격 감시"
             elif current_session == "dayMarket":
                 if session_mode == "BOTH":
-                    if est_time.hour >= 19 and est_time.minute <= 6:
+                    if (est_time.hour == 19 and est_time.minute <= 6) or (est_time.hour < 19 and est_time.hour == 19 and est_time.minute <= 6):
                         state_text = "19:07 타임쉴드"
                     else:
                         state_text = "☀️ 데이장 요격 감시"
@@ -657,7 +655,7 @@ async def process_execute_update(callback_query: types.CallbackQuery, state: FSM
                     return proc.returncode, out.strip(), err.strip()
                 except subprocess.TimeoutExpired:
                     proc.kill()
-                    return -1, "", "Subprocess Timeout Expired (Git Credential Prompt 락다운 의심)"
+                    return -1, "", "Subprocess Timeout Expired"
             
             code, current_hash, err = run_cmd("git rev-parse HEAD")
             if code != 0:
@@ -665,7 +663,7 @@ async def process_execute_update(callback_query: types.CallbackQuery, state: FSM
             
             code, fetch_out, fetch_err = run_cmd("git fetch origin main")
             if code != 0:
-                return False, f"Fetch 실패 (권한/네트워크/토큰 만료 확인 요망):\n{fetch_err}"
+                return False, f"Fetch 실패:\n{fetch_err}"
                 
             code, local_hash, _ = run_cmd("git rev-parse HEAD")
             code, remote_hash, _ = run_cmd("git rev-parse origin/main")
@@ -683,6 +681,7 @@ async def process_execute_update(callback_query: types.CallbackQuery, state: FSM
                 py_compile.compile('tg_router.py', doraise=True)
                 py_compile.compile('quant_engine.py', doraise=True)
                 py_compile.compile('toss_api.py', doraise=True)
+                py_compile.compile('candle_recorder.py', doraise=True)
             except Exception as e:
                 run_cmd(f"git reset --hard {current_hash}")
                 return False, f"문법 에러 감지. 롤백 완료:\n{str(e)}"
@@ -693,13 +692,13 @@ async def process_execute_update(callback_query: types.CallbackQuery, state: FSM
         
         if success:
             if "Already up to date." in msg:
-                await callback_query.message.edit_text(f"✅ <b>서버 탑재 완료</b>\n▫️ 구글 클라우드 서버가 이미 최신 버전입니다.", parse_mode="HTML")
+                await callback_query.message.edit_text("✅ <b>서버 탑재 완료</b>\n▫️ 구글 클라우드 서버가 이미 최신 버전입니다.", parse_mode="HTML")
             else:
                 await callback_query.message.edit_text(f"🚀 <b>탑재 성공. 구글 클라우드 코어 재기동(os._exit) 격발.</b>\n<pre>{html.escape(msg)}</pre>", parse_mode="HTML")
                 await asyncio.sleep(1.0)
                 os._exit(0)
         else:
-            await callback_query.message.edit_text(f"🚨 <b>업데이트 실패 (롤백됨)</b>\n<pre>{html.escape(msg)}</pre>\n\n⚠️ <b>관리자 조치 요망</b>:\n▫️ 서버 터미널에서 Git 권한(PAT 토큰 만료 또는 정지)을 확인하십시오.", parse_mode="HTML")
+            await callback_query.message.edit_text(f"🚨 <b>업데이트 실패 (롤백됨)</b>\n<pre>{html.escape(msg)}</pre>", parse_mode="HTML")
 
     except Exception as e:
         await callback_query.message.edit_text(f"🚨 <b>서버 탑재 붕괴 방어:</b> {html.escape(str(e))}", parse_mode="HTML")

@@ -34,6 +34,10 @@ def main():
 
     try:
         py_compile.compile('main.py', doraise=True)
+        py_compile.compile('tg_router.py', doraise=True)
+        py_compile.compile('quant_engine.py', doraise=True)
+        py_compile.compile('toss_api.py', doraise=True)
+        py_compile.compile('candle_recorder.py', doraise=True)
         print("✅ 프리플라이트 파이썬 컴파일 검증 통과.")
         sys.exit(0)
     except py_compile.PyCompileError as e:
@@ -42,7 +46,7 @@ def main():
         if reset_code == 0:
             print("✅ 롤백 성공. 이전 정상 코드로 파일 시스템 복구 완료.", file=sys.stderr)
         else:
-            print(f"🚨 롤백 실패. 시스템 권한 붕괴. 수동 개입 요망: {reset_err}", file=sys.stderr)
+            print(f"🚨 롤백 실패. 시스템 권한 붕괴: {reset_err}", file=sys.stderr)
         sys.exit(1)
 
 if __name__ == "__main__":

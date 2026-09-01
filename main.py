@@ -8,7 +8,7 @@ import os
 import math
 import asyncio
 import html
-import logging  # NEW: 로깅 모듈 결속
+import logging
 import pandas as pd
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -21,7 +21,6 @@ from quant_engine import AssassinLedger, AVWAPEngine
 from tg_router import router, inject_dependencies
 from candle_recorder import record_candles_loop
 
-# NEW: aiogram 및 aiohttp 통신 단절 가비지 로그 영구 소각 (CRITICAL 격상)
 logging.getLogger("aiogram").setLevel(logging.CRITICAL)
 logging.getLogger("aiohttp").setLevel(logging.CRITICAL)
 
@@ -50,7 +49,7 @@ async def fetch_full_session_candles(client: TossApiClient, symbol: str, session
     all_candles = []
     before = None
     
-    for _ in range(5): 
+    for _ in range(6): 
         try:
             candles_page = await client.get_1m_candles_pagination(symbol, count=200, before=before)
             candles = candles_page.get("candles", [])
@@ -98,6 +97,7 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
             last_buy_price, budget, last_session_id, is_session_done, is_active, overnight_on, target_sell_price, cond_order_id, session_mode = await AssassinLedger.get_state(symbol)
             buy_order_id = await AssassinLedger.get_buy_order_id(symbol)
 
+            # 17:00 EST 가비지 컬렉션
             if now_est.hour == 17 and now_est.minute == 0:
                 in_memory_ordering_lock[symbol] = False
                 idempotency_keys[symbol] = {"BUY": None, "TRAP": None, "MOC": None}
@@ -108,10 +108,9 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                 await asyncio.sleep(60)
                 continue
             
+            # MODIFIED: 견고한 세션 획득 및 Fail-Safe 결속
             try:
                 is_open, session_end_time, session_name, session_start_time = await asyncio.wait_for(client.is_market_open(), timeout=10.0)
-                if is_open and not session_start_time:
-                    raise ValueError("session_start_time is None")
             except Exception:
                 is_open = True
                 if 400 <= est_time_int < 930:
@@ -120,7 +119,7 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                 elif 930 <= est_time_int < 1600:
                     session_name = "regularMarket"
                     base_h, base_m = 9, 30
-                elif 1600 <= est_time_int < 1859:
+                elif 1600 <= est_time_int <= 1859:
                     session_name = "afterMarket"
                     base_h, base_m = 16, 0
                 else:
@@ -131,11 +130,11 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                 if session_name == "dayMarket" and now_est.hour < 19:
                     fallback_start -= timedelta(days=1)
                 session_start_time = fallback_start
-                print(f"🚨 [aVWAP {symbol}] 캘린더 붕괴 방어. 타임쉴드 폴백: {session_name} ({session_start_time})", flush=True)
 
             is_day_moc = (now_est.hour == 3 and 57 <= now_est.minute <= 59)
             is_reg_moc = (now_est.hour == 16 and 5 <= now_est.minute <= 7)
 
+            # MOC 3-Step 강제 덤핑 스윕
             if (is_day_moc or is_reg_moc) and not overnight_on and is_active:
                 if holdings_qty > 0 and not in_memory_ordering_lock[symbol]:
                     if last_moc_minute != now_est.minute:
@@ -147,7 +146,7 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                                     await AssassinLedger.save_state(symbol, cond_order_id="")
                                     await asyncio.sleep(0.5)
                                 except Exception as e:
-                                    print(f"🚨 [조건주문 취소 붕괴 방어] {e}", flush=True)
+                                    print(f"🚨 [조건주문 취소 방어] {e}", flush=True)
 
                             dump_qty = holdings_qty
                             
@@ -188,9 +187,8 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                                     
                                     tag = "03:57~59 데이장" if is_day_moc else "16:05~07 애프터장"
                                     await notify_tg(f"🔴 <b>[aVWAP {symbol}] {tag} 제로오버나이트 강제 청산 스윕 ({now_est.minute}분 타격)</b>\n▫️ 덤핑 1호가: ${bid_1_price:.2f}\n▫️ 수량: {dump_qty}주")
-                                    print(f"🧹 [aVWAP {symbol}] {tag} MOC 순수 1호가 덤핑 스윕 ({now_est.minute}분) 완료.", flush=True)
                         except Exception as e:
-                            print(f"🚨 [MOC Timeout 방어] {e}", flush=True)
+                            print(f"🚨 [MOC 방어] {e}", flush=True)
                             await notify_tg(f"🚨 <b>[MOC 에러 {symbol}]</b> {html.escape(str(e))}")
                         finally:
                             in_memory_ordering_lock[symbol] = False
@@ -204,6 +202,7 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
             if current_price <= 0.0:
                 continue
 
+            # 세션 전환 시 장부 초기화
             if session_start_time:
                 session_start_est = session_start_time.astimezone(ZoneInfo('America/New_York'))
                 current_session_id = f"{session_start_est.strftime('%Y%m%d_%H%M')}_{session_name}"
@@ -235,15 +234,17 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
             candles_json = await fetch_full_session_candles(client, symbol, session_baseline_est)
             vwap_price = AVWAPEngine.calculate_vwap(candles_json, session_baseline_est)
 
+            # 정규장 진입 시 신규 매수 권한 소각
             if est_time_int >= 930 and est_time_int < 1600:
                 if not buy_order_id and not is_session_done:
                     await AssassinLedger.save_state(symbol, is_session_done=True)
                     is_session_done = True
-                    print(f"🎯 [aVWAP {symbol}] 정규장 진입 & 무포지션 팩트 확인. 당일 신규 매수 영구 소각.", flush=True)
+                    print(f"🎯 [aVWAP {symbol}] 정규장 진입. 당일 신규 매수 권한 소각 완료.", flush=True)
 
             open_orders = await client.get_orders(status="OPEN", symbol=symbol)
             has_open_sell = any(o["side"] == "SELL" for o in open_orders)
             
+            # 보유 물량 확인 즉시 익절 조건주문 덫 장전
             if holdings_qty > 0 and not has_open_sell and not cond_order_id and not in_memory_ordering_lock[symbol] and is_active:
                 calculated_target = target_sell_price
                 trap_qty = holdings_qty
@@ -269,6 +270,13 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                                 trap_tag = "+1.0%"
                             is_rearm = False
 
+                # Fallback: 기존 보유 포지션 재장전
+                if calculated_target <= 0.0 and avg_price <= 0.0:
+                    avg_price = float(holdings_detail.get('avg_price', 0.0))
+                    if avg_price > 0.0:
+                        calculated_target = math.ceil(avg_price * 1.01 * 100) / 100.0
+                        trap_tag = "+1.0%"
+
                 if calculated_target > 0.0 and trap_qty > 0:
                     in_memory_ordering_lock[symbol] = True
                     try:
@@ -292,16 +300,17 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                             await notify_tg(f"🟢 <b>[aVWAP {symbol}] {trap_tag} 기계적 조건주문 덫 장전</b>\n▫️ 팩트 평단가: ${avg_price:.2f}\n▫️ 익절 덫: ${calculated_target:.2f}\n▫️ 수량: {trap_qty}주")
                         else:
                             await AssassinLedger.save_state(symbol, cond_order_id=new_cond_id)
-                            await notify_tg(f"🟢 <b>[aVWAP {symbol}] 오버나이트 조건주문 덫 재장전</b>\n▫️ 유지 평단가: ${avg_price:.2f}\n▫️ 익절 덫: ${calculated_target:.2f}\n▫️ 수량: {trap_qty}주")
+                            await notify_tg(f"🟢 <b>[aVWAP {symbol}] 포지션 조건주문 덫 재장전</b>\n▫️ 유지 평단가: ${avg_price:.2f}\n▫️ 익절 덫: ${calculated_target:.2f}\n▫️ 수량: {trap_qty}주")
                         
                         idempotency_keys[symbol]["TRAP"] = None
                     except Exception as e:
-                        print(f"🚨 [TRAP Timeout 방어] {e}", flush=True)
+                        print(f"🚨 [TRAP 방어] {e}", flush=True)
                         await notify_tg(f"🚨 <b>[TRAP 에러 {symbol}]</b> {html.escape(str(e))}")
                     finally:
                         in_memory_ordering_lock[symbol] = False
                 continue
 
+            # 돌파/추종 매수 트리거 감시
             if not buy_order_id and not is_session_done and is_active and vwap_price > 0.0:
                 is_time_shield = False
                 if session_start_time:
@@ -349,7 +358,7 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                                     idempotency_keys[symbol]["BUY"] = None
                                     await notify_tg(f"🚀 <b>[aVWAP {symbol}] 돌파 요격 매수</b>\n▫️ aVWAP: ${vwap_price:.2f}\n▫️ 타격가: ${ask_1_price:.2f}\n▫️ 수량: {target_qty}주")
                         except Exception as e:
-                            print(f"🚨 [BUY Timeout 방어] {e}", flush=True)
+                            print(f"🚨 [BUY 방어] {e}", flush=True)
                             await notify_tg(f"🚨 <b>[BUY 에러 {symbol}]</b> {html.escape(str(e))}")
                         finally:
                             in_memory_ordering_lock[symbol] = False
@@ -400,4 +409,3 @@ if __name__ == "__main__":
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
         pass
-
