@@ -161,10 +161,11 @@ async def build_avwap_radar() -> tuple[str, InlineKeyboardMarkup]:
         all_candles = []
         before = None
         
-        if now_est.hour >= 19:
-            session_start_est = now_est.replace(hour=19, minute=0, second=0, microsecond=0)
+        # MODIFIED: 초과 Case 40 통합 지시서 고가/저가 연산망 방어 (동적 Aggregation 04:00 EST 락온)
+        if now_est.hour >= 4:
+            session_start_est = now_est.replace(hour=4, minute=0, second=0, microsecond=0)
         else:
-            session_start_est = (now_est - timedelta(days=1)).replace(hour=19, minute=0, second=0, microsecond=0)
+            session_start_est = (now_est - timedelta(days=1)).replace(hour=4, minute=0, second=0, microsecond=0)
         
         for _ in range(10):
             try:
@@ -304,10 +305,11 @@ async def build_sync_board() -> str:
         except Exception:
             pass
 
-        if now_est.hour >= 19:
-            session_start_est = now_est.replace(hour=19, minute=0, second=0, microsecond=0)
+        # MODIFIED: 초과 Case 40 통합 지시서 고가/저가 연산망 방어 (동적 Aggregation 04:00 EST 락온)
+        if now_est.hour >= 4:
+            session_start_est = now_est.replace(hour=4, minute=0, second=0, microsecond=0)
         else:
-            session_start_est = (now_est - timedelta(days=1)).replace(hour=19, minute=0, second=0, microsecond=0)
+            session_start_est = (now_est - timedelta(days=1)).replace(hour=4, minute=0, second=0, microsecond=0)
             
         all_candles = []
         before = None

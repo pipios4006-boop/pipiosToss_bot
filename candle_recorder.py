@@ -7,6 +7,7 @@ import os
 import asyncio
 import pandas as pd
 import numpy as np
+from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from toss_api import TossApiClient, GlobalThrottle
@@ -65,6 +66,12 @@ def _sync_partition_candles(symbol: str, candles_list: list) -> dict:
 async def record_candles_loop(client: TossApiClient, symbol: str):
     while True:
         try:
+            # MODIFIED: 초과 Case 00 - 0세션 (19:00~03:59 EST) API Rate Limit 낭비 방어망
+            now_est = datetime.now(ZoneInfo('America/New_York'))
+            if now_est.hour >= 19 or now_est.hour < 4:
+                await asyncio.sleep(60.0)
+                continue
+
             data = await client.get_1m_candles_pagination(symbol, count=200)
             candles = data.get("candles", [])
             
@@ -80,4 +87,3 @@ async def record_candles_loop(client: TossApiClient, symbol: str):
             print(f"🚨 [Candle Recorder {symbol}] 수집망 붕괴 방어: {e}", flush=True)
             
         await asyncio.sleep(60.0)
-
