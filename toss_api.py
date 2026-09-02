@@ -314,7 +314,6 @@ class TossApiClient:
         if not self.account_seq: await self.fetch_account_seq()
         await self._request("DELETE", f"/api/v1/conditional-orders/{cond_order_id}", "CONDITIONAL_ORDER", headers=self._get_headers(requires_account=True))
 
-    # MODIFIED: 초과 Case 35 유령 덫 추적망용 API 추가
     async def get_conditional_order_detail(self, cond_order_id: str) -> dict:
         if not self.account_seq: await self.fetch_account_seq()
         data = await self._request("GET", f"/api/v1/conditional-orders/{cond_order_id}", "CONDITIONAL_ORDER_HISTORY", headers=self._get_headers(requires_account=True))

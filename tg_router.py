@@ -2,6 +2,7 @@
 # FILE: tg_router.py
 # 목적: SOXL, SOXS 듀얼 상태 제어 UI, 스케줄/명령어 라우팅 및 방어망 결속
 # =====================================================================
+# MODIFIED: 초과 Case 38, 44 - 모바일 단일 라인 렌더링 강제 및 수동 OVN 통제 UI 결속
 
 import os
 import html
@@ -46,7 +47,7 @@ def get_main_menu_text() -> str:
         "▶️ /avwap : 🔫 트레이딩 레이더 관제탑\n"
         "▶️ /sync : 📜 통합 지시서 및 장부 동기화\n"
         "▶️ /settlement : ⚙️ 통합 전술 제어반\n\n"
-        "⚠️ /reset : 🧹 롱/숏 장부 초기화\n"
+        "⚠️ /reset : 🧹 롱/숏 장부 초기화\n\n"
         "⚠️ /update : 🚀 시스템 자가 업데이트\n\n"
         "🌙 <b>오버나이트를 원할 경우 [통합 전술 제어반]에서 해당 종목 가동을 OFF 해주세요.</b>"
     )
@@ -184,10 +185,10 @@ async def build_avwap_radar() -> tuple[str, InlineKeyboardMarkup]:
     sess_l = await fetch_session_stats("SOXL")
     sess_s = await fetch_session_stats("SOXS")
 
-    _, budget_l, _, is_done_l, is_active_l, _, _, session_mode_l, entry_l, first_l, _ = await AssassinLedger.get_state("SOXL")
-    _, budget_s, _, is_done_s, is_active_s, _, _, session_mode_s, entry_s, first_s, _ = await AssassinLedger.get_state("SOXS")
+    _, budget_l, _, is_done_l, is_active_l, _, _, _, entry_l, first_l, _ = await AssassinLedger.get_state("SOXL")
+    _, budget_s, _, is_done_s, is_active_s, _, _, _, entry_s, first_s, _ = await AssassinLedger.get_state("SOXS")
 
-    def build_compact_status(symbol_short, is_active, budget, is_done, current_session, est_time, session_mode, qty, entry_session, pre_first_flag):
+    def build_compact_status(symbol_short, is_active, budget, is_done, current_session, est_time, qty, entry_session, pre_first_flag):
         if not is_active:
             return f"⚠️ <b>[{symbol_short} OFF]</b> 대기 중"
 
@@ -213,8 +214,8 @@ async def build_avwap_radar() -> tuple[str, InlineKeyboardMarkup]:
 
         return f"⚔️ <b>[{symbol_short} ON]</b> {state_text} | 💵${budget:,.0f}"
 
-    status_l = build_compact_status("롱(SOXL)", is_active_l, budget_l, is_done_l, session_name_ui, now_est, session_mode_l, hold_l['qty'], entry_l, first_l)
-    status_s = build_compact_status("숏(SOXS)", is_active_s, budget_s, is_done_s, session_name_ui, now_est, session_mode_s, hold_s['qty'], entry_s, first_s)
+    status_l = build_compact_status("롱(SOXL)", is_active_l, budget_l, is_done_l, session_name_ui, now_est, hold_l['qty'], entry_l, first_l)
+    status_s = build_compact_status("숏(SOXS)", is_active_s, budget_s, is_done_s, session_name_ui, now_est, hold_s['qty'], entry_s, first_s)
     
     scan_time = now_est.strftime("%Y-%m-%d %H:%M:%S")
 
@@ -280,7 +281,6 @@ async def build_sync_board() -> str:
     async def get_symbol_sync_data(symbol):
         state = await AssassinLedger.get_state(symbol)
         budget = state[1]
-        session_mode = state[7]
         entry_session = state[8]
         pre_first_flag = state[9]
         
@@ -348,7 +348,6 @@ async def build_sync_board() -> str:
         return {
             "symbol": symbol,
             "budget": budget,
-            "session_mode": session_mode,
             "entry_session": entry_session,
             "pre_first_flag": pre_first_flag,
             "curr": curr,
@@ -397,8 +396,8 @@ async def build_sync_board() -> str:
     return text
 
 async def build_settlement_board() -> tuple[str, InlineKeyboardMarkup]:
-    _, budget_l, _, _, is_active_l, _, _, mode_l, _, _, _ = await AssassinLedger.get_state("SOXL")
-    _, budget_s, _, _, is_active_s, _, _, mode_s, _, _, _ = await AssassinLedger.get_state("SOXS")
+    _, budget_l, _, _, is_active_l, _, _, _, _, _, _ = await AssassinLedger.get_state("SOXL")
+    _, budget_s, _, _, is_active_s, _, _, _, _, _, _ = await AssassinLedger.get_state("SOXS")
 
     text = (
         "⚙️ <b>[통합 전술 제어반]</b>\n\n"

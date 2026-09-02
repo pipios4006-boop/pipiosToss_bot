@@ -2,6 +2,7 @@
 # FILE: quant_engine.py
 # 목적: SOXL, SOXS 듀얼 장부 격리 및 세션별 aVWAP 연산 엔진 (I/O 통제 결속)
 # =====================================================================
+# MODIFIED: 초과 Case 44 - 오버나이트 로직 전면 소각 및 수동 통제 위임
 
 import os
 import json
