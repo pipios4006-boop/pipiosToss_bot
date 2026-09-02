@@ -134,7 +134,6 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
             session_baseline_est = base_date.replace(hour=base_h, minute=base_m, second=0, microsecond=0)
             current_session_id = f"{session_baseline_est.strftime('%Y%m%d_%H%M')}_{hardcoded_session}"
 
-            # MODIFIED: 엣지 타임라인 전환 및 맥박 로깅
             if hardcoded_session != last_logged_session:
                 if last_logged_session:
                     print(f"🔄 [세션 전이 {symbol}] {last_logged_session} ➡️ {hardcoded_session} 진입 완료.", flush=True)
@@ -191,7 +190,6 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                                         client_order_id=client_id
                                     )
                                     
-                                    # MODIFIED: 단일 강제 매도 로깅
                                     print(f"🔴 [매도 집행 {symbol}] MOC 강제 덤핑 스윕 발사 완료. 수량: {dump_qty}주 | 단가: ${bid_1_price:.2f}", flush=True)
                                     
                                     await AssassinLedger.save_state(symbol, is_session_done=True)
@@ -250,15 +248,28 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                             can_clear = False
                             
                     if can_clear:
-                        is_take_profit_exit = bool(target_sell_price > 0.0 or cond_order_id)
-                        await AssassinLedger.save_state(symbol, price=0.0, target_sell_price=0.0, buy_order_id="", cond_order_id="", is_session_done=True, entry_session="", pre_first_flag=False, force_downgrade=False)
-                        target_sell_price = 0.0
-                        buy_order_id = ""
-                        cond_order_id = ""
-                        is_session_done = True
-                        
-                        if is_take_profit_exit:
-                            await notify_tg(f"🎉 <b>[aVWAP {symbol}] 거래 종료 (퇴근 락온 완료)</b>\n▫️ 잔고 0주 (조건주문 체결 확인)\n▫️ 당일 신규 진입 권한 영구 소각")
+                        in_memory_ordering_lock[symbol] = True
+                        try:
+                            is_take_profit_exit = bool(target_sell_price > 0.0 or cond_order_id)
+                            
+                            if cond_order_id:
+                                try:
+                                    await client.cancel_conditional_order(cond_order_id)
+                                    print(f"🧹 [고아 덫 파기 {symbol}] 잔고 0주 연동. 서버단 조건주문({cond_order_id}) 파기 완료.", flush=True)
+                                    await asyncio.sleep(0.5)
+                                except Exception as e:
+                                    print(f"🚨 [고아 덫 파기 방어 {symbol}] 404 무시(이미 취소됨) 또는 통신 오류: {e}", flush=True)
+
+                            await AssassinLedger.save_state(symbol, price=0.0, target_sell_price=0.0, buy_order_id="", cond_order_id="", is_session_done=True, entry_session="", pre_first_flag=False, force_downgrade=False)
+                            target_sell_price = 0.0
+                            buy_order_id = ""
+                            cond_order_id = ""
+                            is_session_done = True
+                            
+                            if is_take_profit_exit:
+                                await notify_tg(f"🎉 <b>[aVWAP {symbol}] 거래 종료 (퇴근 락온 완료)</b>\n▫️ 잔고 0주 (조건주문 체결 확인)\n▫️ 당일 신규 진입 권한 영구 소각")
+                        finally:
+                            in_memory_ordering_lock[symbol] = False
 
             if hardcoded_session == "dayMarket":
                 vwap_price = 0.0
@@ -368,7 +379,6 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                             client_order_id=client_id, expire_date=expire_date
                         )
                         
-                        # MODIFIED: 익절 덫 조건주문 장전 로깅
                         print(f"🟢 [익절 덫 장전 {symbol}] 기계적 조건주문 서버 위임 완료. 수량: {trap_qty}주 | 덫 단가: ${calculated_target:.2f}", flush=True)
                         
                         new_cond_id = ""
@@ -393,7 +403,9 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
             if not buy_order_id and not is_session_done and is_active and vwap_price > 0.0:
                 is_time_shield = False
                 elapsed = (now_est - session_baseline_est).total_seconds()
-                if 0 <= elapsed <= 360:
+                
+                # MODIFIED: 04:07 정각까지 타임쉴드 절대 방어 락온 (420초 미만 차단)
+                if 0 <= elapsed < 420:
                     is_time_shield = True
                 
                 can_enter = False
@@ -445,7 +457,6 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                                         client_order_id=client_id
                                     )
                                     
-                                    # MODIFIED: 매수 요격 타점 통과 및 API 발사 로깅
                                     print(f"🚀 [매수 집행 {symbol}] 돌파 요격 매수 발사 완료. 수량: {target_qty}주 | 타격가: ${ask_1_price:.2f}", flush=True)
                                     
                                     if res and isinstance(res, dict) and res.get("result", {}).get("orderId"):
