@@ -68,6 +68,8 @@ async def fetch_full_session_candles(client: TossApiClient, symbol: str, session
 
 async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: str):
     last_moc_minute = -1
+    last_heartbeat_hour = -1
+    last_logged_session = ""
     
     async def notify_tg(text: str):
         try:
@@ -132,6 +134,16 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
             session_baseline_est = base_date.replace(hour=base_h, minute=base_m, second=0, microsecond=0)
             current_session_id = f"{session_baseline_est.strftime('%Y%m%d_%H%M')}_{hardcoded_session}"
 
+            # MODIFIED: 엣지 타임라인 전환 및 맥박 로깅
+            if hardcoded_session != last_logged_session:
+                if last_logged_session:
+                    print(f"🔄 [세션 전이 {symbol}] {last_logged_session} ➡️ {hardcoded_session} 진입 완료.", flush=True)
+                last_logged_session = hardcoded_session
+
+            if now_est.hour != last_heartbeat_hour:
+                print(f"💓 [맥박 {symbol}] 논리 시계: {now_est.strftime('%Y-%m-%d %H:%M:%S')} EST | 세션: {hardcoded_session} | 활성: {is_active} | 잔고: {holdings_qty}주", flush=True)
+                last_heartbeat_hour = now_est.hour
+
             is_reg_moc = (now_est.hour == 16 and 5 <= now_est.minute <= 7)
 
             if is_reg_moc and not overnight_on and is_active:
@@ -178,6 +190,9 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                                         quantity=dump_qty, price=f"{bid_1_price:.2f}",
                                         client_order_id=client_id
                                     )
+                                    
+                                    # MODIFIED: 단일 강제 매도 로깅
+                                    print(f"🔴 [매도 집행 {symbol}] MOC 강제 덤핑 스윕 발사 완료. 수량: {dump_qty}주 | 단가: ${bid_1_price:.2f}", flush=True)
                                     
                                     await AssassinLedger.save_state(symbol, is_session_done=True)
                                     
@@ -353,6 +368,9 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                             client_order_id=client_id, expire_date=expire_date
                         )
                         
+                        # MODIFIED: 익절 덫 조건주문 장전 로깅
+                        print(f"🟢 [익절 덫 장전 {symbol}] 기계적 조건주문 서버 위임 완료. 수량: {trap_qty}주 | 덫 단가: ${calculated_target:.2f}", flush=True)
+                        
                         new_cond_id = ""
                         if res and isinstance(res, dict) and res.get("result", {}).get("conditionalOrderId"):
                             new_cond_id = str(res["result"]["conditionalOrderId"])
@@ -402,7 +420,6 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                                     other_state = await AssassinLedger.get_state(other_symbol)
                                     other_buy_id = await AssassinLedger.get_buy_order_id(other_symbol)
                                     
-                                    # MODIFIED: 초과 Case 43 선행 종목 퇴근 식별 1% 타점 락온 및 독립 진입 보장
                                     new_pre_first = False
                                     if hardcoded_session == "preMarket":
                                         other_price = other_state[0]
@@ -427,6 +444,9 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                                         quantity=target_qty, price=f"{ask_1_price:.2f}",
                                         client_order_id=client_id
                                     )
+                                    
+                                    # MODIFIED: 매수 요격 타점 통과 및 API 발사 로깅
+                                    print(f"🚀 [매수 집행 {symbol}] 돌파 요격 매수 발사 완료. 수량: {target_qty}주 | 타격가: ${ask_1_price:.2f}", flush=True)
                                     
                                     if res and isinstance(res, dict) and res.get("result", {}).get("orderId"):
                                         await AssassinLedger.save_state(symbol, buy_order_id=str(res["result"]["orderId"]), entry_session=hardcoded_session, pre_first_flag=new_pre_first)

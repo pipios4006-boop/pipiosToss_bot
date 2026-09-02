@@ -54,6 +54,7 @@ def get_main_menu_text() -> str:
 async def cmd_start(message: types.Message, state: FSMContext):
     if message.from_user.id != ADMIN_CHAT_ID:
         return
+    print(f"💬 [TG 수신] /start 명령 하달 (User: {message.from_user.id})", flush=True)
     await state.clear()
     try:
         await message.answer(get_main_menu_text(), parse_mode="HTML")
@@ -433,6 +434,7 @@ async def build_settlement_board() -> tuple[str, InlineKeyboardMarkup]:
 async def cmd_avwap(message: types.Message, state: FSMContext):
     if message.from_user.id != ADMIN_CHAT_ID:
         return
+    print(f"💬 [TG 수신] /avwap 명령 하달 (User: {message.from_user.id})", flush=True)
     await state.clear()
     try:
         msg = await message.answer("📡 <b>레이더 스캔 및 데이터 동기화 중...</b>", parse_mode="HTML")
@@ -443,6 +445,7 @@ async def cmd_avwap(message: types.Message, state: FSMContext):
 
 @router.callback_query(F.data == "open_avwap")
 async def process_open_avwap(callback_query: types.CallbackQuery, state: FSMContext):
+    print(f"💬 [TG 콜백 수신] open_avwap (User: {callback_query.from_user.id})", flush=True)
     await state.clear()
     try:
         text, keyboard = await build_avwap_radar()
@@ -460,6 +463,7 @@ async def process_open_avwap(callback_query: types.CallbackQuery, state: FSMCont
 async def cmd_sync(message: types.Message, state: FSMContext):
     if message.from_user.id != ADMIN_CHAT_ID:
         return
+    print(f"💬 [TG 수신] /sync 명령 하달 (User: {message.from_user.id})", flush=True)
     await state.clear()
     try:
         msg = await message.answer("📡 <b>통합 지시서 데이터 스캔 중...</b>", parse_mode="HTML")
@@ -474,6 +478,7 @@ async def cmd_sync(message: types.Message, state: FSMContext):
 
 @router.callback_query(F.data == "open_sync")
 async def process_open_sync(callback_query: types.CallbackQuery, state: FSMContext):
+    print(f"💬 [TG 콜백 수신] open_sync (User: {callback_query.from_user.id})", flush=True)
     await state.clear()
     try:
         text = await build_sync_board()
@@ -495,6 +500,7 @@ async def process_open_sync(callback_query: types.CallbackQuery, state: FSMConte
 async def cmd_settlement(message: types.Message, state: FSMContext):
     if message.from_user.id != ADMIN_CHAT_ID:
         return
+    print(f"💬 [TG 수신] /settlement 명령 하달 (User: {message.from_user.id})", flush=True)
     await state.clear()
     text, keyboard = await build_settlement_board()
     try:
@@ -504,6 +510,7 @@ async def cmd_settlement(message: types.Message, state: FSMContext):
 
 @router.callback_query(F.data == "open_settlement")
 async def process_open_settlement(callback_query: types.CallbackQuery, state: FSMContext):
+    print(f"💬 [TG 콜백 수신] open_settlement (User: {callback_query.from_user.id})", flush=True)
     await state.clear()
     try:
         text, keyboard = await build_settlement_board()
@@ -514,6 +521,7 @@ async def process_open_settlement(callback_query: types.CallbackQuery, state: FS
 @router.callback_query(F.data.startswith("toggle_set_act_"))
 async def process_toggle_set_act(callback_query: types.CallbackQuery, state: FSMContext):
     symbol = callback_query.data.split("_")[3].upper()
+    print(f"💬 [TG 콜백 수신] toggle_set_act_{symbol} (User: {callback_query.from_user.id})", flush=True)
     state_data = await AssassinLedger.get_state(symbol)
     await AssassinLedger.save_state(symbol, is_active=not state_data[4])
     text, keyboard = await build_settlement_board()
@@ -525,6 +533,7 @@ async def process_toggle_set_act(callback_query: types.CallbackQuery, state: FSM
 @router.callback_query(F.data.startswith("toggle_set_ovn_"))
 async def process_toggle_set_ovn(callback_query: types.CallbackQuery, state: FSMContext):
     symbol = callback_query.data.split("_")[3].upper()
+    print(f"💬 [TG 콜백 수신] toggle_set_ovn_{symbol} (User: {callback_query.from_user.id})", flush=True)
     state_data = await AssassinLedger.get_state(symbol)
     await AssassinLedger.save_state(symbol, overnight_on=not state_data[5])
     text, keyboard = await build_settlement_board()
@@ -536,6 +545,7 @@ async def process_toggle_set_ovn(callback_query: types.CallbackQuery, state: FSM
 @router.callback_query(F.data.startswith("set_budget_"))
 async def process_set_budget(callback_query: types.CallbackQuery, state: FSMContext):
     symbol = callback_query.data.split("_")[2].upper()
+    print(f"💬 [TG 콜백 수신] set_budget_{symbol} (User: {callback_query.from_user.id})", flush=True)
     await state.set_state(BudgetState.waiting_for_budget)
     BudgetState.symbol = symbol
     text = f"⌨️ <b>{html.escape(symbol)} 예산 입력 (USD)</b>\n\n▫️ 투입할 달러 예산을 숫자로 전송하십시오."
@@ -547,6 +557,7 @@ async def process_set_budget(callback_query: types.CallbackQuery, state: FSMCont
 @router.message(BudgetState.waiting_for_budget)
 async def process_budget_input(message: types.Message, state: FSMContext):
     symbol = BudgetState.symbol
+    print(f"💬 [TG 상태 수신] {symbol} 예산 입력 접수: {message.text.strip()} (User: {message.from_user.id})", flush=True)
     try:
         budget = float(message.text.strip())
         await AssassinLedger.save_state(symbol, budget=budget)
@@ -560,6 +571,7 @@ async def process_budget_input(message: types.Message, state: FSMContext):
 async def cmd_reset(message: types.Message, state: FSMContext):
     if message.from_user.id != ADMIN_CHAT_ID:
         return
+    print(f"💬 [TG 수신] /reset 명령 하달 (User: {message.from_user.id})", flush=True)
     await state.clear()
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="✅ 동시 초기화 진행", callback_data="execute_dual_reset")],
@@ -577,6 +589,7 @@ async def cmd_reset(message: types.Message, state: FSMContext):
 
 @router.callback_query(F.data == "execute_dual_reset")
 async def process_execute_dual_reset(callback_query: types.CallbackQuery, state: FSMContext):
+    print(f"💬 [TG 콜백 수신] execute_dual_reset (User: {callback_query.from_user.id})", flush=True)
     await state.clear()
     try:
         await AssassinLedger.save_state("SOXL", price=0.0, target_sell_price=0.0, buy_order_id="", cond_order_id="", is_session_done=False, entry_session="", pre_first_flag=False, force_downgrade=False)
@@ -598,6 +611,7 @@ async def process_execute_dual_reset(callback_query: types.CallbackQuery, state:
 async def cmd_update(message: types.Message, state: FSMContext):
     if message.from_user.id != ADMIN_CHAT_ID:
         return
+    print(f"💬 [TG 수신] /update 명령 하달 (User: {message.from_user.id})", flush=True)
     await state.clear()
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🚀 구글 클라우드 서버 탑재", callback_data="execute_update")],
@@ -615,6 +629,7 @@ async def cmd_update(message: types.Message, state: FSMContext):
 
 @router.callback_query(F.data == "execute_update")
 async def process_execute_update(callback_query: types.CallbackQuery, state: FSMContext):
+    print(f"💬 [TG 콜백 수신] execute_update (User: {callback_query.from_user.id})", flush=True)
     await state.clear()
     try:
         await callback_query.message.edit_text("🔄 <b>GitHub 파이썬 코드를 다운로드 및 구글 클라우드 서버 탑재 검증 중...</b>", parse_mode="HTML")
@@ -682,6 +697,7 @@ async def process_execute_update(callback_query: types.CallbackQuery, state: FSM
 async def process_back_to_main(callback_query: types.CallbackQuery, state: FSMContext):
     if callback_query.from_user.id != ADMIN_CHAT_ID:
         return
+    print(f"💬 [TG 콜백 수신] back_to_main (User: {callback_query.from_user.id})", flush=True)
     await state.clear()
     try:
         await callback_query.answer()
