@@ -96,7 +96,7 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                 await asyncio.sleep(5)
                 continue
 
-            last_buy_price, budget, last_session_id, is_session_done, is_active, overnight_on, target_sell_price, cond_order_id, session_mode, entry_session, pre_first_flag, force_downgrade = await AssassinLedger.get_state(symbol)
+            last_buy_price, budget, last_session_id, is_session_done, is_active, target_sell_price, cond_order_id, session_mode, entry_session, pre_first_flag, force_downgrade = await AssassinLedger.get_state(symbol)
             buy_order_id = await AssassinLedger.get_buy_order_id(symbol)
 
             if now_est.hour == 17 and now_est.minute == 0:
@@ -145,7 +145,7 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
 
             is_reg_moc = (now_est.hour == 16 and 5 <= now_est.minute <= 7)
 
-            if is_reg_moc and not overnight_on and is_active:
+            if is_reg_moc and is_active:
                 if holdings_qty > 0 and not in_memory_ordering_lock[symbol]:
                     if last_moc_minute != now_est.minute:
                         in_memory_ordering_lock[symbol] = True
@@ -404,7 +404,6 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                 is_time_shield = False
                 elapsed = (now_est - session_baseline_est).total_seconds()
                 
-                # MODIFIED: 04:07 정각까지 타임쉴드 절대 방어 락온 (420초 미만 차단)
                 if 0 <= elapsed < 420:
                     is_time_shield = True
                 
