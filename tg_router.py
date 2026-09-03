@@ -2,7 +2,7 @@
 # FILE: tg_router.py
 # 목적: SOXL, SOXS 듀얼 상태 제어 UI, 스케줄/명령어 라우팅 및 방어망 결속
 # =====================================================================
-# MODIFIED: 초과 Case 38 엄수 - 메인 메뉴 구분선 추가 및 관제탑 세션 데이터(VWAP/고저) 식별성 강화
+# MODIFIED: 초과 Case 38 엄수 - 레이더 뷰 심미성 극대화 ([고저] 텍스트 영구 소각)
 
 import os
 import html
@@ -216,15 +216,15 @@ async def build_avwap_radar() -> tuple[str, InlineKeyboardMarkup]:
 
 🌅 <b>프리장</b> (04:00~09:29)
 ┣ <b>SOXL</b> <code>[VWAP] ${sess_l['pre_vwap']:.2f}</code>
-┣ ⤷ <code>[고저] ${sess_l['pre_l']:.2f}~${sess_l['pre_h']:.2f} ({sess_l['pre_amp']:.1f}%)</code>
+┣ ⤷ <code>${sess_l['pre_l']:.2f}~${sess_l['pre_h']:.2f} ({sess_l['pre_amp']:.1f}%)</code>
 ┣ <b>SOXS</b> <code>[VWAP] ${sess_s['pre_vwap']:.2f}</code>
-┗ ⤷ <code>[고저] ${sess_s['pre_l']:.2f}~${sess_s['pre_h']:.2f} ({sess_s['pre_amp']:.1f}%)</code>
+┗ ⤷ <code>${sess_s['pre_l']:.2f}~${sess_s['pre_h']:.2f} ({sess_s['pre_amp']:.1f}%)</code>
 
 🔥 <b>정규장</b> (09:30~16:00)
 ┣ <b>SOXL</b> <code>[VWAP] ${sess_l['reg_vwap']:.2f}</code>
-┣ ⤷ <code>[고저] ${sess_l['reg_l']:.2f}~${sess_l['reg_h']:.2f} ({sess_l['reg_amp']:.1f}%)</code>
+┣ ⤷ <code>${sess_l['reg_l']:.2f}~${sess_l['reg_h']:.2f} ({sess_l['reg_amp']:.1f}%)</code>
 ┣ <b>SOXS</b> <code>[VWAP] ${sess_s['reg_vwap']:.2f}</code>
-┗ ⤷ <code>[고저] ${sess_s['reg_l']:.2f}~${sess_s['reg_h']:.2f} ({sess_s['reg_amp']:.1f}%)</code>
+┗ ⤷ <code>${sess_s['reg_l']:.2f}~${sess_s['reg_h']:.2f} ({sess_s['reg_amp']:.1f}%)</code>
 ━━━━━━━━━━━━━━━━━━
 {status_l}
 {status_s}
