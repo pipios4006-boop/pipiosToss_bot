@@ -2,7 +2,7 @@
 # FILE: tg_router.py
 # 목적: SOXL, SOXS 듀얼 상태 제어 UI, 스케줄/명령어 라우팅 및 방어망 결속
 # =====================================================================
-# MODIFIED: 초과 Case 38 엄수 - 메인 메뉴 구분선 1칸 축소(14칸)로 모바일 줄바꿈 완벽 방어
+# MODIFIED: 초과 Case 38 엄수 - 전역 UI 구분선 14칸 확장으로 모바일 줄바꿈 및 정렬 완벽 방어
 
 import os
 import html
@@ -213,7 +213,7 @@ async def build_avwap_radar() -> tuple[str, InlineKeyboardMarkup]:
     scan_time = now_est.strftime("%m-%d %H:%M:%S")
 
     text = f"""📡 <b>[aVWAP 레이더]</b> {market_header}
-➖➖➖➖➖➖➖➖➖➖➖➖
+➖➖➖➖➖➖➖➖➖➖➖➖➖➖
 📊 <b>현재가 & 5MA</b>
 🐂 <b>SOXL</b> <code>${price_l:.2f}</code> | <code>{amp_l:.1f}%</code>
 🐻 <b>SOXS</b> <code>${price_s:.2f}</code> | <code>{amp_s:.1f}%</code>
@@ -229,7 +229,7 @@ async def build_avwap_radar() -> tuple[str, InlineKeyboardMarkup]:
   ⤷ <code>${sess_l['reg_l']:.2f}~${sess_l['reg_h']:.2f} ({sess_l['reg_amp']:.1f}%)</code>
 🐻 <b>SOXS</b> <code>[VWAP] ${sess_s['reg_vwap']:.2f}</code>
   ⤷ <code>${sess_s['reg_l']:.2f}~${sess_s['reg_h']:.2f} ({sess_s['reg_amp']:.1f}%)</code>
-➖➖➖➖➖➖➖➖➖➖➖➖
+➖➖➖➖➖➖➖➖➖➖➖➖➖➖
 {status_l}
 {status_s}
 
@@ -386,7 +386,7 @@ async def build_sync_board() -> str:
         f"📜 <b>[ 통합 지시서 ({market_state}) ]</b>\n"
         f"📅 {dst_str} ({now_est.strftime('%H:%M')})\n"
         f"💵 주문가능금액: ${bp:,.2f}\n"
-        f"➖➖➖➖➖➖➖➖➖➖➖➖\n\n"
+        f"➖➖➖➖➖➖➖➖➖➖➖➖➖➖\n\n"
         f"{format_symbol(soxl_data)}\n\n"
         f"{format_symbol(soxs_data)}\n\n"
         f"▶️ /avwap : 🔫 트레이딩 레이더 관제탑"
@@ -402,7 +402,7 @@ async def build_settlement_board() -> tuple[str, InlineKeyboardMarkup]:
 
     text = (
         "⚙️ <b>[전술 코어 제어반]</b>\n"
-        "➖➖➖➖➖➖➖➖➖➖➖➖\n"
+        "➖➖➖➖➖➖➖➖➖➖➖➖➖➖\n"
         "🐂 <b>SOXL (LONG)</b>\n"
         f"▫️ <b>상태:</b> <code>{state_l_str}</code>\n"
         f"▫️ <b>예산:</b> <code>${budget_l:,.2f}</code>\n\n"
