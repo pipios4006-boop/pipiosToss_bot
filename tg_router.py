@@ -2,7 +2,7 @@
 # FILE: tg_router.py
 # 목적: SOXL, SOXS 듀얼 상태 제어 UI, 스케줄/명령어 라우팅 및 방어망 결속
 # =====================================================================
-# MODIFIED: 초과 Case 38, 44 - 모바일 단일 라인 렌더링 강제 및 수동 OVN 통제 UI 결속
+# MODIFIED: A타입 (Terminal ASCII Style) 고정폭 터미널 UI 전면 적용
 
 import os
 import html
@@ -35,19 +35,20 @@ class BudgetState(StatesGroup):
 def get_main_menu_text() -> str:
     now_est = datetime.now(ZoneInfo('America/New_York'))
     is_dst = now_est.dst() is not None and now_est.dst().total_seconds() != 0
-    dst_status_text = "🌞서머타임 ON (EDT)" if is_dst else "❄️서머타임 OFF (EST)"
+    dst_status_text = "🌞DST:ON" if is_dst else "❄️DST:OFF"
     
     return (
-        f"🕒 <b>[ 운영 스케줄 ({dst_status_text}) ]</b>\n"
-        "🔹 17:00: 🧹 정산 스캔 및 시스템 대기\n"
-        "🔹 04:00: 🌅 프리장 VWAP 스캔\n"
-        "🔹 09:30: 🔥 정규장 VWAP 스캔\n"
-        "🔹 16:05: 🛑 애프터장 MOC 덤핑\n\n"
+        f"🕒 <b>[ 운영 스케줄 ]</b> <code>{dst_status_text}</code>\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        "┣ <code>17:00</code> 🧹 정산 스캔 및 대기\n"
+        "┣ <code>04:00</code> 🌅 프리장 VWAP 스캔\n"
+        "┣ <code>09:30</code> 🔥 정규장 VWAP 스캔\n"
+        "┗ <code>16:05</code> 🛑 애프터장 MOC 덤핑\n\n"
         "🛠 <b>[ 핵심 명령어 ]</b>\n"
-        "▶️ /avwap : 🔫 트레이딩 레이더 관제탑\n"
-        "▶️ /sync : 📜 통합 지시서 및 장부 동기화\n"
-        "▶️ /settlement : ⚙️ 통합 전술 제어반\n\n"
-        "⚠️ /reset : 🧹 롱/숏 장부 초기화\n\n"
+        "┣ ▶️ /avwap : 🔫 트레이딩 레이더 관제탑\n"
+        "┣ ▶️ /sync : 📜 통합 지시서 및 장부 동기화\n"
+        "┗ ▶️ /settlement : ⚙️ 통합 전술 제어반\n\n"
+        "⚠️ /reset : 🧹 롱/숏 장부 초기화\n"
         "⚠️ /update : 🚀 시스템 자가 업데이트\n\n"
         "🌙 <b>오버나이트를 원할 경우 [통합 전술 제어반]에서 해당 종목 가동을 OFF 해주세요.</b>"
     )
@@ -113,33 +114,22 @@ async def build_avwap_radar() -> tuple[str, InlineKeyboardMarkup]:
     t = now_est.hour * 100 + now_est.minute
     if 400 <= t <= 929:
         session_name_ui = "preMarket"
-        market_header = "🌅 프리마켓"
+        market_header = "🌅 PRE_MARKET"
     elif 930 <= t <= 1559:
         session_name_ui = "regularMarket"
-        market_header = "🔥 정규장"
+        market_header = "🔥 REG_MARKET"
     elif 1600 <= t <= 1859:
         session_name_ui = "afterMarket"
-        market_header = "🌙 장마감"
+        market_header = "🛑 AFT_MARKET"
     else:
         session_name_ui = "dayMarket"
-        market_header = "🌙 시스템 대기"
+        market_header = "🌙 SYS_STANDBY"
 
     price_l = await api_client.get_current_price("SOXL")
     price_s = await api_client.get_current_price("SOXS")
     
     hold_l = await api_client.get_symbol_holdings_detail("SOXL")
     hold_s = await api_client.get_symbol_holdings_detail("SOXS")
-
-    def calc_profit_str(hold, price):
-        qty = float(hold.get('qty', 0.0))
-        avg = float(hold.get('avg_price', 0.0))
-        if qty > 0 and avg > 0:
-            rate = (price - avg) / avg * 100
-            return f"${avg:.2f}({rate:+.2f}%)"
-        return "$0.00(0.00%)"
-
-    profit_l_str = calc_profit_str(hold_l, price_l)
-    profit_s_str = calc_profit_str(hold_s, price_s)
 
     async def fetch_5ma_amp(symbol):
         try:
@@ -189,14 +179,15 @@ async def build_avwap_radar() -> tuple[str, InlineKeyboardMarkup]:
     _, budget_s, _, is_done_s, is_active_s, _, _, _, entry_s, first_s, _ = await AssassinLedger.get_state("SOXS")
 
     def build_compact_status(symbol_short, is_active, budget, is_done, current_session, est_time, qty, entry_session, pre_first_flag):
+        state_flag = "OFF" if not is_active else "ON "
+        
         if not is_active:
-            return f"⚠️ <b>[{symbol_short} OFF]</b> 대기 중"
-
-        if qty > 0:
+            state_text = "대기 중"
+        elif qty > 0:
             if pre_first_flag:
-                state_text = "🌅 보유 (PRE 1타점 +2.0%)"
+                state_text = "보유 (PRE +2.0%)"
             else:
-                state_text = "🌅 보유 (PRE 듀얼 +1.0%)"
+                state_text = "보유 (PRE +1.0%)"
         elif is_done:
             state_text = "당일 타격 완료"
         else:
@@ -204,45 +195,39 @@ async def build_avwap_radar() -> tuple[str, InlineKeyboardMarkup]:
                 if est_time.hour == 4 and est_time.minute <= 6:
                     state_text = "04:07 타임쉴드"
                 else:
-                    state_text = "🌅 프리장 요격 감시"
+                    state_text = "프리장 요격 대기"
             elif current_session == "dayMarket":
-                state_text = "🌙 장외 대기"
+                state_text = "장외 대기"
             elif current_session == "regularMarket":
-                state_text = "정규장 감시"
+                state_text = "정규장 요격 대기"
             else:
                 state_text = "장외 대기"
 
-        return f"⚔️ <b>[{symbol_short} ON]</b> {state_text} | 💵${budget:,.0f}"
+        return f"⚔️ <b>{symbol_short}</b> <code>[{state_flag}]</code> {state_text} | <code>${budget:,.0f}</code>"
 
-    status_l = build_compact_status("롱(SOXL)", is_active_l, budget_l, is_done_l, session_name_ui, now_est, hold_l['qty'], entry_l, first_l)
-    status_s = build_compact_status("숏(SOXS)", is_active_s, budget_s, is_done_s, session_name_ui, now_est, hold_s['qty'], entry_s, first_s)
+    status_l = build_compact_status("SOXL", is_active_l, budget_l, is_done_l, session_name_ui, now_est, hold_l['qty'], entry_l, first_l)
+    status_s = build_compact_status("SOXS", is_active_s, budget_s, is_done_s, session_name_ui, now_est, hold_s['qty'], entry_s, first_s)
     
     scan_time = now_est.strftime("%Y-%m-%d %H:%M:%S")
 
-    text = f"""📡 <b>[ 관제탑: {market_header} 가동중 ]</b>
+    text = f"""📡 <b>[ aVWAP 레이더 스캔 ]</b> <code>{market_header}</code>
+━━━━━━━━━━━━━━━━━━━━
+📊 <b>CORE METRICS</b> (현재가 / 5MA)
+┣ <b>SOXL</b> <code>${price_l:>6.2f}</code> | <code>{amp_l:>5.2f}%</code>
+┗ <b>SOXS</b> <code>${price_s:>6.2f}</code> | <code>{amp_s:>5.2f}%</code>
 
-🎯 <b>[ 현황: 현재가 / 5MA / 평단(수익) ]</b>
-▫️ 롱(SOXL): ${price_l:.2f} / {amp_l:.2f}%
-       평단(수익): {profit_l_str}
-▫️ 숏(SOXS): ${price_s:.2f} / {amp_s:.2f}%
-       평단(수익): {profit_s_str}
+🌅 <b>1세션 프리장</b> (04:00~09:29)
+┣ <b>SOXL</b> <code>${sess_l['pre_vwap']:>6.2f}</code> (<code>{sess_l['pre_amp']:>5.2f}% ↕</code>)
+┗ <b>SOXS</b> <code>${sess_s['pre_vwap']:>6.2f}</code> (<code>{sess_s['pre_amp']:>5.2f}% ↕</code>)
 
-🌅 <b>[ 1세션 - 프리장 (04:00~09:29) ]</b>
-▫️ 롱: {sess_l['pre_amp']:.2f}% (${sess_l['pre_l']:.2f}~${sess_l['pre_h']:.2f})
-       VWAP: ${sess_l['pre_vwap']:.2f}
-▫️ 숏: {sess_s['pre_amp']:.2f}% (${sess_s['pre_l']:.2f}~${sess_s['pre_h']:.2f})
-       VWAP: ${sess_s['pre_vwap']:.2f}
-
-🔥 <b>[ 2세션 - 정규장 (09:30~16:00) ]</b>
-▫️ 롱: {sess_l['reg_amp']:.2f}% (${sess_l['reg_l']:.2f}~${sess_l['reg_h']:.2f})
-       VWAP: ${sess_l['reg_vwap']:.2f}
-▫️ 숏: {sess_s['reg_amp']:.2f}% (${sess_s['reg_l']:.2f}~${sess_s['reg_h']:.2f})
-       VWAP: ${sess_s['reg_vwap']:.2f}
-
+🔥 <b>2세션 정규장</b> (09:30~16:00)
+┣ <b>SOXL</b> <code>${sess_l['reg_vwap']:>6.2f}</code> (<code>{sess_l['reg_amp']:>5.2f}% ↕</code>)
+┗ <b>SOXS</b> <code>${sess_s['reg_vwap']:>6.2f}</code> (<code>{sess_s['reg_amp']:>5.2f}% ↕</code>)
+━━━━━━━━━━━━━━━━━━━━
 {status_l}
 {status_s}
 
-⏱️ 갱신: {scan_time} (EST)"""
+⏱️ 갱신: <code>{scan_time} (EST)</code>"""
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🔄 레이더 갱신", callback_data="open_avwap")]
@@ -252,17 +237,17 @@ async def build_avwap_radar() -> tuple[str, InlineKeyboardMarkup]:
 async def build_sync_board() -> str:
     now_est = datetime.now(ZoneInfo('America/New_York'))
     is_dst = now_est.dst() is not None and now_est.dst().total_seconds() != 0
-    dst_str = "🌞 서머타임" if is_dst else "❄️ 서머타임 OFF"
+    dst_str = "DST:ON" if is_dst else "DST:OFF"
     
     t = now_est.hour * 100 + now_est.minute
     if 400 <= t <= 929:
-        market_state = "🌅 프리장"
+        market_state = "PRE_MARKET"
     elif 930 <= t <= 1559:
-        market_state = "🔥 정규장"
+        market_state = "REG_MARKET"
     elif 1600 <= t <= 1859:
-        market_state = "⛔ 장마감"
+        market_state = "AFT_MARKET"
     else:
-        market_state = "🌙 시스템 대기"
+        market_state = "STANDBY"
 
     bp = await api_client.get_usd_buying_power()
     
@@ -366,29 +351,27 @@ async def build_sync_board() -> str:
     soxs_data = await get_symbol_sync_data("SOXS")
     
     def format_symbol(d):
-        profit_sign = "+" if d['profit_usd'] >= 0 else "-"
+        profit_sign = "+" if d['profit_usd'] >= 0 else ""
         
         flag_str = "⏳ 대기"
         if d['qty'] > 0:
             if d['pre_first_flag']:
-                flag_str = "🌅 [PRE 1타점: +2.0%]"
+                flag_str = "PRE 1타점 +2.0%"
             else:
-                flag_str = "🌅 [PRE 듀얼: +1.0%]"
+                flag_str = "PRE 듀얼 +1.0%"
 
         return (
-            f"⚖️ <b>[{d['symbol']}] 암살자(aVWAP) 지시서</b>\n"
-            f"💵 총 시드: ${d['budget']:,.0f} | 🎯 {flag_str}\n"
-            f"💰 현재 ${d['curr']:.2f} / 평단 ${d['avg_price']:.2f} ({int(d['qty'])}주)\n"
-            f"📈 금일 고가: ${d['high']:.2f} ({d['high_rate']:+.2f}%)\n"
-            f"📉 금일 저가: ${d['low']:.2f} ({d['low_rate']:+.2f}%)\n"
-            f"🔺 수익: {d['profit_rate']:+.2f}% ({profit_sign}${abs(d['profit_usd']):,.2f} | {profit_sign}₩{int(abs(d['profit_krw'])):,})"
+            f"⚖️ <b>{d['symbol']} aVWAP Ledger</b> <code>[ {flag_str} ]</code>\n"
+            f"┣ <b>단가</b> : <code>${d['curr']:.2f}</code> / <code>${d['avg_price']:.2f}</code> ({int(d['qty'])}주)\n"
+            f"┣ <b>진폭</b> : <code>${d['low']:.2f}</code> ~ <code>${d['high']:.2f}</code>\n"
+            f"┗ <b>수익</b> : <code>{d['profit_rate']:+.2f}% ({profit_sign}${d['profit_usd']:.2f})</code>"
         )
         
     text = (
-        f"📜 <b>[ 통합 지시서 ({market_state}) ]</b>\n"
-        f"📅 {dst_str} ({now_est.strftime('%H:%M')})\n"
-        f"💵 주문가능금액: ${bp:,.2f}\n"
-        f"➖➖➖➖➖➖➖➖➖➖➖➖\n\n"
+        f"📜 <b>[ 통합 지시서 ]</b> <code>{market_state}</code>\n"
+        f"┣ <b>시간</b> : <code>{now_est.strftime('%H:%M')} EST ({dst_str})</code>\n"
+        f"┗ <b>자금</b> : <code>$ {bp:,.2f}</code>\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
         f"{format_symbol(soxl_data)}\n\n"
         f"{format_symbol(soxs_data)}\n\n"
         f"▶️ /avwap : 🔫 트레이딩 레이더 관제탑"
@@ -399,14 +382,18 @@ async def build_settlement_board() -> tuple[str, InlineKeyboardMarkup]:
     _, budget_l, _, _, is_active_l, _, _, _, _, _, _ = await AssassinLedger.get_state("SOXL")
     _, budget_s, _, _, is_active_s, _, _, _, _, _, _ = await AssassinLedger.get_state("SOXS")
 
+    state_l_str = "🟢 ACTIVE " if is_active_l else "🔴 OFFLINE"
+    state_s_str = "🟢 ACTIVE " if is_active_s else "🔴 OFFLINE"
+
     text = (
-        "⚙️ <b>[통합 전술 제어반]</b>\n\n"
-        "▫️ <b>롱(SOXL) 전술 상태</b>\n"
-        f"🔹 가동: {'🟢 ON' if is_active_l else '🔴 OFF'}\n"
-        f"🔹 예산: ${budget_l:,.2f}\n\n"
-        "▫️ <b>숏(SOXS) 전술 상태</b>\n"
-        f"🔹 가동: {'🟢 ON' if is_active_s else '🔴 OFF'}\n"
-        f"🔹 예산: ${budget_s:,.2f}"
+        "⚙️ <b>[ 전술 코어 제어반 ]</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        "📦 <b>SOXL (LONG) CORE</b>\n"
+        f"┣ <b>상태</b> : <code>{state_l_str}</code>\n"
+        f"┗ <b>예산</b> : <code>$ {budget_l:,.2f}</code>\n\n"
+        "📦 <b>SOXS (SHORT) CORE</b>\n"
+        f"┣ <b>상태</b> : <code>{state_s_str}</code>\n"
+        f"┗ <b>예산</b> : <code>$ {budget_s:,.2f}</code>"
     )
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
