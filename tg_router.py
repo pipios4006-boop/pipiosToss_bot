@@ -2,7 +2,7 @@
 # FILE: tg_router.py
 # 목적: SOXL, SOXS 듀얼 상태 제어 UI, 스케줄/명령어 라우팅 및 방어망 결속
 # =====================================================================
-# MODIFIED: 초과 Case 38 엄수 - 레이더 뷰 트리 구조(┃ ⤷, ┗ ⤷) 정밀 조정 및 헤더 강조
+# MODIFIED: 초과 Case 38 엄수 - ASCII 기호 소각, 🐂/🐻 이모지 전역 매핑 및 구분선 통일
 
 import os
 import html
@@ -39,13 +39,13 @@ def get_main_menu_text() -> str:
     
     return (
         f"🕒 <b>[ 운영 스케줄 ({dst_status_text}) ]</b>\n"
-        "━━━━━━━━━━━━━━━━━━\n"
+        "➖➖➖➖➖➖➖➖➖➖➖➖\n"
         "🔹 17:00: 🧹 정산 스캔 및 시스템 대기\n"
         "🔹 04:00: 🌅 프리장 VWAP 스캔\n"
         "🔹 09:30: 🔥 정규장 VWAP 스캔\n"
         "🔹 16:05: 🛑 애프터장 MOC 덤핑\n\n"
         "🛠 <b>[ 핵심 명령어 ]</b>\n"
-        "━━━━━━━━━━━━━━━━━━\n"
+        "➖➖➖➖➖➖➖➖➖➖➖➖\n"
         "▶️ /avwap : 🔫 트레이딩 레이더 관제탑\n"
         "▶️ /sync : 📜 통합 지시서 및 장부 동기화\n"
         "▶️ /settlement : ⚙️ 통합 전술 제어반\n\n"
@@ -205,7 +205,8 @@ async def build_avwap_radar() -> tuple[str, InlineKeyboardMarkup]:
             else:
                 state_text = "장외대기"
 
-        return f"⚔️ <b>{symbol_short}</b> <code>[{state_flag}]</code> {state_text} | <code>${budget:.0f}</code>"
+        emoji = "🐂" if symbol_short == "SOXL" else "🐻"
+        return f"{emoji} <b>{symbol_short}</b> <code>[{state_flag}]</code> {state_text} | <code>${budget:.0f}</code>"
 
     status_l = build_compact_status("SOXL", is_active_l, budget_l, is_done_l, session_name_ui, now_est, hold_l['qty'], entry_l, first_l)
     status_s = build_compact_status("SOXS", is_active_s, budget_s, is_done_s, session_name_ui, now_est, hold_s['qty'], entry_s, first_s)
@@ -213,23 +214,23 @@ async def build_avwap_radar() -> tuple[str, InlineKeyboardMarkup]:
     scan_time = now_est.strftime("%m-%d %H:%M:%S")
 
     text = f"""📡 <b>[aVWAP 레이더]</b> {market_header}
-━━━━━━━━━━━━━━━━━━
+➖➖➖➖➖➖➖➖➖➖➖➖
 📊 <b>현재가 & 5MA</b>
-┣ <b>SOXL</b> <code>${price_l:.2f}</code> | <code>{amp_l:.1f}%</code>
-┗ <b>SOXS</b> <code>${price_s:.2f}</code> | <code>{amp_s:.1f}%</code>
+🐂 <b>SOXL</b> <code>${price_l:.2f}</code> | <code>{amp_l:.1f}%</code>
+🐻 <b>SOXS</b> <code>${price_s:.2f}</code> | <code>{amp_s:.1f}%</code>
 
 🌅 <b>프리장</b> (04:00~09:29)
-┣ <b>SOXL</b> <code>[VWAP] ${sess_l['pre_vwap']:.2f}</code>
-┃ ⤷ <code>${sess_l['pre_l']:.2f}~${sess_l['pre_h']:.2f} ({sess_l['pre_amp']:.1f}%)</code>
-┣ <b>SOXS</b> <code>[VWAP] ${sess_s['pre_vwap']:.2f}</code>
-┗ ⤷ <code>${sess_s['pre_l']:.2f}~${sess_s['pre_h']:.2f} ({sess_s['pre_amp']:.1f}%)</code>
+🐂 <b>SOXL</b> <code>[VWAP] ${sess_l['pre_vwap']:.2f}</code>
+  ⤷ <code>${sess_l['pre_l']:.2f}~${sess_l['pre_h']:.2f} ({sess_l['pre_amp']:.1f}%)</code>
+🐻 <b>SOXS</b> <code>[VWAP] ${sess_s['pre_vwap']:.2f}</code>
+  ⤷ <code>${sess_s['pre_l']:.2f}~${sess_s['pre_h']:.2f} ({sess_s['pre_amp']:.1f}%)</code>
 
 🔥 <b>정규장</b> (09:30~16:00)
-┣ <b>SOXL</b> <code>[VWAP] ${sess_l['reg_vwap']:.2f}</code>
-┃ ⤷ <code>${sess_l['reg_l']:.2f}~${sess_l['reg_h']:.2f} ({sess_l['reg_amp']:.1f}%)</code>
-┣ <b>SOXS</b> <code>[VWAP] ${sess_s['reg_vwap']:.2f}</code>
-┗ ⤷ <code>${sess_s['reg_l']:.2f}~${sess_s['reg_h']:.2f} ({sess_s['reg_amp']:.1f}%)</code>
-━━━━━━━━━━━━━━━━━━
+🐂 <b>SOXL</b> <code>[VWAP] ${sess_l['reg_vwap']:.2f}</code>
+  ⤷ <code>${sess_l['reg_l']:.2f}~${sess_l['reg_h']:.2f} ({sess_l['reg_amp']:.1f}%)</code>
+🐻 <b>SOXS</b> <code>[VWAP] ${sess_s['reg_vwap']:.2f}</code>
+  ⤷ <code>${sess_s['reg_l']:.2f}~${sess_s['reg_h']:.2f} ({sess_s['reg_amp']:.1f}%)</code>
+➖➖➖➖➖➖➖➖➖➖➖➖
 {status_l}
 {status_s}
 
@@ -372,13 +373,14 @@ async def build_sync_board() -> str:
             else:
                 flag_str = "🌅 [PRE 듀얼: +1.0%]"
 
+        emoji = "🐂" if d['symbol'] == "SOXL" else "🐻"
         return (
-            f"⚖️ <b>[{d['symbol']}] 암살자(aVWAP) 지시서</b>\n"
+            f"{emoji} <b>[{d['symbol']}] 암살자(aVWAP) 지시서</b>\n"
             f"💵 총 시드: ${d['budget']:,.0f} | 🎯 {flag_str}\n"
-            f"💰 현재 ${d['curr']:.2f} / 평단 ${d['avg_price']:.2f} ({int(d['qty'])}주)\n"
-            f"📈 금일 고가: ${d['high']:.2f} ({d['high_rate']:+.2f}%)\n"
-            f"📉 금일 저가: ${d['low']:.2f} ({d['low_rate']:+.2f}%)\n"
-            f"🔺 수익: {d['profit_rate']:+.2f}% ({profit_sign}${abs(d['profit_usd']):,.2f} | {profit_sign}₩{int(abs(d['profit_krw'])):,})"
+            f"▫️ <b>현재/평단:</b> <code>${d['curr']:.2f}</code> / <code>${d['avg_price']:.2f}</code> ({int(d['qty'])}주)\n"
+            f"▫️ <b>금일 고가:</b> <code>${d['high']:.2f}</code> ({d['high_rate']:+.2f}%)\n"
+            f"▫️ <b>금일 저가:</b> <code>${d['low']:.2f}</code> ({d['low_rate']:+.2f}%)\n"
+            f"▫️ <b>수익:</b> <code>{d['profit_rate']:+.2f}%</code> ({profit_sign}${abs(d['profit_usd']):,.2f} | {profit_sign}₩{int(abs(d['profit_krw'])):,})"
         )
         
     text = (
@@ -401,13 +403,13 @@ async def build_settlement_board() -> tuple[str, InlineKeyboardMarkup]:
 
     text = (
         "⚙️ <b>[전술 코어 제어반]</b>\n"
-        "━━━━━━━━━━━━━━━━━━\n"
-        "📦 <b>SOXL (LONG)</b>\n"
-        f"┣ <b>상태:</b> <code>{state_l_str}</code>\n"
-        f"┗ <b>예산:</b> <code>${budget_l:,.2f}</code>\n\n"
-        "📦 <b>SOXS (SHORT)</b>\n"
-        f"┣ <b>상태:</b> <code>{state_s_str}</code>\n"
-        f"┗ <b>예산:</b> <code>${budget_s:,.2f}</code>"
+        "➖➖➖➖➖➖➖➖➖➖➖➖\n"
+        "🐂 <b>SOXL (LONG)</b>\n"
+        f"▫️ <b>상태:</b> <code>{state_l_str}</code>\n"
+        f"▫️ <b>예산:</b> <code>${budget_l:,.2f}</code>\n\n"
+        "🐻 <b>SOXS (SHORT)</b>\n"
+        f"▫️ <b>상태:</b> <code>{state_s_str}</code>\n"
+        f"▫️ <b>예산:</b> <code>${budget_s:,.2f}</code>"
     )
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
