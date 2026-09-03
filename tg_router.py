@@ -2,7 +2,7 @@
 # FILE: tg_router.py
 # 목적: SOXL, SOXS 듀얼 상태 제어 UI, 스케줄/명령어 라우팅 및 방어망 결속
 # =====================================================================
-# MODIFIED: 초과 Case 38 엄수 - UI 마이크로 튜닝 (서머타임 한글화, 헤더 스왑, 구분선 18칸 연장, OVN 롤백)
+# MODIFIED: 초과 Case 38 엄수 - 메인 화면 초기 UI 롤백 및 서브 뷰 A타입 유지
 
 import os
 import html
@@ -35,21 +35,20 @@ class BudgetState(StatesGroup):
 def get_main_menu_text() -> str:
     now_est = datetime.now(ZoneInfo('America/New_York'))
     is_dst = now_est.dst() is not None and now_est.dst().total_seconds() != 0
-    dst_status_text = "🌞서머타임 ON" if is_dst else "❄️서머타임 OFF"
+    dst_status_text = "🌞서머타임 ON (EDT)" if is_dst else "❄️서머타임 OFF (EST)"
     
     return (
-        f"🕒 <b>[운영 스케줄]</b> <code>{dst_status_text}</code>\n"
-        "━━━━━━━━━━━━━━━━━━\n"
-        "┣ <code>17:00</code> 🧹 정산 스캔\n"
-        "┣ <code>04:00</code> 🌅 프리장 VWAP\n"
-        "┣ <code>09:30</code> 🔥 정규장 VWAP\n"
-        "┗ <code>16:05</code> 🛑 MOC 강제청산\n\n"
-        "🛠 <b>[핵심 명령어]</b>\n"
-        "┣ ▶️ /avwap 🔫 레이더 관제\n"
-        "┣ ▶️ /sync 📜 지시서 동기화\n"
-        "┗ ▶️ /settlement ⚙️ 제어반\n\n"
-        "⚠️ /reset 🧹 장부 초기화\n"
-        "⚠️ /update 🚀 시스템 업데이트\n\n"
+        f"🕒 <b>[ 운영 스케줄 ({dst_status_text}) ]</b>\n"
+        "🔹 17:00: 🧹 정산 스캔 및 시스템 대기\n"
+        "🔹 04:00: 🌅 프리장 VWAP 스캔\n"
+        "🔹 09:30: 🔥 정규장 VWAP 스캔\n"
+        "🔹 16:05: 🛑 애프터장 MOC 덤핑\n\n"
+        "🛠 <b>[ 핵심 명령어 ]</b>\n"
+        "▶️ /avwap : 🔫 트레이딩 레이더 관제탑\n"
+        "▶️ /sync : 📜 통합 지시서 및 장부 동기화\n"
+        "▶️ /settlement : ⚙️ 통합 전술 제어반\n\n"
+        "⚠️ /reset : 🧹 롱/숏 장부 초기화\n\n"
+        "⚠️ /update : 🚀 시스템 자가 업데이트\n\n"
         "🌙 <b>오버나이트를 원할 경우 [통합 전술 제어반]에서 해당 종목 가동을 OFF 해주세요.</b>"
     )
 
