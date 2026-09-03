@@ -377,10 +377,10 @@ async def build_sync_board() -> str:
         return (
             f"{emoji} <b>[{d['symbol']}] 암살자(aVWAP) 지시서</b>\n"
             f"💵 총 시드: ${d['budget']:,.0f} | 🎯 {flag_str}\n"
-            f"▫️ <b>현재/평단:</b> <code>${d['curr']:.2f}</code> / <code>${d['avg_price']:.2f}</code> ({int(d['qty'])}주)\n"
-            f"▫️ <b>금일 고가:</b> <code>${d['high']:.2f}</code> ({d['high_rate']:+.2f}%)\n"
-            f"▫️ <b>금일 저가:</b> <code>${d['low']:.2f}</code> ({d['low_rate']:+.2f}%)\n"
-            f"▫️ <b>수익:</b> <code>{d['profit_rate']:+.2f}%</code> ({profit_sign}${abs(d['profit_usd']):,.2f} | {profit_sign}₩{int(abs(d['profit_krw'])):,})"
+            f"💰 현재 ${d['curr']:.2f} / 평단 ${d['avg_price']:.2f} ({int(d['qty'])}주)\n"
+            f"📈 금일 고가: ${d['high']:.2f} ({d['high_rate']:+.2f}%)\n"
+            f"📉 금일 저가: ${d['low']:.2f} ({d['low_rate']:+.2f}%)\n"
+            f"🔺 수익: {d['profit_rate']:+.2f}% ({profit_sign}${abs(d['profit_usd']):,.2f} | {profit_sign}₩{int(abs(d['profit_krw'])):,})"
         )
         
     text = (
