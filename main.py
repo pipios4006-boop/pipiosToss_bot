@@ -3,6 +3,8 @@
 # 목적: SOXL, SOXS 듀얼 코어 암살자 엔진 가동 (aVWAP + 제로오버나잇) - 메인 통제소
 # =====================================================================
 # MODIFIED: 초과 Case 44 - 절대 제로-오버나이트 강제 청산망 무조건 격발 결속
+# MODIFIED: 휩소 방어 - 마이크로 노이즈 차단용 4틱(6초) 연속 확증 알고리즘 주입
+# MODIFIED: 엣지 케이스 방어 - 타임쉴드 종속형 틱 누적기 락온 (04:07 정각 이후 누적 개시)
 
 import sys
 import os
@@ -71,6 +73,7 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
     last_moc_minute = -1
     last_heartbeat_hour = -1
     last_logged_session = ""
+    breakout_ticks = 0  # NEW: 마이크로 휩소 방어용 연속 틱 누적기
     
     async def notify_tg(text: str):
         try:
@@ -412,7 +415,13 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                 if hardcoded_session == "preMarket" and not is_time_shield:
                     can_enter = True
                 
+                # MODIFIED: 타임쉴드 종속형 마이크로 휩소 방어망 (쉴드 해제 이후부터 누적)
                 if can_enter and current_price >= vwap_price:
+                    breakout_ticks += 1
+                else:
+                    breakout_ticks = 0
+                
+                if can_enter and breakout_ticks >= 4:
                     if not in_memory_ordering_lock[symbol]:
                         in_memory_ordering_lock[symbol] = True
                         try:
@@ -463,12 +472,14 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                                         await AssassinLedger.save_state(symbol, buy_order_id=str(res["result"]["orderId"]), entry_session=hardcoded_session, pre_first_flag=new_pre_first)
                                     
                                     idempotency_keys[symbol]["BUY"] = None
-                                    await notify_tg(f"🚀 <b>[aVWAP {symbol}] 돌파 요격 매수 (세션: {hardcoded_session})</b>\n▫️ aVWAP: ${vwap_price:.2f}\n▫️ 타격가: ${ask_1_price:.2f}\n▫️ 수량: {target_qty}주")
+                                    await notify_tg(f"🚀 <b>[aVWAP {symbol}] 돌파 요격 매수 (세션: {hardcoded_session})</b>\n▫️ aVWAP: ${vwap_price:.2f}\n▫️ 타격가: ${ask_1_price:.2f}\n▫️ 수량: {target_qty}주\n▫️ 확증: 타임쉴드 종속 4틱(6초) 돌파 방어망 통과")
                         except Exception as e:
                             print(f"🚨 [BUY 방어] {e}", flush=True)
                             await notify_tg(f"🚨 <b>[BUY 에러 {symbol}]</b> {html.escape(str(e))}")
                         finally:
                             in_memory_ordering_lock[symbol] = False
+            else:
+                breakout_ticks = 0 # NEW: 매수 감시 조건 이탈 시 누적기 즉시 증발
 
         except Exception as e:
             print(f"🚨 [aVWAP {symbol}] 감시망 붕괴 방어: {e}", flush=True)
