@@ -374,7 +374,7 @@ async def build_sync_board() -> str:
 
         emoji = "🐂" if d['symbol'] == "SOXL" else "🐻"
         return (
-            f"{emoji} <b>[{d['symbol']}] 암살자(aVWAP) 지시서</b>\n"
+            f"⚖️ <b>[{d['symbol']}] 암살자(aVWAP) 지시서</b>\n"
             f"💵 총 시드: ${d['budget']:,.0f} | 🎯 {flag_str}\n"
             f"💰 현재 ${d['curr']:.2f} / 평단 ${d['avg_price']:.2f} ({int(d['qty'])}주)\n"
             f"📈 금일 고가: ${d['high']:.2f} ({d['high_rate']:+.2f}%)\n"
