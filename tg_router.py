@@ -2,7 +2,7 @@
 # FILE: tg_router.py
 # 목적: SOXL, SOXS 듀얼 상태 제어 UI, 스케줄/명령어 라우팅 및 방어망 결속
 # =====================================================================
-# MODIFIED: 초과 Case 38 엄수 - 가로 폭 압축(구분선 축소, 원화 표출 복구, OVN 문구 롤백)
+# MODIFIED: 초과 Case 38 엄수 - UI 마이크로 튜닝 (서머타임 한글화, 헤더 스왑, 구분선 18칸 연장, OVN 롤백)
 
 import os
 import html
@@ -35,11 +35,11 @@ class BudgetState(StatesGroup):
 def get_main_menu_text() -> str:
     now_est = datetime.now(ZoneInfo('America/New_York'))
     is_dst = now_est.dst() is not None and now_est.dst().total_seconds() != 0
-    dst_status_text = "🌞DST:ON" if is_dst else "❄️DST:OFF"
+    dst_status_text = "🌞서머타임 ON" if is_dst else "❄️서머타임 OFF"
     
     return (
         f"🕒 <b>[운영 스케줄]</b> <code>{dst_status_text}</code>\n"
-        "━━━━━━━━━━━━━━\n"
+        "━━━━━━━━━━━━━━━━━━\n"
         "┣ <code>17:00</code> 🧹 정산 스캔\n"
         "┣ <code>04:00</code> 🌅 프리장 VWAP\n"
         "┣ <code>09:30</code> 🔥 정규장 VWAP\n"
@@ -208,8 +208,8 @@ async def build_avwap_radar() -> tuple[str, InlineKeyboardMarkup]:
     scan_time = now_est.strftime("%m-%d %H:%M:%S")
 
     text = f"""📡 <b>[aVWAP 레이더]</b> <code>{market_header}</code>
-━━━━━━━━━━━━━━
-📊 <b>5MA & 현재가</b>
+━━━━━━━━━━━━━━━━━━
+📊 <b>현재가 & 5MA</b>
 ┣ <b>SOXL</b> <code>${price_l:.2f}</code> | <code>{amp_l:.1f}%</code>
 ┗ <b>SOXS</b> <code>${price_s:.2f}</code> | <code>{amp_s:.1f}%</code>
 
@@ -220,7 +220,7 @@ async def build_avwap_radar() -> tuple[str, InlineKeyboardMarkup]:
 🔥 <b>정규장</b> (09:30~16:00)
 ┣ <b>SOXL</b> <code>${sess_l['reg_vwap']:.2f}</code> (<code>{sess_l['reg_amp']:.1f}%</code>)
 ┗ <b>SOXS</b> <code>${sess_s['reg_vwap']:.2f}</code> (<code>{sess_s['reg_amp']:.1f}%</code>)
-━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━━━━━
 {status_l}
 {status_s}
 
@@ -234,7 +234,7 @@ async def build_avwap_radar() -> tuple[str, InlineKeyboardMarkup]:
 async def build_sync_board() -> str:
     now_est = datetime.now(ZoneInfo('America/New_York'))
     is_dst = now_est.dst() is not None and now_est.dst().total_seconds() != 0
-    dst_str = "DST:ON" if is_dst else "DST:OFF"
+    dst_str = "서머타임 ON" if is_dst else "서머타임 OFF"
     
     t = now_est.hour * 100 + now_est.minute
     if 400 <= t <= 929:
@@ -350,7 +350,7 @@ async def build_sync_board() -> str:
     def format_symbol(d):
         p_usd = d['profit_usd']
         p_krw = d['profit_krw']
-        sign = "+" if p_usd > 0 else "-" if p_usd < 0 else ""
+        sign = "+" if p_usd >= 0 else "-"
         usd_str = f"{sign}${abs(p_usd):.2f}"
         krw_str = f"{sign}₩{int(abs(p_krw)):,}"
 
@@ -369,7 +369,7 @@ async def build_sync_board() -> str:
         f"📜 <b>[통합 지시서]</b> <code>{market_state}</code>\n"
         f"┣ <b>시계:</b> <code>{now_est.strftime('%H:%M')} EST</code>\n"
         f"┗ <b>자금:</b> <code>${bp:,.2f}</code>\n"
-        f"━━━━━━━━━━━━━━\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
         f"{format_symbol(soxl_data)}\n\n"
         f"{format_symbol(soxs_data)}\n\n"
         f"▶️ /avwap 🔫 레이더 관제"
@@ -385,7 +385,7 @@ async def build_settlement_board() -> tuple[str, InlineKeyboardMarkup]:
 
     text = (
         "⚙️ <b>[전술 코어 제어반]</b>\n"
-        "━━━━━━━━━━━━━━\n"
+        "━━━━━━━━━━━━━━━━━━\n"
         "📦 <b>SOXL (LONG)</b>\n"
         f"┣ <b>상태:</b> <code>{state_l_str}</code>\n"
         f"┗ <b>예산:</b> <code>${budget_l:,.2f}</code>\n\n"
