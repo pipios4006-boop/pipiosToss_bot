@@ -2,7 +2,7 @@
 # FILE: tg_router.py
 # 목적: SOXL, SOXS 듀얼 상태 제어 UI, 스케줄/명령어 라우팅 및 방어망 결속
 # =====================================================================
-# MODIFIED: 초과 Case 38 엄수 - [고저] 텍스트 소각 및 17:00 이후 데이터 제로화 결속
+# MODIFIED: 초과 Case 38 엄수 - 레이더 뷰 트리 구조(┃ ⤷, ┗ ⤷) 정밀 조정 및 헤더 강조
 
 import os
 import html
@@ -115,16 +115,16 @@ async def build_avwap_radar() -> tuple[str, InlineKeyboardMarkup]:
     t = now_est.hour * 100 + now_est.minute
     if 400 <= t <= 929:
         session_name_ui = "preMarket"
-        market_header = "🌅 PRE_MARKET"
+        market_header = "( <b>🌅 PRE_MARKET</b> )"
     elif 930 <= t <= 1559:
         session_name_ui = "regularMarket"
-        market_header = "🔥 REG_MARKET"
+        market_header = "( <b>🔥 REG_MARKET</b> )"
     elif 1600 <= t <= 1659:
         session_name_ui = "afterMarket"
-        market_header = "🛑 AFT_MARKET"
+        market_header = "( <b>🛑 AFT_MARKET</b> )"
     else:
         session_name_ui = "dayMarket"
-        market_header = "🌙 시스템 대기"
+        market_header = "( <b>🌙 시스템 대기</b> )"
 
     price_l = await api_client.get_current_price("SOXL")
     price_s = await api_client.get_current_price("SOXS")
@@ -212,7 +212,7 @@ async def build_avwap_radar() -> tuple[str, InlineKeyboardMarkup]:
     
     scan_time = now_est.strftime("%m-%d %H:%M:%S")
 
-    text = f"""📡 <b>[aVWAP 레이더]</b> <code>{market_header}</code>
+    text = f"""📡 <b>[aVWAP 레이더]</b> {market_header}
 ━━━━━━━━━━━━━━━━━━
 📊 <b>현재가 & 5MA</b>
 ┣ <b>SOXL</b> <code>${price_l:.2f}</code> | <code>{amp_l:.1f}%</code>
@@ -221,14 +221,14 @@ async def build_avwap_radar() -> tuple[str, InlineKeyboardMarkup]:
 🌅 <b>프리장</b> (04:00~09:29)
 ┣ <b>SOXL</b> <code>[VWAP] ${sess_l['pre_vwap']:.2f}</code>
 ┃ ⤷ <code>${sess_l['pre_l']:.2f}~${sess_l['pre_h']:.2f} ({sess_l['pre_amp']:.1f}%)</code>
-┗ <b>SOXS</b> <code>[VWAP] ${sess_s['pre_vwap']:.2f}</code>
-  ⤷ <code>${sess_s['pre_l']:.2f}~${sess_s['pre_h']:.2f} ({sess_s['pre_amp']:.1f}%)</code>
+┣ <b>SOXS</b> <code>[VWAP] ${sess_s['pre_vwap']:.2f}</code>
+┗ ⤷ <code>${sess_s['pre_l']:.2f}~${sess_s['pre_h']:.2f} ({sess_s['pre_amp']:.1f}%)</code>
 
 🔥 <b>정규장</b> (09:30~16:00)
 ┣ <b>SOXL</b> <code>[VWAP] ${sess_l['reg_vwap']:.2f}</code>
 ┃ ⤷ <code>${sess_l['reg_l']:.2f}~${sess_l['reg_h']:.2f} ({sess_l['reg_amp']:.1f}%)</code>
-┗ <b>SOXS</b> <code>[VWAP] ${sess_s['reg_vwap']:.2f}</code>
-  ⤷ <code>${sess_s['reg_l']:.2f}~${sess_s['reg_h']:.2f} ({sess_s['reg_amp']:.1f}%)</code>
+┣ <b>SOXS</b> <code>[VWAP] ${sess_s['reg_vwap']:.2f}</code>
+┗ ⤷ <code>${sess_s['reg_l']:.2f}~${sess_s['reg_h']:.2f} ({sess_s['reg_amp']:.1f}%)</code>
 ━━━━━━━━━━━━━━━━━━
 {status_l}
 {status_s}
