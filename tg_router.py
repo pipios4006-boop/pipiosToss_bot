@@ -2,7 +2,7 @@
 # FILE: tg_router.py
 # 목적: SOXL, SOXS 듀얼 상태 제어 UI, 스케줄/명령어 라우팅 및 방어망 결속
 # =====================================================================
-# MODIFIED: 초과 Case 38 엄수 - 레이더 뷰 심미성 극대화 ([고저] 텍스트 영구 소각)
+# MODIFIED: 초과 Case 38 엄수 - [고저] 텍스트 소각 및 17:00 이후 데이터 제로화 결속
 
 import os
 import html
@@ -119,7 +119,7 @@ async def build_avwap_radar() -> tuple[str, InlineKeyboardMarkup]:
     elif 930 <= t <= 1559:
         session_name_ui = "regularMarket"
         market_header = "🔥 REG_MARKET"
-    elif 1600 <= t <= 1859:
+    elif 1600 <= t <= 1659:
         session_name_ui = "afterMarket"
         market_header = "🛑 AFT_MARKET"
     else:
@@ -173,8 +173,12 @@ async def build_avwap_radar() -> tuple[str, InlineKeyboardMarkup]:
                 break
         return await asyncio.to_thread(parse_session_data, all_candles, session_start_est)
 
-    sess_l = await fetch_session_stats("SOXL")
-    sess_s = await fetch_session_stats("SOXS")
+    if session_name_ui == "dayMarket":
+        sess_l = {"pre_h": 0.0, "pre_l": 0.0, "pre_amp": 0.0, "pre_vwap": 0.0, "reg_h": 0.0, "reg_l": 0.0, "reg_amp": 0.0, "reg_vwap": 0.0}
+        sess_s = {"pre_h": 0.0, "pre_l": 0.0, "pre_amp": 0.0, "pre_vwap": 0.0, "reg_h": 0.0, "reg_l": 0.0, "reg_amp": 0.0, "reg_vwap": 0.0}
+    else:
+        sess_l = await fetch_session_stats("SOXL")
+        sess_s = await fetch_session_stats("SOXS")
 
     _, budget_l, _, is_done_l, is_active_l, _, _, _, entry_l, first_l, _ = await AssassinLedger.get_state("SOXL")
     _, budget_s, _, is_done_s, is_active_s, _, _, _, entry_s, first_s, _ = await AssassinLedger.get_state("SOXS")
@@ -246,7 +250,7 @@ async def build_sync_board() -> str:
         market_state = "PRE_MARKET"
     elif 930 <= t <= 1559:
         market_state = "REG_MARKET"
-    elif 1600 <= t <= 1859:
+    elif 1600 <= t <= 1659:
         market_state = "AFT_MARKET"
     else:
         market_state = "STANDBY"
@@ -291,41 +295,46 @@ async def build_sync_board() -> str:
         except Exception:
             pass
 
-        if now_est.hour >= 4:
-            session_start_est = now_est.replace(hour=4, minute=0, second=0, microsecond=0)
-        else:
-            session_start_est = (now_est - timedelta(days=1)).replace(hour=4, minute=0, second=0, microsecond=0)
-            
-        all_candles = []
-        before = None
-        for _ in range(10):
-            try:
-                c_data = await api_client.get_1m_candles_pagination(symbol, count=200, before=before)
-                c_list = c_data.get("candles", [])
-                all_candles.extend(c_list)
-                if not c_list: break
-                oldest_time = pd.to_datetime(c_list[-1]['timestamp'], utc=True).tz_convert(ZoneInfo('America/New_York'))
-                if oldest_time <= session_start_est: break
-                before = c_data.get("nextBefore")
-                if not before: break
-            except Exception:
-                break
-                
         high, low = 0.0, 0.0
-        if all_candles:
-            df = pd.DataFrame(all_candles)
-            if not df.empty:
-                df['timestamp'] = pd.to_datetime(df['timestamp'], format='ISO8601', utc=True).dt.tz_convert(ZoneInfo('America/New_York'))
-                df.set_index('timestamp', inplace=True)
-                df = df[df.index >= session_start_est]
-                if not df.empty:
-                    df['highPrice'] = pd.to_numeric(df['highPrice'], errors='coerce').fillna(0.0)
-                    df['lowPrice'] = pd.to_numeric(df['lowPrice'], errors='coerce').fillna(0.0)
-                    h_max = float(df['highPrice'].max())
-                    l_min = float(df['lowPrice'].min())
-                    if h_max > 0: high = h_max
-                    if l_min > 0: low = l_min
+        
+        if market_state == "STANDBY":
+            high = curr
+            low = curr
+        else:
+            if now_est.hour >= 4:
+                session_start_est = now_est.replace(hour=4, minute=0, second=0, microsecond=0)
+            else:
+                session_start_est = (now_est - timedelta(days=1)).replace(hour=4, minute=0, second=0, microsecond=0)
+                
+            all_candles = []
+            before = None
+            for _ in range(10):
+                try:
+                    c_data = await api_client.get_1m_candles_pagination(symbol, count=200, before=before)
+                    c_list = c_data.get("candles", [])
+                    all_candles.extend(c_list)
+                    if not c_list: break
+                    oldest_time = pd.to_datetime(c_list[-1]['timestamp'], utc=True).tz_convert(ZoneInfo('America/New_York'))
+                    if oldest_time <= session_start_est: break
+                    before = c_data.get("nextBefore")
+                    if not before: break
+                except Exception:
+                    break
                     
+            if all_candles:
+                df = pd.DataFrame(all_candles)
+                if not df.empty:
+                    df['timestamp'] = pd.to_datetime(df['timestamp'], format='ISO8601', utc=True).dt.tz_convert(ZoneInfo('America/New_York'))
+                    df.set_index('timestamp', inplace=True)
+                    df = df[df.index >= session_start_est]
+                    if not df.empty:
+                        df['highPrice'] = pd.to_numeric(df['highPrice'], errors='coerce').fillna(0.0)
+                        df['lowPrice'] = pd.to_numeric(df['lowPrice'], errors='coerce').fillna(0.0)
+                        h_max = float(df['highPrice'].max())
+                        l_min = float(df['lowPrice'].min())
+                        if h_max > 0: high = h_max
+                        if l_min > 0: low = l_min
+                        
         if high == 0.0: high = curr
         if low == 0.0: low = curr
 
