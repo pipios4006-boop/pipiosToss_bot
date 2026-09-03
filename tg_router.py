@@ -2,7 +2,7 @@
 # FILE: tg_router.py
 # 목적: SOXL, SOXS 듀얼 상태 제어 UI, 스케줄/명령어 라우팅 및 방어망 결속
 # =====================================================================
-# MODIFIED: 초과 Case 38 엄수 - 모바일 단일 라인 강제 (텍스트 폭 하드 압축)
+# MODIFIED: 초과 Case 38 엄수 - 가로 폭 압축(구분선 축소, 원화 표출 복구, OVN 문구 롤백)
 
 import os
 import html
@@ -39,7 +39,7 @@ def get_main_menu_text() -> str:
     
     return (
         f"🕒 <b>[운영 스케줄]</b> <code>{dst_status_text}</code>\n"
-        "━━━━━━━━━━━━━━━━━━━━\n"
+        "━━━━━━━━━━━━━━\n"
         "┣ <code>17:00</code> 🧹 정산 스캔\n"
         "┣ <code>04:00</code> 🌅 프리장 VWAP\n"
         "┣ <code>09:30</code> 🔥 정규장 VWAP\n"
@@ -50,7 +50,7 @@ def get_main_menu_text() -> str:
         "┗ ▶️ /settlement ⚙️ 제어반\n\n"
         "⚠️ /reset 🧹 장부 초기화\n"
         "⚠️ /update 🚀 시스템 업데이트\n\n"
-        "🌙 <b>OVN 유지 ➡️ 개별 종목 가동 OFF</b>"
+        "🌙 <b>오버나이트를 원할 경우 [통합 전술 제어반]에서 해당 종목 가동을 OFF 해주세요.</b>"
     )
 
 @router.message(Command("start"))
@@ -179,24 +179,24 @@ async def build_avwap_radar() -> tuple[str, InlineKeyboardMarkup]:
     _, budget_s, _, is_done_s, is_active_s, _, _, _, entry_s, first_s, _ = await AssassinLedger.get_state("SOXS")
 
     def build_compact_status(symbol_short, is_active, budget, is_done, current_session, est_time, qty, entry_session, pre_first_flag):
-        state_flag = "OFF" if not is_active else "ON"
+        state_flag = "ON" if is_active else "OFF"
         
         if not is_active:
             state_text = "대기"
         elif qty > 0:
-            state_text = "보유(PRE 2%)" if pre_first_flag else "보유(PRE 1%)"
+            state_text = "보유(+2%)" if pre_first_flag else "보유(+1%)"
         elif is_done:
             state_text = "타격완료"
         else:
             if current_session == "preMarket":
                 if est_time.hour == 4 and est_time.minute <= 6:
-                    state_text = "04:07 쉴드"
+                    state_text = "타임쉴드"
                 else:
-                    state_text = "프리장 감시"
+                    state_text = "PRE대기"
             elif current_session == "dayMarket":
                 state_text = "장외대기"
             elif current_session == "regularMarket":
-                state_text = "정규장 감시"
+                state_text = "REG대기"
             else:
                 state_text = "장외대기"
 
@@ -208,7 +208,7 @@ async def build_avwap_radar() -> tuple[str, InlineKeyboardMarkup]:
     scan_time = now_est.strftime("%m-%d %H:%M:%S")
 
     text = f"""📡 <b>[aVWAP 레이더]</b> <code>{market_header}</code>
-━━━━━━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━
 📊 <b>5MA & 현재가</b>
 ┣ <b>SOXL</b> <code>${price_l:.2f}</code> | <code>{amp_l:.1f}%</code>
 ┗ <b>SOXS</b> <code>${price_s:.2f}</code> | <code>{amp_s:.1f}%</code>
@@ -220,7 +220,7 @@ async def build_avwap_radar() -> tuple[str, InlineKeyboardMarkup]:
 🔥 <b>정규장</b> (09:30~16:00)
 ┣ <b>SOXL</b> <code>${sess_l['reg_vwap']:.2f}</code> (<code>{sess_l['reg_amp']:.1f}%</code>)
 ┗ <b>SOXS</b> <code>${sess_s['reg_vwap']:.2f}</code> (<code>{sess_s['reg_amp']:.1f}%</code>)
-━━━━━━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━
 {status_l}
 {status_s}
 
@@ -348,23 +348,28 @@ async def build_sync_board() -> str:
     soxs_data = await get_symbol_sync_data("SOXS")
     
     def format_symbol(d):
-        profit_sign = "+" if d['profit_usd'] >= 0 else ""
+        p_usd = d['profit_usd']
+        p_krw = d['profit_krw']
+        sign = "+" if p_usd > 0 else "-" if p_usd < 0 else ""
+        usd_str = f"{sign}${abs(p_usd):.2f}"
+        krw_str = f"{sign}₩{int(abs(p_krw)):,}"
+
         flag_str = "대기"
         if d['qty'] > 0:
-            flag_str = "PRE+2%" if d['pre_first_flag'] else "PRE+1%"
+            flag_str = "+2%" if d['pre_first_flag'] else "+1%"
 
         return (
             f"⚖️ <b>{d['symbol']} 장부</b> <code>[{flag_str}]</code>\n"
-            f"┣ <b>단가:</b> <code>${d['curr']:.2f}</code>/<code>${d['avg_price']:.2f}</code> ({int(d['qty'])})\n"
+            f"┣ <b>단가:</b> <code>${d['curr']:.2f}</code>/<code>${d['avg_price']:.2f}</code>(<code>{int(d['qty'])}</code>)\n"
             f"┣ <b>진폭:</b> <code>${d['low']:.2f}</code>~<code>${d['high']:.2f}</code>\n"
-            f"┗ <b>수익:</b> <code>{d['profit_rate']:+.2f}%</code>(<code>{profit_sign}${d['profit_usd']:.2f}</code>)"
+            f"┗ <b>수익:</b> <code>{d['profit_rate']:+.2f}%</code>(<code>{usd_str}</code>|<code>{krw_str}</code>)"
         )
         
     text = (
         f"📜 <b>[통합 지시서]</b> <code>{market_state}</code>\n"
         f"┣ <b>시계:</b> <code>{now_est.strftime('%H:%M')} EST</code>\n"
         f"┗ <b>자금:</b> <code>${bp:,.2f}</code>\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"━━━━━━━━━━━━━━\n"
         f"{format_symbol(soxl_data)}\n\n"
         f"{format_symbol(soxs_data)}\n\n"
         f"▶️ /avwap 🔫 레이더 관제"
@@ -375,12 +380,12 @@ async def build_settlement_board() -> tuple[str, InlineKeyboardMarkup]:
     _, budget_l, _, _, is_active_l, _, _, _, _, _, _ = await AssassinLedger.get_state("SOXL")
     _, budget_s, _, _, is_active_s, _, _, _, _, _, _ = await AssassinLedger.get_state("SOXS")
 
-    state_l_str = "🟢 ACTIVE" if is_active_l else "🔴 OFFLINE"
-    state_s_str = "🟢 ACTIVE" if is_active_s else "🔴 OFFLINE"
+    state_l_str = "🟢 ON" if is_active_l else "🔴 OFF"
+    state_s_str = "🟢 ON" if is_active_s else "🔴 OFF"
 
     text = (
         "⚙️ <b>[전술 코어 제어반]</b>\n"
-        "━━━━━━━━━━━━━━━━━━━━\n"
+        "━━━━━━━━━━━━━━\n"
         "📦 <b>SOXL (LONG)</b>\n"
         f"┣ <b>상태:</b> <code>{state_l_str}</code>\n"
         f"┗ <b>예산:</b> <code>${budget_l:,.2f}</code>\n\n"
@@ -656,7 +661,7 @@ async def process_execute_update(callback_query: types.CallbackQuery, state: FSM
 
 @router.callback_query(F.data == "back_to_main")
 async def process_back_to_main(callback_query: types.CallbackQuery, state: FSMContext):
-    if callback_query.fromuser.id != ADMIN_CHAT_ID:
+    if callback_query.from_user.id != ADMIN_CHAT_ID:
         return
     print(f"💬 [TG 콜백 수신] back_to_main (User: {callback_query.from_user.id})", flush=True)
     await state.clear()
