@@ -2,7 +2,7 @@
 # FILE: tg_router.py
 # 목적: SOXL, SOXS 듀얼 상태 제어 UI, 스케줄/명령어 라우팅 및 방어망 결속
 # =====================================================================
-# MODIFIED: 초과 Case 38 엄수 - 통합 지시서(/sync) UI 오리지널 포맷 원상 복구
+# MODIFIED: 초과 Case 38 엄수 - [고저] 텍스트 소각 및 17:00 이후 데이터 제로화 결속
 
 import os
 import html
@@ -124,7 +124,7 @@ async def build_avwap_radar() -> tuple[str, InlineKeyboardMarkup]:
         market_header = "🛑 AFT_MARKET"
     else:
         session_name_ui = "dayMarket"
-        market_header = "🌙 SYS_STANDBY"
+        market_header = "🌙 시스템 대기"
 
     price_l = await api_client.get_current_price("SOXL")
     price_s = await api_client.get_current_price("SOXS")
@@ -220,15 +220,15 @@ async def build_avwap_radar() -> tuple[str, InlineKeyboardMarkup]:
 
 🌅 <b>프리장</b> (04:00~09:29)
 ┣ <b>SOXL</b> <code>[VWAP] ${sess_l['pre_vwap']:.2f}</code>
-┣ ⤷ <code>${sess_l['pre_l']:.2f}~${sess_l['pre_h']:.2f} ({sess_l['pre_amp']:.1f}%)</code>
-┣ <b>SOXS</b> <code>[VWAP] ${sess_s['pre_vwap']:.2f}</code>
-┗ ⤷ <code>${sess_s['pre_l']:.2f}~${sess_s['pre_h']:.2f} ({sess_s['pre_amp']:.1f}%)</code>
+┃ ⤷ <code>${sess_l['pre_l']:.2f}~${sess_l['pre_h']:.2f} ({sess_l['pre_amp']:.1f}%)</code>
+┗ <b>SOXS</b> <code>[VWAP] ${sess_s['pre_vwap']:.2f}</code>
+  ⤷ <code>${sess_s['pre_l']:.2f}~${sess_s['pre_h']:.2f} ({sess_s['pre_amp']:.1f}%)</code>
 
 🔥 <b>정규장</b> (09:30~16:00)
 ┣ <b>SOXL</b> <code>[VWAP] ${sess_l['reg_vwap']:.2f}</code>
-┣ ⤷ <code>${sess_l['reg_l']:.2f}~${sess_l['reg_h']:.2f} ({sess_l['reg_amp']:.1f}%)</code>
-┣ <b>SOXS</b> <code>[VWAP] ${sess_s['reg_vwap']:.2f}</code>
-┗ ⤷ <code>${sess_s['reg_l']:.2f}~${sess_s['reg_h']:.2f} ({sess_s['reg_amp']:.1f}%)</code>
+┃ ⤷ <code>${sess_l['reg_l']:.2f}~${sess_l['reg_h']:.2f} ({sess_l['reg_amp']:.1f}%)</code>
+┗ <b>SOXS</b> <code>[VWAP] ${sess_s['reg_vwap']:.2f}</code>
+  ⤷ <code>${sess_s['reg_l']:.2f}~${sess_s['reg_h']:.2f} ({sess_s['reg_amp']:.1f}%)</code>
 ━━━━━━━━━━━━━━━━━━
 {status_l}
 {status_s}
@@ -250,7 +250,7 @@ async def build_sync_board() -> str:
         market_state = "🌅 프리장"
     elif 930 <= t <= 1559:
         market_state = "🔥 정규장"
-    elif 1600 <= t <= 1859:
+    elif 1600 <= t <= 1659:
         market_state = "⛔ 장마감"
     else:
         market_state = "🌙 시스템 대기"
@@ -295,46 +295,52 @@ async def build_sync_board() -> str:
         except Exception:
             pass
 
-        if now_est.hour >= 4:
-            session_start_est = now_est.replace(hour=4, minute=0, second=0, microsecond=0)
+        if market_state == "🌙 시스템 대기":
+            high = 0.0
+            low = 0.0
+            high_rate = 0.0
+            low_rate = 0.0
         else:
-            session_start_est = (now_est - timedelta(days=1)).replace(hour=4, minute=0, second=0, microsecond=0)
-            
-        all_candles = []
-        before = None
-        for _ in range(10):
-            try:
-                c_data = await api_client.get_1m_candles_pagination(symbol, count=200, before=before)
-                c_list = c_data.get("candles", [])
-                all_candles.extend(c_list)
-                if not c_list: break
-                oldest_time = pd.to_datetime(c_list[-1]['timestamp'], utc=True).tz_convert(ZoneInfo('America/New_York'))
-                if oldest_time <= session_start_est: break
-                before = c_data.get("nextBefore")
-                if not before: break
-            except Exception:
-                break
+            if now_est.hour >= 4:
+                session_start_est = now_est.replace(hour=4, minute=0, second=0, microsecond=0)
+            else:
+                session_start_est = (now_est - timedelta(days=1)).replace(hour=4, minute=0, second=0, microsecond=0)
                 
-        high, low = 0.0, 0.0
-        if all_candles:
-            df = pd.DataFrame(all_candles)
-            if not df.empty:
-                df['timestamp'] = pd.to_datetime(df['timestamp'], format='ISO8601', utc=True).dt.tz_convert(ZoneInfo('America/New_York'))
-                df.set_index('timestamp', inplace=True)
-                df = df[df.index >= session_start_est]
-                if not df.empty:
-                    df['highPrice'] = pd.to_numeric(df['highPrice'], errors='coerce').fillna(0.0)
-                    df['lowPrice'] = pd.to_numeric(df['lowPrice'], errors='coerce').fillna(0.0)
-                    h_max = float(df['highPrice'].max())
-                    l_min = float(df['lowPrice'].min())
-                    if h_max > 0: high = h_max
-                    if l_min > 0: low = l_min
+            all_candles = []
+            before = None
+            for _ in range(10):
+                try:
+                    c_data = await api_client.get_1m_candles_pagination(symbol, count=200, before=before)
+                    c_list = c_data.get("candles", [])
+                    all_candles.extend(c_list)
+                    if not c_list: break
+                    oldest_time = pd.to_datetime(c_list[-1]['timestamp'], utc=True).tz_convert(ZoneInfo('America/New_York'))
+                    if oldest_time <= session_start_est: break
+                    before = c_data.get("nextBefore")
+                    if not before: break
+                except Exception:
+                    break
                     
-        if high == 0.0: high = curr
-        if low == 0.0: low = curr
+            high, low = 0.0, 0.0
+            if all_candles:
+                df = pd.DataFrame(all_candles)
+                if not df.empty:
+                    df['timestamp'] = pd.to_datetime(df['timestamp'], format='ISO8601', utc=True).dt.tz_convert(ZoneInfo('America/New_York'))
+                    df.set_index('timestamp', inplace=True)
+                    df = df[df.index >= session_start_est]
+                    if not df.empty:
+                        df['highPrice'] = pd.to_numeric(df['highPrice'], errors='coerce').fillna(0.0)
+                        df['lowPrice'] = pd.to_numeric(df['lowPrice'], errors='coerce').fillna(0.0)
+                        h_max = float(df['highPrice'].max())
+                        l_min = float(df['lowPrice'].min())
+                        if h_max > 0: high = h_max
+                        if l_min > 0: low = l_min
+                        
+            if high == 0.0: high = curr
+            if low == 0.0: low = curr
 
-        high_rate = ((high - prev_close) / prev_close * 100) if prev_close > 0 else 0.0
-        low_rate = ((low - prev_close) / prev_close * 100) if prev_close > 0 else 0.0
+            high_rate = ((high - prev_close) / prev_close * 100) if prev_close > 0 else 0.0
+            low_rate = ((low - prev_close) / prev_close * 100) if prev_close > 0 else 0.0
             
         return {
             "symbol": symbol,
