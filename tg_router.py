@@ -2,7 +2,7 @@
 # FILE: tg_router.py
 # 목적: SOXL, SOXS 듀얼 상태 제어 UI, 스케줄/명령어 라우팅 및 방어망 결속
 # =====================================================================
-# MODIFIED: 초과 Case 38 엄수 - [고저] 텍스트 소각 및 17:00 이후 데이터 제로화 결속
+# MODIFIED: 초과 Case 38 엄수 - 통합 지시서(/sync) UI 오리지널 포맷 원상 복구
 
 import os
 import html
@@ -243,17 +243,17 @@ async def build_avwap_radar() -> tuple[str, InlineKeyboardMarkup]:
 async def build_sync_board() -> str:
     now_est = datetime.now(ZoneInfo('America/New_York'))
     is_dst = now_est.dst() is not None and now_est.dst().total_seconds() != 0
-    dst_str = "서머타임 ON" if is_dst else "서머타임 OFF"
+    dst_str = "🌞 서머타임" if is_dst else "❄️ 서머타임 OFF"
     
     t = now_est.hour * 100 + now_est.minute
     if 400 <= t <= 929:
-        market_state = "PRE_MARKET"
+        market_state = "🌅 프리장"
     elif 930 <= t <= 1559:
-        market_state = "REG_MARKET"
-    elif 1600 <= t <= 1659:
-        market_state = "AFT_MARKET"
+        market_state = "🔥 정규장"
+    elif 1600 <= t <= 1859:
+        market_state = "⛔ 장마감"
     else:
-        market_state = "STANDBY"
+        market_state = "🌙 시스템 대기"
 
     bp = await api_client.get_usd_buying_power()
     
@@ -295,46 +295,41 @@ async def build_sync_board() -> str:
         except Exception:
             pass
 
-        high, low = 0.0, 0.0
-        
-        if market_state == "STANDBY":
-            high = curr
-            low = curr
+        if now_est.hour >= 4:
+            session_start_est = now_est.replace(hour=4, minute=0, second=0, microsecond=0)
         else:
-            if now_est.hour >= 4:
-                session_start_est = now_est.replace(hour=4, minute=0, second=0, microsecond=0)
-            else:
-                session_start_est = (now_est - timedelta(days=1)).replace(hour=4, minute=0, second=0, microsecond=0)
+            session_start_est = (now_est - timedelta(days=1)).replace(hour=4, minute=0, second=0, microsecond=0)
+            
+        all_candles = []
+        before = None
+        for _ in range(10):
+            try:
+                c_data = await api_client.get_1m_candles_pagination(symbol, count=200, before=before)
+                c_list = c_data.get("candles", [])
+                all_candles.extend(c_list)
+                if not c_list: break
+                oldest_time = pd.to_datetime(c_list[-1]['timestamp'], utc=True).tz_convert(ZoneInfo('America/New_York'))
+                if oldest_time <= session_start_est: break
+                before = c_data.get("nextBefore")
+                if not before: break
+            except Exception:
+                break
                 
-            all_candles = []
-            before = None
-            for _ in range(10):
-                try:
-                    c_data = await api_client.get_1m_candles_pagination(symbol, count=200, before=before)
-                    c_list = c_data.get("candles", [])
-                    all_candles.extend(c_list)
-                    if not c_list: break
-                    oldest_time = pd.to_datetime(c_list[-1]['timestamp'], utc=True).tz_convert(ZoneInfo('America/New_York'))
-                    if oldest_time <= session_start_est: break
-                    before = c_data.get("nextBefore")
-                    if not before: break
-                except Exception:
-                    break
-                    
-            if all_candles:
-                df = pd.DataFrame(all_candles)
+        high, low = 0.0, 0.0
+        if all_candles:
+            df = pd.DataFrame(all_candles)
+            if not df.empty:
+                df['timestamp'] = pd.to_datetime(df['timestamp'], format='ISO8601', utc=True).dt.tz_convert(ZoneInfo('America/New_York'))
+                df.set_index('timestamp', inplace=True)
+                df = df[df.index >= session_start_est]
                 if not df.empty:
-                    df['timestamp'] = pd.to_datetime(df['timestamp'], format='ISO8601', utc=True).dt.tz_convert(ZoneInfo('America/New_York'))
-                    df.set_index('timestamp', inplace=True)
-                    df = df[df.index >= session_start_est]
-                    if not df.empty:
-                        df['highPrice'] = pd.to_numeric(df['highPrice'], errors='coerce').fillna(0.0)
-                        df['lowPrice'] = pd.to_numeric(df['lowPrice'], errors='coerce').fillna(0.0)
-                        h_max = float(df['highPrice'].max())
-                        l_min = float(df['lowPrice'].min())
-                        if h_max > 0: high = h_max
-                        if l_min > 0: low = l_min
-                        
+                    df['highPrice'] = pd.to_numeric(df['highPrice'], errors='coerce').fillna(0.0)
+                    df['lowPrice'] = pd.to_numeric(df['lowPrice'], errors='coerce').fillna(0.0)
+                    h_max = float(df['highPrice'].max())
+                    l_min = float(df['lowPrice'].min())
+                    if h_max > 0: high = h_max
+                    if l_min > 0: low = l_min
+                    
         if high == 0.0: high = curr
         if low == 0.0: low = curr
 
@@ -362,31 +357,32 @@ async def build_sync_board() -> str:
     soxs_data = await get_symbol_sync_data("SOXS")
     
     def format_symbol(d):
-        p_usd = d['profit_usd']
-        p_krw = d['profit_krw']
-        sign = "+" if p_usd >= 0 else "-"
-        usd_str = f"{sign}${abs(p_usd):.2f}"
-        krw_str = f"{sign}₩{int(abs(p_krw)):,}"
-
-        flag_str = "대기"
+        profit_sign = "+" if d['profit_usd'] >= 0 else "-"
+        
+        flag_str = "⏳ 대기"
         if d['qty'] > 0:
-            flag_str = "+2%" if d['pre_first_flag'] else "+1%"
+            if d['pre_first_flag']:
+                flag_str = "🌅 [PRE 1타점: +2.0%]"
+            else:
+                flag_str = "🌅 [PRE 듀얼: +1.0%]"
 
         return (
-            f"⚖️ <b>{d['symbol']} 장부</b> <code>[{flag_str}]</code>\n"
-            f"┣ <b>단가:</b> <code>${d['curr']:.2f}</code>/<code>${d['avg_price']:.2f}</code>(<code>{int(d['qty'])}</code>)\n"
-            f"┣ <b>진폭:</b> <code>${d['low']:.2f}</code>~<code>${d['high']:.2f}</code>\n"
-            f"┗ <b>수익:</b> <code>{d['profit_rate']:+.2f}%</code>(<code>{usd_str}</code>|<code>{krw_str}</code>)"
+            f"⚖️ <b>[{d['symbol']}] 암살자(aVWAP) 지시서</b>\n"
+            f"💵 총 시드: ${d['budget']:,.0f} | 🎯 {flag_str}\n"
+            f"💰 현재 ${d['curr']:.2f} / 평단 ${d['avg_price']:.2f} ({int(d['qty'])}주)\n"
+            f"📈 금일 고가: ${d['high']:.2f} ({d['high_rate']:+.2f}%)\n"
+            f"📉 금일 저가: ${d['low']:.2f} ({d['low_rate']:+.2f}%)\n"
+            f"🔺 수익: {d['profit_rate']:+.2f}% ({profit_sign}${abs(d['profit_usd']):,.2f} | {profit_sign}₩{int(abs(d['profit_krw'])):,})"
         )
         
     text = (
-        f"📜 <b>[통합 지시서]</b> <code>{market_state}</code>\n"
-        f"┣ <b>시계:</b> <code>{now_est.strftime('%H:%M')} EST</code>\n"
-        f"┗ <b>자금:</b> <code>${bp:,.2f}</code>\n"
-        f"━━━━━━━━━━━━━━━━━━\n"
+        f"📜 <b>[ 통합 지시서 ({market_state}) ]</b>\n"
+        f"📅 {dst_str} ({now_est.strftime('%H:%M')})\n"
+        f"💵 주문가능금액: ${bp:,.2f}\n"
+        f"➖➖➖➖➖➖➖➖➖➖➖➖\n\n"
         f"{format_symbol(soxl_data)}\n\n"
         f"{format_symbol(soxs_data)}\n\n"
-        f"▶️ /avwap 🔫 레이더 관제"
+        f"▶️ /avwap : 🔫 트레이딩 레이더 관제탑"
     )
     return text
 
