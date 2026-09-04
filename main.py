@@ -2,13 +2,15 @@
 # FILE: main.py
 # 목적: SOXL, SOXS 듀얼 코어 암살자 엔진 가동 (aVWAP + 제로오버나잇) - 메인 통제소
 # =====================================================================
-# MODIFIED: 초과 Case 44 - 절대 제로-오버나이트 강제 청산망 무조건 격발 결속
+# MODIFIED: [스캔망] 장마감 1분 전(15:59)부터 3분(16:01)간 MOC 덤핑 윈도우 락온
+# MODIFIED: [스캔망] 1.5초 TPS 통제 기반 고주파 미체결 취소 및 1호가 재조준 융단폭격 로직 주입
 # MODIFIED: 휩소 방어 - 마이크로 노이즈 차단용 4틱(6초) 연속 확증 알고리즘 주입
 # MODIFIED: 엣지 케이스 방어 - 타임쉴드 종속형 틱 누적기 락온 (04:07 정각 이후 누적 개시)
 
 import sys
 import os
 import math
+import time
 import asyncio
 import html
 import logging
@@ -70,10 +72,11 @@ async def fetch_full_session_candles(client: TossApiClient, symbol: str, session
     return all_candles
 
 async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: str):
-    last_moc_minute = -1
+    last_moc_tick = 0.0
+    moc_dump_active = False
     last_heartbeat_hour = -1
     last_logged_session = ""
-    breakout_ticks = 0  # NEW: 마이크로 휩소 방어용 연속 틱 누적기
+    breakout_ticks = 0
     
     async def notify_tg(text: str):
         try:
@@ -106,7 +109,8 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
             if now_est.hour == 17 and now_est.minute == 0:
                 in_memory_ordering_lock[symbol] = False
                 idempotency_keys[symbol] = {"BUY": None, "TRAP": None, "MOC": None}
-                last_moc_minute = -1
+                last_moc_tick = 0.0
+                moc_dump_active = False
                 if holdings_qty == 0:
                     await AssassinLedger.save_state(symbol, buy_order_id="", cond_order_id="", entry_session="", pre_first_flag=False, force_downgrade=False)
                 print(f"🧹 [GC {symbol}] 17:00 EST 락 해제 및 자정 초기화 완료.", flush=True)
@@ -147,69 +151,64 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                 print(f"💓 [맥박 {symbol}] 논리 시계: {now_est.strftime('%Y-%m-%d %H:%M:%S')} EST | 세션: {hardcoded_session} | 활성: {is_active} | 잔고: {holdings_qty}주", flush=True)
                 last_heartbeat_hour = now_est.hour
 
-            is_reg_moc = (now_est.hour == 16 and 5 <= now_est.minute <= 7)
+            is_reg_moc = ((now_est.hour == 15 and now_est.minute == 59) or (now_est.hour == 16 and 0 <= now_est.minute <= 1))
 
             if is_reg_moc and is_active:
                 if holdings_qty > 0 and not in_memory_ordering_lock[symbol]:
-                    if last_moc_minute != now_est.minute:
+                    current_time = time.time()
+                    if current_time - last_moc_tick >= 1.5:
                         in_memory_ordering_lock[symbol] = True
                         try:
                             if cond_order_id:
                                 try:
                                     await client.cancel_conditional_order(cond_order_id)
                                     await AssassinLedger.save_state(symbol, cond_order_id="")
-                                    await asyncio.sleep(0.5)
                                 except Exception as e:
                                     print(f"🚨 [조건주문 취소 방어] {e}", flush=True)
 
-                            dump_qty = holdings_qty
+                            open_orders = await client.get_orders(status="OPEN", symbol=symbol)
+                            cancel_issued = False
+                            if open_orders:
+                                for order in open_orders:
+                                    await client.cancel_order(order["orderId"])
+                                    cancel_issued = True
+                            
+                            if cancel_issued:
+                                await asyncio.sleep(0.5)
+                                
+                            holdings_detail_moc = await client.get_symbol_holdings_detail(symbol)
+                            dump_qty = int(math.floor(holdings_detail_moc['qty']))
                             
                             if dump_qty > 0:
-                                open_orders = await client.get_orders(status="OPEN", symbol=symbol)
-                                if open_orders:
-                                    for order in open_orders:
-                                        await client.cancel_order(order["orderId"])
-                                    await asyncio.sleep(0.5)
-                                    
                                 orderbook = await client.get_orderbook(symbol)
                                 bids = orderbook.get("bids", [])
                                 current_price = await client.get_current_price(symbol)
                                 
-                                if bids and float(bids[0]["price"]) > 0.0:
-                                    bid_1_price = float(bids[0]["price"])
-                                elif current_price > 0.0:
-                                    bid_1_price = current_price
-                                else:
-                                    bid_1_price = 0.0
-                                    
+                                bid_1_price = float(bids[0]["price"]) if bids and float(bids[0]["price"]) > 0.0 else current_price
+                                
                                 if bid_1_price > 0.0:
-                                    client_id = idempotency_keys[symbol]["MOC"]
-                                    if not client_id:
-                                        client_id = f"MOC_{symbol}_{now_est.strftime('%Y%m%d_%H%M%S')}"
-                                        idempotency_keys[symbol]["MOC"] = client_id
-
+                                    client_id = f"MOC_{symbol}_{now_est.strftime('%H%M%S_%f')}"[:36]
+                                    
                                     await client.create_order(
                                         symbol=symbol, side="SELL", order_type="LIMIT",
                                         quantity=dump_qty, price=f"{bid_1_price:.2f}",
                                         client_order_id=client_id
                                     )
                                     
-                                    print(f"🔴 [매도 집행 {symbol}] MOC 강제 덤핑 스윕 발사 완료. 수량: {dump_qty}주 | 단가: ${bid_1_price:.2f}", flush=True)
-                                    
+                                    print(f"🔴 [매도 덤핑 스윕 {symbol}] 1.5초 주기 타격! 수량: {dump_qty}주 | 단가: ${bid_1_price:.2f}", flush=True)
                                     await AssassinLedger.save_state(symbol, is_session_done=True)
                                     
-                                    idempotency_keys[symbol]["MOC"] = None
-                                    last_moc_minute = now_est.minute
-                                    
-                                    tag = "16:05~07 애프터장"
-                                    await notify_tg(f"🔴 <b>[aVWAP {symbol}] {tag} 제로오버나이트 강제 청산 스윕 ({now_est.minute}분 타격)</b>\n▫️ 덤핑 1호가: ${bid_1_price:.2f}\n▫️ 수량: {dump_qty}주")
+                                    if not moc_dump_active:
+                                        moc_dump_active = True
+                                        await notify_tg(f"🔴 <b>[aVWAP {symbol}] 15:59~16:01 제로오버나이트 덤핑망 결속</b>\n▫️ 1.5초 간격 체결 추적 및 매수 1호가 지속 폭격 개시")
                         except Exception as e:
                             print(f"🚨 [MOC 방어] {e}", flush=True)
-                            await notify_tg(f"🚨 <b>[MOC 에러 {symbol}]</b> {html.escape(str(e))}")
                         finally:
+                            last_moc_tick = time.time()
                             in_memory_ordering_lock[symbol] = False
-                
                 continue
+            else:
+                moc_dump_active = False
 
             if not is_open:
                 continue
@@ -415,7 +414,6 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                 if hardcoded_session == "preMarket" and not is_time_shield:
                     can_enter = True
                 
-                # MODIFIED: 타임쉴드 종속형 마이크로 휩소 방어망 (쉴드 해제 이후부터 누적)
                 if can_enter and current_price >= vwap_price:
                     breakout_ticks += 1
                 else:
@@ -479,7 +477,7 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                         finally:
                             in_memory_ordering_lock[symbol] = False
             else:
-                breakout_ticks = 0 # NEW: 매수 감시 조건 이탈 시 누적기 즉시 증발
+                breakout_ticks = 0
 
         except Exception as e:
             print(f"🚨 [aVWAP {symbol}] 감시망 붕괴 방어: {e}", flush=True)
