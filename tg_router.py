@@ -4,6 +4,7 @@
 # =====================================================================
 # MODIFIED: 장마감 1분 전(15:59)부터 3분간 1.5초 간격 MOC 덤핑 스케줄 텍스트 압축 (정규장 단어 소각)
 # MODIFIED: 초과 Case 38 엄수 - 전역 UI 구분선 14칸 확장으로 모바일 줄바꿈 및 정렬 완벽 방어
+# NEW: /avwap 레이더 화면 하단에 메인 메뉴 복귀 버튼 독립 행(Row) 추가 (모바일 UI 붕괴 방어)
 
 import os
 import html
@@ -237,7 +238,8 @@ async def build_avwap_radar() -> tuple[str, InlineKeyboardMarkup]:
 ⏱️ 갱신: <code>{scan_time} EST</code>"""
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔄 레이더 갱신", callback_data="open_avwap")]
+        [InlineKeyboardButton(text="🔄 레이더 갱신", callback_data="open_avwap")],
+        [InlineKeyboardButton(text="🔙 메인 메뉴", callback_data="back_to_main")]
     ])
     return text, keyboard
 
