@@ -3,6 +3,7 @@
 # 목적: SOXL, SOXS 듀얼 코어 암살자 엔진 가동 (aVWAP + 제로오버나잇) - 메인 통제소
 # =====================================================================
 # MODIFIED: 미국 주식시장 휴장일 사유 파싱(pandas_market_calendars 기반) 텔레그램 1회 통보망 결속 유지
+# MODIFIED: 휴무 사유 텍스트 HTML 이스케이프 강제 결속 (Case 17 방어)
 
 import sys
 import os
@@ -125,8 +126,11 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                 sess_name = "UNKNOWN"
 
             if sess_name and sess_name.startswith("HOLIDAY"):
-                reason = sess_name.split("|")[1] if "|" in sess_name else "미국 주식시장 정규 휴장"
+                # MODIFIED: HTML 파싱 붕괴를 방어하기 위한 원자적 이스케이프 주입
+                raw_reason = sess_name.split("|")[1] if "|" in sess_name else "미국 주식시장 정규 휴장"
+                reason = html.escape(raw_reason)
                 today_str = now_est.strftime("%Y-%m-%d")
+                
                 if last_holiday_notified_date != today_str:
                     async with holiday_notify_lock:
                         if last_holiday_notified_date != today_str:

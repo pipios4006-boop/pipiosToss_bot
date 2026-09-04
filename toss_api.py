@@ -4,6 +4,7 @@
 # =====================================================================
 # MODIFIED: pandas_market_calendars 외부 라이브러리 기반 NYSE 휴무일 절대 식별망 주입
 # MODIFIED: 캘린더 블로킹 연산 방어를 위한 asyncio.to_thread 스레드 격리 헌법 준수
+# MODIFIED: 외부 모듈 예외 시 제2 방어선(토스증권 API) 무중단 Fallback 경로 강제 (Case 21 방어)
 
 import asyncio
 import aiohttp
@@ -209,12 +210,15 @@ class TossApiClient:
 
         now_est = datetime.now(ZoneInfo('America/New_York'))
         
-        # 외부 라이브러리 기반 휴무일 판별 스레드 격리 (제1헌법 준수)
-        holiday_name = await asyncio.to_thread(get_nyse_holiday_name, now_est)
-        if holiday_name:
-            self._calendar_cache = (False, None, f"HOLIDAY|{holiday_name}", None)
-            self._calendar_cache_time = now_ts
-            return self._calendar_cache
+        # MODIFIED: 외부 라이브러리 붕괴 시 제2방어선(토스 API)으로 무중단 Fallback 보장
+        try:
+            holiday_name = await asyncio.to_thread(get_nyse_holiday_name, now_est)
+            if holiday_name:
+                self._calendar_cache = (False, None, f"HOLIDAY|{holiday_name}", None)
+                self._calendar_cache_time = now_ts
+                return self._calendar_cache
+        except Exception as e:
+            print(f"🚨 [NYSE 캘린더 방어망 붕괴] 외부 모듈 예외 자체 흡수 및 제2 방어선 전환: {e}", flush=True)
 
         est_today_str = now_est.strftime("%Y-%m-%d")
         
