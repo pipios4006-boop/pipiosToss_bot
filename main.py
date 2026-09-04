@@ -5,7 +5,7 @@
 # MODIFIED: 미국 주식시장 휴장일 사유 파싱(pandas_market_calendars 기반) 텔레그램 1회 통보망 결속 유지
 # MODIFIED: 휴무 사유 텍스트 HTML 이스케이프 강제 결속 (Case 17 방어)
 # NEW: 초과 Case 44 연계 - 수동 오버나이트를 위한 종목 가동 OFF 시 서버단 조건주문 자동 취소 파이프라인 결속
-# NEW: 초과 Case 46 - 휴장일(주말/공휴일) 텔레그램 통보 시점을 04:00 EST(프리장 개장, KST 17시)로 지연 격발 동기화
+# MODIFIED: 초과 Case 46 - 금요일 CLOSED 상태를 주말/휴장으로 오인하는 조기 격발 버그 소각 및 04:00 EST(KST 17시) 정각 타전 락온
 # NEW: 초과 Case 47 - 수동 OFF 시 조건주문이 없더라도 상태 전이를 감지하여 1회 확증 메시지 타전
 
 import sys
@@ -137,19 +137,16 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
             if not is_open and (sess_name and (sess_name.startswith("HOLIDAY") or sess_name in ["CLOSED", "UNKNOWN"])):
                 if sess_name.startswith("HOLIDAY"):
                     raw_reason = sess_name.split("|")[1] if "|" in sess_name else "미국 주식시장 정규 휴장"
-                else:
-                    raw_reason = "주말 (Weekend) 또는 공휴일"
+                    reason = html.escape(raw_reason)
+                    today_str = now_est.strftime("%Y-%m-%d")
                     
-                reason = html.escape(raw_reason)
-                today_str = now_est.strftime("%Y-%m-%d")
-                
-                if last_holiday_notified_date != today_str:
-                    if now_est.hour >= 4:
-                        async with holiday_notify_lock:
-                            if last_holiday_notified_date != today_str:
-                                last_holiday_notified_date = today_str
-                                await notify_tg(f"🛑 <b>[시스템 대기] 미국 주식시장 휴무 안내</b>\n▫️ 사유: {reason}\n▫️ 조치: 금일 듀얼 암살자 전술 가동 전면 차단 및 레이더망 휴식")
-                                print(f"🛑 [휴장 감지] {today_str} {reason} - 시스템 대기.", flush=True)
+                    if last_holiday_notified_date != today_str:
+                        if est_time_int >= 400:
+                            async with holiday_notify_lock:
+                                if last_holiday_notified_date != today_str:
+                                    last_holiday_notified_date = today_str
+                                    await notify_tg(f"🛑 <b>[시스템 대기] 미국 주식시장 휴무 안내</b>\n▫️ 사유: {reason}\n▫️ 조치: 금일 듀얼 암살자 전술 가동 전면 차단 및 레이더망 휴식")
+                                    print(f"🛑 [휴장 감지] {today_str} {reason} - 시스템 대기.", flush=True)
                 await asyncio.sleep(60.0)
                 continue
 
