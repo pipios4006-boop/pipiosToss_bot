@@ -7,6 +7,7 @@
 # NEW: 초과 Case 44 연계 - 수동 오버나이트를 위한 종목 가동 OFF 시 서버단 조건주문 자동 취소 파이프라인 결속
 # MODIFIED: 초과 Case 46 - 금요일 CLOSED 상태를 주말/휴장으로 오인하는 조기 격발 버그 소각 및 04:00 EST(KST 17시) 정각 타전 락온
 # NEW: 초과 Case 47 - 수동 OFF 시 조건주문이 없더라도 상태 전이를 감지하여 1회 확증 메시지 타전
+# NEW: 초과 Case 48 - pandas_market_calendars 영문 휴일명(Labor Day 등) 한글 정밀 맵핑 딕셔너리 주입
 
 import sys
 import os
@@ -44,6 +45,21 @@ if not all([TOSS_CLIENT_ID, TOSS_CLIENT_SECRET, TELEGRAM_BOT_TOKEN, _telegram_ch
 
 ADMIN_CHAT_ID = int(_telegram_chat_id_str)
 wakeup_event = asyncio.Event()
+
+HOLIDAY_TRANSLATIONS = {
+    "New Year's Day": "신정 (New Year's Day)",
+    "Martin Luther King Jr. Day": "마틴 루터 킹 주니어 탄생일 (MLK Day)",
+    "Washington's Birthday": "대통령의 날 (Presidents' Day)",
+    "Good Friday": "성금요일 (Good Friday)",
+    "Memorial Day": "메모리얼 데이 (Memorial Day)",
+    "Juneteenth National Independence Day": "노예해방기념일 (Juneteenth)",
+    "Independence Day": "독립기념일 (Independence Day)",
+    "Labor Day": "노동절 (Labor Day)",
+    "Thanksgiving Day": "추수감사절 (Thanksgiving Day)",
+    "Christmas": "크리스마스 (Christmas Day)",
+    "Christmas Day": "크리스마스 (Christmas Day)",
+    "주말 (Weekend)": "주말 (Weekend)"
+}
 
 in_memory_ordering_lock = {"SOXL": False, "SOXS": False}
 idempotency_keys = {
@@ -137,7 +153,8 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
             if not is_open and (sess_name and (sess_name.startswith("HOLIDAY") or sess_name in ["CLOSED", "UNKNOWN"])):
                 if sess_name.startswith("HOLIDAY"):
                     raw_reason = sess_name.split("|")[1] if "|" in sess_name else "미국 주식시장 정규 휴장"
-                    reason = html.escape(raw_reason)
+                    translated_reason = HOLIDAY_TRANSLATIONS.get(raw_reason, raw_reason)
+                    reason = html.escape(translated_reason)
                     today_str = now_est.strftime("%Y-%m-%d")
                     
                     if last_holiday_notified_date != today_str:
