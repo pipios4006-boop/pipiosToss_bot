@@ -5,6 +5,8 @@
 # MODIFIED: 미국 주식시장 휴장일 사유 파싱(pandas_market_calendars 기반) 텔레그램 1회 통보망 결속 유지
 # MODIFIED: 휴무 사유 텍스트 HTML 이스케이프 강제 결속 (Case 17 방어)
 # NEW: 초과 Case 44 연계 - 수동 오버나이트를 위한 종목 가동 OFF 시 서버단 조건주문 자동 취소 파이프라인 결속
+# NEW: 초과 Case 46 - 휴장일(주말/공휴일) 텔레그램 통보 시점을 04:00 EST(프리장 개장, KST 17시)로 지연 격발 동기화
+# NEW: 초과 Case 47 - 수동 OFF 시 조건주문이 없더라도 상태 전이를 감지하여 1회 확증 메시지 타전
 
 import sys
 import os
@@ -80,6 +82,7 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
     last_heartbeat_hour = -1
     last_logged_session = ""
     breakout_ticks = 0
+    prev_is_active = None 
     
     async def notify_tg(text: str):
         try:
@@ -109,6 +112,11 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
             last_buy_price, budget, last_session_id, is_session_done, is_active, target_sell_price, cond_order_id, session_mode, entry_session, pre_first_flag, force_downgrade = await AssassinLedger.get_state(symbol)
             buy_order_id = await AssassinLedger.get_buy_order_id(symbol)
 
+            if prev_is_active is None:
+                prev_is_active = is_active
+            just_turned_off = (prev_is_active is True and is_active is False)
+            prev_is_active = is_active
+
             if now_est.hour == 17 and now_est.minute == 0:
                 in_memory_ordering_lock[symbol] = False
                 idempotency_keys[symbol] = {"BUY": None, "TRAP": None, "MOC": None}
@@ -126,17 +134,22 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                 is_open = True
                 sess_name = "UNKNOWN"
 
-            if sess_name and sess_name.startswith("HOLIDAY"):
-                raw_reason = sess_name.split("|")[1] if "|" in sess_name else "미국 주식시장 정규 휴장"
+            if not is_open and (sess_name and (sess_name.startswith("HOLIDAY") or sess_name in ["CLOSED", "UNKNOWN"])):
+                if sess_name.startswith("HOLIDAY"):
+                    raw_reason = sess_name.split("|")[1] if "|" in sess_name else "미국 주식시장 정규 휴장"
+                else:
+                    raw_reason = "주말 (Weekend) 또는 공휴일"
+                    
                 reason = html.escape(raw_reason)
                 today_str = now_est.strftime("%Y-%m-%d")
                 
                 if last_holiday_notified_date != today_str:
-                    async with holiday_notify_lock:
-                        if last_holiday_notified_date != today_str:
-                            last_holiday_notified_date = today_str
-                            await notify_tg(f"🛑 <b>[시스템 대기] 미국 주식시장 휴무 안내</b>\n▫️ 사유: {reason} 사유로 인해 미국 주식시장이 휴무입니다.\n▫️ 조치: 금일 듀얼 암살자 자동매매 가동 전면 차단 및 레이더망 휴식")
-                            print(f"🛑 [휴장 감지] {today_str} {reason} - 시스템 대기.", flush=True)
+                    if now_est.hour >= 4:
+                        async with holiday_notify_lock:
+                            if last_holiday_notified_date != today_str:
+                                last_holiday_notified_date = today_str
+                                await notify_tg(f"🛑 <b>[시스템 대기] 미국 주식시장 휴무 안내</b>\n▫️ 사유: {reason}\n▫️ 조치: 금일 듀얼 암살자 전술 가동 전면 차단 및 레이더망 휴식")
+                                print(f"🛑 [휴장 감지] {today_str} {reason} - 시스템 대기.", flush=True)
                 await asyncio.sleep(60.0)
                 continue
 
@@ -308,28 +321,30 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
             has_open_sell = any(o["side"] == "SELL" for o in open_orders)
             has_open_buy = any(o["side"] == "BUY" for o in open_orders)
             
-            # NEW: 초과 Case 44 연계 - 수동 오버나이트 통제를 위한 가동 OFF 시 기존 조건주문 자동 취소망 결속
-            if cond_order_id and not is_active:
-                if not in_memory_ordering_lock[symbol]:
-                    in_memory_ordering_lock[symbol] = True
-                    try:
-                        await client.cancel_conditional_order(cond_order_id)
-                        await AssassinLedger.save_state(symbol, cond_order_id="", target_sell_price=0.0)
-                        print(f"🛑 [수동 오버나이트 {symbol}] 가동 OFF 감지. 익절 조건주문({cond_order_id}) 파기 완료.", flush=True)
-                        await notify_tg(f"🛑 <b>[aVWAP {symbol}] 수동 오버나이트(가동 OFF) 감지</b>\n▫️ 조치: 기장전된 익절 조건주문 안전 파기 완료")
-                        cond_order_id = ""
-                        target_sell_price = 0.0
-                        await asyncio.sleep(0.5)
-                    except Exception as e:
-                        err_str = str(e).lower()
-                        if "404" in err_str or "not-found" in err_str:
+            if not is_active:
+                if cond_order_id:
+                    if not in_memory_ordering_lock[symbol]:
+                        in_memory_ordering_lock[symbol] = True
+                        try:
+                            await client.cancel_conditional_order(cond_order_id)
                             await AssassinLedger.save_state(symbol, cond_order_id="", target_sell_price=0.0)
+                            print(f"🛑 [수동 오버나이트 {symbol}] 가동 OFF 감지. 익절 조건주문({cond_order_id}) 파기 완료.", flush=True)
+                            await notify_tg(f"🛑 <b>[aVWAP {symbol}] 수동 오버나이트(가동 OFF) 전환</b>\n▫️ 조치: 기장전된 익절 조건주문 안전 파기 완료")
                             cond_order_id = ""
                             target_sell_price = 0.0
-                            await notify_tg(f"🛑 <b>[aVWAP {symbol}] 수동 오버나이트(가동 OFF) 감지</b>\n▫️ 조치: 로컬 덫 장부 초기화 완료 (서버단 이미 증발)")
-                        print(f"🚨 [수동 OFF 덫 파기 방어 {symbol}] {e}", flush=True)
-                    finally:
-                        in_memory_ordering_lock[symbol] = False
+                            await asyncio.sleep(0.5)
+                        except Exception as e:
+                            err_str = str(e).lower()
+                            if "404" in err_str or "not-found" in err_str:
+                                await AssassinLedger.save_state(symbol, cond_order_id="", target_sell_price=0.0)
+                                cond_order_id = ""
+                                target_sell_price = 0.0
+                                await notify_tg(f"🛑 <b>[aVWAP {symbol}] 수동 오버나이트(가동 OFF) 전환</b>\n▫️ 조치: 로컬 덫 장부 초기화 완료 (서버단 이미 증발)")
+                            print(f"🚨 [수동 OFF 덫 파기 방어 {symbol}] {e}", flush=True)
+                        finally:
+                            in_memory_ordering_lock[symbol] = False
+                elif just_turned_off:
+                    await notify_tg(f"🛑 <b>[aVWAP {symbol}] 수동 오버나이트(가동 OFF) 전환</b>\n▫️ 조치: 파기할 조건주문 부재 확인. 시스템 대기 모드로 안전 전환 완료")
             
             if holdings_qty > 0 and cond_order_id and is_active:
                 try:
