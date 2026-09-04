@@ -4,6 +4,7 @@
 # =====================================================================
 # MODIFIED: 미국 주식시장 휴장일 사유 파싱(pandas_market_calendars 기반) 텔레그램 1회 통보망 결속 유지
 # MODIFIED: 휴무 사유 텍스트 HTML 이스케이프 강제 결속 (Case 17 방어)
+# NEW: 초과 Case 44 연계 - 수동 오버나이트를 위한 종목 가동 OFF 시 서버단 조건주문 자동 취소 파이프라인 결속
 
 import sys
 import os
@@ -126,7 +127,6 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                 sess_name = "UNKNOWN"
 
             if sess_name and sess_name.startswith("HOLIDAY"):
-                # MODIFIED: HTML 파싱 붕괴를 방어하기 위한 원자적 이스케이프 주입
                 raw_reason = sess_name.split("|")[1] if "|" in sess_name else "미국 주식시장 정규 휴장"
                 reason = html.escape(raw_reason)
                 today_str = now_est.strftime("%Y-%m-%d")
@@ -307,6 +307,29 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
             open_orders = await client.get_orders(status="OPEN", symbol=symbol)
             has_open_sell = any(o["side"] == "SELL" for o in open_orders)
             has_open_buy = any(o["side"] == "BUY" for o in open_orders)
+            
+            # NEW: 초과 Case 44 연계 - 수동 오버나이트 통제를 위한 가동 OFF 시 기존 조건주문 자동 취소망 결속
+            if cond_order_id and not is_active:
+                if not in_memory_ordering_lock[symbol]:
+                    in_memory_ordering_lock[symbol] = True
+                    try:
+                        await client.cancel_conditional_order(cond_order_id)
+                        await AssassinLedger.save_state(symbol, cond_order_id="", target_sell_price=0.0)
+                        print(f"🛑 [수동 오버나이트 {symbol}] 가동 OFF 감지. 익절 조건주문({cond_order_id}) 파기 완료.", flush=True)
+                        await notify_tg(f"🛑 <b>[aVWAP {symbol}] 수동 오버나이트(가동 OFF) 감지</b>\n▫️ 조치: 기장전된 익절 조건주문 안전 파기 완료")
+                        cond_order_id = ""
+                        target_sell_price = 0.0
+                        await asyncio.sleep(0.5)
+                    except Exception as e:
+                        err_str = str(e).lower()
+                        if "404" in err_str or "not-found" in err_str:
+                            await AssassinLedger.save_state(symbol, cond_order_id="", target_sell_price=0.0)
+                            cond_order_id = ""
+                            target_sell_price = 0.0
+                            await notify_tg(f"🛑 <b>[aVWAP {symbol}] 수동 오버나이트(가동 OFF) 감지</b>\n▫️ 조치: 로컬 덫 장부 초기화 완료 (서버단 이미 증발)")
+                        print(f"🚨 [수동 OFF 덫 파기 방어 {symbol}] {e}", flush=True)
+                    finally:
+                        in_memory_ordering_lock[symbol] = False
             
             if holdings_qty > 0 and cond_order_id and is_active:
                 try:
