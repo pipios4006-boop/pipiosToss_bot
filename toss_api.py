@@ -2,6 +2,8 @@
 # FILE: toss_api.py
 # 목적: 토스증권 Open API 통신 엣지 케이스 방어 및 중앙 통제소 가동
 # =====================================================================
+# MODIFIED: pandas_market_calendars 외부 라이브러리 기반 NYSE 휴무일 절대 식별망 주입
+# MODIFIED: 캘린더 블로킹 연산 방어를 위한 asyncio.to_thread 스레드 격리 헌법 준수
 
 import asyncio
 import aiohttp
@@ -10,6 +12,38 @@ import html
 import json
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
+
+_NYSE_CALENDAR = None
+
+def get_nyse_holiday_name(dt_est: datetime) -> str:
+    """
+    pandas_market_calendars 라이브러리를 활용한 미국 주식시장 정규 휴장일 명칭 원자적 추출
+    """
+    global _NYSE_CALENDAR
+    if _NYSE_CALENDAR is None:
+        import pandas_market_calendars as mcal
+        _NYSE_CALENDAR = mcal.get_calendar('NYSE')
+        
+    import pandas as pd
+    dt_str = dt_est.strftime("%Y-%m-%d")
+    
+    if dt_est.weekday() >= 5:
+        return "주말 (Weekend)"
+        
+    schedule = _NYSE_CALENDAR.schedule(start_date=dt_str, end_date=dt_str)
+    
+    if schedule.empty:
+        try:
+            dt_ts = pd.Timestamp(dt_str)
+            for rule in _NYSE_CALENDAR.regular_holidays.rules:
+                dates = rule.dates(dt_ts.replace(month=1, day=1), dt_ts.replace(month=12, day=31))
+                if dt_ts in dates:
+                    return str(rule.name)
+        except Exception:
+            pass
+        return "미국 주식시장 정규 휴장 (Market Calendar 식별)"
+        
+    return ""
 
 class GlobalThrottle:
     _api_lock = asyncio.Lock()
@@ -174,6 +208,14 @@ class TossApiClient:
             return self._calendar_cache
 
         now_est = datetime.now(ZoneInfo('America/New_York'))
+        
+        # 외부 라이브러리 기반 휴무일 판별 스레드 격리 (제1헌법 준수)
+        holiday_name = await asyncio.to_thread(get_nyse_holiday_name, now_est)
+        if holiday_name:
+            self._calendar_cache = (False, None, f"HOLIDAY|{holiday_name}", None)
+            self._calendar_cache_time = now_ts
+            return self._calendar_cache
+
         est_today_str = now_est.strftime("%Y-%m-%d")
         
         try:
@@ -186,6 +228,17 @@ class TossApiClient:
                 day_obj = result_data.get(day_key)
                 if not day_obj or not isinstance(day_obj, dict):
                     continue
+
+                if day_key == "today":
+                    is_api_holiday = True
+                    for session_name in ["dayMarket", "preMarket", "regularMarket", "afterMarket"]:
+                        if day_obj.get(session_name) is not None:
+                            is_api_holiday = False
+                            break
+                    if is_api_holiday:
+                        self._calendar_cache = (False, None, "HOLIDAY|미국 주식시장 휴장 (API 응답 기준)", None)
+                        self._calendar_cache_time = now_ts
+                        return self._calendar_cache
                     
                 for session_name in ["dayMarket", "preMarket", "regularMarket", "afterMarket"]:
                     session = day_obj.get(session_name)

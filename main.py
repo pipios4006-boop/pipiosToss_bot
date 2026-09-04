@@ -2,10 +2,7 @@
 # FILE: main.py
 # 목적: SOXL, SOXS 듀얼 코어 암살자 엔진 가동 (aVWAP + 제로오버나잇) - 메인 통제소
 # =====================================================================
-# MODIFIED: [스캔망] 알림 전송 태그 오기(15:57~59 정규장) -> 팩트 타임라인(15:59~16:01 MOC) 동기화
-# MODIFIED: [스캔망] 1.5초 TPS 통제 기반 고주파 미체결 취소 및 1호가 재조준 융단폭격 로직 주입
-# MODIFIED: 초과 Case 44 - 절대 제로-오버나이트 강제 청산망 무조건 격발 결속
-# MODIFIED: 휩소 방어 - 마이크로 노이즈 차단용 4틱(6초) 연속 확증 알고리즘 주입
+# MODIFIED: 미국 주식시장 휴장일 사유 파싱(pandas_market_calendars 기반) 텔레그램 1회 통보망 결속 유지
 
 import sys
 import os
@@ -50,6 +47,9 @@ idempotency_keys = {
     "SOXS": {"BUY": None, "TRAP": None, "MOC": None}
 }
 
+holiday_notify_lock = asyncio.Lock()
+last_holiday_notified_date = ""
+
 async def fetch_full_session_candles(client: TossApiClient, symbol: str, session_start_est: datetime) -> list:
     all_candles = []
     before = None
@@ -72,6 +72,7 @@ async def fetch_full_session_candles(client: TossApiClient, symbol: str, session
     return all_candles
 
 async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: str):
+    global last_holiday_notified_date
     last_moc_tick = 0.0
     moc_dump_active = False
     last_heartbeat_hour = -1
@@ -118,9 +119,22 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                 continue
             
             try:
-                is_open, _, _, _ = await asyncio.wait_for(client.is_market_open(), timeout=10.0)
+                is_open, _, sess_name, _ = await asyncio.wait_for(client.is_market_open(), timeout=10.0)
             except Exception:
                 is_open = True
+                sess_name = "UNKNOWN"
+
+            if sess_name and sess_name.startswith("HOLIDAY"):
+                reason = sess_name.split("|")[1] if "|" in sess_name else "미국 주식시장 정규 휴장"
+                today_str = now_est.strftime("%Y-%m-%d")
+                if last_holiday_notified_date != today_str:
+                    async with holiday_notify_lock:
+                        if last_holiday_notified_date != today_str:
+                            last_holiday_notified_date = today_str
+                            await notify_tg(f"🛑 <b>[시스템 대기] 미국 주식시장 휴무 안내</b>\n▫️ 사유: {reason} 사유로 인해 미국 주식시장이 휴무입니다.\n▫️ 조치: 금일 듀얼 암살자 자동매매 가동 전면 차단 및 레이더망 휴식")
+                            print(f"🛑 [휴장 감지] {today_str} {reason} - 시스템 대기.", flush=True)
+                await asyncio.sleep(60.0)
+                continue
 
             if 400 <= est_time_int < 930:
                 hardcoded_session = "preMarket"
