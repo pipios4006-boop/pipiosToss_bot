@@ -3,6 +3,7 @@
 # 목적: SOXL, SOXS 듀얼 장부 격리 및 세션별 aVWAP 연산 엔진 (I/O 통제 결속)
 # =====================================================================
 # MODIFIED: 초과 Case 44 - 오버나이트 로직 전면 소각 및 수동 통제 위임
+# MODIFIED: 3단 하향망 결속을 위한 is_stage_3 및 force_downgrade_0_6 원자적 플래그 증축
 
 import os
 import json
@@ -18,12 +19,12 @@ class AssassinLedger:
         return os.path.join(os.path.dirname(os.path.abspath(__file__)), f"AssassinLedger_{symbol}.json")
 
     @classmethod
-    async def get_state(cls, symbol: str) -> tuple[float, float, str, bool, bool, float, str, str, str, bool, bool]:
+    async def get_state(cls, symbol: str) -> tuple[float, float, str, bool, bool, float, str, str, str, bool, bool, bool, bool]:
         filepath = cls._get_file_path(symbol)
         async with GlobalThrottle.get_file_lock(filepath):
             def _read():
                 if not os.path.exists(filepath):
-                    return 0.0, 100.0, "", False, True, 0.0, "", "PRE_ONLY", "", False, False
+                    return 0.0, 100.0, "", False, True, 0.0, "", "PRE_ONLY", "", False, False, False, False
                 try:
                     with open(filepath, "r", encoding="utf-8") as f:
                         data = json.load(f)
@@ -38,10 +39,12 @@ class AssassinLedger:
                             str(data.get("session_mode", "PRE_ONLY")),
                             str(data.get("entry_session", "")),
                             bool(data.get("pre_first_flag", False)),
-                            bool(data.get("force_downgrade", False))
+                            bool(data.get("force_downgrade", False)),
+                            bool(data.get("force_downgrade_0_6", False)),
+                            bool(data.get("is_stage_3", False))
                         )
                 except Exception:
-                    return 0.0, 100.0, "", False, True, 0.0, "", "PRE_ONLY", "", False, False
+                    return 0.0, 100.0, "", False, True, 0.0, "", "PRE_ONLY", "", False, False, False, False
             return await asyncio.to_thread(_read)
 
     @classmethod
@@ -64,7 +67,8 @@ class AssassinLedger:
                          is_active: bool = None, target_sell_price: float = None, 
                          buy_order_id: str = None, cond_order_id: str = None, 
                          session_mode: str = None, entry_session: str = None, 
-                         pre_first_flag: bool = None, force_downgrade: bool = None):
+                         pre_first_flag: bool = None, force_downgrade: bool = None,
+                         force_downgrade_0_6: bool = None, is_stage_3: bool = None):
         filepath = cls._get_file_path(symbol)
         async with GlobalThrottle.get_file_lock(filepath):
             def _write():
@@ -88,6 +92,8 @@ class AssassinLedger:
                 if entry_session is not None: data["entry_session"] = entry_session
                 if pre_first_flag is not None: data["pre_first_flag"] = pre_first_flag
                 if force_downgrade is not None: data["force_downgrade"] = force_downgrade
+                if force_downgrade_0_6 is not None: data["force_downgrade_0_6"] = force_downgrade_0_6
+                if is_stage_3 is not None: data["is_stage_3"] = is_stage_3
                 
                 tmp_path = filepath + ".tmp"
                 with open(tmp_path, "w", encoding="utf-8") as f:

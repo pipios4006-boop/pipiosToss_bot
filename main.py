@@ -2,12 +2,8 @@
 # FILE: main.py
 # 목적: SOXL, SOXS 듀얼 코어 암살자 엔진 가동 (aVWAP + 제로오버나잇) - 메인 통제소
 # =====================================================================
-# MODIFIED: 미국 주식시장 휴장일 사유 파싱(pandas_market_calendars 기반) 텔레그램 1회 통보망 결속 유지
-# MODIFIED: 휴무 사유 텍스트 HTML 이스케이프 강제 결속 (Case 17 방어)
-# NEW: 초과 Case 44 연계 - 수동 오버나이트를 위한 종목 가동 OFF 시 서버단 조건주문 자동 취소 파이프라인 결속
-# MODIFIED: 초과 Case 46 - 금요일 CLOSED 상태를 주말/휴장으로 오인하는 조기 격발 버그 소각 및 04:00 EST(KST 17시) 정각 타전 락온
-# NEW: 초과 Case 47 - 수동 OFF 시 조건주문이 없더라도 상태 전이를 감지하여 1회 확증 메시지 타전
-# NEW: 초과 Case 48 - pandas_market_calendars 영문 휴일명(Labor Day 등) 한글 정밀 맵핑 딕셔너리 주입
+# MODIFIED: 초과 Case 48 - pandas_market_calendars 영문 휴일명 한글 정밀 맵핑 주입
+# NEW: 3단 하향망(0.6%) 인터럽트 발송 및 수신 락온, 유령 덫 100% 방어 파이프라인
 
 import sys
 import os
@@ -125,7 +121,10 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                 await asyncio.sleep(5)
                 continue
 
-            last_buy_price, budget, last_session_id, is_session_done, is_active, target_sell_price, cond_order_id, session_mode, entry_session, pre_first_flag, force_downgrade = await AssassinLedger.get_state(symbol)
+            (last_buy_price, budget, last_session_id, is_session_done, is_active, 
+             target_sell_price, cond_order_id, session_mode, entry_session, 
+             pre_first_flag, force_downgrade, force_downgrade_0_6, is_stage_3) = await AssassinLedger.get_state(symbol)
+            
             buy_order_id = await AssassinLedger.get_buy_order_id(symbol)
 
             if prev_is_active is None:
@@ -139,7 +138,7 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                 last_moc_tick = 0.0
                 moc_dump_active = False
                 if holdings_qty == 0:
-                    await AssassinLedger.save_state(symbol, buy_order_id="", cond_order_id="", entry_session="", pre_first_flag=False, force_downgrade=False)
+                    await AssassinLedger.save_state(symbol, buy_order_id="", cond_order_id="", entry_session="", pre_first_flag=False, force_downgrade=False, force_downgrade_0_6=False, is_stage_3=False)
                 print(f"🧹 [GC {symbol}] 17:00 EST 락 해제 및 자정 초기화 완료.", flush=True)
                 await asyncio.sleep(60)
                 continue
@@ -274,7 +273,7 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                             can_reset = False
                             
                     if can_reset:
-                        await AssassinLedger.save_state(symbol, price=0.0, target_sell_price=0.0, last_session_id=current_session_id, is_session_done=False, buy_order_id="", cond_order_id="", entry_session="", pre_first_flag=False, force_downgrade=False)
+                        await AssassinLedger.save_state(symbol, price=0.0, target_sell_price=0.0, last_session_id=current_session_id, is_session_done=False, buy_order_id="", cond_order_id="", entry_session="", pre_first_flag=False, force_downgrade=False, force_downgrade_0_6=False, is_stage_3=False)
                         is_session_done = False
                         target_sell_price = 0.0
                         buy_order_id = ""
@@ -308,7 +307,7 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                                 except Exception as e:
                                     print(f"🚨 [고아 덫 파기 방어 {symbol}] 404 무시(이미 취소됨) 또는 통신 오류: {e}", flush=True)
 
-                            await AssassinLedger.save_state(symbol, price=0.0, target_sell_price=0.0, buy_order_id="", cond_order_id="", is_session_done=True, entry_session="", pre_first_flag=False, force_downgrade=False)
+                            await AssassinLedger.save_state(symbol, price=0.0, target_sell_price=0.0, buy_order_id="", cond_order_id="", is_session_done=True, entry_session="", pre_first_flag=False, force_downgrade=False, force_downgrade_0_6=False, is_stage_3=False)
                             target_sell_price = 0.0
                             buy_order_id = ""
                             cond_order_id = ""
@@ -316,6 +315,15 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                             
                             if is_take_profit_exit:
                                 await notify_tg(f"🎉 <b>[aVWAP {symbol}] 거래 종료 (퇴근 락온 완료)</b>\n▫️ 잔고 0주 (조건주문 체결 확인)\n▫️ 당일 신규 진입 권한 영구 소각")
+                                
+                                try:
+                                    other_sym = "SOXS" if symbol == "SOXL" else "SOXL"
+                                    other_hold = await client.get_symbol_holdings_detail(other_sym)
+                                    if int(math.floor(other_hold.get('qty', 0.0))) > 0:
+                                        await AssassinLedger.save_state(other_sym, force_downgrade_0_6=True)
+                                        await notify_tg(f"⚠️ <b>[aVWAP 교차 감시망] {other_sym} 3차 하향 인터럽트 발송</b>\n▫️ 사유: {symbol} 익절 퇴근 확증")
+                                except Exception as e:
+                                    print(f"🚨 [교차 하향 발송 방어] {e}", flush=True)
                         finally:
                             in_memory_ordering_lock[symbol] = False
 
@@ -375,27 +383,59 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                         await AssassinLedger.save_state(symbol, cond_order_id="")
                         cond_order_id = ""
                         
-            if holdings_qty > 0 and cond_order_id and force_downgrade and is_active:
+            if holdings_qty > 0 and force_downgrade_0_6 and is_active:
                 if not in_memory_ordering_lock[symbol]:
                     in_memory_ordering_lock[symbol] = True
                     try:
-                        await client.cancel_conditional_order(cond_order_id)
-                        await AssassinLedger.save_state(symbol, cond_order_id="", target_sell_price=0.0, force_downgrade=False, pre_first_flag=False)
+                        if cond_order_id:
+                            await client.cancel_conditional_order(cond_order_id)
+                            await asyncio.sleep(0.5)
+                        await AssassinLedger.save_state(symbol, cond_order_id="", target_sell_price=0.0, force_downgrade=False, force_downgrade_0_6=False, pre_first_flag=False, is_stage_3=True)
                         cond_order_id = ""
                         target_sell_price = 0.0
                         pre_first_flag = False
                         force_downgrade = False
-                        await notify_tg(f"🚨 <b>[aVWAP {symbol}] 익절 덫 하향 인터럽트 발동</b>\n▫️ 사유: 프리장 듀얼 진입 시그널 감지\n▫️ 조치: +2.0% 덫 강제 파기 및 +1.0% 타점 자동 재장전")
-                        await asyncio.sleep(0.5)
+                        force_downgrade_0_6 = False
+                        is_stage_3 = True
+                        await notify_tg(f"🚨 <b>[aVWAP {symbol}] 익절 덫 3차 하향 인터럽트 발동</b>\n▫️ 사유: 반대 종목 익절 퇴근 확증\n▫️ 조치: 잔류 물량 +0.6% 타점 자동 재장전 락온")
                     except Exception as e:
-                        print(f"🚨 [인터럽트 붕괴 방어] {e}", flush=True)
+                        print(f"🚨 [인터럽트 3차 붕괴 방어] {e}", flush=True)
                         err_str = str(e).lower()
-                        if "404" in err_str or "not-found" in err_str:
-                            await AssassinLedger.save_state(symbol, cond_order_id="", target_sell_price=0.0, force_downgrade=False, pre_first_flag=False)
+                        if "404" in err_str or "not-found" in err_str or not cond_order_id:
+                            await AssassinLedger.save_state(symbol, cond_order_id="", target_sell_price=0.0, force_downgrade=False, force_downgrade_0_6=False, pre_first_flag=False, is_stage_3=True)
                             cond_order_id = ""
                             target_sell_price = 0.0
                             pre_first_flag = False
                             force_downgrade = False
+                            force_downgrade_0_6 = False
+                            is_stage_3 = True
+                    finally:
+                        in_memory_ordering_lock[symbol] = False
+                        
+            elif holdings_qty > 0 and force_downgrade and is_active:
+                if not in_memory_ordering_lock[symbol]:
+                    in_memory_ordering_lock[symbol] = True
+                    try:
+                        if cond_order_id:
+                            await client.cancel_conditional_order(cond_order_id)
+                            await asyncio.sleep(0.5)
+                        await AssassinLedger.save_state(symbol, cond_order_id="", target_sell_price=0.0, force_downgrade=False, force_downgrade_0_6=False, pre_first_flag=False)
+                        cond_order_id = ""
+                        target_sell_price = 0.0
+                        pre_first_flag = False
+                        force_downgrade = False
+                        force_downgrade_0_6 = False
+                        await notify_tg(f"🚨 <b>[aVWAP {symbol}] 익절 덫 2차 하향 인터럽트 발동</b>\n▫️ 사유: 프리장 듀얼 진입 시그널 감지\n▫️ 조치: 기존 덫 강제 파기 및 +1.0% 타점 자동 재장전")
+                    except Exception as e:
+                        print(f"🚨 [인터럽트 2차 붕괴 방어] {e}", flush=True)
+                        err_str = str(e).lower()
+                        if "404" in err_str or "not-found" in err_str or not cond_order_id:
+                            await AssassinLedger.save_state(symbol, cond_order_id="", target_sell_price=0.0, force_downgrade=False, force_downgrade_0_6=False, pre_first_flag=False)
+                            cond_order_id = ""
+                            target_sell_price = 0.0
+                            pre_first_flag = False
+                            force_downgrade = False
+                            force_downgrade_0_6 = False
                     finally:
                         in_memory_ordering_lock[symbol] = False
             
@@ -427,7 +467,10 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                         avg_price = float(holdings_detail.get('avg_price', 0.0))
 
                     if avg_price > 0.0:
-                        if entry_session == "preMarket":
+                        if is_stage_3:
+                            calculated_target = math.ceil(avg_price * 1.006 * 100) / 100.0
+                            trap_tag = "+0.6%"
+                        elif entry_session == "preMarket":
                             if pre_first_flag:
                                 calculated_target = math.ceil(avg_price * 1.02 * 100) / 100.0
                                 trap_tag = "+2.0%"
@@ -575,7 +618,7 @@ async def main():
         await bot.delete_webhook(drop_pending_updates=True)
         await bot.send_message(
             chat_id=ADMIN_CHAT_ID, 
-            text="✅ <b>[시스템 기동 완료]</b>\n▫️ 서버 재부팅 및 듀얼 암살자 코어 결속\n▫️ 방어망 락온 및 폴링을 개시합니다.", 
+            text="✅ <b>[시스템 기동 완료]</b>\n▫️ 서버 재부팅 및 듀얼 암살자 코어 결속\n▫️ 3단 익절 덫 하향망 락온 및 폴링을 개시합니다.", 
             parse_mode="HTML"
         )
     except Exception:
