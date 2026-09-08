@@ -11,6 +11,7 @@
 # MODIFIED: 초과 Case 47 - 숏 스퀴즈 가격 민감도 0.1% 하향 및 거래량 5배 상향 락온
 # NEW: 초과 Case 47 - 세션 전이 거래량 왜곡 방어용 5분 타임쉴드 주입 (04:00~04:04, 09:30~09:34)
 # MODIFIED: 암살자 신규 매수 전용 동적 타임쉴드 07:00 EST(3시간 연장, 10,800초) 락온 결속
+# NEW: 초과 Case 52 - 잔고 0주(퇴근) 확증 시 토스증권 API 호출을 통한 손익(PnL) 데이터 동적 추출 및 타전망 결속
 
 import sys
 import os
@@ -354,8 +355,39 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                     if can_clear:
                         in_memory_ordering_lock[symbol] = True
                         try:
-                            is_take_profit_exit = bool(target_sell_price > 0.0 or cond_order_id)
-                            is_manual_exit = not is_take_profit_exit and bool(buy_order_id)
+                            # NEW: Case 52 - 잔고 0주 감지 즉시 토스증권 API 호출하여 실제 매도 체결 데이터(손익) 추출
+                            exit_price, filled_qty = 0.0, 0.0
+                            try:
+                                orders = await client.get_orders(status="CLOSED", symbol=symbol)
+                                for o in orders:
+                                    if o.get("side") == "SELL" and o.get("status") in ["FILLED", "PARTIAL_FILLED"]:
+                                        exec_info = o.get("execution", {})
+                                        avg_p = float(exec_info.get("averageFilledPrice") or 0.0)
+                                        f_qty = float(exec_info.get("filledQuantity") or 0.0)
+                                        if avg_p > 0 and f_qty > 0:
+                                            exit_price, filled_qty = avg_p, f_qty
+                                            break
+                            except Exception as e:
+                                print(f"🚨 [매도 정보 추출 방어] {e}", flush=True)
+
+                            entry_price = last_buy_price
+                            pnl_str = ""
+                            if entry_price > 0 and exit_price > 0 and filled_qty > 0:
+                                principal = entry_price * filled_qty
+                                gross = exit_price * filled_qty
+                                pnl_amt = gross - principal
+                                pnl_rate = (exit_price / entry_price - 1.0) * 100.0
+                                sign = "+" if pnl_amt > 0 else ""
+                                pnl_str = f"\n▫️ 타점: 매수 ${entry_price:.2f} ➡️ 매도 ${exit_price:.2f}\n▫️ 손익: {sign}{pnl_rate:.2f}% ({sign}${pnl_amt:.2f})"
+                            else:
+                                pnl_str = "\n▫️ 타점: 체결 데이터 추출 지연 (장부 참조 요망)"
+
+                            now_est_check = datetime.now(ZoneInfo('America/New_York'))
+                            is_moc_time = (now_est_check.hour == 15 and now_est_check.minute >= 59) or (now_est_check.hour >= 16)
+                            
+                            is_take_profit_exit = bool(target_sell_price > 0.0 or cond_order_id) and not is_moc_time
+                            is_manual_exit = not is_take_profit_exit and not is_moc_time and bool(buy_order_id)
+                            is_moc_exit = is_moc_time
                             
                             if cond_order_id:
                                 try:
@@ -371,8 +403,10 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                             cond_order_id = ""
                             is_session_done = True
                             
-                            if is_take_profit_exit:
-                                await notify_tg(f"🎉 <b>[aVWAP {symbol}] 거래 종료 (퇴근 락온 완료)</b>\n▫️ 잔고 0주 (조건주문 체결 확인)\n▫️ 당일 신규 진입 권한 영구 소각")
+                            if is_moc_exit:
+                                await notify_tg(f"🛑 <b>[aVWAP {symbol}] MOC 강제 덤핑 청산 완료</b>\n▫️ 잔고 0주 (제로-오버나이트 락온){pnl_str}")
+                            elif is_take_profit_exit:
+                                await notify_tg(f"🎉 <b>[aVWAP {symbol}] 거래 종료 (퇴근 락온 완료)</b>\n▫️ 잔고 0주 (조건주문 체결 확인){pnl_str}\n▫️ 당일 신규 진입 권한 영구 소각")
                                 
                                 try:
                                     other_sym = "SOXS" if symbol == "SOXL" else "SOXL"
@@ -383,7 +417,7 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                                 except Exception as e:
                                     print(f"🚨 [교차 하향 발송 방어] {e}", flush=True)
                             elif is_manual_exit:
-                                await notify_tg(f"🛑 <b>[aVWAP {symbol}] 수동 매도 청산 감지 (퇴근 락온 완료)</b>\n▫️ 잔고 0주 (오프라인 등 수동 청산 식별)\n▫️ 당일 신규 진입 권한 영구 소각 완료")
+                                await notify_tg(f"🛑 <b>[aVWAP {symbol}] 수동 매도 청산 감지 (퇴근 락온 완료)</b>\n▫️ 잔고 0주 (오프라인 등 수동 청산 식별){pnl_str}\n▫️ 당일 신규 진입 권한 영구 소각 완료")
                         finally:
                             in_memory_ordering_lock[symbol] = False
 
@@ -580,7 +614,6 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                 is_time_shield = False
                 elapsed = (now_est - session_baseline_est).total_seconds()
                 
-                # MODIFIED: 암살자 신규 매수 전용 동적 타임쉴드 07:00 EST (3시간 = 10,800초) 락온
                 if 0 <= elapsed < 10800:
                     is_time_shield = True
                 
@@ -648,7 +681,7 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                                     
                                     idempotency_keys[symbol]["BUY"] = None
                                     
-                                    lock_msg = "선행 종목 퇴근 확증 (+0.6% 후발 락온)" if new_is_stage_3 else "07:00 타임쉴드 해제 후 4틱(6초) 돌파 방어망 통과" # MODIFIED
+                                    lock_msg = "선행 종목 퇴근 확증 (+0.6% 후발 락온)" if new_is_stage_3 else "07:00 타임쉴드 해제 후 4틱(6초) 돌파 방어망 통과"
                                     await notify_tg(f"🚀 <b>[aVWAP {symbol}] 돌파 요격 매수 (세션: {hardcoded_session})</b>\n▫️ aVWAP: ${vwap_price:.2f}\n▫️ 타격가: ${ask_1_price:.2f}\n▫️ 수량: {target_qty}주\n▫️ 확증: {lock_msg}")
                         except Exception as e:
                             print(f"🚨 [BUY 방어] {e}", flush=True)
