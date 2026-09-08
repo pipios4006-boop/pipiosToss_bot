@@ -8,6 +8,8 @@
 # MODIFIED: 초과 Case 47 - 퇴근 확증 시에만 SOXL 단독 숏 스퀴즈 실시간 모니터링 가동 및 타전망 결속
 # MODIFIED: 초과 Case 47 - 숏 스퀴즈 1차 트리거 발동 최저가(min_price) 및 포착 현재가(current_price) 텔레그램 타전망 증축
 # NEW: 암살자 OFF 상태(수동 오버나이트) 중 수동 청산 시 침묵(Silent) 해제 및 텔레그램 타전망 분기 결속
+# MODIFIED: 초과 Case 47 - 숏 스퀴즈 가격 민감도 0.1% 하향 및 거래량 5배 상향 락온
+# NEW: 초과 Case 47 - 세션 전이 거래량 왜곡 방어용 5분 타임쉴드 주입 (04:00~04:04, 09:30~09:34)
 
 import sys
 import os
@@ -272,39 +274,46 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
 
             if symbol == "SOXL" and hardcoded_session in ["preMarket", "regularMarket"]:
                 if holdings_qty == 0 and is_session_done:
-                    price_window.append(current_price)
+                    # NEW: 세션 전이 거래량 왜곡 방어용 5분 타임쉴드 (04:00~04:04, 09:30~09:34)
+                    is_squeeze_shield_active = (400 <= est_time_int <= 404) or (930 <= est_time_int <= 934)
                     
-                    if len(price_window) >= 2:
-                        min_price = min(price_window)
-                        if min_price > 0 and current_price >= min_price * 1.01:
-                            current_time_sec = time.time()
-                            
-                            if current_time_sec - last_squeeze_alert_time >= 180.0:
-                                try:
-                                    c_data = await client.get_1m_candles_pagination(symbol, count=6)
-                                    c_list = c_data.get("candles", [])
-                                    
-                                    if len(c_list) >= 6:
-                                        curr_vol = float(c_list[0].get("volume", 0.0))
-                                        vol_5ma = sum(float(c.get("volume", 0.0)) for c in c_list[1:6]) / 5.0
+                    if is_squeeze_shield_active:
+                        if len(price_window) > 0:
+                            price_window.clear()
+                    else:
+                        price_window.append(current_price)
+                        
+                        if len(price_window) >= 2:
+                            min_price = min(price_window)
+                            if min_price > 0 and current_price >= min_price * 1.001: # MODIFIED: 0.1% 상회
+                                current_time_sec = time.time()
+                                
+                                if current_time_sec - last_squeeze_alert_time >= 180.0:
+                                    try:
+                                        c_data = await client.get_1m_candles_pagination(symbol, count=6)
+                                        c_list = c_data.get("candles", [])
                                         
-                                        if vol_5ma > 0 and curr_vol >= vol_5ma * 2.5:
-                                            last_squeeze_alert_time = current_time_sec
-                                            price_window.clear()
+                                        if len(c_list) >= 6:
+                                            curr_vol = float(c_list[0].get("volume", 0.0))
+                                            vol_5ma = sum(float(c.get("volume", 0.0)) for c in c_list[1:6]) / 5.0
                                             
-                                            up_rate = ((current_price / min_price) - 1.0) * 100
-                                            vol_multi = curr_vol / vol_5ma
-                                            
-                                            await notify_tg(
-                                                f"🚨 <b>숏 커버링 으로 롱(SOXL) 가격 상승 중</b>\n"
-                                                f"▫️ 발동 최저가: ${min_price:.2f}\n"
-                                                f"▫️ 포착 현재가: ${current_price:.2f}\n"
-                                                f"▫️ 가격 상승률: +{up_rate:.2f}%\n"
-                                                f"▫️ 거래량 증폭: {vol_multi:.2f}배"
-                                            )
-                                            print(f"🔥 [스퀴즈 모니터 {symbol}] +{up_rate:.2f}% 급등 (${min_price:.2f} -> ${current_price:.2f}) / 거래량 {vol_multi:.2f}배 폭발. 타전 완료.", flush=True)
-                                except Exception as e:
-                                    print(f"🚨 [스퀴즈 캔들 방어 {symbol}] {e}", flush=True)
+                                            if vol_5ma > 0 and curr_vol >= vol_5ma * 5.0: # MODIFIED: 5.0배 거래량 폭발
+                                                last_squeeze_alert_time = current_time_sec
+                                                price_window.clear()
+                                                
+                                                up_rate = ((current_price / min_price) - 1.0) * 100
+                                                vol_multi = curr_vol / vol_5ma
+                                                
+                                                await notify_tg(
+                                                    f"🚨 <b>숏 커버링 으로 롱(SOXL) 가격 상승 중</b>\n"
+                                                    f"▫️ 발동 최저가: ${min_price:.2f}\n"
+                                                    f"▫️ 포착 현재가: ${current_price:.2f}\n"
+                                                    f"▫️ 가격 상승률: +{up_rate:.3f}%\n"
+                                                    f"▫️ 거래량 증폭: {vol_multi:.2f}배"
+                                                )
+                                                print(f"🔥 [스퀴즈 모니터 {symbol}] +{up_rate:.3f}% 단기 반등 (${min_price:.2f} -> ${current_price:.2f}) / 거래량 {vol_multi:.2f}배 폭발. 타전 완료.", flush=True)
+                                    except Exception as e:
+                                        print(f"🚨 [스퀴즈 캔들 방어 {symbol}] {e}", flush=True)
                 else:
                     if len(price_window) > 0:
                         price_window.clear()
@@ -346,7 +355,7 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                         in_memory_ordering_lock[symbol] = True
                         try:
                             is_take_profit_exit = bool(target_sell_price > 0.0 or cond_order_id)
-                            is_manual_exit = not is_take_profit_exit and bool(buy_order_id) # NEW: 수동 청산 식별 플래그
+                            is_manual_exit = not is_take_profit_exit and bool(buy_order_id)
                             
                             if cond_order_id:
                                 try:
@@ -373,7 +382,7 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                                         await notify_tg(f"⚠️ <b>[aVWAP 교차 감시망] {other_sym} 3차 하향 인터럽트 발송</b>\n▫️ 사유: {symbol} 익절 퇴근 확증")
                                 except Exception as e:
                                     print(f"🚨 [교차 하향 발송 방어] {e}", flush=True)
-                            elif is_manual_exit: # NEW: 수동 청산 타전망 결속
+                            elif is_manual_exit:
                                 await notify_tg(f"🛑 <b>[aVWAP {symbol}] 수동 매도 청산 감지 (퇴근 락온 완료)</b>\n▫️ 잔고 0주 (오프라인 등 수동 청산 식별)\n▫️ 당일 신규 진입 권한 영구 소각 완료")
                         finally:
                             in_memory_ordering_lock[symbol] = False
