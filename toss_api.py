@@ -5,6 +5,7 @@
 # MODIFIED: pandas_market_calendars 외부 라이브러리 기반 NYSE 휴무일 절대 식별망 주입
 # MODIFIED: 캘린더 블로킹 연산 방어를 위한 asyncio.to_thread 스레드 격리 헌법 준수
 # MODIFIED: 외부 모듈 예외 시 제2 방어선(토스증권 API) 무중단 Fallback 경로 강제 (Case 21 방어)
+# NEW: 19:00 EST 기점 논리적 거래일(Logical Trading Day) 롤오버 파이프라인 결속 (야간 데이마켓 휴장일 오인 차단)
 
 import asyncio
 import aiohttp
@@ -16,9 +17,10 @@ from zoneinfo import ZoneInfo
 
 _NYSE_CALENDAR = None
 
-def get_nyse_holiday_name(dt_est: datetime) -> str:
+def get_nyse_holiday_name(logical_dt_est: datetime) -> str:
     """
     pandas_market_calendars 라이브러리를 활용한 미국 주식시장 정규 휴장일 명칭 원자적 추출
+    (주의: 입력받는 logical_dt_est는 익일장 19:00 롤오버가 적용된 논리적 거래일이어야 함)
     """
     global _NYSE_CALENDAR
     if _NYSE_CALENDAR is None:
@@ -26,9 +28,9 @@ def get_nyse_holiday_name(dt_est: datetime) -> str:
         _NYSE_CALENDAR = mcal.get_calendar('NYSE')
         
     import pandas as pd
-    dt_str = dt_est.strftime("%Y-%m-%d")
+    dt_str = logical_dt_est.strftime("%Y-%m-%d")
     
-    if dt_est.weekday() >= 5:
+    if logical_dt_est.weekday() >= 5:
         return "주말 (Weekend)"
         
     schedule = _NYSE_CALENDAR.schedule(start_date=dt_str, end_date=dt_str)
@@ -210,9 +212,11 @@ class TossApiClient:
 
         now_est = datetime.now(ZoneInfo('America/New_York'))
         
-        # MODIFIED: 외부 라이브러리 붕괴 시 제2방어선(토스 API)으로 무중단 Fallback 보장
+        # NEW: 19:00 EST 기점 논리적 거래일(Logical Trading Day) 롤오버 락온
+        logical_est = now_est if now_est.hour < 19 else now_est + timedelta(days=1)
+        
         try:
-            holiday_name = await asyncio.to_thread(get_nyse_holiday_name, now_est)
+            holiday_name = await asyncio.to_thread(get_nyse_holiday_name, logical_est)
             if holiday_name:
                 self._calendar_cache = (False, None, f"HOLIDAY|{holiday_name}", None)
                 self._calendar_cache_time = now_ts
@@ -220,7 +224,7 @@ class TossApiClient:
         except Exception as e:
             print(f"🚨 [NYSE 캘린더 방어망 붕괴] 외부 모듈 예외 자체 흡수 및 제2 방어선 전환: {e}", flush=True)
 
-        est_today_str = now_est.strftime("%Y-%m-%d")
+        est_today_str = logical_est.strftime("%Y-%m-%d")
         
         try:
             if not self.token: await self.authenticate()
@@ -268,14 +272,15 @@ class TossApiClient:
             print(f"🚨 [캘린더 API 호출 붕괴 방어] {e}", flush=True)
 
         est_time_int = now_est.hour * 100 + now_est.minute
-        weekday = now_est.weekday() 
+        logical_weekday = logical_est.weekday()
         
         is_fallback_open = False
         session_name = "CLOSED"
         fallback_start = now_est
         fallback_end = now_est
 
-        if (weekday == 6 and est_time_int >= 1900) or (0 <= weekday <= 3) or (weekday == 4 and est_time_int <= 1859):
+        # MODIFIED: 논리적 거래일 기반 요일 검증(월~금) 통합 및 단순화 락온
+        if 0 <= logical_weekday <= 4:
             if est_time_int >= 1900 or est_time_int < 400:
                 is_fallback_open = True
                 session_name = "dayMarket"
