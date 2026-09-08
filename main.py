@@ -4,7 +4,8 @@
 # =====================================================================
 # MODIFIED: 초과 Case 48 - pandas_market_calendars 영문 휴일명 한글 정밀 맵핑 주입
 # MODIFIED: 2.5차 하드 락온 - 선행 종목 익절 퇴근 후 후발 종목 진입 시 0.6% 즉각 하향 락온 결속
-# NEW: 3단 하향망(0.6%) 인터럽트 발송 및 수신 락온, 유령 덫 100% 방어 파이프라인
+# MODIFIED: 3단 하향망(0.6%) 인터럽트 발송 및 수신 락온, 유령 덫 100% 방어 파이프라인
+# NEW: SOXL 단독 숏 스퀴즈 실시간 모니터링 및 타전 (매매 개입 0% 방탄 격리망)
 
 import sys
 import os
@@ -16,6 +17,7 @@ import logging
 import pandas as pd
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
+from collections import deque
 from aiogram import Bot, Dispatcher
 from aiogram.client.session.aiohttp import AiohttpSession
 from dotenv import load_dotenv
@@ -97,6 +99,10 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
     breakout_ticks = 0
     prev_is_active = None 
     
+    # NEW: 숏 스퀴즈 실시간 모니터링 변수 (매매 개입 완전 차단 격리망)
+    price_window = deque(maxlen=40)
+    last_squeeze_alert_time = 0.0
+    
     async def notify_tg(text: str):
         try:
             await bot.send_message(chat_id=chat_id, text=text, parse_mode="HTML")
@@ -138,6 +144,7 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                 idempotency_keys[symbol] = {"BUY": None, "TRAP": None, "MOC": None}
                 last_moc_tick = 0.0
                 moc_dump_active = False
+                price_window.clear() # NEW: 큐 초기화
                 if holdings_qty == 0:
                     await AssassinLedger.save_state(symbol, buy_order_id="", cond_order_id="", entry_session="", pre_first_flag=False, force_downgrade=False, force_downgrade_0_6=False, is_stage_3=False)
                 print(f"🧹 [GC {symbol}] 17:00 EST 락 해제 및 자정 초기화 완료.", flush=True)
@@ -261,6 +268,39 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
             current_price = await client.get_current_price(symbol)
             if current_price <= 0.0:
                 continue
+
+            # ==========================================================
+            # NEW: [SOXL 단독] 숏 스퀴즈 실시간 모니터링 및 타전망 (매매 개입 0%)
+            # ==========================================================
+            if symbol == "SOXL" and hardcoded_session in ["preMarket", "regularMarket"]:
+                price_window.append(current_price)
+                
+                if len(price_window) >= 2:
+                    min_price = min(price_window)
+                    # 1. 40틱(60초) 내 1.0% 상승 검증
+                    if min_price > 0 and current_price >= min_price * 1.01:
+                        current_time_sec = time.time()
+                        
+                        # 2. 3분(180초) 쿨다운 락온 통과 시에만 제한적 캔들 API 호출 (Rate Limit 방어)
+                        if current_time_sec - last_squeeze_alert_time >= 180.0:
+                            try:
+                                c_data = await client.get_1m_candles_pagination(symbol, count=6)
+                                c_list = c_data.get("candles", [])
+                                
+                                if len(c_list) >= 6:
+                                    curr_vol = float(c_list[0].get("volume", 0.0))
+                                    # 직전 5분(완성 캔들) 평균 거래량
+                                    vol_5ma = sum(float(c.get("volume", 0.0)) for c in c_list[1:6]) / 5.0
+                                    
+                                    # 3. 5MA 대비 현재 거래량 2.5배 폭발 교차 검증
+                                    if vol_5ma > 0 and curr_vol >= vol_5ma * 2.5:
+                                        last_squeeze_alert_time = current_time_sec
+                                        price_window.clear() # 도배 방지를 위한 큐 즉각 소각
+                                        
+                                        await notify_tg(f"🚨 <b>숏 커버링 으로 롱(SOXL) 가격 상승 중</b>\n▫️ 가격 상승: +{((current_price/min_price)-1.0)*100:.2f}%\n▫️ 거래량: {curr_vol/vol_5ma:.2f}배 증폭")
+                                        print(f"🔥 [스퀴즈 모니터 {symbol}] +{((current_price/min_price)-1.0)*100:.2f}% 급등 / 거래량 {curr_vol/vol_5ma:.2f}배 폭발. 타전 완료.", flush=True)
+                            except Exception as e:
+                                print(f"🚨 [스퀴즈 캔들 방어 {symbol}] {e}", flush=True)
 
             if current_session_id != last_session_id:
                 if holdings_qty == 0:
@@ -554,7 +594,7 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                                     other_buy_id = await AssassinLedger.get_buy_order_id(other_symbol)
                                     
                                     new_pre_first = False
-                                    new_is_stage_3 = False # MODIFIED: 0.6% 타점 락온 플래그 초기화
+                                    new_is_stage_3 = False
                                     
                                     if hardcoded_session == "preMarket":
                                         other_price = other_state[0]
@@ -566,7 +606,7 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                                             await notify_tg(f"⚠️ <b>[aVWAP {symbol}] 프리장 듀얼 동시 가동 포착</b>\n▫️ 타점 하향(1.0%) 소프트웨어 인터럽트 발송 완료")
                                         elif other_is_done:
                                             new_pre_first = False
-                                            new_is_stage_3 = True # MODIFIED: 선행 종목 익절 퇴근 후 후발 진입 시 +0.6% 즉각 하향 락온
+                                            new_is_stage_3 = True
                                         else:
                                             new_pre_first = True
 
