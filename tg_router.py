@@ -5,6 +5,7 @@
 # MODIFIED: 장마감 1분 전(15:59)부터 3분간 1.5초 간격 MOC 덤핑 스케줄 텍스트 압축 (정규장 단어 소각)
 # MODIFIED: 3단 하향망(0.6%) 렌더링 락온 및 Reset 시 플래그 초기화 파이프라인
 # NEW: 초과 Case 50 - 5MA 기반 동적 예상 저가/고가(예상 밴드) 연산 및 팩트/예상 분리 렌더링 락온
+# MODIFIED: 암살자 타임쉴드(04:00~06:59 EST) UI 렌더링 07:00 EST 기준 동기화 락온
 
 import os
 import html
@@ -43,8 +44,8 @@ def get_main_menu_text() -> str:
         f"🕒 <b>[ 운영 스케줄 ({dst_status_text}) ]</b>\n"
         "➖➖➖➖➖➖➖➖➖➖➖➖➖➖\n"
         "🔹 17:00: 🧹 정산 스캔 및 시스템 대기\n"
-        "🔹 04:00: 🌅 프리장 VWAP 스캔\n"
-        "🔹 09:30: 🔥 정규장 VWAP 스캔\n"
+        "🔹 04:00: 🌅 프리장 레이더 스캔 (07:00 타임쉴드)\n"
+        "🔹 09:30: 🔥 정규장 VWAP 스캔 (신규 진입 셧다운)\n"
         "🔹 15:59: 🛑 MOC 덤핑 (1.5초 주기)\n\n"
         "🛠 <b>[ 핵심 명령어 ]</b>\n"
         "▶️ /avwap : 🔫 트레이딩 레이더 관제탑\n"
@@ -181,7 +182,6 @@ async def build_avwap_radar() -> tuple[str, InlineKeyboardMarkup]:
         sess_l = await fetch_session_stats("SOXL")
         sess_s = await fetch_session_stats("SOXS")
 
-    # NEW: 5MA 기반 예상 밴드 연산 락온
     pre_exp_l_l = sess_l['pre_h'] * (1 - amp_l / 100) if sess_l['pre_h'] > 0 else 0.0
     pre_exp_h_l = sess_l['pre_l'] * (1 + amp_l / 100) if sess_l['pre_l'] > 0 else 0.0
     reg_exp_l_l = sess_l['reg_h'] * (1 - amp_l / 100) if sess_l['reg_h'] > 0 else 0.0
@@ -211,7 +211,8 @@ async def build_avwap_radar() -> tuple[str, InlineKeyboardMarkup]:
             state_text = "타격완료"
         else:
             if current_session == "preMarket":
-                if est_time.hour == 4 and est_time.minute <= 6:
+                # MODIFIED: 04:00~06:59 EST 구간은 타임쉴드로 정밀 표출 락온
+                if est_time.hour < 7:
                     state_text = "타임쉴드"
                 else:
                     state_text = "PRE대기"
