@@ -10,7 +10,7 @@
 # NEW: 암살자 OFF 상태(수동 오버나이트) 중 수동 청산 시 침묵(Silent) 해제 및 텔레그램 타전망 분기 결속
 # MODIFIED: 초과 Case 47 - 숏 스퀴즈 가격 민감도 0.1% 하향 및 거래량 5배 상향 락온
 # NEW: 초과 Case 47 - 세션 전이 거래량 왜곡 방어용 5분 타임쉴드 주입 (04:00~04:04, 09:30~09:34)
-# MODIFIED: 암살자 신규 매수 전용 동적 타임쉴드 07:00 EST(3시간 연장, 10,800초) 락온 결속
+# MODIFIED: 암살자 신규 매수 전용 동적 타임쉴드 04:07 EST(7분, 420초) 얼리버드 롤백 락온
 # NEW: 초과 Case 52 - 잔고 0주(퇴근) 확증 시 토스증권 API 호출을 통한 손익(PnL) 데이터 동적 추출 및 타전망 결속
 
 import sys
@@ -614,7 +614,8 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                 is_time_shield = False
                 elapsed = (now_est - session_baseline_est).total_seconds()
                 
-                if 0 <= elapsed < 10800:
+                # MODIFIED: 04:07 타임쉴드 (420초) 하드 락온
+                if 0 <= elapsed < 420:
                     is_time_shield = True
                 
                 can_enter = False
@@ -681,7 +682,7 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                                     
                                     idempotency_keys[symbol]["BUY"] = None
                                     
-                                    lock_msg = "선행 종목 퇴근 확증 (+0.6% 후발 락온)" if new_is_stage_3 else "07:00 타임쉴드 해제 후 4틱(6초) 돌파 방어망 통과"
+                                    lock_msg = "선행 종목 퇴근 확증 (+0.6% 후발 락온)" if new_is_stage_3 else "04:07 타임쉴드 해제 후 4틱(6초) 돌파 방어망 통과"
                                     await notify_tg(f"🚀 <b>[aVWAP {symbol}] 돌파 요격 매수 (세션: {hardcoded_session})</b>\n▫️ aVWAP: ${vwap_price:.2f}\n▫️ 타격가: ${ask_1_price:.2f}\n▫️ 수량: {target_qty}주\n▫️ 확증: {lock_msg}")
                         except Exception as e:
                             print(f"🚨 [BUY 방어] {e}", flush=True)
@@ -717,7 +718,7 @@ async def main():
         await bot.delete_webhook(drop_pending_updates=True)
         await bot.send_message(
             chat_id=ADMIN_CHAT_ID, 
-            text="✅ <b>[시스템 기동 완료]</b>\n▫️ 서버 재부팅 및 듀얼 암살자 코어 결속\n▫️ 07:00 타임쉴드 및 3단 익절 덫 하향망 락온 완료.", 
+            text="✅ <b>[시스템 기동 완료]</b>\n▫️ 서버 재부팅 및 듀얼 암살자 코어 결속\n▫️ 04:07 타임쉴드 및 3단 익절 덫 하향망 락온 완료.", 
             parse_mode="HTML"
         )
     except Exception:
