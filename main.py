@@ -7,6 +7,7 @@
 # MODIFIED: 3단 하향망(0.6%) 인터럽트 발송 및 수신 락온, 유령 덫 100% 방어 파이프라인
 # MODIFIED: 초과 Case 47 - 퇴근 확증 시에만 SOXL 단독 숏 스퀴즈 실시간 모니터링 가동 및 타전망 결속
 # MODIFIED: 초과 Case 47 - 숏 스퀴즈 1차 트리거 발동 최저가(min_price) 및 포착 현재가(current_price) 텔레그램 타전망 증축
+# NEW: 암살자 OFF 상태(수동 오버나이트) 중 수동 청산 시 침묵(Silent) 해제 및 텔레그램 타전망 분기 결속
 
 import sys
 import os
@@ -100,7 +101,6 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
     breakout_ticks = 0
     prev_is_active = None 
     
-    # NEW: 숏 스퀴즈 실시간 모니터링 변수 (매매 개입 완전 차단 격리망)
     price_window = deque(maxlen=40)
     last_squeeze_alert_time = 0.0
     
@@ -145,7 +145,7 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                 idempotency_keys[symbol] = {"BUY": None, "TRAP": None, "MOC": None}
                 last_moc_tick = 0.0
                 moc_dump_active = False
-                price_window.clear() # NEW: 큐 초기화
+                price_window.clear()
                 if holdings_qty == 0:
                     await AssassinLedger.save_state(symbol, buy_order_id="", cond_order_id="", entry_session="", pre_first_flag=False, force_downgrade=False, force_downgrade_0_6=False, is_stage_3=False)
                 print(f"🧹 [GC {symbol}] 17:00 EST 락 해제 및 자정 초기화 완료.", flush=True)
@@ -270,20 +270,15 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
             if current_price <= 0.0:
                 continue
 
-            # ==========================================================
-            # MODIFIED: [SOXL 단독] 숏 스퀴즈 실시간 모니터링 (퇴근 후 전용 관측망)
-            # ==========================================================
             if symbol == "SOXL" and hardcoded_session in ["preMarket", "regularMarket"]:
                 if holdings_qty == 0 and is_session_done:
                     price_window.append(current_price)
                     
                     if len(price_window) >= 2:
                         min_price = min(price_window)
-                        # 1. 40틱(60초) 내 1.0% 상승 검증
                         if min_price > 0 and current_price >= min_price * 1.01:
                             current_time_sec = time.time()
                             
-                            # 2. 3분(180초) 쿨다운 락온 통과 시에만 제한적 캔들 API 호출 (Rate Limit 방어)
                             if current_time_sec - last_squeeze_alert_time >= 180.0:
                                 try:
                                     c_data = await client.get_1m_candles_pagination(symbol, count=6)
@@ -291,13 +286,11 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                                     
                                     if len(c_list) >= 6:
                                         curr_vol = float(c_list[0].get("volume", 0.0))
-                                        # 직전 5분(완성 캔들) 평균 거래량
                                         vol_5ma = sum(float(c.get("volume", 0.0)) for c in c_list[1:6]) / 5.0
                                         
-                                        # 3. 5MA 대비 현재 거래량 2.5배 폭발 교차 검증
                                         if vol_5ma > 0 and curr_vol >= vol_5ma * 2.5:
                                             last_squeeze_alert_time = current_time_sec
-                                            price_window.clear() # 도배 방지를 위한 큐 즉각 소각
+                                            price_window.clear()
                                             
                                             up_rate = ((current_price / min_price) - 1.0) * 100
                                             vol_multi = curr_vol / vol_5ma
@@ -313,7 +306,6 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                                 except Exception as e:
                                     print(f"🚨 [스퀴즈 캔들 방어 {symbol}] {e}", flush=True)
                 else:
-                    # 보유 중이거나 진입 대기 중일 때는 큐를 비워 메모리 낭비 및 휩소 타전 원천 차단
                     if len(price_window) > 0:
                         price_window.clear()
 
@@ -354,6 +346,7 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                         in_memory_ordering_lock[symbol] = True
                         try:
                             is_take_profit_exit = bool(target_sell_price > 0.0 or cond_order_id)
+                            is_manual_exit = not is_take_profit_exit and bool(buy_order_id) # NEW: 수동 청산 식별 플래그
                             
                             if cond_order_id:
                                 try:
@@ -380,6 +373,8 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                                         await notify_tg(f"⚠️ <b>[aVWAP 교차 감시망] {other_sym} 3차 하향 인터럽트 발송</b>\n▫️ 사유: {symbol} 익절 퇴근 확증")
                                 except Exception as e:
                                     print(f"🚨 [교차 하향 발송 방어] {e}", flush=True)
+                            elif is_manual_exit: # NEW: 수동 청산 타전망 결속
+                                await notify_tg(f"🛑 <b>[aVWAP {symbol}] 수동 매도 청산 감지 (퇴근 락온 완료)</b>\n▫️ 잔고 0주 (오프라인 등 수동 청산 식별)\n▫️ 당일 신규 진입 권한 영구 소각 완료")
                         finally:
                             in_memory_ordering_lock[symbol] = False
 
