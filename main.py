@@ -6,6 +6,7 @@
 # MODIFIED: 2.5차 하드 락온 - 선행 종목 익절 퇴근 후 후발 종목 진입 시 0.6% 즉각 하향 락온 결속
 # MODIFIED: 3단 하향망(0.6%) 인터럽트 발송 및 수신 락온, 유령 덫 100% 방어 파이프라인
 # MODIFIED: 초과 Case 47 - 퇴근 확증 시에만 SOXL 단독 숏 스퀴즈 실시간 모니터링 가동 및 타전망 결속
+# MODIFIED: 초과 Case 47 - 숏 스퀴즈 1차 트리거 발동 최저가(min_price) 및 포착 현재가(current_price) 텔레그램 타전망 증축
 
 import sys
 import os
@@ -301,8 +302,14 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                                             up_rate = ((current_price / min_price) - 1.0) * 100
                                             vol_multi = curr_vol / vol_5ma
                                             
-                                            await notify_tg(f"🚨 <b>숏 커버링 으로 롱(SOXL) 가격 상승 중</b>\n▫️ 가격 상승률: +{up_rate:.2f}%\n▫️ 거래량 증폭: {vol_multi:.2f}배")
-                                            print(f"🔥 [스퀴즈 모니터 {symbol}] +{up_rate:.2f}% 급등 / 거래량 {vol_multi:.2f}배 폭발. 타전 완료.", flush=True)
+                                            await notify_tg(
+                                                f"🚨 <b>숏 커버링 으로 롱(SOXL) 가격 상승 중</b>\n"
+                                                f"▫️ 발동 최저가: ${min_price:.2f}\n"
+                                                f"▫️ 포착 현재가: ${current_price:.2f}\n"
+                                                f"▫️ 가격 상승률: +{up_rate:.2f}%\n"
+                                                f"▫️ 거래량 증폭: {vol_multi:.2f}배"
+                                            )
+                                            print(f"🔥 [스퀴즈 모니터 {symbol}] +{up_rate:.2f}% 급등 (${min_price:.2f} -> ${current_price:.2f}) / 거래량 {vol_multi:.2f}배 폭발. 타전 완료.", flush=True)
                                 except Exception as e:
                                     print(f"🚨 [스퀴즈 캔들 방어 {symbol}] {e}", flush=True)
                 else:
@@ -611,7 +618,7 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                                         if other_price > 0 or other_buy_id: 
                                             new_pre_first = False
                                             await AssassinLedger.save_state(other_symbol, force_downgrade=True)
-                                            await notify_tg(f"⚠️ <b>[aVWAP {symbol}] 프리장 듀얼 동시 가동 포착</b>\n▫️ 타점 하향(1.0%) 소프트웨어 인터럽트 발송 완료")
+                                            await notify_tg(f"⚠️ <b>[aVWAP {symbol}] 프리장 듀얼 동시 가 가동 포착</b>\n▫️ 타점 하향(1.0%) 소프트웨어 인터럽트 발송 완료")
                                         elif other_is_done:
                                             new_pre_first = False
                                             new_is_stage_3 = True
