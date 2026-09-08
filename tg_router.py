@@ -4,6 +4,7 @@
 # =====================================================================
 # MODIFIED: 장마감 1분 전(15:59)부터 3분간 1.5초 간격 MOC 덤핑 스케줄 텍스트 압축 (정규장 단어 소각)
 # MODIFIED: 3단 하향망(0.6%) 렌더링 락온 및 Reset 시 플래그 초기화 파이프라인
+# NEW: 초과 Case 50 - 5MA 기반 동적 예상 저가/고가(예상 밴드) 연산 및 팩트/예상 분리 렌더링 락온
 
 import os
 import html
@@ -180,6 +181,17 @@ async def build_avwap_radar() -> tuple[str, InlineKeyboardMarkup]:
         sess_l = await fetch_session_stats("SOXL")
         sess_s = await fetch_session_stats("SOXS")
 
+    # NEW: 5MA 기반 예상 밴드 연산 락온
+    pre_exp_l_l = sess_l['pre_h'] * (1 - amp_l / 100) if sess_l['pre_h'] > 0 else 0.0
+    pre_exp_h_l = sess_l['pre_l'] * (1 + amp_l / 100) if sess_l['pre_l'] > 0 else 0.0
+    reg_exp_l_l = sess_l['reg_h'] * (1 - amp_l / 100) if sess_l['reg_h'] > 0 else 0.0
+    reg_exp_h_l = sess_l['reg_l'] * (1 + amp_l / 100) if sess_l['reg_l'] > 0 else 0.0
+
+    pre_exp_l_s = sess_s['pre_h'] * (1 - amp_s / 100) if sess_s['pre_h'] > 0 else 0.0
+    pre_exp_h_s = sess_s['pre_l'] * (1 + amp_s / 100) if sess_s['pre_l'] > 0 else 0.0
+    reg_exp_l_s = sess_s['reg_h'] * (1 - amp_s / 100) if sess_s['reg_h'] > 0 else 0.0
+    reg_exp_h_s = sess_s['reg_l'] * (1 + amp_s / 100) if sess_s['reg_l'] > 0 else 0.0
+
     _, budget_l, _, is_done_l, is_active_l, _, _, _, entry_l, first_l, _, _, is_st3_l = await AssassinLedger.get_state("SOXL")
     _, budget_s, _, is_done_s, is_active_s, _, _, _, entry_s, first_s, _, _, is_st3_s = await AssassinLedger.get_state("SOXS")
 
@@ -226,15 +238,19 @@ async def build_avwap_radar() -> tuple[str, InlineKeyboardMarkup]:
 
 🌅 <b>프리장</b> (04:00~09:29)
 🐂 <b>SOXL</b> <code>[VWAP] ${sess_l['pre_vwap']:.2f}</code>
-  ⤷ <code>${sess_l['pre_l']:.2f}~${sess_l['pre_h']:.2f} ({sess_l['pre_amp']:.1f}%)</code>
+  ⤷ 팩트: <code>${sess_l['pre_l']:.2f}~${sess_l['pre_h']:.2f} ({sess_l['pre_amp']:.1f}%)</code>
+  ⤷ 예상: <code>${pre_exp_l_l:.2f}~${pre_exp_h_l:.2f}</code>
 🐻 <b>SOXS</b> <code>[VWAP] ${sess_s['pre_vwap']:.2f}</code>
-  ⤷ <code>${sess_s['pre_l']:.2f}~${sess_s['pre_h']:.2f} ({sess_s['pre_amp']:.1f}%)</code>
+  ⤷ 팩트: <code>${sess_s['pre_l']:.2f}~${sess_s['pre_h']:.2f} ({sess_s['pre_amp']:.1f}%)</code>
+  ⤷ 예상: <code>${pre_exp_l_s:.2f}~${pre_exp_h_s:.2f}</code>
 
 🔥 <b>정규장</b> (09:30~16:00)
 🐂 <b>SOXL</b> <code>[VWAP] ${sess_l['reg_vwap']:.2f}</code>
-  ⤷ <code>${sess_l['reg_l']:.2f}~${sess_l['reg_h']:.2f} ({sess_l['reg_amp']:.1f}%)</code>
+  ⤷ 팩트: <code>${sess_l['reg_l']:.2f}~${sess_l['reg_h']:.2f} ({sess_l['reg_amp']:.1f}%)</code>
+  ⤷ 예상: <code>${reg_exp_l_l:.2f}~${reg_exp_h_l:.2f}</code>
 🐻 <b>SOXS</b> <code>[VWAP] ${sess_s['reg_vwap']:.2f}</code>
-  ⤷ <code>${sess_s['reg_l']:.2f}~${sess_s['reg_h']:.2f} ({sess_s['reg_amp']:.1f}%)</code>
+  ⤷ 팩트: <code>${sess_s['reg_l']:.2f}~${sess_s['reg_h']:.2f} ({sess_s['reg_amp']:.1f}%)</code>
+  ⤷ 예상: <code>${reg_exp_l_s:.2f}~${reg_exp_h_s:.2f}</code>
 ➖➖➖➖➖➖➖➖➖➖➖➖➖➖
 {status_l}
 {status_s}
