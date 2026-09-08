@@ -5,7 +5,7 @@
 # MODIFIED: 초과 Case 48 - pandas_market_calendars 영문 휴일명 한글 정밀 맵핑 주입
 # MODIFIED: 2.5차 하드 락온 - 선행 종목 익절 퇴근 후 후발 종목 진입 시 0.6% 즉각 하향 락온 결속
 # MODIFIED: 3단 하향망(0.6%) 인터럽트 발송 및 수신 락온, 유령 덫 100% 방어 파이프라인
-# NEW: SOXL 단독 숏 스퀴즈 실시간 모니터링 및 타전 (매매 개입 0% 방탄 격리망)
+# MODIFIED: 초과 Case 47 - 퇴근 확증 시에만 SOXL 단독 숏 스퀴즈 실시간 모니터링 가동 및 타전망 결속
 
 import sys
 import os
@@ -270,37 +270,45 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                 continue
 
             # ==========================================================
-            # NEW: [SOXL 단독] 숏 스퀴즈 실시간 모니터링 및 타전망 (매매 개입 0%)
+            # MODIFIED: [SOXL 단독] 숏 스퀴즈 실시간 모니터링 (퇴근 후 전용 관측망)
             # ==========================================================
             if symbol == "SOXL" and hardcoded_session in ["preMarket", "regularMarket"]:
-                price_window.append(current_price)
-                
-                if len(price_window) >= 2:
-                    min_price = min(price_window)
-                    # 1. 40틱(60초) 내 1.0% 상승 검증
-                    if min_price > 0 and current_price >= min_price * 1.01:
-                        current_time_sec = time.time()
-                        
-                        # 2. 3분(180초) 쿨다운 락온 통과 시에만 제한적 캔들 API 호출 (Rate Limit 방어)
-                        if current_time_sec - last_squeeze_alert_time >= 180.0:
-                            try:
-                                c_data = await client.get_1m_candles_pagination(symbol, count=6)
-                                c_list = c_data.get("candles", [])
-                                
-                                if len(c_list) >= 6:
-                                    curr_vol = float(c_list[0].get("volume", 0.0))
-                                    # 직전 5분(완성 캔들) 평균 거래량
-                                    vol_5ma = sum(float(c.get("volume", 0.0)) for c in c_list[1:6]) / 5.0
+                if holdings_qty == 0 and is_session_done:
+                    price_window.append(current_price)
+                    
+                    if len(price_window) >= 2:
+                        min_price = min(price_window)
+                        # 1. 40틱(60초) 내 1.0% 상승 검증
+                        if min_price > 0 and current_price >= min_price * 1.01:
+                            current_time_sec = time.time()
+                            
+                            # 2. 3분(180초) 쿨다운 락온 통과 시에만 제한적 캔들 API 호출 (Rate Limit 방어)
+                            if current_time_sec - last_squeeze_alert_time >= 180.0:
+                                try:
+                                    c_data = await client.get_1m_candles_pagination(symbol, count=6)
+                                    c_list = c_data.get("candles", [])
                                     
-                                    # 3. 5MA 대비 현재 거래량 2.5배 폭발 교차 검증
-                                    if vol_5ma > 0 and curr_vol >= vol_5ma * 2.5:
-                                        last_squeeze_alert_time = current_time_sec
-                                        price_window.clear() # 도배 방지를 위한 큐 즉각 소각
+                                    if len(c_list) >= 6:
+                                        curr_vol = float(c_list[0].get("volume", 0.0))
+                                        # 직전 5분(완성 캔들) 평균 거래량
+                                        vol_5ma = sum(float(c.get("volume", 0.0)) for c in c_list[1:6]) / 5.0
                                         
-                                        await notify_tg(f"🚨 <b>숏 커버링 으로 롱(SOXL) 가격 상승 중</b>\n▫️ 가격 상승: +{((current_price/min_price)-1.0)*100:.2f}%\n▫️ 거래량: {curr_vol/vol_5ma:.2f}배 증폭")
-                                        print(f"🔥 [스퀴즈 모니터 {symbol}] +{((current_price/min_price)-1.0)*100:.2f}% 급등 / 거래량 {curr_vol/vol_5ma:.2f}배 폭발. 타전 완료.", flush=True)
-                            except Exception as e:
-                                print(f"🚨 [스퀴즈 캔들 방어 {symbol}] {e}", flush=True)
+                                        # 3. 5MA 대비 현재 거래량 2.5배 폭발 교차 검증
+                                        if vol_5ma > 0 and curr_vol >= vol_5ma * 2.5:
+                                            last_squeeze_alert_time = current_time_sec
+                                            price_window.clear() # 도배 방지를 위한 큐 즉각 소각
+                                            
+                                            up_rate = ((current_price / min_price) - 1.0) * 100
+                                            vol_multi = curr_vol / vol_5ma
+                                            
+                                            await notify_tg(f"🚨 <b>숏 커버링 으로 롱(SOXL) 가격 상승 중</b>\n▫️ 가격 상승률: +{up_rate:.2f}%\n▫️ 거래량 증폭: {vol_multi:.2f}배")
+                                            print(f"🔥 [스퀴즈 모니터 {symbol}] +{up_rate:.2f}% 급등 / 거래량 {vol_multi:.2f}배 폭발. 타전 완료.", flush=True)
+                                except Exception as e:
+                                    print(f"🚨 [스퀴즈 캔들 방어 {symbol}] {e}", flush=True)
+                else:
+                    # 보유 중이거나 진입 대기 중일 때는 큐를 비워 메모리 낭비 및 휩소 타전 원천 차단
+                    if len(price_window) > 0:
+                        price_window.clear()
 
             if current_session_id != last_session_id:
                 if holdings_qty == 0:
