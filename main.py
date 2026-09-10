@@ -14,6 +14,7 @@
 # NEW: 초과 Case 52 - 잔고 0주(퇴근) 확증 시 토스증권 API 호출을 통한 손익(PnL) 데이터 동적 추출 및 타전망 결속
 # NEW: 수동 매수(개입) 원자적 식별 및 1.0% 타점 하드 락온. 수동 덫 장전 즉시 당일 자동 매수 권한 100% 영구 소각(Mutex).
 # MODIFIED: 초과 Case 54 - 잔고 0주 청산 시 조건주문 생존(WATCHING) 여부 원자적 프로빙을 통한 수동 매도 허위 익절(False Positive) 판별망 결속
+# NEW: 초과 Case 55 - 듀얼 휩소 동시 진입(마이크로 휩소) 방어용 180초 교차 타임쉴드 인터럽트 주입 및 락온
 
 import sys
 import os
@@ -137,7 +138,7 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
 
             (last_buy_price, budget, last_session_id, is_session_done, is_active, 
              target_sell_price, cond_order_id, session_mode, entry_session, 
-             pre_first_flag, force_downgrade, force_downgrade_0_6, is_stage_3) = await AssassinLedger.get_state(symbol)
+             pre_first_flag, force_downgrade, force_downgrade_0_6, is_stage_3, entry_time) = await AssassinLedger.get_state(symbol)
             
             buy_order_id = await AssassinLedger.get_buy_order_id(symbol)
 
@@ -153,7 +154,7 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                 moc_dump_active = False
                 price_window.clear()
                 if holdings_qty == 0:
-                    await AssassinLedger.save_state(symbol, buy_order_id="", cond_order_id="", entry_session="", pre_first_flag=False, force_downgrade=False, force_downgrade_0_6=False, is_stage_3=False)
+                    await AssassinLedger.save_state(symbol, buy_order_id="", cond_order_id="", entry_session="", pre_first_flag=False, force_downgrade=False, force_downgrade_0_6=False, is_stage_3=False, entry_time=0.0)
                 print(f"🧹 [GC {symbol}] 17:00 EST 락 해제 및 자정 초기화 완료.", flush=True)
                 await asyncio.sleep(60)
                 continue
@@ -259,7 +260,7 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                                     
                                     if not moc_dump_active:
                                         moc_dump_active = True
-                                        await notify_tg(f"🔴 <b>[aVWAP {symbol}] 15:59~16:01 제로오버나이트 덤핑망 결속</b>\n▫️ 1.5초 간격 체결 추적 및 매수 1호가 지속 폭격 개시")
+                                        await notify_tg(f"🔴 <b>[aVWAP {symbol}] 15:59~16:01 제로오버나이트 덤핑망 결속</b>\n▫️ 1.5초 간격 체결 추 추적 및 매수 1호가 지속 폭격 개시")
                         except Exception as e:
                             print(f"🚨 [MOC 방어] {e}", flush=True)
                         finally:
@@ -333,7 +334,7 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                             can_reset = False
                             
                     if can_reset:
-                        await AssassinLedger.save_state(symbol, price=0.0, target_sell_price=0.0, last_session_id=current_session_id, is_session_done=False, buy_order_id="", cond_order_id="", entry_session="", pre_first_flag=False, force_downgrade=False, force_downgrade_0_6=False, is_stage_3=False)
+                        await AssassinLedger.save_state(symbol, price=0.0, target_sell_price=0.0, last_session_id=current_session_id, is_session_done=False, buy_order_id="", cond_order_id="", entry_session="", pre_first_flag=False, force_downgrade=False, force_downgrade_0_6=False, is_stage_3=False, entry_time=0.0)
                         is_session_done = False
                         target_sell_price = 0.0
                         buy_order_id = ""
@@ -402,7 +403,7 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                             is_manual_exit = not is_take_profit_exit and not is_moc_time
                             is_moc_exit = is_moc_time
 
-                            await AssassinLedger.save_state(symbol, price=0.0, target_sell_price=0.0, buy_order_id="", cond_order_id="", is_session_done=True, entry_session="", pre_first_flag=False, force_downgrade=False, force_downgrade_0_6=False, is_stage_3=False)
+                            await AssassinLedger.save_state(symbol, price=0.0, target_sell_price=0.0, buy_order_id="", cond_order_id="", is_session_done=True, entry_session="", pre_first_flag=False, force_downgrade=False, force_downgrade_0_6=False, is_stage_3=False, entry_time=0.0)
                             target_sell_price = 0.0
                             buy_order_id = ""
                             cond_order_id = ""
@@ -631,7 +632,18 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                     can_enter = True
                 
                 if can_enter and current_price >= vwap_price:
-                    breakout_ticks += 1
+                    # NEW: 교차 타임쉴드(180초) 검증망 (마이크로 휩소 방어)
+                    other_symbol_for_shield = "SOXS" if symbol == "SOXL" else "SOXL"
+                    other_state_for_shield = await AssassinLedger.get_state(other_symbol_for_shield)
+                    other_entry_time = other_state_for_shield[13] # entry_time index is 13
+                    
+                    current_time_for_shield = time.time()
+                    
+                    # 만약 상대 종목이 최근 180초 이내에 진입한 기록이 있다면, 본 종목의 타격을 강제 억제(틱 누적 0점 증발)
+                    if other_entry_time > 0 and current_time_for_shield - other_entry_time < 180.0:
+                        breakout_ticks = 0
+                    else:
+                        breakout_ticks += 1
                 else:
                     breakout_ticks = 0
                 
@@ -686,7 +698,7 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                                     print(f"🚀 [매수 집행 {symbol}] 돌파 요격 매수 발사 완료. 수량: {target_qty}주 | 타격가: ${ask_1_price:.2f}", flush=True)
                                     
                                     if res and isinstance(res, dict) and res.get("result", {}).get("orderId"):
-                                        await AssassinLedger.save_state(symbol, buy_order_id=str(res["result"]["orderId"]), entry_session=hardcoded_session, pre_first_flag=new_pre_first, is_stage_3=new_is_stage_3)
+                                        await AssassinLedger.save_state(symbol, buy_order_id=str(res["result"]["orderId"]), entry_session=hardcoded_session, pre_first_flag=new_pre_first, is_stage_3=new_is_stage_3, entry_time=time.time())
                                     
                                     idempotency_keys[symbol]["BUY"] = None
                                     

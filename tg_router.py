@@ -6,6 +6,7 @@
 # MODIFIED: 3단 하향망(0.6%) 렌더링 락온 및 Reset 시 플래그 초기화 파이프라인
 # NEW: 초과 Case 50 - 5MA 기반 동적 예상 저가/고가(예상 밴드) 연산 및 팩트/예상 분리 렌더링 락온
 # MODIFIED: 암살자 타임쉴드(04:00~04:06 EST) UI 렌더링 04:07 EST 기준 동기화 롤백 락온
+# NEW: 3분(180초) 교차 타임쉴드 대기 상태 UI 렌더링 파이프라인 결속
 
 import os
 import html
@@ -58,7 +59,7 @@ def get_main_menu_text() -> str:
 
 @router.message(Command("start"))
 async def cmd_start(message: types.Message, state: FSMContext):
-    if message.from_user.id != ADMIN_CHAT_ID:
+    if message.fromuser.id != ADMIN_CHAT_ID:
         return
     print(f"💬 [TG 수신] /start 명령 하달 (User: {message.from_user.id})", flush=True)
     await state.clear()
@@ -192,10 +193,10 @@ async def build_avwap_radar() -> tuple[str, InlineKeyboardMarkup]:
     reg_exp_l_s = sess_s['reg_h'] * (1 - amp_s / 100) if sess_s['reg_h'] > 0 else 0.0
     reg_exp_h_s = sess_s['reg_l'] * (1 + amp_s / 100) if sess_s['reg_l'] > 0 else 0.0
 
-    _, budget_l, _, is_done_l, is_active_l, _, _, _, entry_l, first_l, _, _, is_st3_l = await AssassinLedger.get_state("SOXL")
-    _, budget_s, _, is_done_s, is_active_s, _, _, _, entry_s, first_s, _, _, is_st3_s = await AssassinLedger.get_state("SOXS")
+    _, budget_l, _, is_done_l, is_active_l, _, _, _, entry_l, first_l, _, _, is_st3_l, entry_time_l = await AssassinLedger.get_state("SOXL")
+    _, budget_s, _, is_done_s, is_active_s, _, _, _, entry_s, first_s, _, _, is_st3_s, entry_time_s = await AssassinLedger.get_state("SOXS")
 
-    def build_compact_status(symbol_short, is_active, budget, is_done, current_session, est_time, qty, entry_session, pre_first_flag, is_stage_3):
+    def build_compact_status(symbol_short, is_active, budget, is_done, current_session, est_time, qty, entry_session, pre_first_flag, is_stage_3, my_entry_time, other_entry_time):
         state_flag = "ON" if is_active else "OFF"
         
         if not is_active:
@@ -211,9 +212,13 @@ async def build_avwap_radar() -> tuple[str, InlineKeyboardMarkup]:
             state_text = "타격완료"
         else:
             if current_session == "preMarket":
+                import time
+                current_time_for_ui = time.time()
                 # MODIFIED: 04:00~04:06 EST 구간은 타임쉴드로 정밀 표출 락온
                 if est_time.hour == 4 and est_time.minute < 7:
                     state_text = "타임쉴드"
+                elif other_entry_time > 0 and current_time_for_ui - other_entry_time < 180.0:
+                    state_text = "교차쉴드"
                 else:
                     state_text = "PRE대기"
             elif current_session == "dayMarket":
@@ -226,8 +231,8 @@ async def build_avwap_radar() -> tuple[str, InlineKeyboardMarkup]:
         emoji = "🐂" if symbol_short == "SOXL" else "🐻"
         return f"{emoji} <b>{symbol_short}</b> <code>[{state_flag}]</code> {state_text} | <code>${budget:.0f}</code>"
 
-    status_l = build_compact_status("SOXL", is_active_l, budget_l, is_done_l, session_name_ui, now_est, hold_l['qty'], entry_l, first_l, is_st3_l)
-    status_s = build_compact_status("SOXS", is_active_s, budget_s, is_done_s, session_name_ui, now_est, hold_s['qty'], entry_s, first_s, is_st3_s)
+    status_l = build_compact_status("SOXL", is_active_l, budget_l, is_done_l, session_name_ui, now_est, hold_l['qty'], entry_l, first_l, is_st3_l, entry_time_l, entry_time_s)
+    status_s = build_compact_status("SOXS", is_active_s, budget_s, is_done_s, session_name_ui, now_est, hold_s['qty'], entry_s, first_s, is_st3_s, entry_time_s, entry_time_l)
     
     scan_time = now_est.strftime("%m-%d %H:%M:%S")
 
@@ -422,8 +427,8 @@ async def build_sync_board() -> str:
     return text
 
 async def build_settlement_board() -> tuple[str, InlineKeyboardMarkup]:
-    _, budget_l, _, _, is_active_l, _, _, _, _, _, _, _, _ = await AssassinLedger.get_state("SOXL")
-    _, budget_s, _, _, is_active_s, _, _, _, _, _, _, _, _ = await AssassinLedger.get_state("SOXS")
+    _, budget_l, _, _, is_active_l, _, _, _, _, _, _, _, _, _ = await AssassinLedger.get_state("SOXL")
+    _, budget_s, _, _, is_active_s, _, _, _, _, _, _, _, _, _ = await AssassinLedger.get_state("SOXS")
 
     state_l_str = "🟢 ON" if is_active_l else "🔴 OFF"
     state_s_str = "🟢 ON" if is_active_s else "🔴 OFF"
@@ -603,8 +608,8 @@ async def process_execute_dual_reset(callback_query: types.CallbackQuery, state:
     print(f"💬 [TG 콜백 수신] execute_dual_reset (User: {callback_query.from_user.id})", flush=True)
     await state.clear()
     try:
-        await AssassinLedger.save_state("SOXL", price=0.0, target_sell_price=0.0, buy_order_id="", cond_order_id="", is_session_done=False, entry_session="", pre_first_flag=False, force_downgrade=False, force_downgrade_0_6=False, is_stage_3=False)
-        await AssassinLedger.save_state("SOXS", price=0.0, target_sell_price=0.0, buy_order_id="", cond_order_id="", is_session_done=False, entry_session="", pre_first_flag=False, force_downgrade=False, force_downgrade_0_6=False, is_stage_3=False)
+        await AssassinLedger.save_state("SOXL", price=0.0, target_sell_price=0.0, buy_order_id="", cond_order_id="", is_session_done=False, entry_session="", pre_first_flag=False, force_downgrade=False, force_downgrade_0_6=False, is_stage_3=False, entry_time=0.0)
+        await AssassinLedger.save_state("SOXS", price=0.0, target_sell_price=0.0, buy_order_id="", cond_order_id="", is_session_done=False, entry_session="", pre_first_flag=False, force_downgrade=False, force_downgrade_0_6=False, is_stage_3=False, entry_time=0.0)
         
         await callback_query.answer("✅ 듀얼 장부 영구 소각 완료", show_alert=True)
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
