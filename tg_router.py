@@ -5,7 +5,7 @@
 # MODIFIED: 장마감 1분 전(15:59)부터 3분간 1.5초 간격 MOC 덤핑 스케줄 텍스트 압축 (정규장 단어 소각)
 # MODIFIED: 3단 하향망(0.6%) 렌더링 락온 및 Reset 시 플래그 초기화 파이프라인
 # NEW: 초과 Case 50 - 5MA 기반 동적 예상 저가/고가(예상 밴드) 연산 및 팩트/예상 분리 렌더링 락온
-# MODIFIED: 암살자 타임쉴드(04:00~04:06 EST) UI 렌더링 04:07 EST 기준 동기화 롤백 락온
+# MODIFIED: 암살자 타임쉴드(04:00~04:06 EST) UI 렌더링 04:30 동적 타임쉴드(40틱)로 롤백 락온
 # NEW: 3분(180초) 교차 타임쉴드 대기 상태 UI 렌더링 파이프라인 결속
 # MODIFIED: /start 명령어 객체 속성 오타(fromuser -> from_user) 원자적 교체 및 AttributeError 방어
 
@@ -46,7 +46,7 @@ def get_main_menu_text() -> str:
         f"🕒 <b>[ 운영 스케줄 ({dst_status_text}) ]</b>\n"
         "➖➖➖➖➖➖➖➖➖➖➖➖➖➖\n"
         "🔹 17:00: 🧹 정산 스캔 및 시스템 대기\n"
-        "🔹 04:00: 🌅 프리장 레이더 스캔 (04:07 타임쉴드)\n"
+        "🔹 04:00: 🌅 프리장 레이더 스캔 (04:30 동적 타임쉴드)\n"
         "🔹 09:30: 🔥 정규장 VWAP 스캔 (신규 진입 셧다운)\n"
         "🔹 15:59: 🛑 MOC 덤핑 (1.5초 주기)\n\n"
         "🛠 <b>[ 핵심 명령어 ]</b>\n"
@@ -60,7 +60,7 @@ def get_main_menu_text() -> str:
 
 @router.message(Command("start"))
 async def cmd_start(message: types.Message, state: FSMContext):
-    if message.from_user.id != ADMIN_CHAT_ID: # MODIFIED: fromuser -> from_user 오타 교체 (AttributeError 방어)
+    if message.from_user.id != ADMIN_CHAT_ID: 
         return
     print(f"💬 [TG 수신] /start 명령 하달 (User: {message.from_user.id})", flush=True)
     await state.clear()
@@ -215,8 +215,9 @@ async def build_avwap_radar() -> tuple[str, InlineKeyboardMarkup]:
             if current_session == "preMarket":
                 import time
                 current_time_for_ui = time.time()
-                if est_time.hour == 4 and est_time.minute < 7:
-                    state_text = "타임쉴드"
+                # MODIFIED: 동적쉴드 적용 시간 04:30까지 확장 렌더링 락온
+                if est_time.hour == 4 and est_time.minute < 30:
+                    state_text = "동적쉴드"
                 elif other_entry_time > 0 and current_time_for_ui - other_entry_time < 180.0:
                     state_text = "교차쉴드"
                 else:
