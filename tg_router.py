@@ -7,6 +7,7 @@
 # NEW: 초과 Case 50 - 5MA 기반 동적 예상 저가/고가(예상 밴드) 연산 및 팩트/예상 분리 렌더링 락온
 # MODIFIED: 암살자 타임쉴드(04:00~04:06 EST) UI 렌더링 04:07 EST 기준 동기화 롤백 락온
 # NEW: 3분(180초) 교차 타임쉴드 대기 상태 UI 렌더링 파이프라인 결속
+# MODIFIED: /start 명령어 객체 속성 오타(fromuser -> from_user) 원자적 교체 및 AttributeError 방어
 
 import os
 import html
@@ -59,7 +60,7 @@ def get_main_menu_text() -> str:
 
 @router.message(Command("start"))
 async def cmd_start(message: types.Message, state: FSMContext):
-    if message.fromuser.id != ADMIN_CHAT_ID:
+    if message.from_user.id != ADMIN_CHAT_ID: # MODIFIED: fromuser -> from_user 오타 교체 (AttributeError 방어)
         return
     print(f"💬 [TG 수신] /start 명령 하달 (User: {message.from_user.id})", flush=True)
     await state.clear()
@@ -214,7 +215,6 @@ async def build_avwap_radar() -> tuple[str, InlineKeyboardMarkup]:
             if current_session == "preMarket":
                 import time
                 current_time_for_ui = time.time()
-                # MODIFIED: 04:00~04:06 EST 구간은 타임쉴드로 정밀 표출 락온
                 if est_time.hour == 4 and est_time.minute < 7:
                     state_text = "타임쉴드"
                 elif other_entry_time > 0 and current_time_for_ui - other_entry_time < 180.0:
