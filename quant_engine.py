@@ -3,7 +3,7 @@
 # 목적: SOXL, SOXS 듀얼 장부 격리 및 세션별 aVWAP 연산 엔진 (I/O 통제 결속)
 # =====================================================================
 # MODIFIED: 초과 Case 44 - 오버나이트 로직 전면 소각 및 수동 통제 위임
-# MODIFIED: 3단 하향망 결속을 위한 is_stage_3 및 force_downgrade_0_6 원자적 플래그 증축
+# MODIFIED: 3단 하향망 로직 전면 소각 (1.0% 고정 락온) 및 관련 플래그 증발
 # NEW: 초과 Case 55 - 듀얼 휩소 동시 진입 방어를 위한 180초 교차 타임쉴드 원자적 장부 필드(entry_time) 증축
 
 import os
@@ -20,12 +20,12 @@ class AssassinLedger:
         return os.path.join(os.path.dirname(os.path.abspath(__file__)), f"AssassinLedger_{symbol}.json")
 
     @classmethod
-    async def get_state(cls, symbol: str) -> tuple[float, float, str, bool, bool, float, str, str, str, bool, bool, bool, bool, float]:
+    async def get_state(cls, symbol: str) -> tuple[float, float, str, bool, bool, float, str, str, str, float]:
         filepath = cls._get_file_path(symbol)
         async with GlobalThrottle.get_file_lock(filepath):
             def _read():
                 if not os.path.exists(filepath):
-                    return 0.0, 100.0, "", False, True, 0.0, "", "PRE_ONLY", "", False, False, False, False, 0.0
+                    return 0.0, 100.0, "", False, True, 0.0, "", "PRE_ONLY", "", 0.0
                 try:
                     with open(filepath, "r", encoding="utf-8") as f:
                         data = json.load(f)
@@ -39,14 +39,10 @@ class AssassinLedger:
                             str(data.get("cond_order_id", "")),
                             str(data.get("session_mode", "PRE_ONLY")),
                             str(data.get("entry_session", "")),
-                            bool(data.get("pre_first_flag", False)),
-                            bool(data.get("force_downgrade", False)),
-                            bool(data.get("force_downgrade_0_6", False)),
-                            bool(data.get("is_stage_3", False)),
                             float(data.get("entry_time", 0.0))
                         )
                 except Exception:
-                    return 0.0, 100.0, "", False, True, 0.0, "", "PRE_ONLY", "", False, False, False, False, 0.0
+                    return 0.0, 100.0, "", False, True, 0.0, "", "PRE_ONLY", "", 0.0
             return await asyncio.to_thread(_read)
 
     @classmethod
@@ -69,8 +65,7 @@ class AssassinLedger:
                          is_active: bool = None, target_sell_price: float = None, 
                          buy_order_id: str = None, cond_order_id: str = None, 
                          session_mode: str = None, entry_session: str = None, 
-                         pre_first_flag: bool = None, force_downgrade: bool = None,
-                         force_downgrade_0_6: bool = None, is_stage_3: bool = None, entry_time: float = None):
+                         entry_time: float = None):
         filepath = cls._get_file_path(symbol)
         async with GlobalThrottle.get_file_lock(filepath):
             def _write():
@@ -92,11 +87,11 @@ class AssassinLedger:
                 if cond_order_id is not None: data["cond_order_id"] = cond_order_id
                 if session_mode is not None: data["session_mode"] = session_mode
                 if entry_session is not None: data["entry_session"] = entry_session
-                if pre_first_flag is not None: data["pre_first_flag"] = pre_first_flag
-                if force_downgrade is not None: data["force_downgrade"] = force_downgrade
-                if force_downgrade_0_6 is not None: data["force_downgrade_0_6"] = force_downgrade_0_6
-                if is_stage_3 is not None: data["is_stage_3"] = is_stage_3
                 if entry_time is not None: data["entry_time"] = entry_time
+                
+                # 사용되지 않는 레거시 키 증발 처리
+                for obsolete_key in ["pre_first_flag", "force_downgrade", "force_downgrade_0_6", "is_stage_3"]:
+                    data.pop(obsolete_key, None)
                 
                 tmp_path = filepath + ".tmp"
                 with open(tmp_path, "w", encoding="utf-8") as f:
