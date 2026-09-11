@@ -15,6 +15,7 @@
 # NEW: 수동 매수(개입) 원자적 식별 및 1.0% 타점 하드 락온. 수동 덫 장전 즉시 당일 자동 매수 권한 100% 영구 소각(Mutex).
 # MODIFIED: 초과 Case 54 - 잔고 0주 청산 시 조건주문 생존(WATCHING) 여부 원자적 프로빙을 통한 수동 매도 허위 익절(False Positive) 판별망 결속
 # NEW: 초과 Case 55 - 듀얼 휩소 동시 진입(마이크로 휩소) 방어용 180초 교차 타임쉴드 인터럽트 주입 및 락온
+# NEW: 초과 Case 56 - 04:07 EST (7분) 프리장 개장 직후 절대 진입 금지(절대 타임쉴드) 하드 락온
 
 import sys
 import os
@@ -624,10 +625,11 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                 elapsed = (now_est - session_baseline_est).total_seconds()
                 
                 can_enter = False
-                if hardcoded_session == "preMarket":
+                # NEW: 04:07분(420초) 이전에는 절대 진입 금지 (can_enter = False 유지)
+                if hardcoded_session == "preMarket" and elapsed >= 420:
                     can_enter = True
                 
-                # NEW: 동적 타임쉴드 확장 (04:30 EST 기준 분기) 및 60초 연속 상회(40틱) 확증망 주입
+                # MODIFIED: 동적 타임쉴드 확장 (04:07 ~ 04:30 EST 기준 분기) 및 60초 연속 상회(40틱) 확증망 주입
                 required_ticks = 4
                 if hardcoded_session == "preMarket" and elapsed < 1800:
                     required_ticks = 40
@@ -647,6 +649,7 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                         breakout_ticks += 1
                 else:
                     # 원자적 증발: 단 1틱이라도 VWAP 아래로 하회 시 0점으로 강제 소각
+                    # (절대쉴드 구간인 04:00~04:06 내내 can_enter가 False이므로 틱이 0으로 원자적 강제 유지됨)
                     breakout_ticks = 0
                 
                 if can_enter and breakout_ticks >= required_ticks:
@@ -741,7 +744,7 @@ async def main():
         await bot.delete_webhook(drop_pending_updates=True)
         await bot.send_message(
             chat_id=ADMIN_CHAT_ID, 
-            text="✅ <b>[시스템 기동 완료]</b>\n▫️ 서버 재부팅 및 듀얼 암살자 코어 결속\n▫️ 04:30 동적 타임쉴드(40틱) 및 3단 익절 덫 하향망 락온 완료.", 
+            text="✅ <b>[시스템 기동 완료]</b>\n▫️ 서버 재부팅 및 듀얼 암살자 코어 결속\n▫️ 04:07 절대쉴드, 04:30 동적쉴드(40틱) 및 3단 익절 덫 하향망 락온 완료.", 
             parse_mode="HTML"
         )
     except Exception:
