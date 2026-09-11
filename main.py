@@ -16,6 +16,7 @@
 # MODIFIED: 초과 Case 54 - 잔고 0주 청산 시 조건주문 생존(WATCHING) 여부 원자적 프로빙을 통한 수동 매도 허위 익절(False Positive) 판별망 결속
 # NEW: 초과 Case 55 - 듀얼 휩소 동시 진입(마이크로 휩소) 방어용 180초 교차 타임쉴드 인터럽트 주입 및 락온
 # NEW: 초과 Case 56 - 04:07 EST (7분) 프리장 개장 직후 절대 진입 금지(절대 타임쉴드) 하드 락온
+# MODIFIED: 휴장 알림 시각을 프리장 개장 정밀 윈도우(04:00~04:05 EST)로 락온하여 조기 발송 원천 차단
 
 import sys
 import os
@@ -173,7 +174,7 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                     today_str = now_est.strftime("%Y-%m-%d")
                     
                     if last_holiday_notified_date != today_str:
-                        if est_time_int >= 400:
+                        if 400 <= est_time_int <= 405:
                             async with holiday_notify_lock:
                                 if last_holiday_notified_date != today_str:
                                     last_holiday_notified_date = today_str
@@ -565,7 +566,6 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                     
                     current_time_for_shield = time.time()
                     
-                    # 듀얼 종목 배타적 추세 추종(단일 방향 락온) 및 마이크로 휩소 방어
                     if other_buy_price > 0 or other_buy_id or other_is_done or (other_entry_time > 0 and current_time_for_shield - other_entry_time < 180.0):
                         breakout_ticks = 0
                     else:
