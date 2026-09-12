@@ -9,6 +9,7 @@
 # NEW: 3분(180초) 교차 타임쉴드 대기 상태 UI 렌더링 파이프라인 결속
 # MODIFIED: /start 명령어 객체 속성 오타(fromuser -> from_user) 원자적 교체 및 AttributeError 방어
 # NEW: 초과 Case 56 - 04:07 EST 절대 타임쉴드 렌더링 파이프라인 결속
+# MODIFIED: 레이더 관제탑 5MA 진폭 표출 시 어제(Yesterday) 단일 확정 진폭 동시 연산 및 UI 병기 락온
 
 import os
 import html
@@ -143,17 +144,24 @@ async def build_avwap_radar() -> tuple[str, InlineKeyboardMarkup]:
             data = await api_client._request("GET", endpoint, "MARKET_DATA_CHART", headers=api_client._get_headers())
             candles = data.get("result", {}).get("candles", [])
             amps = []
+            yesterday_amp = 0.0
             
-            for c in candles[1:6]:
+            for i, c in enumerate(candles[1:6]):
                 h = float(c.get("highPrice", 0))
                 l = float(c.get("lowPrice", 0))
-                if l > 0: amps.append((h - l) / l * 100)
-            return sum(amps) / len(amps) if amps else 0.0
+                if l > 0: 
+                    amp = (h - l) / l * 100
+                    amps.append(amp)
+                    if i == 0:
+                        yesterday_amp = amp
+                        
+            avg_amp = sum(amps) / len(amps) if amps else 0.0
+            return avg_amp, yesterday_amp
         except Exception:
-            return 0.0
+            return 0.0, 0.0
 
-    amp_l = await fetch_5ma_amp("SOXL")
-    amp_s = await fetch_5ma_amp("SOXS")
+    amp_l, yest_amp_l = await fetch_5ma_amp("SOXL")
+    amp_s, yest_amp_s = await fetch_5ma_amp("SOXS")
 
     async def fetch_session_stats(symbol):
         all_candles = []
@@ -239,9 +247,9 @@ async def build_avwap_radar() -> tuple[str, InlineKeyboardMarkup]:
 
     text = f"""📡 <b>[aVWAP 레이더]</b> {market_header}
 ➖➖➖➖➖➖➖➖➖➖➖➖➖➖
-📊 <b>현재가 & 5MA</b>
-🐂 <b>SOXL</b> <code>${price_l:.2f}</code> | <code>{amp_l:.1f}%</code>
-🐻 <b>SOXS</b> <code>${price_s:.2f}</code> | <code>{amp_s:.1f}%</code>
+📊 <b>현재가 & 5MA(어제 진폭)</b>
+🐂 <b>SOXL</b> <code>${price_l:.2f}</code> | <code>{amp_l:.1f}%({yest_amp_l:.1f}%)</code>
+🐻 <b>SOXS</b> <code>${price_s:.2f}</code> | <code>{amp_s:.1f}%({yest_amp_s:.1f}%)</code>
 
 🌅 <b>프리장</b> (04:00~09:29)
 🐂 <b>SOXL</b> <code>[VWAP] ${sess_l['pre_vwap']:.2f}</code>
