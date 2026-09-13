@@ -7,10 +7,11 @@
 # NEW: 초과 Case 50 - 5MA 기반 동적 예상 저가/고가(예상 밴드) 연산 및 팩트/예상 분리 렌더링 락온
 # MODIFIED: 암살자 타임쉴드 UI 렌더링 04:07 절대쉴드, 04:30 동적쉴드(40틱)로 롤백 락온
 # NEW: 3분(180초) 교차 타임쉴드 대기 상태 UI 렌더링 파이프라인 결속
-# MODIFIED: /start 명령어 객체 속성 오타(fromuser -> from_user) 원자적 교체 및 AttributeError 방어
+# MODIFIED: /start 명령어 객체 속성 오타(from_user) 원자적 교체 및 AttributeError 방어
 # NEW: 초과 Case 56 - 04:07 EST 절대 타임쉴드 렌더링 파이프라인 결속
 # MODIFIED: 레이더 관제탑 5MA 진폭 표출 시 어제(Yesterday) 단일 확정 진폭 동시 연산 및 UI 병기 락온
 # MODIFIED: 메인 화면 운영 스케줄 UI 가독성 최적화 (04:00, 09:30 다중 라인 분리 및 들여쓰기 락온)
+# MODIFIED: 주말/휴장일 5MA 및 어제 진폭(Yesterday Amp) 동적 시프트 방어 (c0_dt < today_dt 검증망 주입)
 
 import os
 import html
@@ -146,10 +147,22 @@ async def build_avwap_radar() -> tuple[str, InlineKeyboardMarkup]:
             endpoint = f"/api/v1/candles?symbol={symbol}&interval=1d&count=6"
             data = await api_client._request("GET", endpoint, "MARKET_DATA_CHART", headers=api_client._get_headers())
             candles = data.get("result", {}).get("candles", [])
+            
+            if not candles:
+                return 0.0, 0.0
+                
+            c0_dt = pd.to_datetime(candles[0]['timestamp'], format='ISO8601', utc=True).tz_convert(ZoneInfo('America/New_York')).date()
+            today_dt = datetime.now(ZoneInfo('America/New_York')).date()
+            
+            if c0_dt >= today_dt:
+                valid_candles = candles[1:6]
+            else:
+                valid_candles = candles[0:5]
+                
             amps = []
             yesterday_amp = 0.0
             
-            for i, c in enumerate(candles[1:6]):
+            for i, c in enumerate(valid_candles):
                 h = float(c.get("highPrice", 0))
                 l = float(c.get("lowPrice", 0))
                 if l > 0: 
@@ -714,7 +727,7 @@ async def process_execute_update(callback_query: types.CallbackQuery, state: FSM
 
 @router.callback_query(F.data == "back_to_main")
 async def process_back_to_main(callback_query: types.CallbackQuery, state: FSMContext):
-    if callback_query.fromuser.id != ADMIN_CHAT_ID:
+    if callback_query.from_user.id != ADMIN_CHAT_ID:
         return
     print(f"💬 [TG 콜백 수신] back_to_main (User: {callback_query.from_user.id})", flush=True)
     await state.clear()
