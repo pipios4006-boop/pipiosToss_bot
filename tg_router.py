@@ -12,6 +12,7 @@
 # MODIFIED: 레이더 관제탑 5MA 진폭 표출 시 어제(Yesterday) 단일 확정 진폭 동시 연산 및 UI 병기 락온
 # MODIFIED: 메인 화면 운영 스케줄 UI 가독성 최적화 (04:00, 09:30 다중 라인 분리 및 들여쓰기 락온)
 # MODIFIED: 주말/휴장일 5MA 및 어제 진폭(Yesterday Amp) 동적 시프트 방어 (c0_dt < today_dt 검증망 주입)
+# NEW: 어제 진폭(Yesterday Amp) 격차 기반 상승/하락/횡보장 동적 판별 알고리즘 및 UI 렌더링 락온
 
 import os
 import html
@@ -178,6 +179,14 @@ async def build_avwap_radar() -> tuple[str, InlineKeyboardMarkup]:
 
     amp_l, yest_amp_l = await fetch_5ma_amp("SOXL")
     amp_s, yest_amp_s = await fetch_5ma_amp("SOXS")
+    
+    diff_amp = abs(yest_amp_l - yest_amp_s)
+    if diff_amp <= 0.3:
+        trend_msg = "▫️ ⚔️ <b>횡보/휩소장 (방향성 상실)</b> : SOXL 진폭 ≈ SOXS 진폭 (극심한 톱니바퀴 공방)"
+    elif yest_amp_s > yest_amp_l:
+        trend_msg = "▫️ 🐂 <b>상승장 (SOXL 승리)</b> : SOXS 진폭 > SOXL 진폭 (숏의 저점이 붕괴됨)"
+    else:
+        trend_msg = "▫️ 🐻 <b>하락장 (SOXS 승리)</b> : SOXL 진폭 > SOXS 진폭 (롱의 저점이 붕괴됨)"
 
     async def fetch_session_stats(symbol):
         all_candles = []
@@ -266,6 +275,7 @@ async def build_avwap_radar() -> tuple[str, InlineKeyboardMarkup]:
 📊 <b>현재가 & 5MA(어제 진폭)</b>
 🐂 <b>SOXL</b> <code>${price_l:.2f}</code> | <code>{amp_l:.1f}%({yest_amp_l:.1f}%)</code>
 🐻 <b>SOXS</b> <code>${price_s:.2f}</code> | <code>{amp_s:.1f}%({yest_amp_s:.1f}%)</code>
+{trend_msg}
 
 🌅 <b>프리장</b> (04:00~09:29)
 🐂 <b>SOXL</b> <code>[VWAP] ${sess_l['pre_vwap']:.2f}</code>
