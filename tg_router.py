@@ -10,6 +10,7 @@
 # MODIFIED: /start 명령어 객체 속성 오타(fromuser -> from_user) 원자적 교체 및 AttributeError 방어
 # NEW: 초과 Case 56 - 04:07 EST 절대 타임쉴드 렌더링 파이프라인 결속
 # MODIFIED: 레이더 관제탑 5MA 진폭 표출 시 어제(Yesterday) 단일 확정 진폭 동시 연산 및 UI 병기 락온
+# MODIFIED: 메인 화면 운영 스케줄 UI 가독성 최적화 (04:00, 09:30 다중 라인 분리 및 들여쓰기 락온)
 
 import os
 import html
@@ -48,8 +49,10 @@ def get_main_menu_text() -> str:
         f"🕒 <b>[ 운영 스케줄 ({dst_status_text}) ]</b>\n"
         "➖➖➖➖➖➖➖➖➖➖➖➖➖➖\n"
         "🔹 17:00: 🧹 정산 스캔 및 시스템 대기\n"
-        "🔹 04:00: 🌅 프리장 레이더 스캔 (04:07 절대쉴드, 04:30 동적쉴드)\n"
-        "🔹 09:30: 🔥 정규장 VWAP 스캔 (신규 진입 셧다운)\n"
+        "🔹 04:00: 🌅 프리장 레이더 스캔 \n"
+        "      (04:07 절대쉴드, 04:30 동적쉴드)\n"
+        "🔹 09:30: 🔥 정규장 VWAP 스캔\n"
+        "      (신규 진입 셧다운)\n"
         "🔹 15:59: 🛑 MOC 덤핑 (1.5초 주기)\n\n"
         "🛠 <b>[ 핵심 명령어 ]</b>\n"
         "▶️ /avwap : 🔫 트레이딩 레이더 관제탑\n"
@@ -711,7 +714,7 @@ async def process_execute_update(callback_query: types.CallbackQuery, state: FSM
 
 @router.callback_query(F.data == "back_to_main")
 async def process_back_to_main(callback_query: types.CallbackQuery, state: FSMContext):
-    if callback_query.from_user.id != ADMIN_CHAT_ID:
+    if callback_query.fromuser.id != ADMIN_CHAT_ID:
         return
     print(f"💬 [TG 콜백 수신] back_to_main (User: {callback_query.from_user.id})", flush=True)
     await state.clear()
