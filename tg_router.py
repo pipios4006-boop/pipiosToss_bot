@@ -14,6 +14,7 @@
 # MODIFIED: 주말/휴장일 5MA 및 어제 진폭(Yesterday Amp) 동적 시프트 방어 (c0_dt < today_dt 검증망 주입)
 # NEW: 어제 진폭(Yesterday Amp) 격차 기반 상승/하락/횡보장 동적 판별 알고리즘 및 UI 렌더링 락온
 # MODIFIED: 초과 Case 57 - 암살자 PRE_ONLY 헌법 준수 및 주말 정규장 시간대 "REG대기" 오표출 영구 소각 ("장외대기" 락온)
+# MODIFIED: 주말/휴장일 레이더 UI 정규장 오표출 방어를 위한 동적 캘린더 원자적 교차 검증망 주입
 
 import os
 import html
@@ -137,6 +138,18 @@ async def build_avwap_radar() -> tuple[str, InlineKeyboardMarkup]:
     else:
         session_name_ui = "dayMarket"
         market_header = "( <b>🌙 시스템 대기</b> )"
+
+    # 주말/휴장일 동적 캘린더 원자적 교차 검증망 주입
+    try:
+        is_open, _, sess_name, _ = await asyncio.wait_for(api_client.is_market_open(), timeout=3.0)
+        if not is_open:
+            session_name_ui = "dayMarket"
+            if sess_name and "HOLIDAY" in sess_name:
+                market_header = "( <b>🌙 주말/휴장일</b> )"
+            else:
+                market_header = "( <b>🌙 장외 대기</b> )"
+    except Exception:
+        pass
 
     price_l = await api_client.get_current_price("SOXL")
     price_s = await api_client.get_current_price("SOXS")
@@ -316,6 +329,17 @@ async def build_sync_board() -> str:
     else:
         market_state = "🌙 시스템 대기"
 
+    # 지시서 UI 주말/휴장일 동적 캘린더 검증망 주입
+    try:
+        is_open, _, sess_name, _ = await asyncio.wait_for(api_client.is_market_open(), timeout=3.0)
+        if not is_open:
+            if sess_name and "HOLIDAY" in sess_name:
+                market_state = "🌙 주말/휴장일"
+            else:
+                market_state = "🌙 장외 대기"
+    except Exception:
+        pass
+
     bp = await api_client.get_usd_buying_power()
     
     exchange_rate = 1400.0
@@ -355,7 +379,7 @@ async def build_sync_board() -> str:
         except Exception:
             pass
 
-        if market_state == "🌙 시스템 대기":
+        if market_state in ["🌙 시스템 대기", "🌙 주말/휴장일", "🌙 장외 대기"]:
             high = 0.0
             low = 0.0
             high_rate = 0.0
