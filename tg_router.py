@@ -12,9 +12,10 @@
 # MODIFIED: 레이더 관제탑 5MA 진폭 표출 시 어제(Yesterday) 단일 확정 진폭 동시 연산 및 UI 병기 락온
 # MODIFIED: 메인 화면 운영 스케줄 UI 가독성 최적화 (04:00, 09:30 다중 라인 분리 및 들여쓰기 락온)
 # MODIFIED: 주말/휴장일 5MA 및 어제 진폭(Yesterday Amp) 동적 시프트 방어 (c0_dt < today_dt 검증망 주입)
-# NEW: 어제 진폭(Yesterday Amp) 격차 기반 상승/하락/횡보장 동적 판별 알고리즘 및 UI 렌더링 락온
+# NEW: 초과 Case 56 - 어제 진폭(Yesterday Amp) 격차 기반 상승/하락/횡보장 동적 판별 알고리즘 및 UI 렌더링 락온
 # MODIFIED: 초과 Case 57 - 암살자 PRE_ONLY 헌법 준수 및 주말 정규장 시간대 "REG대기" 오표출 영구 소각 ("장외대기" 락온)
 # MODIFIED: 주말/휴장일 레이더 UI 정규장 오표출 방어를 위한 동적 캘린더 원자적 교차 검증망 주입
+# NEW: 초과 Case 58 - 세션별 당일 실시간 진폭 격차 기반 실시간 장세(상승/하락/횡보) 동적 판별 및 관제탑 UI 렌더링 결속
 
 import os
 import html
@@ -139,7 +140,6 @@ async def build_avwap_radar() -> tuple[str, InlineKeyboardMarkup]:
         session_name_ui = "dayMarket"
         market_header = "( <b>🌙 시스템 대기</b> )"
 
-    # 주말/휴장일 동적 캘린더 원자적 교차 검증망 주입
     try:
         is_open, _, sess_name, _ = await asyncio.wait_for(api_client.is_market_open(), timeout=3.0)
         if not is_open:
@@ -242,6 +242,20 @@ async def build_avwap_radar() -> tuple[str, InlineKeyboardMarkup]:
     reg_exp_l_s = sess_s['reg_h'] * (1 - amp_s / 100) if sess_s['reg_h'] > 0 else 0.0
     reg_exp_h_s = sess_s['reg_l'] * (1 + amp_s / 100) if sess_s['reg_l'] > 0 else 0.0
 
+    def get_realtime_trend(amp_long, amp_short):
+        if amp_long <= 0.0 and amp_short <= 0.0:
+            return "대기 (데이터 수집 중)"
+        diff = abs(amp_long - amp_short)
+        if diff <= 0.3:
+            return "⚔️ 횡보/휩소장 (방향성 상실)"
+        elif amp_short > amp_long:
+            return "🐂 상승장 (SOXL 승리)"
+        else:
+            return "🐻 하락장 (SOXS 승리)"
+
+    pre_trend_msg = get_realtime_trend(sess_l['pre_amp'], sess_s['pre_amp'])
+    reg_trend_msg = get_realtime_trend(sess_l['reg_amp'], sess_s['reg_amp'])
+
     _, budget_l, _, is_done_l, is_active_l, _, _, _, entry_l, entry_time_l = await AssassinLedger.get_state("SOXL")
     _, budget_s, _, is_done_s, is_active_s, _, _, _, entry_s, entry_time_s = await AssassinLedger.get_state("SOXS")
 
@@ -294,6 +308,7 @@ async def build_avwap_radar() -> tuple[str, InlineKeyboardMarkup]:
 🐻 <b>SOXS</b> <code>[VWAP] ${sess_s['pre_vwap']:.2f}</code>
   ⤷ 팩트: <code>${sess_s['pre_l']:.2f}~${sess_s['pre_h']:.2f} ({sess_s['pre_amp']:.1f}%)</code>
   ⤷ 예상: <code>${pre_exp_l_s:.2f}~${pre_exp_h_s:.2f}</code>
+▫️ <b>실시간:</b> <code>{pre_trend_msg}</code>
 
 🔥 <b>정규장</b> (09:30~16:00)
 🐂 <b>SOXL</b> <code>[VWAP] ${sess_l['reg_vwap']:.2f}</code>
@@ -302,6 +317,7 @@ async def build_avwap_radar() -> tuple[str, InlineKeyboardMarkup]:
 🐻 <b>SOXS</b> <code>[VWAP] ${sess_s['reg_vwap']:.2f}</code>
   ⤷ 팩트: <code>${sess_s['reg_l']:.2f}~${sess_s['reg_h']:.2f} ({sess_s['reg_amp']:.1f}%)</code>
   ⤷ 예상: <code>${reg_exp_l_s:.2f}~${reg_exp_h_s:.2f}</code>
+▫️ <b>실시간:</b> <code>{reg_trend_msg}</code>
 ➖➖➖➖➖➖➖➖➖➖➖➖➖➖
 {status_l}
 {status_s}
@@ -329,7 +345,6 @@ async def build_sync_board() -> str:
     else:
         market_state = "🌙 시스템 대기"
 
-    # 지시서 UI 주말/휴장일 동적 캘린더 검증망 주입
     try:
         is_open, _, sess_name, _ = await asyncio.wait_for(api_client.is_market_open(), timeout=3.0)
         if not is_open:
