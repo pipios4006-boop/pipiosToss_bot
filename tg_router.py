@@ -13,6 +13,7 @@
 # MODIFIED: 메인 화면 운영 스케줄 UI 가독성 최적화 (04:00, 09:30 다중 라인 분리 및 들여쓰기 락온)
 # MODIFIED: 주말/휴장일 5MA 및 어제 진폭(Yesterday Amp) 동적 시프트 방어 (c0_dt < today_dt 검증망 주입)
 # NEW: 어제 진폭(Yesterday Amp) 격차 기반 상승/하락/횡보장 동적 판별 알고리즘 및 UI 렌더링 락온
+# MODIFIED: 초과 Case 57 - 암살자 PRE_ONLY 헌법 준수 및 주말 정규장 시간대 "REG대기" 오표출 영구 소각 ("장외대기" 락온)
 
 import os
 import html
@@ -255,10 +256,6 @@ async def build_avwap_radar() -> tuple[str, InlineKeyboardMarkup]:
                         state_text = "PRE대기"
                 else:
                     state_text = "PRE대기"
-            elif current_session == "dayMarket":
-                state_text = "장외대기"
-            elif current_session == "regularMarket":
-                state_text = "REG대기"
             else:
                 state_text = "장외대기"
 
