@@ -16,6 +16,7 @@
 # MODIFIED: 초과 Case 57 - 암살자 PRE_ONLY 헌법 준수 및 주말 정규장 시간대 "REG대기" 오표출 영구 소각 ("장외대기" 락온)
 # MODIFIED: 주말/휴장일 레이더 UI 정규장 오표출 방어를 위한 동적 캘린더 원자적 교차 검증망 주입
 # NEW: 초과 Case 58 - 세션별 당일 실시간 진폭 격차 기반 실시간 장세(상승/하락/횡보) 동적 판별 및 관제탑 UI 렌더링 결속
+# MODIFIED: 초과 Case 56 & 58 - 갭-다운/상승 왜곡 방어용 실질 등락률(Body Return) 기반 장세 판별망 교체 락온
 
 import os
 import html
@@ -81,8 +82,8 @@ async def cmd_start(message: types.Message, state: FSMContext):
 
 def parse_session_data(all_candles: list, session_start_est: datetime) -> dict:
     res = {
-        "pre_h": 0.0, "pre_l": 0.0, "pre_amp": 0.0, "pre_vwap": 0.0,
-        "reg_h": 0.0, "reg_l": 0.0, "reg_amp": 0.0, "reg_vwap": 0.0
+        "pre_h": 0.0, "pre_l": 0.0, "pre_amp": 0.0, "pre_vwap": 0.0, "pre_body": 0.0,
+        "reg_h": 0.0, "reg_l": 0.0, "reg_amp": 0.0, "reg_vwap": 0.0, "reg_body": 0.0
     }
     if not all_candles: return res
     
@@ -104,22 +105,27 @@ def parse_session_data(all_candles: list, session_start_est: datetime) -> dict:
     reg_df = df.between_time('09:30', '16:00')
     
     def calc_metrics(sub_df):
-        if sub_df.empty: return 0.0, 0.0, 0.0, 0.0
+        if sub_df.empty: return 0.0, 0.0, 0.0, 0.0, 0.0
         h = float(sub_df['highPrice'].max())
         l = float(sub_df['lowPrice'].min())
         amp = ((h - l) / l * 100) if l > 0 else 0.0
+        
+        o = float(sub_df['openPrice'].iloc[0])
+        c = float(sub_df['closePrice'].iloc[-1])
+        body = ((c - o) / o * 100) if o > 0 else 0.0
+        
         tp = (sub_df['highPrice'] + sub_df['lowPrice'] + sub_df['closePrice']) / 3.0
         pv = tp * sub_df['volume']
         vol = sub_df['volume'].sum()
         vwap = float(pv.sum() / vol) if vol > 0 else 0.0
-        return h, l, float(amp), vwap
+        return h, l, float(amp), vwap, float(body)
 
-    pre_h, pre_l, pre_amp, pre_vwap = calc_metrics(pre_df)
-    reg_h, reg_l, reg_amp, reg_vwap = calc_metrics(reg_df)
+    pre_h, pre_l, pre_amp, pre_vwap, pre_body = calc_metrics(pre_df)
+    reg_h, reg_l, reg_amp, reg_vwap, reg_body = calc_metrics(reg_df)
     
     res.update({
-        "pre_h": pre_h, "pre_l": pre_l, "pre_amp": pre_amp, "pre_vwap": pre_vwap,
-        "reg_h": reg_h, "reg_l": reg_l, "reg_amp": reg_amp, "reg_vwap": reg_vwap
+        "pre_h": pre_h, "pre_l": pre_l, "pre_amp": pre_amp, "pre_vwap": pre_vwap, "pre_body": pre_body,
+        "reg_h": reg_h, "reg_l": reg_l, "reg_amp": reg_amp, "reg_vwap": reg_vwap, "reg_body": reg_body
     })
     return res
 
@@ -164,7 +170,7 @@ async def build_avwap_radar() -> tuple[str, InlineKeyboardMarkup]:
             candles = data.get("result", {}).get("candles", [])
             
             if not candles:
-                return 0.0, 0.0
+                return 0.0, 0.0, 0.0
                 
             c0_dt = pd.to_datetime(candles[0]['timestamp'], format='ISO8601', utc=True).tz_convert(ZoneInfo('America/New_York')).date()
             today_dt = datetime.now(ZoneInfo('America/New_York')).date()
@@ -176,31 +182,36 @@ async def build_avwap_radar() -> tuple[str, InlineKeyboardMarkup]:
                 
             amps = []
             yesterday_amp = 0.0
+            yesterday_body = 0.0
             
             for i, c in enumerate(valid_candles):
+                o = float(c.get("openPrice", 0))
                 h = float(c.get("highPrice", 0))
                 l = float(c.get("lowPrice", 0))
+                cls = float(c.get("closePrice", 0))
                 if l > 0: 
                     amp = (h - l) / l * 100
                     amps.append(amp)
                     if i == 0:
                         yesterday_amp = amp
+                        if o > 0:
+                            yesterday_body = (cls - o) / o * 100
                         
             avg_amp = sum(amps) / len(amps) if amps else 0.0
-            return avg_amp, yesterday_amp
+            return avg_amp, yesterday_amp, yesterday_body
         except Exception:
-            return 0.0, 0.0
+            return 0.0, 0.0, 0.0
 
-    amp_l, yest_amp_l = await fetch_5ma_amp("SOXL")
-    amp_s, yest_amp_s = await fetch_5ma_amp("SOXS")
+    amp_l, yest_amp_l, yest_body_l = await fetch_5ma_amp("SOXL")
+    amp_s, yest_amp_s, yest_body_s = await fetch_5ma_amp("SOXS")
     
-    diff_amp = abs(yest_amp_l - yest_amp_s)
-    if diff_amp <= 0.3:
-        trend_msg = "▫️ ⚔️ <b>횡보/휩소장 (방향성 상실)</b> : SOXL 진폭 ≈ SOXS 진폭 (극심한 톱니바퀴 공방)"
-    elif yest_amp_s > yest_amp_l:
-        trend_msg = "▫️ 🐂 <b>상승장 (SOXL 승리)</b> : SOXS 진폭 > SOXL 진폭 (숏의 저점이 붕괴됨)"
+    diff_body = abs(yest_body_l - yest_body_s)
+    if diff_body <= 0.3:
+        trend_msg = "▫️ ⚔️ <b>횡보/휩소장 (방향성 상실)</b> : 실질 등락률 격차 미미 (극심한 톱니바퀴 공방)"
+    elif yest_body_l > yest_body_s:
+        trend_msg = "▫️ 🐂 <b>상승장 (SOXL 승리)</b> : SOXL 실질 등락률 우위 (숏의 상승세 붕괴)"
     else:
-        trend_msg = "▫️ 🐻 <b>하락장 (SOXS 승리)</b> : SOXL 진폭 > SOXS 진폭 (롱의 저점이 붕괴됨)"
+        trend_msg = "▫️ 🐻 <b>하락장 (SOXS 승리)</b> : SOXS 실질 등락률 우위 (롱의 상승세 붕괴)"
 
     async def fetch_session_stats(symbol):
         all_candles = []
@@ -226,8 +237,8 @@ async def build_avwap_radar() -> tuple[str, InlineKeyboardMarkup]:
         return await asyncio.to_thread(parse_session_data, all_candles, session_start_est)
 
     if session_name_ui == "dayMarket":
-        sess_l = {"pre_h": 0.0, "pre_l": 0.0, "pre_amp": 0.0, "pre_vwap": 0.0, "reg_h": 0.0, "reg_l": 0.0, "reg_amp": 0.0, "reg_vwap": 0.0}
-        sess_s = {"pre_h": 0.0, "pre_l": 0.0, "pre_amp": 0.0, "pre_vwap": 0.0, "reg_h": 0.0, "reg_l": 0.0, "reg_amp": 0.0, "reg_vwap": 0.0}
+        sess_l = {"pre_h": 0.0, "pre_l": 0.0, "pre_amp": 0.0, "pre_vwap": 0.0, "pre_body": 0.0, "reg_h": 0.0, "reg_l": 0.0, "reg_amp": 0.0, "reg_vwap": 0.0, "reg_body": 0.0}
+        sess_s = {"pre_h": 0.0, "pre_l": 0.0, "pre_amp": 0.0, "pre_vwap": 0.0, "pre_body": 0.0, "reg_h": 0.0, "reg_l": 0.0, "reg_amp": 0.0, "reg_vwap": 0.0, "reg_body": 0.0}
     else:
         sess_l = await fetch_session_stats("SOXL")
         sess_s = await fetch_session_stats("SOXS")
@@ -242,19 +253,19 @@ async def build_avwap_radar() -> tuple[str, InlineKeyboardMarkup]:
     reg_exp_l_s = sess_s['reg_h'] * (1 - amp_s / 100) if sess_s['reg_h'] > 0 else 0.0
     reg_exp_h_s = sess_s['reg_l'] * (1 + amp_s / 100) if sess_s['reg_l'] > 0 else 0.0
 
-    def get_realtime_trend(amp_long, amp_short):
+    def get_realtime_trend(body_long, body_short, amp_long, amp_short):
         if amp_long <= 0.0 and amp_short <= 0.0:
             return "대기 (데이터 수집 중)"
-        diff = abs(amp_long - amp_short)
+        diff = abs(body_long - body_short)
         if diff <= 0.3:
             return "⚔️ 횡보/휩소장 (방향성 상실)"
-        elif amp_short > amp_long:
+        elif body_long > body_short:
             return "🐂 상승장 (SOXL 승리)"
         else:
             return "🐻 하락장 (SOXS 승리)"
 
-    pre_trend_msg = get_realtime_trend(sess_l['pre_amp'], sess_s['pre_amp'])
-    reg_trend_msg = get_realtime_trend(sess_l['reg_amp'], sess_s['reg_amp'])
+    pre_trend_msg = get_realtime_trend(sess_l['pre_body'], sess_s['pre_body'], sess_l['pre_amp'], sess_s['pre_amp'])
+    reg_trend_msg = get_realtime_trend(sess_l['reg_body'], sess_s['reg_body'], sess_l['reg_amp'], sess_s['reg_amp'])
 
     _, budget_l, _, is_done_l, is_active_l, _, _, _, entry_l, entry_time_l = await AssassinLedger.get_state("SOXL")
     _, budget_s, _, is_done_s, is_active_s, _, _, _, entry_s, entry_time_s = await AssassinLedger.get_state("SOXS")
