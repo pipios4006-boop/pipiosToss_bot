@@ -10,13 +10,14 @@
 # MODIFIED: /start 명령어 객체 속성 오타(from_user) 원자적 교체 및 AttributeError 방어
 # NEW: 초과 Case 56 - 04:07 EST 절대 타임쉴드 렌더링 파이프라인 결속
 # MODIFIED: 레이더 관제탑 5MA 진폭 표출 시 어제(Yesterday) 단일 확정 진폭 동시 연산 및 UI 병기 락온
-# MODIFIED: 메인 화면 운영 스케줄 UI 가독성 최적화 (04:00, 09:30 다중 라인 분리 및 들여쓰기 락온)
 # MODIFIED: 주말/휴장일 5MA 및 어제 진폭(Yesterday Amp) 동적 시프트 방어 (c0_dt < today_dt 검증망 주입)
 # NEW: 초과 Case 56 - 어제 진폭(Yesterday Amp) 격차 기반 상승/하락/횡보장 동적 판별 알고리즘 및 UI 렌더링 락온
 # MODIFIED: 초과 Case 57 - 암살자 PRE_ONLY 헌법 준수 및 주말 정규장 시간대 "REG대기" 오표출 영구 소각 ("장외대기" 락온)
 # MODIFIED: 주말/휴장일 레이더 UI 정규장 오표출 방어를 위한 동적 캘린더 원자적 교차 검증망 주입
 # NEW: 초과 Case 58 - 세션별 당일 실시간 진폭 격차 기반 실시간 장세(상승/하락/횡보) 동적 판별 및 관제탑 UI 렌더링 결속
 # MODIFIED: 초과 Case 56 & 58 - 갭-다운/상승 왜곡 방어용 전일 종가 대비 실질 등락률(True Return) 기반 장세 판별망 교체 락온
+# MODIFIED: 초과 Case 59 - 정규장 마감(16:00 EST) 이후 당일 확정 캔들 5MA 증발(시프트 왜곡) 방어망 락온
+# MODIFIED: 초과 Case 60 - 통합 지시서 전일 종가(prev_close) 동적 캘린더 추출 방어망 주입
 
 import os
 import html
@@ -173,9 +174,11 @@ async def build_avwap_radar() -> tuple[str, InlineKeyboardMarkup]:
                 return 0.0, 0.0, 0.0
                 
             c0_dt = pd.to_datetime(candles[0]['timestamp'], format='ISO8601', utc=True).tz_convert(ZoneInfo('America/New_York')).date()
-            today_dt = datetime.now(ZoneInfo('America/New_York')).date()
+            now_est_check = datetime.now(ZoneInfo('America/New_York'))
+            today_dt = now_est_check.date()
             
-            if c0_dt >= today_dt:
+            # MODIFIED: 초과 Case 59 - 정규장 마감(16:00 EST) 이후 당일 확정 캔들 증발 방어망 락온
+            if c0_dt >= today_dt and now_est_check.hour < 16:
                 valid_candles = candles[1:6]
             else:
                 valid_candles = candles[0:5]
@@ -397,13 +400,22 @@ async def build_sync_board() -> str:
         curr = await api_client.get_current_price(symbol)
         prev_close = curr
         
+        if now_est.hour >= 4:
+            session_start_est = now_est.replace(hour=4, minute=0, second=0, microsecond=0)
+        else:
+            session_start_est = (now_est - timedelta(days=1)).replace(hour=4, minute=0, second=0, microsecond=0)
+        
+        # MODIFIED: 초과 Case 60 - 통합 지시서 전일 종가(prev_close) 동적 캘린더 추출 방어망 주입
         try:
-            data_1d = await api_client._request("GET", f"/api/v1/candles?symbol={symbol}&interval=1d&count=2", "MARKET_DATA_CHART", headers=api_client._get_headers())
+            data_1d = await api_client._request("GET", f"/api/v1/candles?symbol={symbol}&interval=1d&count=5", "MARKET_DATA_CHART", headers=api_client._get_headers())
             candles_1d = data_1d.get("result", {}).get("candles", [])
-            if len(candles_1d) > 1:
-                prev_close = float(candles_1d[1].get("closePrice", 0))
-            elif len(candles_1d) == 1:
-                prev_close = float(candles_1d[0].get("closePrice", 0))
+            
+            target_date = session_start_est.date()
+            for c in candles_1d:
+                c_dt = pd.to_datetime(c['timestamp'], format='ISO8601', utc=True).tz_convert(ZoneInfo('America/New_York')).date()
+                if c_dt < target_date:
+                    prev_close = float(c.get("closePrice", 0))
+                    break
         except Exception:
             pass
 
@@ -413,11 +425,6 @@ async def build_sync_board() -> str:
             high_rate = 0.0
             low_rate = 0.0
         else:
-            if now_est.hour >= 4:
-                session_start_est = now_est.replace(hour=4, minute=0, second=0, microsecond=0)
-            else:
-                session_start_est = (now_est - timedelta(days=1)).replace(hour=4, minute=0, second=0, microsecond=0)
-                
             all_candles = []
             before = None
             for _ in range(10):
@@ -786,7 +793,7 @@ async def process_execute_update(callback_query: types.CallbackQuery, state: FSM
 
 @router.callback_query(F.data == "back_to_main")
 async def process_back_to_main(callback_query: types.CallbackQuery, state: FSMContext):
-    if callback_query.from_user.id != ADMIN_CHAT_ID:
+    if callback_query.fromuser.id != ADMIN_CHAT_ID:
         return
     print(f"💬 [TG 콜백 수신] back_to_main (User: {callback_query.from_user.id})", flush=True)
     await state.clear()
