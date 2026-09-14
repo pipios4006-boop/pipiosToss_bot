@@ -16,7 +16,7 @@
 # MODIFIED: 초과 Case 57 - 암살자 PRE_ONLY 헌법 준수 및 주말 정규장 시간대 "REG대기" 오표출 영구 소각 ("장외대기" 락온)
 # MODIFIED: 주말/휴장일 레이더 UI 정규장 오표출 방어를 위한 동적 캘린더 원자적 교차 검증망 주입
 # NEW: 초과 Case 58 - 세션별 당일 실시간 진폭 격차 기반 실시간 장세(상승/하락/횡보) 동적 판별 및 관제탑 UI 렌더링 결속
-# MODIFIED: 초과 Case 56 & 58 - 갭-다운/상승 왜곡 방어용 실질 등락률(Body Return) 기반 장세 판별망 교체 락온
+# MODIFIED: 초과 Case 56 & 58 - 갭-다운/상승 왜곡 방어용 전일 종가 대비 실질 등락률(True Return) 기반 장세 판별망 교체 락온
 
 import os
 import html
@@ -182,36 +182,38 @@ async def build_avwap_radar() -> tuple[str, InlineKeyboardMarkup]:
                 
             amps = []
             yesterday_amp = 0.0
-            yesterday_body = 0.0
+            yesterday_return = 0.0
             
             for i, c in enumerate(valid_candles):
-                o = float(c.get("openPrice", 0))
                 h = float(c.get("highPrice", 0))
                 l = float(c.get("lowPrice", 0))
-                cls = float(c.get("closePrice", 0))
                 if l > 0: 
                     amp = (h - l) / l * 100
                     amps.append(amp)
                     if i == 0:
                         yesterday_amp = amp
-                        if o > 0:
-                            yesterday_body = (cls - o) / o * 100
+            
+            if len(valid_candles) >= 2:
+                yest_cls = float(valid_candles[0].get("closePrice", 0))
+                prev_cls = float(valid_candles[1].get("closePrice", 0))
+                if prev_cls > 0:
+                    yesterday_return = (yest_cls - prev_cls) / prev_cls * 100
                         
             avg_amp = sum(amps) / len(amps) if amps else 0.0
-            return avg_amp, yesterday_amp, yesterday_body
+            return avg_amp, yesterday_amp, yesterday_return
         except Exception:
             return 0.0, 0.0, 0.0
 
-    amp_l, yest_amp_l, yest_body_l = await fetch_5ma_amp("SOXL")
-    amp_s, yest_amp_s, yest_body_s = await fetch_5ma_amp("SOXS")
+    amp_l, yest_amp_l, yest_return_l = await fetch_5ma_amp("SOXL")
+    amp_s, yest_amp_s, yest_return_s = await fetch_5ma_amp("SOXS")
     
-    diff_body = abs(yest_body_l - yest_body_s)
-    if diff_body <= 0.3:
-        trend_msg = "▫️ ⚔️ <b>횡보/휩소장 (방향성 상실)</b> : 실질 등락률 격차 미미 (극심한 톱니바퀴 공방)"
-    elif yest_body_l > yest_body_s:
-        trend_msg = "▫️ 🐂 <b>상승장 (SOXL 승리)</b> : SOXL 실질 등락률 우위 (숏의 상승세 붕괴)"
+    diff_return = abs(yest_return_l - yest_return_s)
+    if diff_return <= 0.3:
+        trend_msg = "▫️ ⚔️ <b>횡보/휩소장 (방향성 상실)</b> : 전일 실질 등락률 격차 미미 (극심한 공방)"
+    elif yest_return_l > yest_return_s:
+        trend_msg = "▫️ 🐂 <b>상승장 (SOXL 승리)</b> : SOXL 전일 등락률 우위 (숏의 상승세 붕괴)"
     else:
-        trend_msg = "▫️ 🐻 <b>하락장 (SOXS 승리)</b> : SOXS 실질 등락률 우위 (롱의 상승세 붕괴)"
+        trend_msg = "▫️ 🐻 <b>하락장 (SOXS 승리)</b> : SOXS 전일 등락률 우위 (롱의 상승세 붕괴)"
 
     async def fetch_session_stats(symbol):
         all_candles = []
@@ -258,11 +260,11 @@ async def build_avwap_radar() -> tuple[str, InlineKeyboardMarkup]:
             return "대기 (데이터 수집 중)"
         diff = abs(body_long - body_short)
         if diff <= 0.3:
-            return "⚔️ 횡보/휩소장 (방향성 상실)"
+            return "⚔️ 횡보/휩소장 (세션 방향성 상실)"
         elif body_long > body_short:
-            return "🐂 상승장 (SOXL 승리)"
+            return "🐂 상승장 (SOXL 세션 우위)"
         else:
-            return "🐻 하락장 (SOXS 승리)"
+            return "🐻 하락장 (SOXS 세션 우위)"
 
     pre_trend_msg = get_realtime_trend(sess_l['pre_body'], sess_s['pre_body'], sess_l['pre_amp'], sess_s['pre_amp'])
     reg_trend_msg = get_realtime_trend(sess_l['reg_body'], sess_s['reg_body'], sess_l['reg_amp'], sess_s['reg_amp'])
