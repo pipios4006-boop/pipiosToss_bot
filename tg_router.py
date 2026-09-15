@@ -18,6 +18,7 @@
 # MODIFIED: 초과 Case 56 & 58 - 갭-다운/상승 왜곡 방어용 전일 종가 대비 실질 등락률(True Return) 기반 장세 판별망 교체 락온
 # MODIFIED: 초과 Case 59 - 정규장 마감(16:00 EST) 이후 당일 확정 캔들 5MA 증발(시프트 왜곡) 방어망 락온
 # MODIFIED: 초과 Case 60 - 통합 지시서 전일 종가(prev_close) 동적 캘린더 추출 방어망 주입
+# MODIFIED: 초과 Case 61 - 데이장(19:00 EST 이후) 1d 캔들 롤오버 시 실시간 미완성 캔들 오염(어제 진폭 휩소) 완벽 방어를 위한 3단 동적 시프트 락온
 
 import os
 import html
@@ -177,9 +178,14 @@ async def build_avwap_radar() -> tuple[str, InlineKeyboardMarkup]:
             now_est_check = datetime.now(ZoneInfo('America/New_York'))
             today_dt = now_est_check.date()
             
-            # MODIFIED: 초과 Case 59 - 정규장 마감(16:00 EST) 이후 당일 확정 캔들 증발 방어망 락온
-            if c0_dt >= today_dt and now_est_check.hour < 16:
+            # MODIFIED: 초과 Case 61 - 데이장(19:00 이후) 토스 롤오버 시 실시간 미완성 캔들 오염 절대 방어망 결속
+            if c0_dt > today_dt:
                 valid_candles = candles[1:6]
+            elif c0_dt == today_dt:
+                if 16 <= now_est_check.hour < 19:
+                    valid_candles = candles[0:5]
+                else:
+                    valid_candles = candles[1:6]
             else:
                 valid_candles = candles[0:5]
                 
@@ -793,7 +799,7 @@ async def process_execute_update(callback_query: types.CallbackQuery, state: FSM
 
 @router.callback_query(F.data == "back_to_main")
 async def process_back_to_main(callback_query: types.CallbackQuery, state: FSMContext):
-    if callback_query.fromuser.id != ADMIN_CHAT_ID:
+    if callback_query.from_user.id != ADMIN_CHAT_ID:
         return
     print(f"💬 [TG 콜백 수신] back_to_main (User: {callback_query.from_user.id})", flush=True)
     await state.clear()
