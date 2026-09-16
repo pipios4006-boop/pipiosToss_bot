@@ -15,7 +15,7 @@
 # NEW: 수동 매수(개입) 원자적 식별 및 1.0% 타점 하드 락온. 수동 덫 장전 즉시 당일 자동 매수 권한 100% 영구 소각(Mutex).
 # MODIFIED: 초과 Case 54 - 잔고 0주 청산 시 조건주문 생존(WATCHING) 여부 원자적 프로빙을 통한 수동 매도 허위 익절(False Positive) 판별망 결속
 # NEW: 초과 Case 55 - 듀얼 휩소 동시 진입(마이크로 휩소) 방어용 180초 교차 타임쉴드 인터럽트 주입 및 락온
-# NEW: 초과 Case 56 - 04:07 EST (7분) 프리장 개장 직후 절대 진입 금지(절대 타임쉴드) 하드 락온
+# MODIFIED: 초과 Case 56 - 04:07 EST 절대 타임쉴드 전면 폐기 및 04:00부터 40틱 동적 타임쉴드 즉각 가동
 # MODIFIED: 휴장 알림 시각을 프리장 개장 정밀 윈도우(04:00~04:05 EST)로 락온하여 조기 발송 원천 차단
 
 import sys
@@ -545,11 +545,12 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                         in_memory_ordering_lock[symbol] = False
                 continue
 
+            # MODIFIED: 절대 쉴드 (7분) 완전 폐지 및 04:00부터 40틱 동적 감시 즉시 개시
             if not buy_order_id and not is_session_done and is_active and vwap_price > 0.0:
                 elapsed = (now_est - session_baseline_est).total_seconds()
                 
                 can_enter = False
-                if hardcoded_session == "preMarket" and elapsed >= 420:
+                if hardcoded_session == "preMarket":
                     can_enter = True
                 
                 required_ticks = 4

@@ -8,7 +8,7 @@
 # MODIFIED: 암살자 타임쉴드 UI 렌더링 04:07 절대쉴드, 04:30 동적쉴드(40틱)로 롤백 락온
 # NEW: 3분(180초) 교차 타임쉴드 대기 상태 UI 렌더링 파이프라인 결속
 # MODIFIED: /start 명령어 객체 속성 오타(from_user) 원자적 교체 및 AttributeError 방어
-# NEW: 초과 Case 56 - 04:07 EST 절대 타임쉴드 렌더링 파이프라인 결속
+# MODIFIED: 초과 Case 56 - 04:07 EST 절대 타임쉴드 렌더링 전면 폐기 및 04:00부터 40틱 동적쉴드 렌더링 즉각 반영
 # MODIFIED: 레이더 관제탑 5MA 진폭 표출 시 어제(Yesterday) 단일 확정 진폭 동시 연산 및 UI 병기 락온
 # MODIFIED: 주말/휴장일 5MA 및 어제 진폭(Yesterday Amp) 동적 시프트 방어 (c0_dt < today_dt 검증망 주입)
 # NEW: 초과 Case 56 - 어제 진폭(Yesterday Amp) 격차 기반 상승/하락/횡보장 동적 판별 알고리즘 및 UI 렌더링 락온
@@ -58,7 +58,7 @@ def get_main_menu_text() -> str:
         "➖➖➖➖➖➖➖➖➖➖➖➖➖➖\n"
         "🔹 17:00: 🧹 정산 스캔 및 시스템 대기\n"
         "🔹 04:00: 🌅 프리장 레이더 스캔 \n"
-        "      (04:07 절대쉴드, 04:30 동적쉴드)\n"
+        "      (04:30 동적쉴드 40틱 확증)\n"
         "🔹 09:30: 🔥 정규장 VWAP 스캔\n"
         "      (신규 진입 셧다운)\n"
         "🔹 15:59: 🛑 MOC 덤핑 (1.5초 주기)\n\n"
@@ -178,7 +178,6 @@ async def build_avwap_radar() -> tuple[str, InlineKeyboardMarkup]:
             now_est_check = datetime.now(ZoneInfo('America/New_York'))
             today_dt = now_est_check.date()
             
-            # MODIFIED: 초과 Case 61 - 데이장(19:00 이후) 토스 롤오버 시 실시간 미완성 캔들 오염 절대 방어망 결속
             if c0_dt > today_dt:
                 valid_candles = candles[1:6]
             elif c0_dt == today_dt:
@@ -295,9 +294,7 @@ async def build_avwap_radar() -> tuple[str, InlineKeyboardMarkup]:
                 import time
                 current_time_for_ui = time.time()
                 if est_time.hour == 4:
-                    if est_time.minute < 7:
-                        state_text = "절대쉴드"
-                    elif est_time.minute < 30:
+                    if est_time.minute < 30:
                         state_text = "동적쉴드"
                     elif other_entry_time > 0 and current_time_for_ui - other_entry_time < 180.0:
                         state_text = "교차쉴드"
@@ -411,7 +408,6 @@ async def build_sync_board() -> str:
         else:
             session_start_est = (now_est - timedelta(days=1)).replace(hour=4, minute=0, second=0, microsecond=0)
         
-        # MODIFIED: 초과 Case 60 - 통합 지시서 전일 종가(prev_close) 동적 캘린더 추출 방어망 주입
         try:
             data_1d = await api_client._request("GET", f"/api/v1/candles?symbol={symbol}&interval=1d&count=5", "MARKET_DATA_CHART", headers=api_client._get_headers())
             candles_1d = data_1d.get("result", {}).get("candles", [])
