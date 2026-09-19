@@ -19,6 +19,7 @@
 # MODIFIED: 휴장 알림 시각을 프리장 개장 정밀 윈도우(04:00~04:05 EST)로 락온하여 조기 발송 원천 차단
 # NEW: 심야/주말 토스 API 점검 시 HTTP 500 에러 스팸 폭탄 방어용 3600초 타전 쿨다운(음소거) 파이프라인 결속
 # MODIFIED: 초과 Case 62 - 토스 서버 점검(HTTP 500/503) 시 초기 기동(fetch_account_seq) 파이프라인 붕괴 방어 및 텔레그램 봇 생존 보장망 락온
+# MODIFIED: 초과 Case 63 - 장기 점검 대응 무한 침묵(Infinite Silence) 파이프라인 결속 (3600초 쿨다운 소각 및 상태 전이 기반 타전망 락온)
 
 import sys
 import os
@@ -116,7 +117,6 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
     last_squeeze_alert_time = 0.0
     
     last_error_msg = ""
-    last_error_time = 0.0
     
     async def notify_tg(text: str):
         try:
@@ -141,17 +141,14 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                 
                 if last_error_msg != "":
                     last_error_msg = ""
-                    last_error_time = 0.0
             except Exception as e:
                 err_str = str(e)
-                current_time = time.time()
                 
-                if err_str != last_error_msg or (current_time - last_error_time) > 3600:
+                if err_str != last_error_msg:
                     await notify_tg(f"🚨 <b>[aVWAP {symbol}] 통신 붕괴 (유령 잔고 방어)</b>\n▫️ 사유: {html.escape(err_str)}")
                     last_error_msg = err_str
-                    last_error_time = current_time
                 else:
-                    print(f"🔇 [알람 쿨다운 {symbol}] 동일 통신 에러 타전 억제 중: {err_str}", flush=True)
+                    print(f"🔇 [알람 무한 침묵 {symbol}] 동일 통신 에러 타전 영구 억제 중: {err_str}", flush=True)
                     
                 await asyncio.sleep(5)
                 continue
