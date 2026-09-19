@@ -17,6 +17,7 @@
 # NEW: 초과 Case 55 - 듀얼 휩소 동시 진입(마이크로 휩소) 방어용 180초 교차 타임쉴드 인터럽트 주입 및 락온
 # MODIFIED: 초과 Case 56 - 04:07 EST 절대 타임쉴드 전면 폐기 및 04:00부터 40틱 동적 타임쉴드 즉각 가동
 # MODIFIED: 휴장 알림 시각을 프리장 개장 정밀 윈도우(04:00~04:05 EST)로 락온하여 조기 발송 원천 차단
+# NEW: 심야/주말 토스 API 점검 시 HTTP 500 에러 스팸 폭탄 방어용 3600초 타전 쿨다운(음소거) 파이프라인 결속
 
 import sys
 import os
@@ -113,6 +114,9 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
     price_window = deque(maxlen=40)
     last_squeeze_alert_time = 0.0
     
+    last_error_msg = ""
+    last_error_time = 0.0
+    
     async def notify_tg(text: str):
         try:
             await bot.send_message(chat_id=chat_id, text=text, parse_mode="HTML")
@@ -133,8 +137,21 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
             try:
                 holdings_detail = await client.get_symbol_holdings_detail(symbol)
                 holdings_qty = int(math.floor(holdings_detail['qty']))
+                
+                if last_error_msg != "":
+                    last_error_msg = ""
+                    last_error_time = 0.0
             except Exception as e:
-                await notify_tg(f"🚨 <b>[aVWAP {symbol}] 통신 붕괴 (유령 잔고 방어)</b>\n▫️ 사유: {html.escape(str(e))}")
+                err_str = str(e)
+                current_time = time.time()
+                
+                if err_str != last_error_msg or (current_time - last_error_time) > 3600:
+                    await notify_tg(f"🚨 <b>[aVWAP {symbol}] 통신 붕괴 (유령 잔고 방어)</b>\n▫️ 사유: {html.escape(err_str)}")
+                    last_error_msg = err_str
+                    last_error_time = current_time
+                else:
+                    print(f"🔇 [알람 쿨다운 {symbol}] 동일 통신 에러 타전 억제 중: {err_str}", flush=True)
+                    
                 await asyncio.sleep(5)
                 continue
 
@@ -545,7 +562,6 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                         in_memory_ordering_lock[symbol] = False
                 continue
 
-            # MODIFIED: 절대 쉴드 (7분) 완전 폐지 및 04:00부터 40틱 동적 감시 즉시 개시
             if not buy_order_id and not is_session_done and is_active and vwap_price > 0.0:
                 elapsed = (now_est - session_baseline_est).total_seconds()
                 
