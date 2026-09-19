@@ -6,6 +6,7 @@
 # MODIFIED: 캘린더 블로킹 연산 방어를 위한 asyncio.to_thread 스레드 격리 헌법 준수
 # MODIFIED: 외부 모듈 예외 시 제2 방어선(토스증권 API) 무중단 Fallback 경로 강제 (Case 21 방어)
 # NEW: 19:00 EST 기점 논리적 거래일(Logical Trading Day) 롤오버 파이프라인 결속 (야간 데이마켓 휴장일 오인 차단)
+# MODIFIED: 초과 Case 62 - 토스 인증 모듈(_do_authenticate) HTTP 상태 코드 검증망 주입을 통한 JSON 파싱 붕괴(HTML 응답) 원천 차단
 
 import asyncio
 import aiohttp
@@ -154,6 +155,9 @@ class TossApiClient:
         await GlobalThrottle.wait_api_sync()
         async with aiohttp.ClientSession() as session:
             async with session.post(url, data=payload, timeout=10.0) as resp:
+                if resp.status >= 400:
+                    err_text = await resp.text()
+                    raise Exception(f"Auth HTTP {resp.status}: {html.escape(err_text[:200])}")
                 data = await resp.json()
                 self.token = data.get("access_token")
 

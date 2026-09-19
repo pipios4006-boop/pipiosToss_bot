@@ -18,6 +18,7 @@
 # MODIFIED: 초과 Case 56 - 04:07 EST 절대 타임쉴드 전면 폐기 및 04:00부터 40틱 동적 타임쉴드 즉각 가동
 # MODIFIED: 휴장 알림 시각을 프리장 개장 정밀 윈도우(04:00~04:05 EST)로 락온하여 조기 발송 원천 차단
 # NEW: 심야/주말 토스 API 점검 시 HTTP 500 에러 스팸 폭탄 방어용 3600초 타전 쿨다운(음소거) 파이프라인 결속
+# MODIFIED: 초과 Case 62 - 토스 서버 점검(HTTP 500/503) 시 초기 기동(fetch_account_seq) 파이프라인 붕괴 방어 및 텔레그램 봇 생존 보장망 락온
 
 import sys
 import os
@@ -643,7 +644,11 @@ async def main():
     dp = Dispatcher()
     
     api_client = TossApiClient(client_id=TOSS_CLIENT_ID, client_secret=TOSS_CLIENT_SECRET)
-    await api_client.fetch_account_seq()
+    
+    try:
+        await api_client.fetch_account_seq()
+    except Exception as e:
+        print(f"🚨 [초기 기동 방어] 토스 API 서버 점검 또는 통신 장애로 계좌 연동 지연 (자동 재시도 예정): {e}", flush=True)
     
     inject_dependencies(api_client, ADMIN_CHAT_ID, wakeup_event)
     dp.include_router(router)
