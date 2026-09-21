@@ -20,6 +20,7 @@
 # NEW: 심야/주말 토스 API 점검 시 HTTP 500 에러 스팸 폭탄 방어용 3600초 타전 쿨다운(음소거) 파이프라인 결속
 # MODIFIED: 초과 Case 62 - 토스 서버 점검(HTTP 500/503) 시 초기 기동(fetch_account_seq) 파이프라인 붕괴 방어 및 텔레그램 봇 생존 보장망 락온
 # MODIFIED: 초과 Case 63 - 장기 점검 대응 무한 침묵(Infinite Silence) 파이프라인 결속 (3600초 쿨다운 소각 및 상태 전이 기반 타전망 락온)
+# MODIFIED: 초과 Case 53 - 04:07 EST (7분) 프리장 개장 직후 절대 진입 금지(절대 타임쉴드) 하드 락온 복구 및 결속
 
 import sys
 import os
@@ -565,7 +566,10 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                 
                 can_enter = False
                 if hardcoded_session == "preMarket":
-                    can_enter = True
+                    if 400 <= est_time_int <= 406:
+                        can_enter = False
+                    else:
+                        can_enter = True
                 
                 required_ticks = 4
                 if hardcoded_session == "preMarket" and elapsed < 1800:

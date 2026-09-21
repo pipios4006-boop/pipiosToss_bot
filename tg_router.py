@@ -19,6 +19,7 @@
 # MODIFIED: 초과 Case 59 - 정규장 마감(16:00 EST) 이후 당일 확정 캔들 5MA 증발(시프트 왜곡) 방어망 락온
 # MODIFIED: 초과 Case 60 - 통합 지시서 전일 종가(prev_close) 동적 캘린더 추출 방어망 주입
 # MODIFIED: 초과 Case 61 - 데이장(19:00 EST 이후) 1d 캔들 롤오버 시 실시간 미완성 캔들 오염(어제 진폭 휩소) 완벽 방어를 위한 3단 동적 시프트 락온
+# MODIFIED: Case 13 - 04:06 EST 절대 타임쉴드 구간 '절대쉴드' UI 렌더링 락온 결속
 
 import os
 import html
@@ -58,7 +59,7 @@ def get_main_menu_text() -> str:
         "➖➖➖➖➖➖➖➖➖➖➖➖➖➖\n"
         "🔹 17:00: 🧹 정산 스캔 및 시스템 대기\n"
         "🔹 04:00: 🌅 프리장 레이더 스캔 \n"
-        "      (04:30 동적쉴드 40틱 확증)\n"
+        "      (04:06 절대쉴드 / 04:30 동적쉴드)\n"
         "🔹 09:30: 🔥 정규장 VWAP 스캔\n"
         "      (신규 진입 셧다운)\n"
         "🔹 15:59: 🛑 MOC 덤핑 (1.5초 주기)\n\n"
@@ -294,7 +295,9 @@ async def build_avwap_radar() -> tuple[str, InlineKeyboardMarkup]:
                 import time
                 current_time_for_ui = time.time()
                 if est_time.hour == 4:
-                    if est_time.minute < 30:
+                    if est_time.minute <= 6:
+                        state_text = "절대쉴드"
+                    elif est_time.minute < 30:
                         state_text = "동적쉴드"
                     elif other_entry_time > 0 and current_time_for_ui - other_entry_time < 180.0:
                         state_text = "교차쉴드"
