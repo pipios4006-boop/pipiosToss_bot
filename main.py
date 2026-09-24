@@ -21,6 +21,7 @@
 # MODIFIED: 초과 Case 62 - 토스 서버 점검(HTTP 500/503) 시 초기 기동(fetch_account_seq) 파이프라인 붕괴 방어 및 텔레그램 봇 생존 보장망 락온
 # MODIFIED: 초과 Case 63 - 장기 점검 대응 무한 침묵(Infinite Silence) 파이프라인 결속 (3600초 쿨다운 소각 및 상태 전이 기반 타전망 락온)
 # MODIFIED: 초과 Case 53 - 04:07 EST (7분) 프리장 개장 직후 절대 진입 금지(절대 타임쉴드) 하드 락온 복구 및 결속
+# MODIFIED: MOC 청산 허위 알림(False Positive) 방어를 위한 is_moc_time 타임쉴드 윈도우 원자적 축소 락온 (15:59~16:05 EST)
 
 import sys
 import os
@@ -402,7 +403,8 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                                 pnl_str = "\n▫️ 타점: 체결 데이터 추출 지연 (장부 참조 요망)"
 
                             now_est_check = datetime.now(ZoneInfo('America/New_York'))
-                            is_moc_time = (now_est_check.hour == 15 and now_est_check.minute >= 59) or (now_est_check.hour >= 16)
+                            # 허위 MOC 청산 알림 방어를 위한 윈도우 원자적 축소 결속
+                            is_moc_time = ((now_est_check.hour == 15 and now_est_check.minute >= 59) or (now_est_check.hour == 16 and 0 <= now_est_check.minute <= 5))
                             
                             is_trap_survived = False
                             if cond_order_id:
