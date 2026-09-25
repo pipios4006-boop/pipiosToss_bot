@@ -22,6 +22,7 @@
 # MODIFIED: 초과 Case 63 - 장기 점검 대응 무한 침묵(Infinite Silence) 파이프라인 결속 (3600초 쿨다운 소각 및 상태 전이 기반 타전망 락온)
 # MODIFIED: 초과 Case 53 - 04:07 EST (7분) 프리장 개장 직후 절대 진입 금지(절대 타임쉴드) 하드 락온 복구 및 결속
 # MODIFIED: MOC 청산 허위 알림(False Positive) 방어를 위한 is_moc_time 타임쉴드 윈도우 원자적 축소 락온 (15:59~16:05 EST)
+# NEW: 수동 진입 상태에서 자동매매 동시 진입 충돌을 완벽 차단하기 위한 3단계 배타적 절대 락온(Global Shared Holdings + Probing) 결속
 
 import sys
 import os
@@ -77,6 +78,8 @@ HOLIDAY_TRANSLATIONS = {
 }
 
 in_memory_ordering_lock = {"SOXL": False, "SOXS": False}
+shared_holdings = {"SOXL": 0, "SOXS": 0}
+
 idempotency_keys = {
     "SOXL": {"BUY": None, "TRAP": None, "MOC": None},
     "SOXS": {"BUY": None, "TRAP": None, "MOC": None}
@@ -140,6 +143,7 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
             try:
                 holdings_detail = await client.get_symbol_holdings_detail(symbol)
                 holdings_qty = int(math.floor(holdings_detail['qty']))
+                shared_holdings[symbol] = holdings_qty
                 
                 if last_error_msg != "":
                     last_error_msg = ""
@@ -403,7 +407,6 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                                 pnl_str = "\n▫️ 타점: 체결 데이터 추출 지연 (장부 참조 요망)"
 
                             now_est_check = datetime.now(ZoneInfo('America/New_York'))
-                            # 허위 MOC 청산 알림 방어를 위한 윈도우 원자적 축소 결속
                             is_moc_time = ((now_est_check.hour == 15 and now_est_check.minute >= 59) or (now_est_check.hour == 16 and 0 <= now_est_check.minute <= 5))
                             
                             is_trap_survived = False
@@ -584,10 +587,11 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                     other_is_done = other_state_for_shield[3]
                     other_entry_time = other_state_for_shield[9] 
                     other_buy_id = await AssassinLedger.get_buy_order_id(other_symbol_for_shield)
+                    other_qty = shared_holdings.get(other_symbol_for_shield, 0)
                     
                     current_time_for_shield = time.time()
                     
-                    if other_buy_price > 0 or other_buy_id or other_is_done or (other_entry_time > 0 and current_time_for_shield - other_entry_time < 180.0):
+                    if other_buy_price > 0 or other_buy_id or other_is_done or (other_entry_time > 0 and current_time_for_shield - other_entry_time < 180.0) or other_qty > 0:
                         breakout_ticks = 0
                     else:
                         breakout_ticks += 1
@@ -598,6 +602,17 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                     if not in_memory_ordering_lock[symbol]:
                         in_memory_ordering_lock[symbol] = True
                         try:
+                            # NEW: 듀얼 동시 진입 원천 차단 하드 락온 (매수 요격 직전 상대 종목 100% 팩트 잔고 교차 검증)
+                            other_symbol_for_lock = "SOXS" if symbol == "SOXL" else "SOXL"
+                            other_hold_check = await client.get_symbol_holdings_detail(other_symbol_for_lock)
+                            other_hold_qty_check = int(math.floor(other_hold_check.get('qty', 0.0)))
+                            
+                            if other_hold_qty_check > 0:
+                                breakout_ticks = 0
+                                await AssassinLedger.save_state(other_symbol_for_lock, is_session_done=True)
+                                print(f"🚨 [듀얼 절대 쉴드 락온] {symbol} 돌파 확증되었으나 반대 종목({other_symbol_for_lock}) 수동/자동 잔고 포착! 요격 원천 차단.", flush=True)
+                                continue
+
                             orderbook = await client.get_orderbook(symbol)
                             asks = orderbook.get("asks", [])
                             
