@@ -23,6 +23,8 @@
 # MODIFIED: 초과 Case 53 - 04:07 EST (7분) 프리장 개장 직후 절대 진입 금지(절대 타임쉴드) 하드 락온 복구 및 결속
 # MODIFIED: MOC 청산 허위 알림(False Positive) 방어를 위한 is_moc_time 타임쉴드 윈도우 원자적 축소 락온 (15:59~16:05 EST)
 # NEW: 수동 진입 상태에서 자동매매 동시 진입 충돌을 완벽 차단하기 위한 3단계 배타적 절대 락온(Global Shared Holdings + Probing) 결속
+# MODIFIED: 수동 개입(잔고 존재, buy_order_id 부재) 식별 시 is_rearm = False 강제 주입으로 세션 락(is_session_done) 및 평단가 장부 기록 정상화
+# MODIFIED: 잔고 보유 중(수동/자동) 추가 진입 원천 차단을 위한 매수 요격 조건식(holdings_qty == 0) 하드 락온
 
 import sys
 import os
@@ -519,13 +521,16 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                                     is_rearm = False
                         except Exception:
                             pass
+                    else:
+                        # NEW: 수동 개입(buy_order_id 부재) 식별 확증. 재장전(is_rearm) 우회 및 최초 덫 장전으로 규정하여 세션 락(is_session_done=True) 격발
+                        is_rearm = False
 
                     if avg_price <= 0.0:
                         avg_price = float(holdings_detail.get('avg_price', 0.0))
 
                     if avg_price > 0.0:
                         calculated_target = math.ceil(avg_price * 1.01 * 100) / 100.0
-                        trap_tag = "+1.0%" if entry_session == "preMarket" else "수동개입(+1.0%)"
+                        trap_tag = "+1.0%" if entry_session == "preMarket" and buy_order_id else "수동개입(+1.0%)"
 
                 if calculated_target > 0.0 and trap_qty > 0:
                     in_memory_ordering_lock[symbol] = True
@@ -566,7 +571,8 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                         in_memory_ordering_lock[symbol] = False
                 continue
 
-            if not buy_order_id and not is_session_done and is_active and vwap_price > 0.0:
+            # MODIFIED: holdings_qty == 0 절대 조건 주입. 잔고 보유(수동/자동 불문) 중 추가 매수 요격을 원천 차단
+            if holdings_qty == 0 and not buy_order_id and not is_session_done and is_active and vwap_price > 0.0:
                 elapsed = (now_est - session_baseline_est).total_seconds()
                 
                 can_enter = False
