@@ -28,6 +28,7 @@
 # NEW: 초과 Case 58 - 매크로 위험(스퀴즈 및 진폭 한계) 감지 전용 백그라운드 모니터(macro_risk_monitor) 결속 및 yfinance NQ=F 연동
 # MODIFIED: 초과 Case 58 - 매크로 위험 감지 시 강제 퇴근 사유 명문화 및 비대칭 수동 진입 권고 타전망 결속 (숏 금지 로직 최저가 도달 시 무조건 격발)
 # MODIFIED: 매크로 위험(스퀴즈 및 진폭 한계) 롱 차단 기준을 1.5%에서 절대헌법 1.0%로 보수적 하향 락온 적용
+# NEW: 무인 자동 깃허브 업데이트 폴링망(auto_update_loop) 백그라운드 결속 및 시스템 대기 시간대(17:00~03:59 EST) 하드 락온
 
 import sys
 import os
@@ -114,6 +115,87 @@ async def fetch_full_session_candles(client: TossApiClient, symbol: str, session
             break
             
     return all_candles
+
+def _run_git_update_sync() -> tuple[bool, str]:
+    import subprocess
+    import py_compile
+    
+    def run_cmd(cmd):
+        proc = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        try:
+            out, err = proc.communicate(timeout=20)
+            return proc.returncode, out.strip(), err.strip()
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            return -1, "", "Subprocess Timeout Expired"
+    
+    code, current_hash, err = run_cmd("git rev-parse HEAD")
+    if code != 0:
+        return False, f"해시 백업 실패: {err}"
+    
+    code, fetch_out, fetch_err = run_cmd("git fetch origin main")
+    if code != 0:
+        return False, f"Fetch 실패:\n{fetch_err}"
+        
+    code, local_hash, _ = run_cmd("git rev-parse HEAD")
+    code, remote_hash, _ = run_cmd("git rev-parse origin/main")
+    
+    if local_hash == remote_hash:
+        return True, "Already up to date."
+    
+    code, reset_out, reset_err = run_cmd("git reset --hard origin/main")
+    if code != 0:
+        run_cmd(f"git reset --hard {current_hash}")
+        return False, f"Hard Reset 붕괴 (원상 복구됨):\n{reset_err}"
+        
+    try:
+        py_compile.compile('main.py', doraise=True)
+        py_compile.compile('tg_router.py', doraise=True)
+        py_compile.compile('quant_engine.py', doraise=True)
+        py_compile.compile('toss_api.py', doraise=True)
+        py_compile.compile('candle_recorder.py', doraise=True)
+    except Exception as e:
+        run_cmd(f"git reset --hard {current_hash}")
+        return False, f"문법 에러 감지. 롤백 완료:\n{str(e)}"
+        
+    return True, f"업데이트 성공:\n{reset_out}"
+
+async def auto_update_loop(bot: Bot, chat_id: int):
+    """
+    무인 자동 깃허브 업데이트 폴링 루프.
+    장마감 이후(17:00 EST ~ 03:59 EST)에만 가동되며 1시간 간격으로 origin/main을 스캔.
+    """
+    while True:
+        try:
+            now_est = datetime.now(ZoneInfo('America/New_York'))
+            
+            # 장중(04:00 ~ 16:59 EST)에는 자동 업데이트 전면 차단
+            if 4 <= now_est.hour < 17:
+                await asyncio.sleep(3600.0)
+                continue
+                
+            success, msg = await asyncio.to_thread(_run_git_update_sync)
+            
+            if success:
+                if "Already up to date." not in msg:
+                    await bot.send_message(
+                        chat_id=chat_id,
+                        text=f"🚀 <b>[무인 자동 업데이트 성공]</b>\n▫️ 최신 코드가 백그라운드에서 감지되어 구글 클라우드 서버에 안전하게 탑재되었습니다.\n▫️ 파이썬 컴파일 검증 완료. 코어 재기동(os._exit) 격발.\n<pre>{html.escape(msg)}</pre>",
+                        parse_mode="HTML"
+                    )
+                    await asyncio.sleep(1.0)
+                    os._exit(0)
+            else:
+                await bot.send_message(
+                    chat_id=chat_id,
+                    text=f"🚨 <b>[무인 자동 업데이트 실패 및 롤백]</b>\n<pre>{html.escape(msg)}</pre>",
+                    parse_mode="HTML"
+                )
+                
+        except Exception as e:
+            print(f"🚨 [무인 업데이트망 붕괴 방어] {e}", flush=True)
+            
+        await asyncio.sleep(3600.0)
 
 async def macro_risk_monitor(bot: Bot, chat_id: int):
     while True:
@@ -744,6 +826,7 @@ async def main():
     
     asyncio.create_task(api_client.token_renewal_loop())
     asyncio.create_task(macro_risk_monitor(bot, ADMIN_CHAT_ID))
+    asyncio.create_task(auto_update_loop(bot, ADMIN_CHAT_ID))
     asyncio.create_task(assassin_loop(api_client, bot, ADMIN_CHAT_ID, "SOXL"))
     asyncio.create_task(assassin_loop(api_client, bot, ADMIN_CHAT_ID, "SOXS"))
     asyncio.create_task(record_candles_loop(api_client, "SOXL"))
