@@ -25,6 +25,7 @@
 # NEW: 수동 진입 상태에서 자동매매 동시 진입 충돌을 완벽 차단하기 위한 3단계 배타적 절대 락온(Global Shared Holdings + Probing) 결속
 # MODIFIED: 수동 개입(잔고 존재, buy_order_id 부재) 식별 시 is_rearm = False 강제 주입으로 세션 락(is_session_done) 및 평단가 장부 기록 정상화
 # MODIFIED: 잔고 보유 중(수동/자동) 추가 진입 원천 차단을 위한 매수 요격 조건식(holdings_qty == 0) 하드 락온
+# NEW: 초과 Case 58 - 매크로 위험(스퀴즈 및 진폭 한계) 감지 전용 백그라운드 모니터(macro_risk_monitor) 결속 및 yfinance NQ=F 연동
 
 import sys
 import os
@@ -33,6 +34,7 @@ import time
 import asyncio
 import html
 import logging
+import yfinance as yf
 import pandas as pd
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -110,6 +112,60 @@ async def fetch_full_session_candles(client: TossApiClient, symbol: str, session
             break
             
     return all_candles
+
+async def macro_risk_monitor(bot: Bot, chat_id: int):
+    while True:
+        try:
+            now_est = datetime.now(ZoneInfo('America/New_York'))
+            if now_est.hour >= 19 or now_est.hour < 4:
+                await asyncio.sleep(60.0)
+                continue
+
+            state_l = await AssassinLedger.get_state("SOXL")
+            state_s = await AssassinLedger.get_state("SOXS")
+            
+            if state_l[3] and state_s[3]: 
+                await asyncio.sleep(60.0)
+                continue
+
+            def _get_nq():
+                tkr = yf.Ticker("NQ=F")
+                df = tkr.history(period="1d", interval="1m")
+                if df.empty: return 0.0, 0.0, 0.0
+                return float(df['High'].max()), float(df['Low'].min()), float(df['Close'].iloc[-1])
+
+            try:
+                h, l, c = await asyncio.wait_for(asyncio.to_thread(_get_nq), timeout=10.0)
+            except Exception as e:
+                print(f"🚨 [yfinance NQ=F 통신 방어] {e}", flush=True)
+                h, l, c = 0.0, 0.0, 0.0
+
+            if h > 0 and l > 0 and c > 0:
+                long_exhausted = ((c * 1.002 - l) / l * 100.0) > 1.5
+                short_exhausted = ((h - c * 0.998) / (c * 0.998) * 100.0) > 1.5
+
+                if long_exhausted or short_exhausted:
+                    await AssassinLedger.save_state("SOXL", is_session_done=True, entry_session="MACRO_BLOCKED")
+                    await AssassinLedger.save_state("SOXS", is_session_done=True, entry_session="MACRO_BLOCKED")
+                    
+                    try:
+                        await bot.send_message(
+                            chat_id=chat_id,
+                            text="🚨 <b>[매크로 위험 감지] 금일 암살자 자동 진입 전면 차단 및 강제 퇴근 처리</b>\n"
+                                 "▫️ 사유: 나스닥 100 선물지수(NQ=F) 당일 진폭 한계(1.5%) 도달 임박\n"
+                                 "▫️ 기준: 0.50% 체력 공식 적용 (레버리지 1.0% 익절 ↔ NQ 0.2% 필요)\n"
+                                 f"▫️ 현재 지수: {c:.2f} (고가: {h:.2f} / 저가: {l:.2f})\n"
+                                 "▫️ 조치: SOXL/SOXS 양방향 신규 진입 권한 100% 영구 소각",
+                            parse_mode="HTML"
+                        )
+                    except Exception:
+                        pass
+                    print(f"🛑 [매크로 위험 감지] NQ=F 한계 도달. 롱 차단 조건: {long_exhausted}, 숏 차단 조건: {short_exhausted}. 양방향 퇴근 락온 완료.", flush=True)
+
+        except Exception as e:
+            print(f"🚨 [매크로 모니터망 붕괴 방어] {e}", flush=True)
+
+        await asyncio.sleep(60.0)
 
 async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: str):
     global last_holiday_notified_date
@@ -522,7 +578,6 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                         except Exception:
                             pass
                     else:
-                        # NEW: 수동 개입(buy_order_id 부재) 식별 확증. 재장전(is_rearm) 우회 및 최초 덫 장전으로 규정하여 세션 락(is_session_done=True) 격발
                         is_rearm = False
 
                     if avg_price <= 0.0:
@@ -554,7 +609,7 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                         
                         if not is_rearm:
                             if not buy_order_id:
-                                await AssassinLedger.save_state(symbol, price=avg_price, target_sell_price=calculated_target, cond_order_id=new_cond_id, is_session_done=True)
+                                await AssassinLedger.save_state(symbol, price=avg_price, target_sell_price=calculated_target, cond_order_id=new_cond_id, is_session_done=True, entry_session="MANUAL")
                                 is_session_done = True
                             else:
                                 await AssassinLedger.save_state(symbol, price=avg_price, target_sell_price=calculated_target, cond_order_id=new_cond_id)
@@ -571,7 +626,6 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                         in_memory_ordering_lock[symbol] = False
                 continue
 
-            # MODIFIED: holdings_qty == 0 절대 조건 주입. 잔고 보유(수동/자동 불문) 중 추가 매수 요격을 원천 차단
             if holdings_qty == 0 and not buy_order_id and not is_session_done and is_active and vwap_price > 0.0:
                 elapsed = (now_est - session_baseline_est).total_seconds()
                 
@@ -608,7 +662,6 @@ async def assassin_loop(client: TossApiClient, bot: Bot, chat_id: int, symbol: s
                     if not in_memory_ordering_lock[symbol]:
                         in_memory_ordering_lock[symbol] = True
                         try:
-                            # NEW: 듀얼 동시 진입 원천 차단 하드 락온 (매수 요격 직전 상대 종목 100% 팩트 잔고 교차 검증)
                             other_symbol_for_lock = "SOXS" if symbol == "SOXL" else "SOXL"
                             other_hold_check = await client.get_symbol_holdings_detail(other_symbol_for_lock)
                             other_hold_qty_check = int(math.floor(other_hold_check.get('qty', 0.0)))
@@ -678,6 +731,7 @@ async def main():
     dp.include_router(router)
     
     asyncio.create_task(api_client.token_renewal_loop())
+    asyncio.create_task(macro_risk_monitor(bot, ADMIN_CHAT_ID))
     asyncio.create_task(assassin_loop(api_client, bot, ADMIN_CHAT_ID, "SOXL"))
     asyncio.create_task(assassin_loop(api_client, bot, ADMIN_CHAT_ID, "SOXS"))
     asyncio.create_task(record_candles_loop(api_client, "SOXL"))

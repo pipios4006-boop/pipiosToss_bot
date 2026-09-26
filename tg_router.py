@@ -21,11 +21,14 @@
 # MODIFIED: 초과 Case 60 - 통합 지시서 전일 종가(prev_close) 동적 캘린더 추출 방어망 주입
 # MODIFIED: 초과 Case 61 - 데이장(19:00 EST 이후) 1d 캔들 롤오버 시 실시간 미완성 캔들 오염(어제 진폭 휩소) 완벽 방어를 위한 3단 동적 시프트 락온
 # MODIFIED: Case 13 - 04:06 EST 절대 타임쉴드 구간 '절대쉴드' UI 렌더링 락온 결속
+# NEW: 초과 Case 58 - 관제탑 UI MACRO_BLOCKED 감지 시 '🛑 강제퇴근' 원자적 렌더링 결속
+# NEW: 나스닥 100 선물지수(NQ=F) 실시간 관제 UI 렌더링 및 비동기 수집망 결속
 
 import os
 import html
 import asyncio
 import pandas as pd
+import yfinance as yf
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from aiogram import Router, types, F
@@ -162,6 +165,19 @@ async def build_avwap_radar() -> tuple[str, InlineKeyboardMarkup]:
     except Exception:
         pass
 
+    async def fetch_nq_futures():
+        def _get_nq():
+            tkr = yf.Ticker("NQ=F")
+            df = tkr.history(period="1d", interval="1m")
+            if df.empty: return 0.0, 0.0, 0.0
+            return float(df['Close'].iloc[-1]), float(df['High'].max()), float(df['Low'].min())
+        try:
+            return await asyncio.wait_for(asyncio.to_thread(_get_nq), timeout=5.0)
+        except Exception:
+            return 0.0, 0.0, 0.0
+
+    nq_c, nq_h, nq_l = await fetch_nq_futures()
+
     price_l = await api_client.get_current_price("SOXL")
     price_s = await api_client.get_current_price("SOXS")
     
@@ -291,7 +307,10 @@ async def build_avwap_radar() -> tuple[str, InlineKeyboardMarkup]:
         elif qty > 0:
             state_text = "보유(+1.0%)"
         elif is_done:
-            state_text = "타격완료"
+            if entry_session == "MACRO_BLOCKED":
+                state_text = "🛑 강제퇴근"
+            else:
+                state_text = "타격완료"
         else:
             if current_session == "preMarket":
                 import time
@@ -319,6 +338,9 @@ async def build_avwap_radar() -> tuple[str, InlineKeyboardMarkup]:
     scan_time = now_est.strftime("%m-%d %H:%M:%S")
 
     text = f"""📡 <b>[aVWAP 레이더]</b> {market_header}
+➖➖➖➖➖➖➖➖➖➖➖➖➖➖
+🌐 <b>나스닥 100 선물 (NQ=F)</b>
+▫️ 현재: <code>{nq_c:.2f}</code> | 고가: <code>{nq_h:.2f}</code> | 저가: <code>{nq_l:.2f}</code>
 ➖➖➖➖➖➖➖➖➖➖➖➖➖➖
 📊 <b>현재가 & 5MA(어제 진폭)</b>
 🐂 <b>SOXL</b> <code>${price_l:.2f}</code> | <code>{amp_l:.1f}%({yest_amp_l:.1f}%)</code>
@@ -706,7 +728,7 @@ async def cmd_reset(message: types.Message, state: FSMContext):
     ])
     text = (
         "⚠️ <b>[듀얼 장부 동시 초기화]</b>\n\n"
-        "경고: SOXL 및 SOXS의 로컬 장부(평단가, 목표가, 주문 ID, 세션 락)를 100% 영구 소각하고 0점으로 원자적 초기화를 수행합니다.\n"
+        "경고: SOXL 및 SOXS의 로컬 장부(평단가, 목표가, 주문 ID, 세 세션 락)를 100% 영구 소각하고 0점으로 원자적 초기화를 수행합니다.\n"
         "진행하시겠습니까?"
     )
     try:
