@@ -26,6 +26,8 @@
 # MODIFIED: 수동 개입(잔고 존재, buy_order_id 부재) 식별 시 is_rearm = False 강제 주입으로 세션 락(is_session_done) 및 평단가 장부 기록 정상화
 # MODIFIED: 잔고 보유 중(수동/자동) 추가 진입 원천 차단을 위한 매수 요격 조건식(holdings_qty == 0) 하드 락온
 # NEW: 초과 Case 58 - 매크로 위험(스퀴즈 및 진폭 한계) 감지 전용 백그라운드 모니터(macro_risk_monitor) 결속 및 yfinance NQ=F 연동
+# MODIFIED: 초과 Case 58 - 매크로 위험 감지 시 강제 퇴근 사유 명문화 및 비대칭 수동 진입 권고 타전망 결속 (숏 금지 로직 최저가 도달 시 무조건 격발)
+# MODIFIED: 매크로 위험(스퀴즈 및 진폭 한계) 롱 차단 기준을 1.5%에서 절대헌법 1.0%로 보수적 하향 락온 적용
 
 import sys
 import os
@@ -140,20 +142,30 @@ async def macro_risk_monitor(bot: Bot, chat_id: int):
                 print(f"🚨 [yfinance NQ=F 통신 방어] {e}", flush=True)
                 h, l, c = 0.0, 0.0, 0.0
 
-            if h > 0 and l > 0 and c > 0:
-                long_exhausted = ((c * 1.002 - l) / l * 100.0) > 1.5
-                short_exhausted = ((h - c * 0.998) / (c * 0.998) * 100.0) > 1.5
+            if h > 0 and l > 0 and c > 0 and h > l:
+                daily_amp = (h - l) / l * 100.0
+                
+                # MODIFIED: 1.5 -> 1.0 절대헌법에 따른 잔여 체력 임계값 하향 락온
+                long_exhausted = ((c * 1.002 - l) / l * 100.0) > 1.0
+                short_exhausted = (daily_amp > 0.3) and (((c - l) / l * 100.0) <= 0.1)
 
                 if long_exhausted or short_exhausted:
                     await AssassinLedger.save_state("SOXL", is_session_done=True, entry_session="MACRO_BLOCKED")
                     await AssassinLedger.save_state("SOXS", is_session_done=True, entry_session="MACRO_BLOCKED")
                     
+                    if long_exhausted and short_exhausted:
+                        reason_msg = "▫️ 사유: NQ=F 상/하방 진폭 체력이 모두 한계치에 도달함 (극심한 방향성 상실)\n▫️ 권고: 방향성 확립 시까지 <b>전면 관망</b>을 유지하십시오."
+                    elif long_exhausted:
+                        # MODIFIED: 1.5% -> 1.0% 타전 팩트 동기화 락온
+                        reason_msg = "▫️ 사유: NQ=F 최고가 부근 도달 및 롱(SOXL) 1% 익절을 위한 추가 상승 체력(1.0% 한계) 100% 고갈\n▫️ 권고: <b>숏(SOXS)에 수동으로 진입하세요.</b>"
+                    elif short_exhausted:
+                        reason_msg = "▫️ 사유: NQ=F 현재 지수가 당일 최저가(저점) 부근에 도달함 (대세 상승 반전 위험)\n▫️ 권고: <b>롱(SOXL)에 수동으로 진입 하세요.</b>"
+
                     try:
                         await bot.send_message(
                             chat_id=chat_id,
                             text="🚨 <b>[매크로 위험 감지] 금일 암살자 자동 진입 전면 차단 및 강제 퇴근 처리</b>\n"
-                                 "▫️ 사유: 나스닥 100 선물지수(NQ=F) 당일 진폭 한계(1.5%) 도달 임박\n"
-                                 "▫️ 기준: 0.50% 체력 공식 적용 (레버리지 1.0% 익절 ↔ NQ 0.2% 필요)\n"
+                                 f"{reason_msg}\n"
                                  f"▫️ 현재 지수: {c:.2f} (고가: {h:.2f} / 저가: {l:.2f})\n"
                                  "▫️ 조치: SOXL/SOXS 양방향 신규 진입 권한 100% 영구 소각",
                             parse_mode="HTML"
