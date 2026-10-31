@@ -1,18 +1,19 @@
 # -*- coding: utf-8 -*-
 """
 # MODIFIED: plugin_updater.py
-인피니트 스노우볼 (Infinite Snowball) v3.0 — 순수 롱(🐂 SOXL 단독) 매수 04:07 ~ 16:00 EST 제한 &
+인피니트 스노우볼 (Infinite Snowball) v3.0 — 순수 롱(🐂 SOXL 단독) 매수 04:07 ~ 16:00 EST 제한
+(정규장 마감 30분 전 15:30 ~ 16:00 EST 0주 새 사이클 1층 진입 및 1층 공석 +1.0% 돌파 추격 차단 · Case 84) &
 익절 매도 24시간 전 세션 확장(Case 83 방안 C 오버나이트 통합이평 사수 하이브리드) 오버나이트 7층 골디락스 멀티 그리드 지층관리 스나이퍼
-11대 코어 모듈(quant_engine_core.py + quant_engine.py 2분할 및 main_runtime.py + main.py 2분할 포함)
+12대 코어 모듈(quant_engine_core.py + quant_engine.py 2분할 · sniper_plugin_core.py + sniper_plugin.py 2분할 · main_runtime.py + main.py 2분할 포함)
 무디스크 인메모리 프리플라이트 컴파일 · AST 심볼 교차 검증 · 4배수 선제 스냅 치유기 · 텔레그램 잔류 큐 소각 ·
 폴더별 원장/환경변수/오프셋 스냅샷 Dirty-Check 철벽 보존 · 무인 Git 업데이트 및
-Case 81 커널 레벨 인플레이스 프로세스 자가 교체(os.execv + 3.5초 하드 워치독) 코어 모듈 (Step 02 / 02)
+Case 81 커널 레벨 인플레이스 프로세스 자가 교체(os.execv + 3.5초 하드 워치독) 코어 모듈 (Step 06 / 06)
 - 제1헌법: 모든 파일 I/O 및 git/python 서브프로세스 실행을 asyncio.to_thread 로 비동기 격리 및 타임아웃 적용
 - 제3헌법: 구버전 폐기 파일(daymarket_sim_plugin.py, whipsaw_plugin.py, state_SOXS.json 등) 디스크 영구 소각
 - Case 07: 평일 04:00 ~ 16:05 EST 장중 백그라운드 무인 업데이트 재기동 전면 차단 및 systemd ExecStartPre 장중 락다운 지원
 - Case 11 & Case 62:
-  1) 11대 필수 코어 모듈(REQUIRED_CORE_MODULES : quant_engine_core.py + quant_engine.py 및 main_runtime.py + main.py 분할 반영)
-     인메모리 compile() 문법 검증 + AST ImportFrom 심볼 테이블 정적 교차 검증
+  1) 12대 필수 코어 모듈(REQUIRED_CORE_MODULES : quant_engine_core.py + quant_engine.py · sniper_plugin_core.py + sniper_plugin.py ·
+     main_runtime.py + main.py 분할 반영) 인메모리 compile() 문법 검증 + AST ImportFrom 심볼 테이블 정적 교차 검증
   2) 모바일 복사·붙여넣기 과정에서 발생한 마크다운 펜스 및 홀수 공백(1칸 -> 0칸, 9칸 -> 8칸)을
      AST 파싱 전에 4배수로 선제 스냅 교정하여 다음 줄이 오염되는 현상을 100% 원천 차단(_auto_heal_indentation_glitches)
   3) /update 실행 시 구버전 RAM 캐시(sys.modules) 간섭을 막기 위해 `python3 plugin_updater.py --verify-only` 를
@@ -77,13 +78,14 @@ from toss_api import (
 logger = logging.getLogger("toss_sniper.plugin_updater")
 
 # ---------------------------------------------------------------------------
-# [핵심 상수] 11대 필수 코어 모듈(quant_engine_core.py + quant_engine.py 및 main_runtime.py + main.py 분할 반영) 및 영구 폐기 레거시 파일 목록 (제3헌법)
+# [핵심 상수] 12대 필수 코어 모듈(quant_engine_core + quant_engine · sniper_plugin_core + sniper_plugin · main_runtime + main 분할 반영) 및 영구 폐기 레거시 파일 목록 (제3헌법)
 # ---------------------------------------------------------------------------
 REQUIRED_CORE_MODULES: Tuple[str, ...] = (
     "toss_api.py",
     "quant_indicators_plugin.py",
     "quant_engine_core.py",
     "quant_engine.py",
+    "sniper_plugin_core.py",
     "sniper_plugin.py",
     "sniper_exit_plugin.py",
     "defense_plugin.py",
@@ -805,7 +807,7 @@ def _auto_heal_indentation_glitches(
 
 
 # ---------------------------------------------------------------------------
-# [핵심 3] AST 최상위 익스포트 심볼 추출기 및 11대 코어 모듈 무디스크 인메모리 교차 검증기 (Case 75)
+# [핵심 3] AST 최상위 익스포트 심볼 추출기 및 12대 코어 모듈 무디스크 인메모리 교차 검증기 (Case 75)
 # ---------------------------------------------------------------------------
 def _extract_module_exported_symbols(tree: ast.AST) -> Set[str]:
     """
@@ -846,13 +848,14 @@ def verify_all_modules_compile(
     """
     🚨 Case 11, Case 62 & Case 75 [디스크 쓰기 0 Byte 순수 인메모리 컴파일 검증]:
     1) 검증 시작 전 emergency_free_disk_space_sync(remove_pycache=False) 로 고아 .tmp.* 파일을 청소한다.
-    2) 11대 필수 코어 모듈(REQUIRED_CORE_MODULES : quant_engine_core.py + quant_engine.py 및 main_runtime.py + main.py 포함)이
+    2) 12대 필수 코어 모듈(REQUIRED_CORE_MODULES : quant_engine_core.py + quant_engine.py ·
+       sniper_plugin_core.py + sniper_plugin.py · main_runtime.py + main.py 포함)이
        디스크에 모두 존재하는지 확인한다.
     3) 홀수 공백 들여쓰기 오타 자동 치유(_auto_heal_indentation_glitches) 후
        디스크에 단 1바이트도 쓰지 않는 파이썬 내장 인메모리 바이트코드 컴파일러
        `compile(src, fpath, "exec", dont_inherit=True)` 및 `ast.parse(src, filename=fpath)` 로
        문법 및 바이트코드 생성 무결성을 100% 검증한다!
-    4) 11대 코어 모듈 간 `from <local_module> import <symbol>` 구문을 전수 대조하여,
+    4) 12대 코어 모듈 간 `from <local_module> import <symbol>` 구문을 전수 대조하여,
        대상 모듈에 존재하지 않는 심볼을 임포트하는 경우 즉시 에러 원인을 반환한다.
     """
     target_dir = get_bot_base_dir(base_dir)
@@ -899,7 +902,7 @@ def verify_all_modules_compile(
     if errors:
         return False, "🚨 컴파일/문법 검증 실패:\n" + "\n".join(errors)
 
-    # 2단계: 11대 로컬 모듈 간 from <mod> import <symbol> 심볼 존재 여부 교차 검증
+    # 2단계: 12대 로컬 모듈 간 from <mod> import <symbol> 심볼 존재 여부 교차 검증
     local_mod_names = {f[:-3] for f in REQUIRED_CORE_MODULES}
     for mod_name, tree in ast_trees.items():
         fname = f"{mod_name}.py"
@@ -1276,7 +1279,7 @@ def _cli_main() -> int:
     parser.add_argument(
         "--verify-only",
         action="store_true",
-        help="디스크의 11대 코어 모듈 인메모리 컴파일 및 AST 심볼 정합성만 검증하고 종료합니다.",
+        help="디스크의 12대 코어 모듈 인메모리 컴파일 및 AST 심볼 정합성만 검증하고 종료합니다.",
     )
     parser.add_argument(
         "--base-dir",

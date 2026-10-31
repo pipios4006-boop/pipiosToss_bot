@@ -3,11 +3,14 @@
 # MODIFIED: sniper_exit_plugin.py
 순수 롱(SOXL) 전용 '매수 체결 후 최초 60초 강제 타임쉴드(POST_BUY_TO_SELL_SHIELD_SEC = 60.0) &
 매수 후 60초 경과 시점부터 프리마켓·정규장·애프터마켓(16:00 ~ 19:59 EST)·데이마켓(20:00 ~ 03:59 EST) 24시간 전 세션에서
-보유 중 60초 블라인드 대기 락 없이 매 1.5초 실시간 4중 다중 익절 타점 스나이퍼 매도 모니터(Case 70, Case 71, Case 72, Case 79, Case 80, Case 82, Case 83) ·
+보유 중 60초 블라인드 대기 락 없이 매 1.5초 실시간 4중 다중 익절 타점 스나이퍼 매도 모니터(Case 70, Case 71, Case 72, Case 79, Case 80, Case 82, Case 83, Case 84) ·
 🚨 [Case 83 방안 C 오버나이트 통합이평 사수 하이브리드] 애프터마켓·데이마켓(is_ext_sell_only == True) 구간에서 상단 2~7층 보유 시
 하단 개별 층(1층 및 2~6층 개별) 쪼개 팔기를 잠가 저가 물량 이탈로 인한 2~7층 통합 이동평균(wma_2_to_7) 도망을 100% 원천 봉쇄하고,
 오버나이트 중에는 통합 이동평균(+1.00%) 일괄 졸업(또는 1층 단독 보유 +1.50% / 독립 골든포켓 +1.50%)만 허용한 뒤,
 04:07:00 EST 프리장 개장(is_ext_sell_only == False) 즉시 프리장 시초가로 4중 다중 익절을 전면 개방하여 시초가 갭상승 수익 극대화! ·
+🛡️ [Case 84 정규장 마감 30분 전(15:30 ~ 16:00 EST) 새 사이클 1층 진입 차단 및 1층 공석 +1% 돌파 차단 알림 연동]
+15:29:01 ~ 16:00:00 EST 구간에 0주 전량 졸업 달성 시 60초 타임쉴드 직후 15:30 EST 이상이 되어 새 사이클 1층 진입이 자동 차단되므로
+익일 04:07 EST 프리장 진입 대기 안내를 표출하고, 1층 익절 후 상단 2~7층 잔존 시 +1.0% 돌파 차단 및 -1.0% 눌림목 감시 안내를 표출! ·
 1.5초 실시간 감시 중 익절 조건 도래 및 최근접 유효 목표가 -2.50% 이내 근접 시 GET /api/v1/trades 최근 5.0초 체결틱 최고가(wick_high_p) 병행 감지로
 1분봉 윗꼬리(Upper-Wick) 슈팅을 100% 포착하되, 다중 지층 윗꼬리 스침 시 상위층 고가 목표가 결합으로 인한 하위층 미체결 역설을 분리 차단하고
 윗꼬리 타임스탬프(_LAST_CONSUMED_WICK_TRADE_TS)는 실주문 발주 성공 시에만 각인하며,
@@ -22,8 +25,8 @@
 0주 전량 졸업 시 온디맨드 예비시드 원금 자동 상환 및 6/6회분 한도 원상 복구(compute_reserve_repayment_on_zero · Case 77) ·
 매도 체결(부분 익절 · 골든포켓 익절 및 0주 전량 졸업) 즉시 기정산 주문 ID(last_settled_order_ids) 등록 및
 60초 매도타임쉴드(last_sell_fill_ts / last_cycle_end_ts) & 1층 공석 재장전 타임쉴드 클리어(last_reentry_eval_ts = 0.0) &
-15초 잔고 인덱싱 그레이스 쉴드(last_auto_fill_ts) 동시 각인' 코어 플러그인 (Step 02 / 04)
-- 제1헌법 ~ 제6헌법 및 Case 01 ~ 83 완벽 준수
+15초 잔고 인덱싱 그레이스 쉴드(last_auto_fill_ts) 동시 각인' 코어 플러그인 (Step 04 / 06)
+- 제1헌법 ~ 제6헌법 및 Case 01 ~ 84 완벽 준수
 """
 
 from __future__ import annotations
@@ -59,10 +62,12 @@ from quant_engine import (
     vrev_reanchor_single_tier_quota,
 )
 from quant_indicators_plugin import (
+    NEW_CYCLE_BUY_CUTOFF_HM,
     is_active_buy_window,
     is_active_sell_window,
     is_active_trading_window,
     is_extended_sell_only_window,
+    is_late_regular_new_cycle_cutoff_window,
     refresh_metrics_with_live_tick,
 )
 from toss_api import (
@@ -926,7 +931,7 @@ async def _commit_filled_sell_and_reanchor_ledger(
     settled_order_id: str = "",
 ) -> Dict[str, Any]:
     """
-    🎯 1 ~ 🎯 4 & Case 19, 59, 60, 61, 65, 69, 70, 71, 72, 73, 77, 78, 79, 80, 82, 83:
+    🎯 1 ~ 🎯 4 & Case 19, 59, 60, 61, 65, 69, 70, 71, 72, 73, 77, 78, 79, 80, 82, 83, 84:
     7층 골디락스 멀티 그리드 및 독립 골든포켓 스나이퍼 매도 주문이 체결(FILLED 또는 부분 체결 후 취소 종료)되었을 때:
     1) pending_sell_pocket_qty (독립 골든포켓) 및 pending_sell_indices (1~7층 그리드)에 해당하는
        순수 매수 원금과 실제 매도 체결가(avg_fill_price)로 왕복 수수료(0.14%) 차감 후 세후 실현 순수익금을 산출한다.
@@ -940,6 +945,7 @@ async def _commit_filled_sell_and_reanchor_ledger(
          1층이 일부만 부분 매도되어 rem_buckets[0].qty < buckets[0].qty 가 된 경우에는
          next_l1_target_q = rem_buckets[0].qty 로 즉시 동기화하여 익절된 물량을 미체결 매수 잔량으로 오인하지 않게 방어한다!
     4) 🚨 [Case 77 & Case 80 : 0주 전량 졸업(len(rem_buckets) == 0 and not rem_gp.is_active) 시 예비시드 자동 상환]
+    5) 🛡️ [Case 84 : 15:29:01 ~ 16:00:00 EST 구간 0주 졸업 시 새 사이클 진입 차단 안내 및 1층 공석 돌파 차단 안내 표출]
     """
     st = context.ledger.get_state(TARGET_SYMBOL)
     buckets = buckets_from_dicts(st.get("buckets", []))
@@ -1117,10 +1123,6 @@ async def _commit_filled_sell_and_reanchor_ledger(
             )
 
     # MODIFIED [Case 78 & Case 80]:
-    # 1) 1층이 전량 익절되었거나 그리드가 0주가 된 경우 l1_target_quota_qty = 0 클리어.
-    # 2) 1층이 부분 익절(rem_buckets[0].qty < orig_l1_qty)된 경우, 방금 익절한 수량을 미체결 잔량(TOPUP_1FL)으로
-    #    오인해 재매수하지 않도록 next_l1_target_q = rem_buckets[0].qty 로 즉시 동기화!
-    # 3) 오직 1층 수량이 전혀 변동하지 않은 경우(예: 골든포켓 단독 익절 또는 상단 개별층 단독 익절)에만 기존 l1_target_quota_qty 보존.
     rem_has_active_l1 = has_active_l1_bucket(rem_buckets)
     if not rem_buckets or not rem_has_active_l1 or sold_l1_flag:
         next_l1_target_q = 0
@@ -1174,8 +1176,6 @@ async def _commit_filled_sell_and_reanchor_ledger(
     )
     day_sell_ev = safe_int(st.get("daily_sell_events"), 0) + 1
 
-    # MODIFIED: 상단 지층이 실제로 전량 소진(rem_upper_cnt == 0)되었을 때만 wma_grad_sell_cnt 를 증가시키고,
-    # 상단 부분 체결로 잔여 상단층이 남은 경우에는 indiv_grid_sell_cnt 로 정확히 집계한다.
     rem_upper_cnt = (
         max(0, len(rem_buckets) - (1 if rem_has_active_l1 else 0))
         if rem_buckets
@@ -1342,6 +1342,18 @@ async def _commit_filled_sell_and_reanchor_ledger(
     now_est_dt = datetime.now(EST_TZ)
     hm_now = now_est_dt.hour * 100 + now_est_dt.minute
     is_ext_sell = is_extended_sell_only_window(hm_now, now_est=now_est_dt)
+    # NEW [Case 84]: 15:30 ~ 16:00 EST 구간이거나 15:29:01 ~ 15:29:59 EST (60초 타임쉴드 경과 시 15:30 EST 이상 도달)인지 판별
+    is_late_cutoff_now = is_late_regular_new_cycle_cutoff_window(
+        hm_now, now_est=now_est_dt
+    )
+    will_hit_late_cutoff_after_shield = bool(
+        is_late_cutoff_now
+        or (
+            now_est_dt.weekday() < 5
+            and hm_now == (NEW_CYCLE_BUY_CUTOFF_HM - 1)
+            and now_est_dt.second >= 1
+        )
+    )
 
     if hasattr(context, "send_slim_alert"):
         sign = "+" if net_pnl >= 0.0 else "-"
@@ -1367,11 +1379,17 @@ async def _commit_filled_sell_and_reanchor_ledger(
                         f" · 💉예비시드 원금 ${repaid_this_time:,.2f} 자동상환 완료"
                         f"(예비한도 {avail_p}/{MAX_RESERVE_PORTIONS}회분 복구!)"
                     )
-                next_entry_guide = (
-                    "🔒장외 매수잠금 · 04:07 EST 프리장 개시 후 첫 1층 진입 대기!"
-                    if is_ext_sell
-                    else "🛡️60초 타임쉴드 경과 후 현재가 조회 및 첫 1층 진입!"
-                )
+                if is_ext_sell:
+                    next_entry_guide = "🔒장외 매수잠금 · 04:07 EST 프리장 개시 후 첫 1층 진입 대기!"
+                elif will_hit_late_cutoff_after_shield:
+                    next_entry_guide = (
+                        "🔒장마감 30분전(15:30~16:00) 새 사이클 진입 차단(고점 오버나이트 방어) · "
+                        "익일 04:07 EST 프리장 첫 1층 진입 대기!"
+                    )
+                else:
+                    next_entry_guide = (
+                        "🛡️60초 타임쉴드 경과 후 현재가 조회 및 첫 1층 진입!"
+                    )
                 note_str = (
                     f"🎓 전 지층 흑자 졸업 완료(0주 싸이클 종료{repay_note} "
                     f"➔ {next_entry_guide})"
@@ -1397,11 +1415,19 @@ async def _commit_filled_sell_and_reanchor_ledger(
                         wma_info.get("min_indiv_upper_price"),
                         rem_buckets[0].book_price,
                     )
-                    reload_guide = (
-                        f"🔒장외 매수·개별층잠금(04:07 EST 이후 2층상한 ${l2_cap_p:.2f} 이하 1층재장전 · 기억저가 ${next_cycle_min_p:.2f} 잠금)"
-                        if is_ext_sell
-                        else f"🛡️60초 타임쉴드 후 1분 주기 1층재장전(2층상한 ${l2_cap_p:.2f} 이하 · 기억저가 ${next_cycle_min_p:.2f} 잠금)"
-                    )
+                    if is_ext_sell:
+                        reload_guide = (
+                            f"🔒장외 매수·개별층잠금(04:07 EST 이후 2층상한 ${l2_cap_p:.2f} 이하 1층재장전 · 기억저가 ${next_cycle_min_p:.2f} 잠금)"
+                        )
+                    elif will_hit_late_cutoff_after_shield:
+                        reload_guide = (
+                            f"🛡️60초 타임쉴드 후 1분 주기 1층 눌림목(-1.0%) 재장전 감시"
+                            f"(🔒장마감 30분전 +1% 돌파차단 · 2층상한 ${l2_cap_p:.2f} 이하 · 기억저가 ${next_cycle_min_p:.2f} 잠금)"
+                        )
+                    else:
+                        reload_guide = (
+                            f"🛡️60초 타임쉴드 후 1분 주기 1층재장전(2층상한 ${l2_cap_p:.2f} 이하 · 기억저가 ${next_cycle_min_p:.2f} 잠금)"
+                        )
                     note_str = (
                         f"📦 잔여 2~{u_cnt + 1}층({u_cnt}개층·{u_qty}주) 순수이평 ${u_wma_p:.2f}(목표 ${u_wma_t:.2f}) 1.5초 실시간 익절감시 "
                         f"· {reload_guide}"
@@ -1757,9 +1783,6 @@ async def execute_1m_sniper_sell_and_reanchor_plugin(
     )
 
     # 🎯 4-B) [Case 82 핵심 수술 3 & Case 83 방안 C : GET /api/v1/trades 최근 5.0초 체결 최고가(wick_high_p) 병행 스캔]:
-    # 1.5 ~ 2.7초 폴링 사이에 0.3초 동안만 윗꼬리를 찍고 내려온 경우에도,
-    # live_p 가 현재 세션에서 유효한 최단 거리 목표가(nearest_target_p) 대비 -2.50% 이내이면
-    # 최근 체결 내역(/api/v1/trades)을 역추적하여 윗꼬리 최고가로 매도 판정기를 즉시 격발한다!
     wick_high_p: float = 0.0
     wick_trade_ts: float = 0.0
     nearest_target_p: float = 0.0
@@ -1793,9 +1816,6 @@ async def execute_1m_sniper_sell_and_reanchor_plugin(
                 )
             )
             if wick_high_p >= nearest_target_p and wick_high_p > live_p:
-                # MODIFIED [Case 82 다중 층 윗꼬리 스침 역설 차단]:
-                # wick_high_p 가 상위 고가 지층까지 스치고 내려온 경우 상위 층 목표가가 결합되어 하위 층까지 미체결되는 것을 막기 위해,
-                # 순수 윗꼬리 감지 시에는 최단 거리 목표가(nearest_target_p) 기준으로 먼저 매도 대상을 산출한다.
                 wick_eval = evaluate_multi_grid_sell_targets(
                     buckets=buckets,
                     live_price=nearest_target_p,
@@ -1827,8 +1847,6 @@ async def execute_1m_sniper_sell_and_reanchor_plugin(
                     )
 
     if bool(sell_eval.get("should_sell")):
-        # [Case 82 핵심 수술 2]: 장외(is_ext_sell_only)에서도 fallback_price=live_p 로 통일하여
-        # 2차 재조회 일시 타임아웃 시 매도를 포기하던 SILENT_EXTENDED_NO_FRESH_LIVE_PRICE 버그 영구 소각!
         fresh_live_p = await _fetch_fresh_current_soxl_price(
             context,
             fallback_price=live_p,
@@ -1836,8 +1854,6 @@ async def execute_1m_sniper_sell_and_reanchor_plugin(
         if fresh_live_p <= 0.0:
             fresh_live_p = live_p
 
-        # MODIFIED [Case 82]: 최신 현재가(fresh_live_p) 단독(또는 max(live_p, fresh_live_p))으로 달성된 지층이 있으면
-        # 해당 물량들은 현재 호가에서 100% 즉시 Taker 체결 가능하므로 이를 최우선 반영한다!
         live_peak_p = max(live_p, fresh_live_p)
         fresh_only_eval = evaluate_multi_grid_sell_targets(
             buckets=buckets,
@@ -1867,11 +1883,6 @@ async def execute_1m_sniper_sell_and_reanchor_plugin(
         )
         reason_tag = str(sell_eval.get("reason_tag") or "SELL_L1_ONLY")
 
-        # [Case 82 핵심 수술 1 : 고점 박제 max(live_p, fresh_live_p) 영구 제거 & 목표 하한가(min_floor_p) 직결 발주]:
-        # - 일반 타점 돌파 및 1분봉 윗꼬리($104.00 터치 직후 호가가 $103.91~$103.99 에 걸려 있거나 순간 밀린 상태)에서는
-        #   윗꼬리 꼭대기($104.00)로 지정가를 박제하지 않고 정확히 목표 익절 하한가(min_floor_p, 예: $103.91)로 지정가 발주한다.
-        # - 오직 최신 현재가(fresh_live_p)가 목표 하한가 대비 +0.50% 초과 대폭 갭상승(fresh_live_p > min_floor_p * 1.005)한 경우에만
-        #   갭상승 수익 보호를 위해 fresh_live_p * 0.997 마켓터블 지정가를 적용한다.
         if fresh_live_p > (min_floor_p * MARKETABLE_GAP_UP_THRESHOLD_MULT):
             gap_exec_p = max(
                 min_floor_p, fresh_live_p * MARKETABLE_GAP_UP_SLIPPAGE_MULT
@@ -1897,8 +1908,6 @@ async def execute_1m_sniper_sell_and_reanchor_plugin(
             "NEW_SELL_SWEEP_OK",
             "SELL_ORDER_ALREADY_ACTIVE",
         )
-        # MODIFIED [Case 82]: 실제 매도 주문 발주가 성공(did_order == True)했을 때만 윗꼬리 체결 시각을 소모 각인하여,
-        # 장외 sellableQuantity 일시 0주 대기(5초) 후 재시도 시 윗꼬리 신호가 증발하지 않도록 보호!
         if did_order and (triggered_by_wick_only or wick_trade_ts > 0.0):
             _LAST_CONSUMED_WICK_TRADE_TS = max(
                 _LAST_CONSUMED_WICK_TRADE_TS,
