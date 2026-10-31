@@ -3,10 +3,10 @@
 # MODIFIED: toss_api.py
 인피니트 스노우볼 (Infinite Snowball) v3.0 — 토스증권 Open API (v1.2.14) 방탄 통신 통제소 &
 SOXL 단일 롱 7-Tier 순수 멀티 그리드(1층 공격수 + 2 ~ 6층 개별 완충층 + 통합 7층 본대) 및
-황금시간대(07:00 ~ 07:50 EST & RSI <= 19.0) 독립 골든포켓(GoldenAllInPocket · 기본값 NONE[OFF]) 폴더별 3중 지층 원장(SoxlStratumLedger) 코어 모듈 (Step 01 / 07)
+황금시간대(07:00 ~ 07:50 EST & RSI <= 19.0) 독립 골든포켓(GoldenAllInPocket · 기본값 NONE[OFF]) 폴더별 3중 지층 원장(SoxlStratumLedger) 코어 모듈 (Step 01 / 09)
 - 제1헌법: 모든 파일 I/O 및 네트워크 통신의 asyncio.to_thread 비동기 격리 + GlobalThrottle 중앙 통제
 - 제2헌법: 기동 시 GET /api/v1/accounts 1회 호출로 BROKERAGE accountSeq 메모리 락온 및 X-Tossinvest-Account 자동 주입
-- 제3헌법 ~ 제6헌법 및 Case 01 ~ 83 전수 락온:
+- 제3헌법 ~ 제6헌법 및 Case 01 ~ 84 전수 락온:
   1) REAL_ALLOWED_SYMBOLS = ("SOXL",) 단일 롱 화이트리스트 물리적 강제 (인버스 숏 SOXS 원천 차단)
   2) get_holdings_map_with_status, get_candles_1m, get_candles_1d, get_recent_trades, get_recent_wick_high_price,
      get_current_prices_batch, get_orderbook, get_buying_power_usd, get_sellable_quantity, create_order, modify_order,
@@ -44,7 +44,9 @@ SOXL 단일 롱 7-Tier 순수 멀티 그리드(1층 공격수 + 2 ~ 6층 개별 
       독립 골든포켓(golden_pocket) 분리회계 & 전술 제어반(/settlement) 3대 모드 선택기(기본값 "NONE" [OFF]) &
       1분봉 캔들 페이지네이션 방탄화(1페이지 200봉 유실 차단 및 스키마 다변화 대응) 탑재]
   12) 🚨 [Case 82 : 1분봉 윗꼬리(Upper-Wick) 슈팅 100% 포착을 위한 GET /api/v1/trades 최근 5.0초 내 유효 체결 최고가 추출기
-      (get_recent_wick_high_price & _parse_iso_timestamp_to_epoch) 탑재]
+      (get_recent_wick_high_price & _parse_iso_timestamp_to_epoch · 서버 시차 -5.0s 허용) 탑재]
+  13) 🚨 [Case 83 & Case 84 : 방안 C 오버나이트 통합이평 사수 하이브리드 및 정규장 마감 30분 전(15:30 ~ 16:00 EST · NEW_CYCLE_BUY_CUTOFF_HM = 1530)
+      0주 새 사이클 첫 1층 진입 및 1층 공석 +1.0% 돌파 추격 차단 상수 연동]
 """
 
 from __future__ import annotations
@@ -71,7 +73,7 @@ from zoneinfo import ZoneInfo
 logger = logging.getLogger("toss_sniper.toss_api")
 
 # ---------------------------------------------------------------------------
-# [핵심 상수] 제4헌법 EST 단일 타임존 & 최종 확정 진화 챔피언 (Case 72 ~ 83) 전역 상수
+# [핵심 상수] 제4헌법 EST 단일 타임존 & 최종 확정 진화 챔피언 (Case 72 ~ 84) 전역 상수
 # ---------------------------------------------------------------------------
 EST_TZ = ZoneInfo("America/New_York")
 KST_TZ = ZoneInfo("Asia/Seoul")
@@ -103,7 +105,7 @@ MIN_DIP_BUDGET_RATIO: float = 0.30
 MIN_DIP_VS_L1_RATIO: float = 0.30
 RESERVE_DEPOSIT_TOLERANCE_RATIO: float = 0.95
 
-# NEW [Case 80 : 미동부 프리장 황금시간대(07:00 ~ 07:50 EST & RSI(14) <= 19.0) 가용시드 100% 전액 추가매수 상수]
+# [Case 80 : 미동부 프리장 황금시간대(07:00 ~ 07:50 EST & RSI(14) <= 19.0) 가용시드 100% 전액 추가매수 상수]
 # 기본값은 "NONE" (OFF) 으로 락온하여 QuantEngine TDD 정합성 100% 보장
 GOLDEN_ALLIN_MODES: Tuple[str, ...] = (
     "NONE",
@@ -115,6 +117,9 @@ GOLDEN_WINDOW_START_HM: int = 700
 GOLDEN_WINDOW_END_HM: int = 750
 GOLDEN_RSI_MAX_THRESHOLD: float = 19.0
 GOLDEN_POCKET_RISE_PCT: float = 1.50
+
+# NEW [Case 84 : 정규장 마감 30분 전(15:30 ~ 16:00 EST) 0주 새 사이클 1층 진입 및 1층 공석 +1.0% 돌파 추격 차단 기준 시각(HHMM)]
+NEW_CYCLE_BUY_CUTOFF_HM: int = 1530
 
 LOCKED_BUY_INTERVAL_MIN: int = 10
 LOCKED_SELL_INTERVAL_MIN: int = 1
@@ -259,7 +264,7 @@ def resolve_folder_isolated_ledger_paths(
     legacy_path = os.path.join(target_dir, "soxl_stratum_ledger.json")
     backup_dir = os.path.join(target_dir, "ledger_backups")
     backup_path = os.path.join(
-        backup_dir, f"soxl_stratum_ledger_{folder_slug}.bak.json"
+        backup_dir, f"soxl_stratum_ledger_{folder_slug>.bak.json".replace(">", "")
     )
     return primary_path, legacy_path, backup_path, folder_slug
 
@@ -473,11 +478,11 @@ class GlobalThrottle:
 
 
 # ---------------------------------------------------------------------------
-# [핵심 2] SOXL 단일 롱 7-Tier 순수 멀티 그리드 및 골든포켓 폴더별 3중 안전 지층 원장 (SoxlStratumLedger — Case 68 ~ 83)
+# [핵심 2] SOXL 단일 롱 7-Tier 순수 멀티 그리드 및 골든포켓 폴더별 3중 안전 지층 원장 (SoxlStratumLedger — Case 68 ~ 84)
 # ---------------------------------------------------------------------------
 class SoxlStratumLedger:
     """
-    🎯 1 ~ 🎯 5 & Case 02, 05, 06, 58 ~ 83:
+    🎯 1 ~ 🎯 5 & Case 02, 05, 06, 58 ~ 84:
     현재 봇이 위치한 폴더(`base_dir`)를 기준으로:
     ① 폴더 고유 원장(`soxl_stratum_ledger_<folder_slug>.json` — Git 덮어쓰기 100% 면역)
     ② 표준 호환 원장(`soxl_stratum_ledger.json` — 기존 코드 및 외부 도구 호환 미러)
@@ -617,7 +622,7 @@ class SoxlStratumLedger:
             "reentry_mode": "HYBRID_PULL_OR_BRK",
             # Case 76: 🔓 06_STEP2X_15PCT_C20 조건부 스텝업 저가 해금 모드 락온
             "unlock_mode": DEFAULT_UNLOCK_MODE,
-            # NEW [Case 80]: 황금시간대(07:00 ~ 07:50 EST & RSI <= 19.0) 전액매수 모드 (기본값 "NONE" [OFF])
+            # [Case 80]: 황금시간대(07:00 ~ 07:50 EST & RSI <= 19.0) 전액매수 모드 (기본값 "NONE" [OFF])
             "golden_allin_mode": DEFAULT_GOLDEN_ALLIN_MODE,
             "golden_pocket": cls._empty_golden_pocket_dict(),
             "last_golden_allin_date": "",
@@ -644,7 +649,7 @@ class SoxlStratumLedger:
             "pending_step_up_min_price": 0.0,
             "pending_sell_mode": "",
             "pending_sell_indices": [],
-            # NEW [Case 80]: 매도 주문 발주 중 포함된 독립 골든포켓 수량
+            # [Case 80]: 매도 주문 발주 중 포함된 독립 골든포켓 수량
             "pending_sell_pocket_qty": 0,
             # 봇 자동 정산 완료된 orderId 링버퍼(최근 50개) — 수동 체결 역추적 시 중복 정산 방지
             "last_settled_order_ids": [],
@@ -679,7 +684,7 @@ class SoxlStratumLedger:
             # Case 76: STEP2X_15PCT_C20 조건부 스텝업 해금 매수 누적/당일 카운터
             "cond_unlock_buy_events": 0,
             "daily_unlock_buy_events": 0,
-            # NEW [Case 80]: 황금시간대(07:00 ~ 07:50 EST & RSI <= 19.0) 전액매수 및 골든포켓 익절/수익 통계
+            # [Case 80]: 황금시간대(07:00 ~ 07:50 EST & RSI <= 19.0) 전액매수 및 골든포켓 익절/수익 통계
             "golden_allin_buy_events": 0,
             "daily_golden_allin_buy_events": 0,
             "golden_pocket_sell_cnt": 0,
@@ -776,7 +781,7 @@ class SoxlStratumLedger:
         cls, raw_pocket: Any
     ) -> Dict[str, Any]:
         """
-        # NEW [Case 69, Case 71 & Case 80 : 독립 골든포켓(golden_pocket) 순수 실물 원가 정규화기]:
+        # [Case 69, Case 71 & Case 80 : 독립 골든포켓(golden_pocket) 순수 실물 원가 정규화기]:
         golden_pocket 의 qty > 0 일 때 book_price == actual_avg_price 및
         book_invested_usd == actual_cost_usd 를 100% 일치시켜 원가 훼손을 원천 차단한다.
         """
@@ -851,7 +856,7 @@ class SoxlStratumLedger:
             0, safe_int(st.get("daily_unlock_buy_events"), 0)
         )
 
-        # NEW [Case 80]: 황금시간대 전액매수 모드 검증 (기본값 "NONE" [OFF]) 및 통계 정규화
+        # [Case 80]: 황금시간대 전액매수 모드 검증 (기본값 "NONE" [OFF]) 및 통계 정규화
         raw_g_mode = (
             str(st.get("golden_allin_mode") or DEFAULT_GOLDEN_ALLIN_MODE)
             .upper()
@@ -1207,7 +1212,7 @@ class SoxlStratumLedger:
 
     def _load_sync(self) -> None:
         """
-        🚨 Case 68, Case 75 & Case 80 [기존 soxl_stratum_ledger.json 100% 무손실 자동 이관 & 3중 금고 Dirty-Check 자가 치유]:
+        🚨 Case 68, Case 75, Case 80 & Case 84 [기존 soxl_stratum_ledger.json 100% 무손실 자동 이관 & 3중 금고 Dirty-Check 자가 치유]:
         1) primary_filepath (`soxl_stratum_ledger_<폴더명>.json`)
         2) backup_filepath  (`ledger_backups/soxl_stratum_ledger_<폴더명>.bak.json`)
         3) legacy_filepath  (`soxl_stratum_ledger.json`)
@@ -1263,8 +1268,9 @@ class SoxlStratumLedger:
                     gp_q = safe_int(
                         (sanitized.get("golden_pocket") or {}).get("qty"), 0
                     )
+                    # MODIFIED [Case 68 ~ 84]: 원장 락온 로그 배너 동기화
                     logger.info(
-                        "📂 [Case 68~83 폴더별 3중 7층 골디락스 그리드 원장 락온 완료] 폴더=[%s] · 채택소스=%s · 시드=$%.2f · 그리드=%d주(%d개층) · 골든포켓=%d주(모드=%s) · 예비수혈=%d/%d회분($%.2f) · 고유원장=%s",
+                        "📂 [Case 68~84 폴더별 3중 7층 골디락스 그리드 원장 락온 완료] 폴더=[%s] · 채택소스=%s · 시드=$%.2f · 그리드=%d주(%d개층) · 골든포켓=%d주(모드=%s) · 예비수혈=%d/%d회분($%.2f) · 고유원장=%s",
                         self.folder_slug,
                         best_label,
                         safe_float(sanitized.get("initial_seed_usd"), 10000.0),
@@ -1536,7 +1542,7 @@ class SoxlStratumLedger:
         self, target_mode: Optional[str] = None
     ) -> Dict[str, Any]:
         """
-        # NEW [Case 80 : 전술 제어반(/settlement) 황금시간대(07:00 ~ 07:50 EST & RSI <= 19.0) 전액매수 모드 순환 선택기]:
+        # [Case 80 : 전술 제어반(/settlement) 황금시간대(07:00 ~ 07:50 EST & RSI <= 19.0) 전액매수 모드 순환 선택기]:
         - target_mode 가 지정되면 해당 모드로 즉시 설정하고,
         - 미지정(인라인 버튼 클릭) 시 "NONE" (⚪ OFF) -> "POCKET_ALLIN" (🌟 독립 골든포켓 ON) ->
           "GRID_L1_ALLIN" (🔥 7층 그리드 1층편입 ON) -> "NONE" (⚪ OFF) 순서로 순환 전환한다.
@@ -2100,7 +2106,7 @@ class TossApiClient:
         self, symbol: str = TARGET_SYMBOL, count: int = 50
     ) -> List[Dict[str, Any]]:
         """
-        # NEW [API.txt v1.2.14 & Case 80, Case 82]:
+        # [API.txt v1.2.14 & Case 80, Case 82]:
         GET /api/v1/trades?symbol=SOXL&count=50
         당일 최근 체결 내역(price, volume, timestamp)을 조회하여 캔들 차트 지연 시 보조 시계열 및
         1분봉 윗꼬리(Upper-Wick) 순간 체결 최고가 포착에 활용한다.
@@ -2127,7 +2133,7 @@ class TossApiClient:
     @staticmethod
     def _parse_iso_timestamp_to_epoch(ts_val: Any) -> float:
         """
-        # NEW [Case 82 : GET /api/v1/trades ISO 8601 체결 시각 -> UTC Epoch(float) 변환기]:
+        # [Case 82 : GET /api/v1/trades ISO 8601 체결 시각 -> UTC Epoch(float) 변환기]:
         예: "2026-03-25T22:30:42.100+09:00" 또는 "2026-10-29T06:57:02.120Z" 또는 숫자형 epoch 를
         초 단위 float 타임스탬프로 안전하게 변환한다.
         """
@@ -2162,11 +2168,11 @@ class TossApiClient:
         count: int = 15,
     ) -> Tuple[float, float]:
         """
-        # NEW [Case 82 : 1분봉 윗꼬리(Upper-Wick) 슈팅 포착용 최근 체결 최고가 추출기]:
+        # MODIFIED [Case 82 : 1분봉 윗꼬리(Upper-Wick) 슈팅 포착용 최근 체결 최고가 추출기 (서버 시차 -5.0s 허용)]:
         GET /api/v1/prices 는 단일 스냅샷(lastPrice)만 반환하므로 1.5 ~ 2.5초 폴링 간격 사이에
         0.3초 동안만 찍히고 내려온 $104.00 윗꼬리 체결틱을 놓칠 수 있다.
         이를 원천 보완하기 위해 GET /api/v1/trades?symbol=SOXL&count=15 를 호출하여:
-        1) 체결 시각(trade_epoch)이 현재 시각 기준 최근 lookback_sec(기본 5.0초, 서버 시차 -2.0초 허용) 이내이고,
+        1) 체결 시각(trade_epoch)이 현재 시각 기준 최근 lookback_sec(기본 5.0초, 서버 NTP 시차 -5.0초 허용) 이내이고,
         2) 직전 매수/매도 체결 시각 및 기소모된 윗꼬리 시각(min_after_ts) 이후에 발생한 유효 체결틱 중
            가장 높은 체결가(best_price)와 해당 체결 시각(best_ts)을 (best_price, best_ts) 튜플로 반환한다.
         """
@@ -2206,7 +2212,7 @@ class TossApiClient:
                 continue
 
             age_sec = now_epoch - t_epoch
-            if age_sec > max_age or age_sec < -2.0:
+            if age_sec > max_age or age_sec < -5.0:
                 continue
 
             if p > best_price or (
@@ -2276,7 +2282,7 @@ class TossApiClient:
         res: Any,
     ) -> Tuple[List[Dict[str, Any]], Optional[str]]:
         """
-        # NEW [Case 80 캔들 응답 스키마 다변화 방탄 파서]:
+        # [Case 80 캔들 응답 스키마 다변화 방탄 파서]:
         API 응답이 {"result": {"candles": [...], "nextBefore": ...}} 표준 형식일 때뿐만 아니라,
         {"result": [...]} 리스트 직접 반환 또는 {"candles": [...]} / {"items": [...]} / {"data": [...]}
         구조일 때도 단 1건의 누락 없이 캔들 배열과 nextBefore 커서를 추출한다.
@@ -2317,7 +2323,7 @@ class TossApiClient:
         adjusted: bool = True,
     ) -> Tuple[List[Dict[str, Any]], Optional[str]]:
         """
-        # MODIFIED [Case 80 : GET /api/v1/candles 방탄 폴백 탑재]:
+        # [Case 80 : GET /api/v1/candles 방탄 폴백 탑재]:
         1) 요청된 count(최대 200) 및 adjusted 파라미터로 1차 조회한다.
         2) 만약 브로커 서버가 특정 세션에서 adjusted 또는 count=200 에 대해 에러나 빈 배열을 반환하면
            즉시 기본 파라미터(count=min(100, q_cnt), adjusted 생략)로 자동 폴백 재시도한다.
@@ -2382,7 +2388,7 @@ class TossApiClient:
         adjusted: bool = True,
     ) -> List[Dict[str, Any]]:
         """
-        # MODIFIED [Case 80 : 1분봉 다중 페이지네이션 페이지별 독립 예외 격리]:
+        # [Case 80 : 1분봉 다중 페이지네이션 페이지별 독립 예외 격리]:
         GET /api/v1/candles (interval="1m") 를 nextBefore 페이지네이션으로 호출하여
         최대 total_count(기본 300)개의 1분봉 리스트를 반환한다.
         - 1페이지(최신 200봉) 수신 성공 후 2페이지(before 커서) 조회에서 에러가 발생하더라도
@@ -2778,7 +2784,7 @@ class TossApiClient:
         if clean_side not in ("BUY", "SELL"):
             raise ValueError(f"유효하지 않은 주문 방향: {clean_side}")
 
-        # MODIFIED [Case 01 & Case 79]: 평일 04:07 ~ 16:00 EST 외(주말 토·일요일 포함) 모든 매수 주문 물리적 차단
+        # [Case 01 & Case 79]: 평일 04:07 ~ 16:00 EST 외(주말 토·일요일 포함) 모든 매수 주문 물리적 차단
         if enforce_daymarket_block and clean_side == "BUY":
             now_est = datetime.now(EST_TZ)
             hm = now_est.hour * 100 + now_est.minute
@@ -2956,7 +2962,7 @@ class TossApiClient:
         symbol: str = TARGET_SYMBOL,
     ) -> Tuple[float, List[str]]:
         """
-        # MODIFIED [Case 19 & Case 63 수동 매수·매도 실체결가 역추적기 (API.txt OrderStatus 규격 엄수)]:
+        # [Case 19 & Case 63 수동 매수·매도 실체결가 역추적기 (API.txt OrderStatus 규격 엄수)]:
         GET /api/v1/orders?status=CLOSED&symbol=SOXL 응답에서:
         1) 봇이 이미 정산한 settled_order_ids 를 제외하고,
         2) CANCEL_REJECTED (취소 거부 별도 레코드), REPLACE_REJECTED (정정 거부 별도 레코드),

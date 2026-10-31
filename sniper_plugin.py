@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 # MODIFIED: sniper_plugin.py
-인피니트 스노우볼 (Infinite Snowball) v3.0 — 스나이퍼 매수 코어 Part 2 / 2 (Step 03 / 06)
+인피니트 스노우볼 (Infinite Snowball) v3.0 — 스나이퍼 매수 코어 Part 2 / 2 (Step 05 / 09)
 역할:
 1) sniper_plugin_core.py (Part 1 / 2) 의 모든 상수·타임쉴드·GUARD30 예비수혈·체결커밋·미체결 동기화 심볼 명시적 재익스포트(Facade Re-export)로
    타 모듈(defense_plugin.py, tg_ui_plugin.py, main_runtime.py, main.py, plugin_updater.py) AST 임포트 호환성 100% 보장
@@ -233,7 +233,7 @@ async def execute_seed_protected_buy_gate_plugin(
         )
         met = refresh_metrics_with_live_tick(base_met, live_p, now_est=dt_now)
         rsi_val = safe_float(met.get("rsi_14"), 50.0)
-        # MODIFIED [Case 80]: 최소 14개 이상의 1분봉이 확보된 rsi_ready == True 만 엄격히 신뢰!
+        # [Case 80]: 최소 14개 이상의 1분봉이 확보된 rsi_ready == True 만 엄격히 신뢰!
         rsi_ready = bool(met.get("rsi_ready", False))
 
         golden_sig = evaluate_golden_allin_signal(
@@ -392,7 +392,7 @@ async def execute_seed_protected_buy_gate_plugin(
                                 oid = str(
                                     ord_res.get("orderId") or ""
                                 ).strip()
-                                # MODIFIED [Case 78 & Case 80]:
+                                # [Case 78 & Case 80]:
                                 # 이미 활성 1층이 존재하는 상태에서 GOLDEN_L1 이 발주될 때는 기존 1층의 l1_target_quota_qty 를 유지하고
                                 # 실제 체결 커밋 시점에 체결 수량으로 확정하여, 0주 미체결 취소 시 기존 1층 정량이 오염되지 않게 보호!
                                 has_l1_g = has_active_l1_bucket(now_buckets)
@@ -461,7 +461,7 @@ async def execute_seed_protected_buy_gate_plugin(
     #    익일 급락 오버나이트 리스크를 원천 차단하기 위해 0주 새 사이클 첫 1층(REENTRY_1FL) 진입을 100% 금지한다!
     # -----------------------------------------------------------------------
     if is_zero_shares:
-        # NEW [Case 84 : 정규장 마감 30분 전(15:30 ~ 16:00 EST) 0주 새 사이클 첫 1층 진입 원천 차단]
+        # [Case 84 : 정규장 마감 30분 전(15:30 ~ 16:00 EST) 0주 새 사이클 첫 1층 진입 원천 차단]
         if is_late_regular_new_cycle_cutoff_window(hm, now_est=dt_now):
             return {
                 "status": "HOLD_LATE_SESSION_NEW_CYCLE_CUTOFF",
@@ -469,7 +469,7 @@ async def execute_seed_protected_buy_gate_plugin(
                 "cutoff_hm": NEW_CYCLE_BUY_CUTOFF_HM,
             }
 
-        # MODIFIED [Case 80]: 그리드가 0주인데 독립 골든포켓(gp.is_active)에 가용 현금 100%가 투입되어 있는 동안에는
+        # [Case 80]: 그리드가 0주인데 독립 골든포켓(gp.is_active)에 가용 현금 100%가 투입되어 있는 동안에는
         # 매 1.5초마다 불필요하게 시세 API를 재조회하지 않고 골든포켓(+1.50%) 익절로 현금이 환원될 때까지 조용히 대기한다!
         min_req_0sh_guard = max(
             live_p * (1.0 + ROUND_TRIP_FEE_RATE_PCT / 100.0),
@@ -494,7 +494,7 @@ async def execute_seed_protected_buy_gate_plugin(
                 if len(now_buckets) > 0:
                     return {"status": "L1_ALREADY_FILLED_IN_MUTEX"}
 
-                # NEW [Case 84 뮤텍스 내부 2차 시각 재검문 : 15:29:59 -> 15:30:00 경계 경합 원천 차단]
+                # [Case 84 뮤텍스 내부 2차 시각 재검문 : 15:29:59 -> 15:30:00 경계 경합 원천 차단]
                 dt_mutex = (
                     now_est.astimezone(EST_TZ)
                     if now_est
@@ -675,23 +675,27 @@ async def execute_seed_protected_buy_gate_plugin(
             wma_info.get("upper_wma_price"), min_upper_tier_p
         )
         anchor_p = safe_float(st.get("anchor_price"), min_upper_tier_p)
+        is_late_cutoff = is_late_regular_new_cycle_cutoff_window(
+            hm, now_est=dt_now
+        )
 
+        # MODIFIED [Case 84]: 코어 판정기 evaluate_l2_only_hybrid_reentry_signal 에 is_late_new_cycle_cutoff 직접 주입
         reentry_sig = evaluate_l2_only_hybrid_reentry_signal(
             live_price=fresh_live_p,
             anchor_price=anchor_p,
             l2_book_price=min_upper_tier_p,
             min_upper_tier_price=min_upper_tier_p,
+            is_late_new_cycle_cutoff=is_late_cutoff,
         )
         sig_type = str(reentry_sig.get("signal_type") or "HOLD_WAIT_GATE")
-        is_late_cutoff = is_late_regular_new_cycle_cutoff_window(
-            hm, now_est=dt_now
-        )
 
-        # NEW [Case 84 : 15:30 ~ 16:00 EST 구간에서 상단 2 ~ 7층 보유 · 1층 공석 시 +1.00% 상승돌파(BREAKOUT_RELOAD) 추격 차단]
         if (
-            bool(reentry_sig.get("should_buy"))
-            and sig_type == "BREAKOUT_RELOAD"
-            and is_late_cutoff
+            sig_type == "HOLD_LATE_SESSION_BREAKOUT_CUTOFF"
+            or (
+                bool(reentry_sig.get("should_buy"))
+                and sig_type == "BREAKOUT_RELOAD"
+                and is_late_cutoff
+            )
         ):
             new_pass_cnt = safe_int(st.get("seed_protect_pass_cnt"), 0) + 1
             new_day_pass = (
@@ -787,7 +791,7 @@ async def execute_seed_protected_buy_gate_plugin(
                 if in_re_m:
                     return {"status": "HOLD_60S_REENTRY_TIME_SHIELD_IN_MUTEX"}
 
-                # NEW [Case 84 뮤텍스 내부 2차 시각 재검문 : 15:30 ~ 16:00 EST 구간 BREAKOUT_RELOAD 원천 차단]
+                # [Case 84 뮤텍스 내부 2차 시각 재검문 : 15:30 ~ 16:00 EST 구간 BREAKOUT_RELOAD 원천 차단]
                 dt_mutex = (
                     now_est.astimezone(EST_TZ)
                     if now_est
@@ -1004,7 +1008,7 @@ async def execute_seed_protected_buy_gate_plugin(
                     "l2_ceiling_price": min_upper_tier_p,
                 }
 
-    # MODIFIED: 원장 그리드가 비어 있으나(len(buckets) == 0) 실계좌 잔고(h_qty)와 일시 시차가 존재하는 경우 IndexError 원천 차단
+    # 원장 그리드가 비어 있으나(len(buckets) == 0) 실계좌 잔고(h_qty)와 일시 시차가 존재하는 경우 IndexError 원천 차단
     if not buckets or not has_active_l1:
         return {
             "status": "WAIT_HOLDINGS_RECONCILE_SYNC",
@@ -1091,7 +1095,7 @@ async def execute_seed_protected_buy_gate_plugin(
                                 "golden_pocket_qty": now_gp_top.qty,
                             }
 
-                        # MODIFIED [Case 77 & Case 78 : 예수금 API 0.0 반환 시 0.25초 재시도 및 None 우회 422 루프 원천 차단]:
+                        # [Case 77 & Case 78 : 예수금 API 0.0 반환 시 0.25초 재시도 및 None 우회 422 루프 원천 차단]:
                         raw_bp_top = await context.api.get_buying_power_usd(
                             safety_buffer_pct=0.2
                         )
@@ -1255,7 +1259,7 @@ async def execute_seed_protected_buy_gate_plugin(
     lot_tag = "DIP_1FL"
 
     if not bool(dip_eval.get("should_buy")):
-        # MODIFIED [Case 75 & Case 77]:
+        # [Case 75 & Case 77]:
         # 이미 시드고갈 입금 대기(waiting_reserve_deposit == True) 상태에서 60초 주기로 깨어났는데
         # 가격이 일시 반등해 있는 경우에는 10분 버킷(last_evaluated_buy_bucket_id)을 소모하거나
         # 매 60초마다 패스 카운터를 디스크에 기록하지 않고 인메모리 60초 입금 감시 쉴드만 재장전한다!

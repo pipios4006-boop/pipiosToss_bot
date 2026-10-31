@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 """
-# NEW: quant_engine_core.py
-인피니트 스노우볼 (Infinite Snowball) v3.0 — 퀀트 엔진 코어 Part 1 / 2 (Step 01 / 05)
+# MODIFIED: quant_engine_core.py
+인피니트 스노우볼 (Infinite Snowball) v3.0 — 퀀트 엔진 코어 Part 1 / 2 (Step 02 / 09)
 역할:
-1) 전역 퀀트 상수 락온 (8% 황금비율 · 7-Layer 골디락스 그리드 · STEP2X_15PCT_C20 · GUARD30 예비수혈 · 황금시간 전액매수 기본값 NONE[OFF])
+1) 전역 퀀트 상수 락온 (8% 황금비율 · 7-Layer 골디락스 그리드 · STEP2X_15PCT_C20 · GUARD30 예비수혈 · 황금시간 전액매수 기본값 NONE[OFF] · Case 84 15:30 컷오프)
 2) 순수 실물 매수 원가(book_price == actual_avg_price) 구조체 (StratumBucket, GoldenAllInPocket) 및
    상단 그리드(2층 ~ 6층 개별 완충층 + 통합 7층 본대 GRID_L7) 번호 정규화·합병기(relabel_upper_grid_tiers)
 3) 8%(12.5분할) 황금비율 정액 기반 정량 산출기(min(1회분 예산 상한 주수, 기준가 고정 정량) 이중 캡핑 Case 67) 및
@@ -11,9 +11,10 @@
 4) 30% 자투리 1주 승격 방지 가드(GUARD30) & 토스 실계좌 여유자금 감지 기반 최대 +6회분 온디맨드 예비시드 자동 수혈 판정기 및
    0주 전량 졸업 시 예비시드 원금 자동 상환 연산기(Case 77)
 5) 보유 회차별 4단 와이드 점진 활주로(1~4회 -1.0% / 5~8회 -2.0% / 9~10회 -3.5% / 11회+ -5.5%) ·
-   1층 공석 시 2층 단가 상한 역전 차단(HOLD_PREVENT_INVERSION · Case 73) 기반 하이브리드 재장전 판정기 ·
+   1층 공석 시 2층 단가 상한 역전 차단(HOLD_PREVENT_INVERSION · Case 73) 및
+   정규장 마감 30분 전(15:30 ~ 16:00 EST) +1.00% 상승돌파 추격 차단(HOLD_LATE_SESSION_BREAKOUT_CUTOFF · Case 84) 기반 하이브리드 재장전 판정기 ·
    3중 안전문(보유 2층 이하 & 현금비중 20%+ & 저점대비 2.0배+ 반등) 통과 시 -15.0% 스텝업 저가 해금 판정기(Case 76)
-- 제1헌법 ~ 제6헌법 및 Case 01 ~ 83 완벽 준수
+- 제1헌법 ~ 제6헌법 및 Case 01 ~ 84 완벽 준수
 """
 
 from __future__ import annotations
@@ -49,9 +50,14 @@ MAX_GRID_TIERS: int = MAX_GRID_TIERS_7
 # 타 모듈 AST 심볼 임포트 호환을 위해 MAX_GRID_TIERS_12 별칭을 7 로 동시 유지
 MAX_GRID_TIERS_12: int = MAX_GRID_TIERS_7
 
-# 🎯 4 & Case 59, Case 71, Case 72, Case 73: 상단 그리드(2~7층) 보유 중 1층 공석 시 60초 주기 눌림목/상승돌파 임계치(%)
+# 🎯 4 & Case 59, Case 71, Case 72, Case 73, Case 84: 상단 그리드(2~7층) 보유 중 1층 공석 시 60초 주기 눌림목/상승돌파 임계치(%)
 REENTRY_PULLBACK_DROP_PCT: float = -1.00
 REENTRY_BREAKOUT_RISE_PCT: float = 1.00
+
+# NEW [Case 84]: 정규장 마감 30분 전(15:30 ~ 16:00 EST) 0주 새 사이클 1층 진입 및 1층 공석 +1.0% 돌파 추격 차단 기준 시각(HHMM)
+NEW_CYCLE_BUY_CUTOFF_HM: int = int(
+    getattr(toss_api, "NEW_CYCLE_BUY_CUTOFF_HM", 1530)
+)
 
 # Case 76: 🔓 06_STEP2X_15PCT_C20 3중 안전문 기반 조건부 스텝업 저가 해금 상수
 DEFAULT_UNLOCK_MODE: str = str(
@@ -124,12 +130,12 @@ def get_golden_allin_mode_label(mode: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# [핵심 1] StratumBucket & GoldenAllInPocket : 순수 실물 매수 원가(book_price == actual_avg_price) 구조체 (Case 46 ~ 83)
+# [핵심 1] StratumBucket & GoldenAllInPocket : 순수 실물 매수 원가(book_price == actual_avg_price) 구조체 (Case 46 ~ 84)
 # ---------------------------------------------------------------------------
 @dataclass
 class StratumBucket:
     """
-    🎯 3 & Case 46 ~ 83:
+    🎯 3 & Case 46 ~ 84:
     SOXL 1층 ~ 7층 골디락스 멀티 그리드(1층 공격수 L1 / 2층 ~ 6층 개별 완충층 GRID_L2 ~ GRID_L6 / 통합 7층 본대 GRID_L7) 데이터 구조체.
     - qty              : 보유 정수 주식 수 (주)
     - book_price       : 목표 탈출 기준 단가 ($, 순수 원가 모드에서는 actual_avg_price 와 100% 동일)
@@ -929,7 +935,7 @@ def compute_reserve_repayment_on_zero(
 
 
 # ---------------------------------------------------------------------------
-# [핵심 3] 보유 회차별 4단 와이드 점진 단차 · 하이브리드 1층 재장전 · STEP2X_15PCT_C20 스텝업 해금 판정기 (Case 36 ~ 76)
+# [핵심 3] 보유 회차별 4단 와이드 점진 단차 · 하이브리드 1층 재장전(Case 84 돌파차단 포함) · STEP2X_15PCT_C20 스텝업 해금 판정기 (Case 36 ~ 84)
 # ---------------------------------------------------------------------------
 def get_golden8_prog_thresholds(
     held_lots: int,
@@ -969,9 +975,10 @@ def evaluate_l2_only_hybrid_reentry_signal(
     anchor_price: float,
     l2_book_price: float = 0.0,
     min_upper_tier_price: float = 0.0,
+    is_late_new_cycle_cutoff: bool = False,
 ) -> Dict[str, Any]:
     """
-    # [🎯 4 & Case 59, Case 67, Case 71, Case 72, Case 73]:
+    # MODIFIED [🎯 4 & Case 59, Case 67, Case 71, Case 72, Case 73 & Case 84]:
     1층이 실물 익절되어 장부에 상단 그리드(2층 ~ 7층)만 남아 1층이 공석일 때,
     매도 후 60.0초 타임쉴드 및 매 60.0초(1분) 타임쉴드 주기마다 호출되는 하이브리드 독립 1층 재장전 판정기:
     1) 🛡️ [Case 73 단가 역전 원천 차단 가드 (HOLD_PREVENT_INVERSION · 후자)]:
@@ -979,10 +986,12 @@ def evaluate_l2_only_hybrid_reentry_signal(
        (lp > ceil_p + 1e-6), 새로 매수할 1층 공격수 단가가 2층 단가보다 비싸지는 단가 역전(1층 > 2층) 및
        고점 중복 매수를 막기 위해 즉시 매수를 패스(should_buy = False, signal_type = "HOLD_PREVENT_INVERSION")하고
        실시간 매도 모니터가 수익권에 들어선 2층(+1.00%)을 익절하도록 위임한다!
-    2) 🎯 [현재가 <= 2층 단가 안전 영역 내 눌림목(-1.00%) OR 상승돌파(+1.00%) 타점 판정]:
-       - 조건 A (눌림목 재장전 : chg_from_exit <= -1.00% & lp <= ceil_p) -> PULLBACK_RELOAD
-       - 조건 B (상승돌파 재장전 : chg_from_exit >= +1.00% & lp <= ceil_p) -> BREAKOUT_RELOAD
-       충족 시에만 상단 2층 ~ 7층 비병합 독립 실물 1층(REENTRY_1FL) 재장전을 승인한다.
+    2) 🎯 [현재가 <= 2층 단가 안전 영역 내 눌림목(-1.00%) OR 상승돌파(+1.00%) 타점 판정 & Case 84 장마감 30분전 돌파 차단]:
+       - 조건 A (눌림목 재장전 : chg_from_exit <= -1.00% & lp <= ceil_p) -> 04:07 ~ 16:00 EST 전 구간 PULLBACK_RELOAD 승인!
+       - 조건 B (상승돌파 재장전 : chg_from_exit >= +1.00% & lp <= ceil_p) ->
+         정규장 마감 30분 전(15:30 ~ 16:00 EST, is_late_new_cycle_cutoff == True) 구간에서는
+         장 막판 고점 추격을 막기 위해 HOLD_LATE_SESSION_BREAKOUT_CUTOFF 로 즉시 차단하고,
+         04:07 ~ 15:29 EST 구간에서만 BREAKOUT_RELOAD 로 독립 실물 1층(REENTRY_1FL) 재장전을 승인한다!
     """
     lp = safe_float(live_price, 0.0)
     anc = safe_float(anchor_price, 0.0)
@@ -1035,6 +1044,7 @@ def evaluate_l2_only_hybrid_reentry_signal(
             "l2_ceiling_price": round(ceil_p, 4),
         }
 
+    # 조건 A : -1.00% 이하 눌림목 재장전 (15:30 ~ 16:00 EST 구간 포함 전 매수 구간 100% 정상 허용)
     if chg_from_exit_pct <= REENTRY_PULLBACK_DROP_PCT:
         return {
             "should_buy": True,
@@ -1047,7 +1057,19 @@ def evaluate_l2_only_hybrid_reentry_signal(
             "l2_ceiling_price": round(ceil_p, 4),
         }
 
+    # 조건 B : +1.00% 이상 상승돌파 재장전 (Case 84 : 15:30 ~ 16:00 EST 구간에서는 돌파 추격 차단!)
     if chg_from_exit_pct >= REENTRY_BREAKOUT_RISE_PCT:
+        if is_late_new_cycle_cutoff:
+            return {
+                "should_buy": False,
+                "signal_type": "HOLD_LATE_SESSION_BREAKOUT_CUTOFF",
+                "ref_anchor": round(ref_anchor, 4),
+                "quota_ref_price": round(ref_anchor, 4),
+                "chg_from_exit_pct": round(chg_from_exit_pct, 2),
+                "pullback_target_price": pullback_target_p,
+                "breakout_target_price": breakout_target_p,
+                "l2_ceiling_price": round(ceil_p, 4),
+            }
         return {
             "should_buy": True,
             "signal_type": "BREAKOUT_RELOAD",

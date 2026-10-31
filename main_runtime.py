@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 # MODIFIED: main_runtime.py
-인피니트 스노우볼 (Infinite Snowball) v3.0 — 메인 런타임 서포트 브릿지 (메인 코드 2분할 리팩토링 Part 1 / 2 · Step 06 / 07)
+인피니트 스노우볼 (Infinite Snowball) v3.0 — 메인 런타임 서포트 브릿지 (메인 코드 2분할 리팩토링 Part 1 / 2 · Step 08 / 09)
 - 역할:
   1) 적응형 비동기 플러그인 호출기(_call_plugin_adaptive) 및 동적 심볼 리졸버(_resolve_module_attr) (Case 13)
   2) TossApiClient 런타임 메서드 호환성 폴리필 어댑터(_install_toss_api_compatibility_patches · 보조 폴리필 5종 및 close 전수 포함)
@@ -9,10 +9,10 @@
   4) 100% 벡터화 1분봉/일봉 지표 및 실시간 틱 Wilder's RSI(14) 무손실 직결(_compute_candle_metrics_dynamic · Case 80 RSI 50.0 고정 버그 영구 소각)
   5) 폴더 위치(base_dir) 전용 텔레그램 토큰·채팅방 ID 자동 탐색기(_discover_telegram_credentials · Case 68)
   6) 내장형 사용자 중심 초슬림 텔레그램 불사조 롱폴링/관제탑 브릿지(_AdaptiveTelegramBridge · tg_ui_plugin 단일 렌더러 직결 ·
-     11대 코어 모듈 프리플라이트 안내 동기화 · /avwap 조회 시 1분봉 미확보 상태면 즉시 온디맨드 프리워밍 수행 ·
+     12대 코어 모듈 프리플라이트 안내 동기화 · /avwap 조회 시 1분봉 미확보 상태면 즉시 온디맨드 프리워밍 수행 ·
      전술 제어반 황금시간[07:00~07:50 EST & RSI <= 19.0] 전액매수 모드 선택기[기본값 NONE(OFF) ↔ POCKET_ALLIN ↔ GRID_L1_ALLIN] 완벽 지원 ·
-     Case 75 httpx/httpcore INFO 로그 묵음화 & Case 81 전용 httpx.AsyncClient 자동 재생성 불사조 폴링 · 오프셋 파일 선행 영속화 · os.execv 인플레이스 자가 교체 탑재)
-- 제1헌법 ~ 제6헌법 및 Case 01 ~ 83 전수 락온
+     Case 75 httpx/httpcore INFO 로그 묵음화 & Case 81 전용 httpx.AsyncClient 자동 재생성 불사조 폴링 · 오프셋 파일 선행 영속화 · os.execv 인플레이스 자가 교체 · Case 84 실시간 EST 연동 탑재)
+- 제1헌법 ~ 제6헌법 및 Case 01 ~ 84 전수 락온
 """
 
 from __future__ import annotations
@@ -86,7 +86,7 @@ from toss_api import (
     safe_int,
 )
 
-# NEW [Case 75]: 매 1.5초 시세 조회 및 폴링 시 systemd-journald 디스크 쓰기를 유발하는 httpx / httpcore INFO 로그를 WARNING 으로 고정
+# [Case 75]: 매 1.5초 시세 조회 및 폴링 시 systemd-journald 디스크 쓰기를 유발하는 httpx / httpcore INFO 로그를 WARNING 으로 고정
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 
@@ -416,7 +416,7 @@ def _extract_candles_list(
     raw_res: Any,
 ) -> Tuple[List[Dict[str, Any]], Optional[str]]:
     """
-    # MODIFIED [Case 80]:
+    # [Case 80]:
     result.candles 표준 스키마뿐만 아니라 result 직접 리스트, items, data 키 응답을 모두 파싱한다.
     """
     if isinstance(raw_res, list):
@@ -446,7 +446,6 @@ def _extract_candles_list(
 
 def _install_toss_api_compatibility_patches() -> None:
     """
-    # MODIFIED:
     TossApiClient 에 필수 메서드가 누락된 구버전 환경에서도 런타임 AttributeError 를 0건으로 차단한다.
     (보조 폴리필 5종: get_open_orders, cancel_all_open_orders, find_latest_open_order_id,
      get_buying_power_usd, get_usd_krw_rate 및 close 포함)
@@ -852,7 +851,7 @@ def _compute_vectorized_metrics_fallback(
     candles_1d: List[Dict[str, Any]],
 ) -> Dict[str, Any]:
     """
-    # MODIFIED [Case 80]:
+    # [Case 80]:
     quant_indicators_plugin.compute_soxl_quant_metrics_1m() 를 최우선 호출하여
     인메모리 1분봉(_LIVE_1M_BAR_STORE) 병합 및 Wilder's RSI(14) 산출을 수행하고,
     예외 발생 시에만 ISO8601 + np.diff 기반 자체 벡터화 폴백을 수행한다.
@@ -1094,7 +1093,7 @@ async def _compute_candle_metrics_dynamic(
     candles_1d: List[Dict[str, Any]],
 ) -> Dict[str, Any]:
     """
-    # MODIFIED [Case 80 : compute_soxl_quant_metrics_1m 결과 무손실 직결]:
+    # [Case 80 : compute_soxl_quant_metrics_1m 결과 무손실 직결]:
     quant_indicators_plugin.compute_soxl_quant_metrics_1m() 가 반환한 딕셔너리를
     조건부 누락 없이 즉시 채택하여 인메모리 1분봉 합성 기저값(prev_bar_close 등)이 100% 유지되도록 보장한다.
     """
@@ -1260,11 +1259,11 @@ def _discover_telegram_credentials(
 
 
 # ---------------------------------------------------------------------------
-# [핵심 5] 내장형 텔레그램 브릿지 (_AdaptiveTelegramBridge — tg_ui_plugin 렌더러 직결 & Case 80/81/83 완벽 통합)
+# [핵심 5] 내장형 텔레그램 브릿지 (_AdaptiveTelegramBridge — tg_ui_plugin 렌더러 직결 & Case 80/81/83/84 완벽 통합)
 # ---------------------------------------------------------------------------
 class _AdaptiveTelegramBridge:
     """
-    # MODIFIED [Case 62 ~ 83]:
+    # MODIFIED [Case 62 ~ 84]:
     tg_ui_plugin 의 4대 관제 보드 렌더러(build_start_schedule_message, build_avwap_radar_message,
     build_sync_instruction_message, build_settlement_control_message)를 단일 소스로 재사용하여
     코드 중복을 제거하고,
@@ -1272,7 +1271,7 @@ class _AdaptiveTelegramBridge:
       HTTP 409 Conflict / 연속 3회 오류 시 세션 자동 재생성 불사조 롱폴링(Immortal Supervisor Wrapper)
     - [Case 81] 폴더별 오프셋 파일(.tg_update_offset_<folder_slug>.dat) + 3중 원장 + 서버 3중 선행 영속화
     - [Case 81] /update 완료 후 구버전 os._exit(0) 대신 3.5초 하드 워치독 및 perform_self_restart_execv(os.execv)로
-      100% 무중단 자가 교체 수행!
+      100% 무중단 자가 교체 수행 (12대 코어 모듈 프리플라이트 안내 동기화 포함)!
     """
 
     def __init__(self, context: Any) -> None:
@@ -1302,7 +1301,7 @@ class _AdaptiveTelegramBridge:
 
     async def _ensure_tg_http_client(self) -> Optional[Any]:
         """
-        # NEW [Case 81]:
+        # [Case 81]:
         토스 API 세션과 분리된 텔레그램 전용 httpx.AsyncClient 를 생성/반환한다.
         """
         if not _HTTPX_AVAILABLE or httpx is None:
@@ -1318,7 +1317,7 @@ class _AdaptiveTelegramBridge:
 
     async def _close_tg_http_client(self) -> None:
         """
-        # NEW [Case 81]:
+        # [Case 81]:
         종료/재기동 직전 또는 연속 오류 발생 시 열린 텔레그램 롱폴링 소켓을 즉시 닫아
         신구 프로세스 간 HTTP 409 Conflict 충돌을 원천 차단한다.
         """
@@ -1333,7 +1332,7 @@ class _AdaptiveTelegramBridge:
 
     async def _recreate_tg_http_client(self, reason: str = "ERROR") -> None:
         """
-        # NEW [Case 81]:
+        # [Case 81]:
         HTTP 409 Conflict 또는 연속 3회 이상 폴링 오류 감지 시 기존 소켓 풀을 폐기하고 새 세션을 구축한다.
         """
         logger.info(
@@ -1386,7 +1385,7 @@ class _AdaptiveTelegramBridge:
         timeout_sec: float = 15.0,
     ) -> Dict[str, Any]:
         """
-        # MODIFIED [Case 81]:
+        # [Case 81]:
         텔레그램 전용 httpx.AsyncClient 가 가용하면 비동기 커넥션 풀로 직접 호출하고,
         예외 또는 미설치 환경에서는 asyncio.to_thread(_post_tg_sync) 로 안전 폴백한다.
         """
@@ -1435,7 +1434,7 @@ class _AdaptiveTelegramBridge:
 
     async def _persist_offset_locally(self, target_update_id: int) -> None:
         """
-        # NEW [Case 81]:
+        # [Case 81]:
         최신 update_id 를 로컬 오프셋 파일(.tg_update_offset_<folder_slug>.dat)과 3중 원장에 동시 영속화한다.
         """
         uid = max(self._last_update_id, safe_int(target_update_id, 0))
@@ -1588,7 +1587,7 @@ class _AdaptiveTelegramBridge:
         self,
     ) -> Tuple[float, Dict[str, Any]]:
         """
-        # MODIFIED [Case 80 : /avwap 조회 시 1분봉 미확보 상태면 즉시 온디맨드 프리워밍 수행]:
+        # [Case 80 : /avwap 조회 시 1분봉 미확보 상태면 즉시 온디맨드 프리워밍 수행]:
         현재가를 최신화한 뒤, 만약 candle_metrics_cache 에 아직 prev_bar_close 가 세팅되어 있지 않다면
         그 자리에서 get_candles_1m(total_count=200)을 1회 호출하여 Wilder's RSI(14) 기저값을 생성한다.
         """
@@ -1764,7 +1763,9 @@ class _AdaptiveTelegramBridge:
         )
         self.context.wakeup_event.set()
         live_p, _ = await self._refresh_live_price_and_metrics()
-        summary = summarize_stratum_portfolio(updated_st, live_price=live_p)
+        summary = summarize_stratum_portfolio(
+            updated_st, live_price=live_p, now_est=datetime.now(EST_TZ)
+        )
         quota_badge_str = _format_case67_quota_badge(summary)
         await self.send_message(
             chat_id=chat_id,
@@ -1858,7 +1859,9 @@ class _AdaptiveTelegramBridge:
 
         self.context.wakeup_event.set()
         live_p, _ = await self._refresh_live_price_and_metrics()
-        summary = summarize_stratum_portfolio(st_reset, live_price=live_p)
+        summary = summarize_stratum_portfolio(
+            st_reset, live_price=live_p, now_est=datetime.now(EST_TZ)
+        )
         init_seed = safe_float(summary.get("initial_seed_usd"), 10000.0)
         free_cash = safe_float(summary.get("free_cash_usd"), 0.0)
         next_bud = safe_float(
@@ -1886,7 +1889,7 @@ class _AdaptiveTelegramBridge:
         """
         # MODIFIED [Case 62, Case 68, Case 75 & Case 81]:
         1) /update 수신 즉시 오프셋을 로컬 파일(.tg_update_offset_<slug>.dat), 원장, 텔레그램 서버에 선행 확정한다.
-        2) execute_git_pull_and_preflight() 로 업데이트 및 11대 코어 모듈 서브프로세스 검증을 수행한다.
+        2) execute_git_pull_and_preflight() 로 업데이트 및 12대 코어 모듈 서브프로세스 검증을 수행한다.
         3) 신규 커밋(changed == True)이 적용되었을 때는 구버전 os._exit(0) 을 제거하고,
            텔레그램 HTTP 세션을 즉시 닫은(_close_tg_http_client) 뒤 Case 81 3.5초 하드 워치독 및
            perform_self_restart_execv(os.execv + os._exit(1) 폴백)로 무중단 인플레이스 자가 재기동한다!
@@ -1896,7 +1899,7 @@ class _AdaptiveTelegramBridge:
             chat_id=chat_id,
             text=(
                 "⏳ <b>[시스템 업데이트 개시]</b>\n"
-                "🔸 GitHub 최신 코드 동기화 및 11대 코어 모듈 프리플라이트 검증 중..."
+                "🔸 GitHub 최신 코드 동기화 및 12대 코어 모듈 프리플라이트 검증 중..."
             ),
         )
         fn_upd = getattr(
@@ -1919,11 +1922,11 @@ class _AdaptiveTelegramBridge:
                 msg = (
                     " · ".join(str_parts)
                     if str_parts
-                    else "✅ 11대 코어 모듈 인메모리 컴파일 및 AST 심볼 정합성 100% 통과 · 원장 보존"
+                    else "✅ 12대 코어 모듈 인메모리 컴파일 및 AST 심볼 정합성 100% 통과 · 원장 보존"
                 )
             else:
                 ok = bool(upd_res)
-                msg = "✅ 11대 코어 모듈 인메모리 컴파일 및 AST 심볼 정합성 100% 통과 · 원장 보존"
+                msg = "✅ 12대 코어 모듈 인메모리 컴파일 및 AST 심볼 정합성 100% 통과 · 원장 보존"
         else:
             ok, msg = verify_all_modules_compile(self.base_dir)
 
@@ -2200,7 +2203,7 @@ class _AdaptiveTelegramBridge:
 
     async def run_polling_loop(self) -> None:
         """
-        🚨 [Case 81 (# MODIFIED) : 내장 텔레그램 브릿지 불사조 폴링 루프 (Immortal Supervisor Wrapper)]:
+        🚨 [Case 81 : 내장 텔레그램 브릿지 불사조 폴링 루프 (Immortal Supervisor Wrapper)]:
         - 텔레그램 전용 httpx.AsyncClient 분리 운용 및 HTTP 409 Conflict / 연속 3회 오류 시 자동 재생성
         - 개별 명령어 처리 예외 격리 및 최상위 감독 루프를 통해 shutdown_event.is_set() 전까지
           어떠한 예외에서도 텔레그램 수신 태스크가 단독 사망하지 않도록 100% 보장한다.

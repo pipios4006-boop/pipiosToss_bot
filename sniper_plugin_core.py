@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-# NEW: sniper_plugin_core.py
-인피니트 스노우볼 (Infinite Snowball) v3.0 — 스나이퍼 매수 코어 Part 1 / 2 (Step 02 / 06)
+# MODIFIED: sniper_plugin_core.py
+인피니트 스노우볼 (Infinite Snowball) v3.0 — 스나이퍼 매수 코어 Part 1 / 2 (Step 04 / 09)
 역할:
 1) 스나이퍼 매수 전역 상수 락온 (STEP2X_15PCT_C20 · BUY_ORDER_MAX_WAIT_SEC = 60.0 · AUTO_FILL_GRACE_SHIELD_SEC = 15.0 ·
    REENTRY_MONITOR_TIME_SHIELD_SEC = 60.0 · RESERVE_DEPOSIT_CHECK_INTERVAL_SEC = 60.0)
@@ -17,10 +17,10 @@
    시드고갈 단 1회 입금 요청 알림 영구 래치 waiting_reserve_deposit_alert_sent 및 중복 디스크 쓰기 스킵 ·
    토스 실계좌 여유자금 감지 기반 최대 +6회분 온디맨드 예비시드 자동 수혈) 실행 엔진
    (_check_and_execute_guard30_or_reserve_injection · Case 75, 77, 80)
-7) 매수 체결(FILLED / 부분 체결 후 60초 취소 종료) 원장 커밋 · 독립 골든포켓(GOLDEN_POCKET) 분리 정산(Case 80) ·
-   부분 체결 수량 비례 자투리 정산 및 1층 목표 정량(l1_target_quota_qty) 보존(Case 78) ·
-   STEP2X_15PCT_C20 스텝업 잠금 저가 갱신(Case 76) 및 미체결 매수 주문 60.0초 동기화/안전 취소기
-   (_commit_filled_buy_to_stratum_ledger, sync_pending_buy_order_plugin · Case 19, 24, 59 ~ 80)
+7) 매수 체결(FILLED / 부분 체결 후 60초 취소 종료 / 세션 경계 force_settle 강제 정산) 원장 커밋 ·
+   독립 골든포켓(GOLDEN_POCKET) 분리 정산(Case 80) · 부분 체결 수량 비례 자투리 정산 및 1층 목표 정량(l1_target_quota_qty) 보존(Case 78) ·
+   STEP2X_15PCT_C20 스텝업 잠금 저가 갱신(Case 76) · 15:30 EST 경계 미체결 0주 1층/돌파 주문 즉시 취소(Case 84) 및
+   미체결 매수 주문 60.0초 동기화/안전 취소기 (_commit_filled_buy_to_stratum_ledger, sync_pending_buy_order_plugin · Case 19, 24, 59 ~ 84)
 - 제1헌법 ~ 제6헌법 및 Case 01 ~ 84 완벽 준수
 """
 
@@ -49,7 +49,10 @@ from quant_engine import (
     summarize_stratum_portfolio,
     vrev_add_quota_lot_and_merge_2tier,
 )
-from quant_indicators_plugin import refresh_metrics_with_live_tick
+from quant_indicators_plugin import (
+    is_late_regular_new_cycle_cutoff_window,
+    refresh_metrics_with_live_tick,
+)
 from sniper_exit_plugin import (
     is_within_post_buy_time_shield,
     is_within_post_sell_time_shield,
@@ -511,7 +514,7 @@ async def _check_and_execute_guard30_or_reserve_injection(
     2) `evaluate_guard30_and_reserve_injection()` 으로 30% 자투리 가드(`min_req_cash`) 통과 여부 및
        토스 계좌 미할당 여유 입금액(`raw_bp_usd - free_cash_usd`) 기반 예비시드 수혈 가능 여부를 판정한다.
     3) [PROCEED_NORMAL] / [INJECT_AND_PROCEED] / [BLOCK_AND_ALERT_DEPOSIT] 분기 처리:
-       - MODIFIED [Case 75 & Case 77]: 이미 `waiting_reserve_deposit == True` 및 `waiting_reserve_deposit_alert_sent == True` 로
+       - [Case 75 & Case 77]: 이미 `waiting_reserve_deposit == True` 및 `waiting_reserve_deposit_alert_sent == True` 로
          진입해 있는 상태에서 60초 주기 재확인 시 미입금이 지속될 때는 인메모리 60초 쉴드만 재장전하고
          카운터(`dust_guard_blocked_cnt`, `daily_seed_protect_pass_cnt`) 중복 증가 및 원장 디스크 쓰기를 스킵한다!
     """
@@ -519,7 +522,7 @@ async def _check_and_execute_guard30_or_reserve_injection(
     cur_used_res = max(0, safe_int(st_now.get("used_reserve_portions_cnt"), 0))
     cur_inj_usd = max(0.0, safe_float(st_now.get("injected_reserve_usd"), 0.0))
 
-    # MODIFIED [Case 80]: 독립 골든포켓(golden_pocket)이 보유 중이어서 현금이 골든포켓에 가동 중일 때
+    # [Case 80]: 독립 골든포켓(golden_pocket)이 보유 중이어서 현금이 골든포켓에 가동 중일 때
     # 일반 그리드 매수 시도로 인해 시드고갈 알림이나 예비시드 수혈이 오발동하는 현상을 차단하고 60초 인메모리 쉴드로 API 스팸을 방지!
     gp_now = pocket_from_dict(st_now.get("golden_pocket"))
     fee_mult = 1.0 + (ROUND_TRIP_FEE_RATE_PCT / 100.0)
@@ -549,7 +552,7 @@ async def _check_and_execute_guard30_or_reserve_injection(
         )
 
     raw_bp_usd = await context.api.get_buying_power_usd(safety_buffer_pct=0.0)
-    # MODIFIED [Case 77 예수금 API 일시 오류(0.0 반환) 시 허위 시드고갈 알림 원천 차단]:
+    # [Case 77 예수금 API 일시 오류(0.0 반환) 시 허위 시드고갈 알림 원천 차단]:
     # 원장 가용현금이 충분한데(now_free_cash >= est_min_req) 브로커 API가 0.0을 반환했다면 0.25초 후 1회 재시도한다.
     if raw_bp_usd <= 0.0 and now_free_cash >= est_min_req:
         await asyncio.sleep(0.25)
@@ -687,7 +690,7 @@ async def _check_and_execute_guard30_or_reserve_injection(
             context=context, symbol=TARGET_SYMBOL, eval_price=exec_order_p
         )
 
-    # MODIFIED [Case 75 & Case 77 : 이미 시드고갈 입금 대기 상태이고 1회 알림도 발송 완료된 경우 중복 카운터 증가 및 매 60초 os.fsync 디스크 쓰기 스킵!]
+    # [Case 75 & Case 77 : 이미 시드고갈 입금 대기 상태이고 1회 알림도 발송 완료된 경우 중복 카운터 증가 및 매 60초 os.fsync 디스크 쓰기 스킵!]
     if already_waiting_dep and alert_already_sent:
         prev_req_dep = safe_float(
             st_now.get("required_reserve_deposit_usd"), 0.0
@@ -772,7 +775,7 @@ async def _commit_filled_buy_to_stratum_ledger(
 ) -> Dict[str, Any]:
     """
     🎯 1, 🎯 3, 🎯 4 & Case 25, 46, 53, 59, 60, 61, 65, 67, 69, 71, 72, 73, 74, 76, 77, 78, 80:
-    매수 주문 체결(FILLED 또는 부분 체결 후 60초 타임아웃 종료)이 확인된 즉시:
+    매수 주문 체결(FILLED 또는 부분 체결 후 60초 타임아웃/세션 경계 취소 종료)이 확인된 즉시:
     0) 🚨 [Case 80 : POCKET_ALLIN 모드 독립 골든포켓(lot_type == "GOLDEN_POCKET") 체결 분리 정산]:
        - 기존 1층 ~ 7층 그리드(old_buckets), anchor_price, cycle_min_buy_price, l1_target_quota_qty 를
          전혀 변경하거나 승격시키지 않고 원장의 golden_pocket 에 순수 원가로 독립 기록한다!
@@ -947,7 +950,7 @@ async def _commit_filled_buy_to_stratum_ledger(
         max_tiers=MAX_GRID_TIERS_7,
     )
 
-    # MODIFIED [Case 67, Case 78 & Case 80 : 1층 목표 정량(l1_target_quota_qty) 보존 및 이전 층 수량 오염 차단]
+    # [Case 67, Case 78 & Case 80 : 1층 목표 정량(l1_target_quota_qty) 보존 및 이전 층 수량 오염 차단]
     raw_target_q = max(0, safe_int(st.get("l1_target_quota_qty"), 0))
     cur_l1_qty = new_buckets[0].qty if new_buckets else q_int
     if tag == "GOLDEN_L1":
@@ -1179,23 +1182,38 @@ async def sync_pending_buy_order_plugin(
     holdings: Dict[str, Dict[str, Any]],
     prices: Dict[str, float],
     now_est: Optional[datetime] = None,
+    force_settle: bool = False,
 ) -> Dict[str, Any]:
     """
-    🎯 1 & 🎯 5 & Case 19, 24, 59, 60, 61, 65, 71, 72, 73, 76, 77, 78, 80:
+    # MODIFIED [🎯 1 & 🎯 5 & Case 19, 24, 59, 60, 61, 65, 66, 71, 72, 73, 76, 77, 78, 80, 84]:
     장부에 대기 중인 미체결 매수 주문(buy_order_id)이 존재할 때:
-    1) GET /api/v1/orders/{orderId} 로 실제 체결 상태(FILLED / PARTIAL_FILLED / PENDING / CANCELED)를 조회한다.
+    1) GET /api/v1/orders/{orderId} 로 실제 체결 상태(FILLED / PARTIAL_FILLED / PENDING / PENDING_CANCEL / CANCELED)를 조회한다.
     2) FILLED(또는 부분 체결 후 취소 종료) 확인 즉시 실제 평균 체결가(execution.averageFilledPrice)와
        체결 수량(filledQuantity), 원주문 수량(ordered_qty)을 _commit_filled_buy_to_stratum_ledger() 에 전달한다.
-    3) 단 1주도 체결되지 않고(filled_q == 0) 취소/거부된 경우:
+    3) 🚨 [Case 66 & Case 78 세션 경계 force_settle=True 강제 정산]:
+       04:00 EST 오프닝 안정화 또는 16:01 EST 정규장 마감 결산 진입 시 force_settle=True 로 호출되면,
+       발주 후 60.0초가 경과하지 않았더라도(elapsed_mod < BUY_ORDER_MAX_WAIT_SEC) 미체결 잔량을 즉시 취소 확정하고
+       기체결된 부분 체결 물량(filled_q > 0)을 단 1주도 유실하지 않고 100% 정식 커밋한다!
+    4) 🛡️ [Case 84 15:29:xx EST 발주 미체결 0주 새 사이클 1층 / 1층 공석 돌파 주문의 15:30:00 EST 진입 즉시 취소]:
+       15:29:xx EST 에 발주된 0주 새 사이클 첫 1층(REENTRY_1FL) 또는 1층 공석 +1.0% 돌파(ord_price >= anchor_price * 1.005)
+       미체결 주문이 15:30:00 EST 경계를 넘어가면, 장 막판 투매 시 고점 호가에 지연 체결되는 현상을 막기 위해
+       즉시 안전 취소(should_abort_late_cutoff = True)한다!
+    5) 단 1주도 체결되지 않고(filled_q == 0) 취소/거부된 경우:
        - GOLDEN_POCKET / GOLDEN_L1 주문이었으면 last_golden_allin_date 를 "" 로 원복하여
          07:00 ~ 07:50 EST 시간창 내 재타격 기회를 보존한다(Case 80).
-    4) 프로세스 재기동으로 인해 last_modify_mono 단조시계가 역전(last_mod > now_mono)되었거나 0.0 인 경우
+    6) 프로세스 재기동으로 인해 last_modify_mono 단조시계가 역전(last_mod > now_mono)되었거나 0.0 인 경우
        즉시 현재 단조시계로 자가 치유하여 60.0초(BUY_ORDER_MAX_WAIT_SEC) 타임아웃 안전 취소를 100% 보장한다(Case 65).
     """
     st = context.ledger.get_state(TARGET_SYMBOL)
     buy_oid = str(st.get("buy_order_id") or "").strip()
     if not buy_oid:
         return {"status": "NO_PENDING_BUY"}
+
+    dt_now = now_est.astimezone(EST_TZ) if now_est else datetime.now(EST_TZ)
+    hm_now = dt_now.hour * 100 + dt_now.minute
+    is_late_cutoff_now = is_late_regular_new_cycle_cutoff_window(
+        hm_now, now_est=dt_now
+    )
 
     ordered_qty = max(1, safe_int(st.get("ordered_qty"), 1))
     ord_price = safe_float(st.get("buy_price"), 0.0)
@@ -1214,7 +1232,22 @@ async def sync_pending_buy_order_plugin(
     )
     is_golden_lot = lot_type in ("GOLDEN_POCKET", "GOLDEN_L1")
 
-    # MODIFIED [Case 65 : 프로세스 재기동 후 단조 시계(last_modify_mono) 역전 또는 결측 시 즉시 자가 치유]
+    # NEW [Case 84 : 15:29:xx EST 에 발주된 미체결 0주 새 사이클 1층 또는 1층 공석 돌파 주문이 15:30:00 EST 경계를 넘은 경우 즉시 안전 취소]
+    anchor_now = safe_float(st.get("anchor_price"), 0.0)
+    is_zero_grid_reentry = bool(
+        len(buckets_now) == 0 and lot_type == "REENTRY_1FL"
+    )
+    is_vacant_l1_breakout = bool(
+        is_vacant_l1_now
+        and lot_type == "REENTRY_1FL"
+        and anchor_now > 0.0
+        and ord_price >= round(anchor_now * 1.005, 2)
+    )
+    should_abort_late_cutoff = bool(
+        is_late_cutoff_now and (is_zero_grid_reentry or is_vacant_l1_breakout)
+    )
+
+    # [Case 65 : 프로세스 재기동 후 단조 시계(last_modify_mono) 역전 또는 결측 시 즉시 자가 치유]
     now_mono = time.monotonic()
     last_mod = safe_float(st.get("last_modify_mono"), 0.0)
     if last_mod <= 0.0 or last_mod > now_mono:
@@ -1251,9 +1284,18 @@ async def sync_pending_buy_order_plugin(
                 ordered_qty=ordered_qty,
             )
 
-        # 2) 부분 체결(PARTIAL_FILLED) 진행 중인 경우 -> 60.0초까지 잔량 체결 대기 후 미체결분 안전 취소 & 기체결분 반영
-        if ord_status == "PARTIAL_FILLED" or filled_q > 0:
-            if elapsed_mod >= BUY_ORDER_MAX_WAIT_SEC:
+        # 2) 부분 체결(PARTIAL_FILLED / PENDING_CANCEL) 진행 중인 경우 ->
+        #    60.0초 타임아웃, 세션 경계 강제 정산(force_settle), 또는 15:30 컷오프 도달 시 미체결분 안전 취소 & 기체결분 즉시 정식 커밋!
+        if (
+            ord_status in ("PARTIAL_FILLED", "PENDING_CANCEL")
+            or filled_q > 0
+        ):
+            if (
+                elapsed_mod >= BUY_ORDER_MAX_WAIT_SEC
+                or force_settle
+                or should_abort_late_cutoff
+                or ord_status == "PENDING_CANCEL"
+            ):
                 try:
                     await context.api.cancel_order(buy_oid)
                 except Exception:
@@ -1273,21 +1315,23 @@ async def sync_pending_buy_order_plugin(
                         filled_q = f_q2
                     if f_p2 > 0.0:
                         avg_fill_p = f_p2
-                eff_p = avg_fill_p if avg_fill_p > 0.0 else ord_price
-                return await _commit_filled_buy_to_stratum_ledger(
-                    context=context,
-                    filled_qty=filled_q,
-                    avg_fill_price=eff_p,
-                    portion_budget=portion_budget,
-                    lot_type=lot_type,
-                    settled_order_id=buy_oid,
-                    ordered_qty=ordered_qty,
-                )
-            return {
-                "status": "BUY_PARTIAL_FILLED_WAITING",
-                "filled_qty": filled_q,
-                "ordered_qty": ordered_qty,
-            }
+                if filled_q > 0:
+                    eff_p = avg_fill_p if avg_fill_p > 0.0 else ord_price
+                    return await _commit_filled_buy_to_stratum_ledger(
+                        context=context,
+                        filled_qty=filled_q,
+                        avg_fill_price=eff_p,
+                        portion_budget=portion_budget,
+                        lot_type=lot_type,
+                        settled_order_id=buy_oid,
+                        ordered_qty=ordered_qty,
+                    )
+            else:
+                return {
+                    "status": "BUY_PARTIAL_FILLED_WAITING",
+                    "filled_qty": filled_q,
+                    "ordered_qty": ordered_qty,
+                }
 
         # 3) 미체결 상태로 취소/거부된 경우 장부 락 해제
         if ord_status in ("CANCELED", "REJECTED") and filled_q == 0:
@@ -1313,8 +1357,13 @@ async def sync_pending_buy_order_plugin(
             await context.ledger.update_state(TARGET_SYMBOL, **clear_kw)
             return {"status": f"BUY_ORDER_{ord_status}_CLEARED"}
 
-    # 🚨 4) [Case 65, Case 73, Case 76, Case 78 & Case 80] 매도 1호가(Ask 1) 상향 추격 정정 완전 소각! (60초 대기 후 안전 취소)
-    if elapsed_mod >= BUY_ORDER_MAX_WAIT_SEC:
+    # 🚨 4) [Case 65, Case 66, Case 73, Case 76, Case 78, Case 80 & Case 84]
+    # 매도 1호가(Ask 1) 상향 추격 정정 완전 소각! (60초 대기 / 세션 경계 force_settle / 15:30 컷오프 시 안전 취소)
+    if (
+        elapsed_mod >= BUY_ORDER_MAX_WAIT_SEC
+        or force_settle
+        or should_abort_late_cutoff
+    ):
         try:
             await context.api.cancel_order(buy_oid)
         except Exception:
@@ -1361,6 +1410,13 @@ async def sync_pending_buy_order_plugin(
         if is_golden_lot:
             timeout_kw["last_golden_allin_date"] = ""
         await context.ledger.update_state(TARGET_SYMBOL, **timeout_kw)
+        if should_abort_late_cutoff:
+            logger.info(
+                "🛡️ [Case 84 장마감 30분전(15:30 EST) 도래 -> 미체결 고점 매수(%s) 즉시 안전 취소] 지정가 $%.2f 취소 ➔ 컷오프 방어 전환",
+                lot_type,
+                ord_price,
+            )
+            return {"status": "BUY_ORDER_LATE_CUTOFF_CANCELED_SAFE"}
         logger.info(
             "⏳ [SOXL 현재가 지정가 매수(%s) 60초 미체결 안전 취소] 지정가 $%.2f 유지 종료 ➔ 관망 복귀",
             lot_type,

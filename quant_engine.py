@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 """
 # MODIFIED: quant_engine.py
-인피니트 스노우볼 (Infinite Snowball) v3.0 — 퀀트 엔진 코어 Part 2 / 2 (Step 03 / 07)
+인피니트 스노우볼 (Infinite Snowball) v3.0 — 퀀트 엔진 코어 Part 2 / 2 (Step 03 / 09)
 역할:
-1) quant_engine_core.py (Part 1 / 2) 의 모든 상수·구조체·정량/수혈/스텝업 판정 심볼 명시적 재익스포트(Facade Re-export)로
+1) quant_engine_core.py (Part 1 / 2) 의 모든 상수·구조체·정량/수혈/스텝업/컷오프 판정 심볼 명시적 재익스포트(Facade Re-export)로
    타 모듈 AST 임포트 호환성 100% 보장
 2) 1층 ~ 7층 골디락스 순수 멀티 그리드 배치 및 병합기(vrev_add_quota_lot_and_merge_2tier :
    REENTRY_1FL 독립 1층 배치 / TOPUP_1FL 기존 1층 무승격 원자적 합산[Case 78] /
@@ -16,14 +16,16 @@
    장외에서는 통합 이동평균(+1.00%) 일괄 졸업(1층 본전 이상 시 SELL_ALL_GRAD 전량 졸업 / 1층 본전 미달 시 SELL_WMA_UPPER 상단 일괄 졸업,
    또는 1층 단독 보유 +1.50% / 독립 골든포켓 +1.50%)만 허용한 뒤
    04:07 EST 프리장 개장(is_overnight_session=False) 즉시 4중 다중 익절을 전면 개방하는 하이브리드 매도 판정기(evaluate_multi_grid_sell_targets)
-5) 포트폴리오 통합 요약기(summarize_stratum_portfolio) 및 기동 전 TDD 사전 무결성 검증 슈트(run_quant_engine_tdd · Case 25 ~ 83 전수 검증)
-- 제1헌법 ~ 제6헌법 및 Case 01 ~ 83 완벽 준수
+5) 포트폴리오 통합 요약기(summarize_stratum_portfolio · Case 84 15:30~16:00 돌파 차단 상태 동기화) 및
+   기동 전 TDD 사전 무결성 검증 슈트(run_quant_engine_tdd · Case 25 ~ 84 전수 검증)
+- 제1헌법 ~ 제6헌법 및 Case 01 ~ 84 완벽 준수
 """
 
 from __future__ import annotations
 
 import logging
 import math
+from datetime import datetime
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
 from quant_engine_core import (
@@ -43,6 +45,7 @@ from quant_engine_core import (
     MAX_RESERVE_PORTIONS,
     MIN_DIP_BUDGET_RATIO,
     MIN_DIP_VS_L1_RATIO,
+    NEW_CYCLE_BUY_CUTOFF_HM,
     PORTION_RATIO_LOCKED,
     REANCHOR_NET_BUFFER_MULT,
     REENTRY_BREAKOUT_RISE_PCT,
@@ -74,13 +77,13 @@ from quant_engine_core import (
     resolve_affordable_buy_qty,
     resolve_allin_affordable_buy_qty,
 )
-from toss_api import safe_float, safe_int
+from toss_api import EST_TZ, safe_float, safe_int
 
 logger = logging.getLogger("toss_sniper.quant_engine")
 
 
 # ---------------------------------------------------------------------------
-# [핵심 4 · Case 63, Case 71 ~ 83] 1층 ~ 7층 골디락스 순수 멀티 그리드 배치 & 매도 층/포켓 원가 매칭 정산기
+# [핵심 4 · Case 63, Case 71 ~ 84] 1층 ~ 7층 골디락스 순수 멀티 그리드 배치 & 매도 층/포켓 원가 매칭 정산기
 # ---------------------------------------------------------------------------
 def vrev_add_quota_lot_and_merge_2tier(
     queue: Sequence[StratumBucket],
@@ -91,7 +94,7 @@ def vrev_add_quota_lot_and_merge_2tier(
     max_tiers: int = MAX_GRID_TIERS_7,
 ) -> List[StratumBucket]:
     """
-    🎯 3 & 🎯 4 & Case 46 ~ 83 (함수명은 타 모듈 AST 호환을 위해 유지하되 내부는 1~7층 골디락스 멀티 그리드로 작동):
+    🎯 3 & 🎯 4 & Case 46 ~ 84 (함수명은 타 모듈 AST 호환을 위해 유지하되 내부는 1~7층 골디락스 멀티 그리드로 작동):
     신규 정량 매수(또는 GRID_L1_ALLIN 모드 1층 전액편입 GOLDEN_L1) 체결 시
     최대 7개 지층(1층 공격수 + 2~6층 개별 완충층[5개] + 통합 7층 본대[GRID_L7])을 관리한다.
     """
@@ -495,7 +498,7 @@ def evaluate_multi_grid_sell_targets(
     is_overnight_session: bool = False,
 ) -> Dict[str, Any]:
     """
-    🚨 MODIFIED [Case 69, Case 70, Case 71, Case 72, Case 80 & Case 83 (방안 C 오버나이트 통합이평 사수 하이브리드)]:
+    🚨 [Case 69, Case 70, Case 71, Case 72, Case 80 & Case 83 (방안 C 오버나이트 통합이평 사수 하이브리드)]:
     매수 후 60초 타임쉴드 뒤 매 1.5초 실시간 현재가(live_price)로 매도 조건을 스캔한다:
     1) [조건 ① : 독립 골든포켓(golden_pocket) +1.50% 이상 도래 (Case 80)]
        gp.is_active == True 이고 live_price >= gp.target_sell_price(rise_pocket_pct) 이면
@@ -583,7 +586,7 @@ def evaluate_multi_grid_sell_targets(
             valid, rise_upper_pct=rise_upper_pct
         )
         wma_target_p = safe_float(wma_info.get("upper_wma_target_price"), 0.0)
-        # MODIFIED [Case 69, Case 71 & Case 83]:
+        # [Case 69, Case 71 & Case 83]:
         # 1) 소수점 절사로 인한 원금 손실을 막기 위해 1층 본전 하한가(b1_breakeven_p)를 math.ceil 로 정밀 산출한다.
         # 2) 오버나이트 중에도 lp >= wma_target_p 이면 상단 2~7층 일괄 졸업(SELL_WMA_UPPER)을 항상 허용하고,
         #    동시에 1층 본전 이상(lp >= b1_breakeven_p)이면 1층까지 포함하여 전량 졸업(SELL_ALL_GRAD)시킨다!
@@ -793,14 +796,15 @@ def calc_sell_realized_pnl(
 
 
 # ---------------------------------------------------------------------------
-# [핵심 5] 포트폴리오 · 1~7층 골디락스 멀티 그리드 · 독립 골든포켓 · 2~7층 이동평균 · STEP2X_15PCT_C20 · GUARD30 통합 요약기 (Case 59 ~ 83)
+# [핵심 5] 포트폴리오 · 1~7층 골디락스 멀티 그리드 · 독립 골든포켓 · 2~7층 이동평균 · STEP2X_15PCT_C20 · GUARD30 · Case 84 통합 요약기 (Case 59 ~ 84)
 # ---------------------------------------------------------------------------
 def summarize_stratum_portfolio(
     state_dict: Dict[str, Any],
     live_price: float = 0.0,
+    now_est: Optional[datetime] = None,
 ) -> Dict[str, Any]:
     """
-    🎯 1 ~ 🎯 5 & Case 59, 60, 67, 69, 71, 72, 73, 74, 76, 77, 78, 80, 83:
+    # MODIFIED [🎯 1 ~ 🎯 5 & Case 59, 60, 67, 69, 71, 72, 73, 74, 76, 77, 78, 80, 83, 84]:
     원장 상태(state_dict)와 현재가(live_price)를 받아:
     - 1층(활성 공격수) 및 상단 2층 ~ 6층 개별 완충층 · 통합 7층 본대(GRID_L2 ~ GRID_L7) 현황
     - 🌟 Case 80: 황금시간대 전액매수 모드(golden_allin_mode · 기본값 "NONE") 및 독립 골든포켓(golden_pocket) 보유 현황,
@@ -808,10 +812,18 @@ def summarize_stratum_portfolio(
     - 🎯 Case 78: 활성 1층 현재 보유 주수(l1_cur_qty), 1층 목표 정량(l1_target_quota_qty),
       미체결 잔량(l1_rem_quota_qty = max(0, l1_target_quota_qty - l1_cur_qty)) 산출
     - 상단 2층 ~ 7층 통합 이동평균 단가(upper_wma_price) 및 +1.00% 일괄 익절 목표가
+    - 🛡️ Case 84: 현재 시각이 정규장 마감 30분 전(평일 15:30 ~ 16:00 EST)인지 판별하여
+      evaluate_l2_only_hybrid_reentry_signal(..., is_late_new_cycle_cutoff=is_late_cutoff)에 반영
     - 💉 Case 77 & Case 80: 온디맨드 예비시드 수혈 잔액(injected_reserve_usd)을 제외한 순수 코어 자산(core_equity_for_quota) 기반
       8% 정량 산출 및 30% 자투리 가드 최소 필요 현금(min_req_cash_guard30), 예비시드 한도(used/6회분) 요약을 반환한다.
     """
     st = state_dict if isinstance(state_dict, dict) else {}
+    dt_now = now_est.astimezone(EST_TZ) if now_est else datetime.now(EST_TZ)
+    hm_now = dt_now.hour * 100 + dt_now.minute
+    is_late_cutoff = bool(
+        dt_now.weekday() < 5 and (NEW_CYCLE_BUY_CUTOFF_HM <= hm_now <= 1600)
+    )
+
     raw_buckets = buckets_from_dicts(st.get("buckets", []))
     buckets = enforce_true_breakeven_floor_on_buckets(raw_buckets)
     gp = pocket_from_dict(st.get("golden_pocket"))
@@ -986,7 +998,7 @@ def summarize_stratum_portfolio(
     ratchet_p = safe_float(st.get("ratchet_anchor_price"), anchor_p)
     realized_equity_usd = round(max(0.0, init_seed + cum_realized), 4)
 
-    # 🚨 Case 73: 1층 공석 시 상단 최하단 층(2층, min_indiv_upper_price)을 상한 가드로 전달!
+    # 🚨 Case 73 & Case 84: 1층 공석 시 상단 최하단 층(2층, min_indiv_upper_price) 및 장마감 30분전 돌파 차단 여부를 함께 전달!
     reentry_sig = evaluate_l2_only_hybrid_reentry_signal(
         live_price=lp,
         anchor_price=anchor_p,
@@ -996,6 +1008,7 @@ def summarize_stratum_portfolio(
             else upper_wma_price
         ),
         min_upper_tier_price=min_indiv_upper_price,
+        is_late_new_cycle_cutoff=is_late_cutoff,
     )
     reentry_ref_anchor = safe_float(reentry_sig.get("ref_anchor"), anchor_p)
     reentry_pullback_price = safe_float(
@@ -1246,6 +1259,7 @@ def summarize_stratum_portfolio(
         "min_indiv_upper_target_price": min_indiv_upper_target_price,
         "min_indiv_upper_gain_pct": min_indiv_upper_gain_pct,
         "is_l2_only_anti_bloat": is_l2_only,
+        "is_late_new_cycle_cutoff": is_late_cutoff,
         "initial_seed_usd": init_seed,
         "free_cash_usd": free_cash,
         "actual_invested_buckets_usd": actual_invested_buckets,
@@ -1326,7 +1340,7 @@ def summarize_stratum_portfolio(
 
 
 # ---------------------------------------------------------------------------
-# [핵심 6] TDD 사전 무결성 자동 검증 슈트 (Case 25 ~ 83 전수 검증)
+# [핵심 6] TDD 사전 무결성 자동 검증 슈트 (Case 25 ~ 84 전수 검증)
 # ---------------------------------------------------------------------------
 def run_quant_engine_tdd() -> bool:
     """
@@ -1336,7 +1350,9 @@ def run_quant_engine_tdd() -> bool:
     골든포켓(+1.50%) / 1층(+1.50%) / 2~7층 개별(+1.00%) / 2~7층 통합 이동평균(+1.00%) 4중 다중 익절 판정(Case 71, 72, 80),
     🚨 Case 83 (방안 C) 오버나이트(is_overnight_session=True) 중 상단 2~7층 보유 시 개별층 매도 잠금 및 통합이평 일괄 졸업 허용,
     상단 그리드 단독 보유(1층 공석) 시 2층 단가 상한 역전 차단(HOLD_PREVENT_INVERSION · Case 73) 및
-    눌림/돌파 독립 1층 재장전(Case 59, 73), 정적 기억저가 잠금 및 🔓 06_STEP2X_15PCT_C20 3중 안전문 스텝업 해금(Case 60, 72, 76),
+    눌림/돌파 독립 1층 재장전(Case 59, 73),
+    🛡️ Case 84 정규장 마감 30분 전(is_late_new_cycle_cutoff=True, 15:30 ~ 16:00 EST) 구간 +1.0% 상승돌파 추격 차단 및 -1.0% 눌림목 정상 허용,
+    정적 기억저가 잠금 및 🔓 06_STEP2X_15PCT_C20 3중 안전문 스텝업 해금(Case 60, 72, 76),
     💉 05_RESV_6P_GUARD30 30% 자투리 승격 방지 가드 · 토스 계좌 여유자금 감지 자동 수혈 · 0주 졸업 자동 상환(Case 77),
     🎯 Case 78 지정가 부분 체결 후 미체결 잔량(TOPUP_1FL) 기존 1층 무승격 원자적 합산,
     🌟 Case 80 황금시간대(07:00 ~ 07:50 EST & RSI <= 19.0) 기본값 OFF("NONE") 및 POCKET_ALLIN / GRID_L1_ALLIN 판정 검증을 전수 수행한다.
@@ -1463,7 +1479,7 @@ def run_quant_engine_tdd() -> bool:
         and res_ov_l1_single["reason_tag"] == "SELL_L1_ONLY"
     ), f"TDD 실패(Case 83 1층 단독 오버나이트 익절 미작동): {res_ov_l1_single}"
 
-    # NEW 4-E) [Case 83 방안 C] GOLDEN_L1 등으로 1층 단가($88.00) > 상단 2~3층 통합이평 목표가($83.83)일 때 오버나이트 중 상단 일괄 졸업(SELL_WMA_UPPER) 정상 작동 검증
+    # 4-E) [Case 83 방안 C] GOLDEN_L1 등으로 1층 단가($88.00) > 상단 2~3층 통합이평 목표가($83.83)일 때 오버나이트 중 상단 일괄 졸업(SELL_WMA_UPPER) 정상 작동 검증
     res_ov_wma_upper = evaluate_multi_grid_sell_targets(
         [
             StratumBucket(20, 88.0, 1760.0, 1760.0, 1, "GOLDEN_L1"),
@@ -1509,7 +1525,7 @@ def run_quant_engine_tdd() -> bool:
         "TDD 실패(Case 71/72): 1층 익절 후 1층 공석(상단 그리드만 보유) 상태 판별 오류"
     )
 
-    # 5) 🚨 Case 73: 1층 공석 상태에서 현재가 > 2층 단가($85.00)일 때 HOLD_PREVENT_INVERSION 단가 역전 차단 검증
+    # 5) 🚨 Case 73 & Case 84: 1층 공석 상태에서 현재가 > 2층 단가($85.00) 역전 차단 및 15:30~16:00 돌파 차단 검증
     sig_inv = evaluate_l2_only_hybrid_reentry_signal(
         live_price=85.50,
         anchor_price=83.41,
@@ -1527,22 +1543,39 @@ def run_quant_engine_tdd() -> bool:
         anchor_price=83.41,
         l2_book_price=85.00,
         min_upper_tier_price=85.00,
+        is_late_new_cycle_cutoff=False,
     )
     assert (
         sig_brk_ok["should_buy"] is True
         and sig_brk_ok["signal_type"] == "BREAKOUT_RELOAD"
     ), f"TDD 실패(Case 73 2층 이하 안전 돌파 승인): {sig_brk_ok}"
 
+    # NEW [Case 84 TDD 검증 1]: 15:30 ~ 16:00 EST (is_late_new_cycle_cutoff=True) 구간에서 +1.0% 돌파 추격 차단 검증
+    sig_brk_late_blocked = evaluate_l2_only_hybrid_reentry_signal(
+        live_price=84.30,
+        anchor_price=83.41,
+        l2_book_price=85.00,
+        min_upper_tier_price=85.00,
+        is_late_new_cycle_cutoff=True,
+    )
+    assert (
+        sig_brk_late_blocked["should_buy"] is False
+        and sig_brk_late_blocked["signal_type"]
+        == "HOLD_LATE_SESSION_BREAKOUT_CUTOFF"
+    ), f"TDD 실패(Case 84 장마감 30분전 1층공석 돌파차단 미작동): {sig_brk_late_blocked}"
+
+    # NEW [Case 84 TDD 검증 2]: 15:30 ~ 16:00 EST (is_late_new_cycle_cutoff=True) 구간에서도 -1.0% 눌림목 재장전은 정상 허용 검증
     sig_pull_ok = evaluate_l2_only_hybrid_reentry_signal(
         live_price=82.50,
         anchor_price=83.41,
         l2_book_price=85.00,
         min_upper_tier_price=85.00,
+        is_late_new_cycle_cutoff=True,
     )
     assert (
         sig_pull_ok["should_buy"] is True
         and sig_pull_ok["signal_type"] == "PULLBACK_RELOAD"
-    ), f"TDD 실패(Case 73 눌림목 재장전 승인): {sig_pull_ok}"
+    ), f"TDD 실패(Case 73/84 눌림목 재장전 승인): {sig_pull_ok}"
 
     reloaded_grid = vrev_add_quota_lot_and_merge_2tier(
         rem_uppers, 10, 80.50, 805.0, "REENTRY_1FL"
@@ -1775,6 +1808,6 @@ def run_quant_engine_tdd() -> bool:
     )
 
     logger.info(
-        "✅ [QuantEngine TDD 사전 무결성 검증 통과] 챔피언 🌟 POCKET_ALLIN / 🔥 GRID_L1_ALLIN × 💉 05_RESV_6P_GUARD30 × 🔓 06_STEP2X_15PCT_C20 & 방안 C(Case 59~83) 검증 완료"
+        "✅ [QuantEngine TDD 사전 무결성 검증 통과] 챔피언 🌟 POCKET_ALLIN / 🔥 GRID_L1_ALLIN × 💉 05_RESV_6P_GUARD30 × 🔓 06_STEP2X_15PCT_C20 & 방안 C · Case 84(Case 59~84) 검증 완료"
     )
     return True
