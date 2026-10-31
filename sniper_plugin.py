@@ -3,7 +3,7 @@
 # MODIFIED: sniper_plugin.py
 순수 롱(SOXL) 전용 '04:07 ~ 16:00 EST 매도(및 0주 싸이클 종료) 후 60초 강제 타임쉴드(POST_SELL_TO_BUY_SHIELD_SEC = 60.0) &
 직전 매수 후 60초 타임쉴드 · 60초 경과 후 실시간 현재가 직접 조회 및 순수 현재가 지정가(LIMIT) 매수 발주 ·
-매도 1호가(Ask 1) 참조 및 10초 후 상향 추격 정정 100% 영구 소각(Case 65) ·
+매도 1호가(Ask 1) 참조 및 10초 후 상향 추격 정정 100% 영구 소각 및 미체결 단조시계(last_modify_mono) 역전 자가 치유(Case 65) ·
 최종 확정 진화 챔피언(🌟 POCKET_ALLIN / 🔥 GRID_L1_ALLIN × 💉 05_RESV_6P_GUARD30 × 🔓 06_STEP2X_15PCT_C20 · 기본값 NONE[OFF] · Case 71 ~ Case 83) :
 미동부 프리장 황금시간대(07:00 ~ 07:50 EST & 14봉 이상 확보된 1분봉 Wilder RSI(14) <= 19.0) 도달 시 제어반 선택 모드(POCKET_ALLIN / GRID_L1_ALLIN)에 따른
 가용 현금 시드(free_cash_usd) 100% 전액 추가매수 발주 및 독립 골든포켓(golden_pocket) 분리 정산(Case 80) ·
@@ -21,9 +21,9 @@
 1~4회 -1.0% / 5~8회 -2.0% / 9~10회 -3.5% / 11회+ -5.5%) 및 STEP2X_15PCT_C20 3중 안전문(2개층 이하 & 가용현금 20.0%+ & 저점대비 2.0배+ 반등 시
 활성 1층 대비 -15.0% 스텝업 저가 해금 · Case 76) ·
 30% 자투리 1주 승격 방지 가드(GUARD30) & 예수금 API 일시 오류(0.0 반환) 시 재시도 및 허위 시드고갈 알림 차단 &
-시드고갈 시 단 1회 입금 요청 알림 영구 래치(waiting_reserve_deposit_alert_sent) &
+시드고갈 시 단 1회 입금 요청 알림 영구 래치(waiting_reserve_deposit_alert_sent) & 입금 대기 중 60초 주기 중복 카운터/디스크 쓰기 원천 차단(Case 75, Case 77) &
 토스 실계좌 여유자금(1회분 이상) 입금 자동 감지 기반 최대 +6회분 온디맨드 예비시드 자동 수혈(Case 77) ·
-체결 시 1~7층 순수 멀티 그리드 승격·자투리 시드 귀속·기정산 주문 ID(last_settled_order_ids) 각인·양방향 인덱싱 보호(Case 69, Case 71 ~ 83)' 코어 플러그인 (Step 05 / 07)
+체결 시 1~7층 순수 멀티 그리드 승격·자투리 시드 귀속·기정산 주문 ID(last_settled_order_ids) 각인·양방향 인덱싱 보호(Case 69, Case 71 ~ 83)' 코어 플러그인 (Step 03 / 04)
 - 제1헌법 ~ 제6헌법 및 Case 01 ~ 83 완벽 준수
 """
 
@@ -510,7 +510,7 @@ async def _fetch_fresh_current_soxl_price(
 
 
 # ---------------------------------------------------------------------------
-# [핵심 0-B · Case 77 & Case 80] GUARD30 자투리 차단 · 예수금 API 일시 오류 방어 · 토스 계좌 여유자금 감지 자동 수혈 · 단 1회 입금 요청 알림 실행기
+# [핵심 0-B · Case 75, Case 77 & Case 80] GUARD30 자투리 차단 · 예수금 API 일시 오류 방어 · 토스 계좌 여유자금 감지 자동 수혈 · 단 1회 입금 요청 알림 실행기
 # ---------------------------------------------------------------------------
 async def _check_and_execute_guard30_or_reserve_injection(
     context: Any,
@@ -523,7 +523,7 @@ async def _check_and_execute_guard30_or_reserve_injection(
     trigger_desc: str,
 ) -> Tuple[bool, float, float, Dict[str, Any]]:
     """
-    🚨 [Case 77 & Case 80 : 💉 05_RESV_6P_GUARD30 실행 엔진]:
+    🚨 [Case 75, Case 77 & Case 80 : 💉 05_RESV_6P_GUARD30 실행 엔진]:
     매수 주문 발주 직전(뮤텍스 내부)에 호출되어:
     0) [Case 80 골든포켓 일시 가동 중 오발동 방어 및 60초 인메모리 쉴드]:
        만약 현재 독립 골든포켓(golden_pocket.qty > 0)에 가용 현금 100%가 일시 투입되어 있어
@@ -536,7 +536,10 @@ async def _check_and_execute_guard30_or_reserve_injection(
        해당 틱만 조용히 보류(`HOLD_TRANSIENT_BP_API_ERROR`)한다!
     2) `evaluate_guard30_and_reserve_injection()` 으로 30% 자투리 가드(`min_req_cash`) 통과 여부 및
        토스 계좌 미할당 여유 입금액(`raw_bp_usd - free_cash_usd`) 기반 예비시드 수혈 가능 여부를 판정한다.
-    3) [PROCEED_NORMAL] / [INJECT_AND_PROCEED] / [BLOCK_AND_ALERT_DEPOSIT] 분기 처리.
+    3) [PROCEED_NORMAL] / [INJECT_AND_PROCEED] / [BLOCK_AND_ALERT_DEPOSIT] 분기 처리:
+       - MODIFIED [Case 75 & Case 77]: 이미 `waiting_reserve_deposit == True` 및 `waiting_reserve_deposit_alert_sent == True` 로
+         진입해 있는 상태에서 60초 주기 재확인 시 미입금이 지속될 때는 인메모리 60초 쉴드만 재장전하고
+         카운터(`dust_guard_blocked_cnt`, `daily_seed_protect_pass_cnt`) 중복 증가 및 원장 디스크 쓰기를 스킵한다!
     """
     now_free_cash = max(0.0, safe_float(st_now.get("free_cash_usd"), 0.0))
     cur_used_res = max(0, safe_int(st_now.get("used_reserve_portions_cnt"), 0))
@@ -556,11 +559,8 @@ async def _check_and_execute_guard30_or_reserve_injection(
             context=context, symbol=TARGET_SYMBOL, clear_shield=False
         )
         if is_vacant_l1_reentry:
-            re_epoch = mark_reentry_monitor_60s_cycle_shield(
+            mark_reentry_monitor_60s_cycle_shield(
                 context=context, symbol=TARGET_SYMBOL, eval_price=exec_order_p
-            )
-            await context.ledger.update_state(
-                TARGET_SYMBOL, last_reentry_eval_ts=re_epoch
             )
         return (
             False,
@@ -689,15 +689,10 @@ async def _check_and_execute_guard30_or_reserve_injection(
         return True, updated_free_cash, eff_bp_for_order, guard_eval
 
     # [케이스 3] 계좌 미입금 또는 6회분 한도 소진 -> 자투리 1주 매수 차단 & 단 1회 입금 요청 알림(영구 래치)
-    is_dust_blk = bool(guard_eval.get("is_dust_blocked", False))
-    dust_inc = 1 if is_dust_blk else 0
-    new_dust_cnt = safe_int(st_now.get("dust_guard_blocked_cnt"), 0) + dust_inc
-    new_day_dust_cnt = (
-        safe_int(st_now.get("daily_dust_guard_blocked_cnt"), 0) + dust_inc
+    already_waiting_dep = bool(st_now.get("waiting_reserve_deposit", False))
+    alert_already_sent = bool(
+        st_now.get("waiting_reserve_deposit_alert_sent", False)
     )
-    new_pass_cnt = safe_int(st_now.get("seed_protect_pass_cnt"), 0) + 1
-    new_day_pass = safe_int(st_now.get("daily_seed_protect_pass_cnt"), 0) + 1
-
     rec_dep_usd = round(
         max(
             portion_budget,
@@ -709,9 +704,6 @@ async def _check_and_execute_guard30_or_reserve_injection(
     rem_portions = safe_int(guard_eval.get("rem_portions_before"), 0)
     needed_p = max(1, safe_int(guard_eval.get("needed_portions"), 1))
 
-    alert_already_sent = bool(
-        st_now.get("waiting_reserve_deposit_alert_sent", False)
-    )
     now_rc_epoch = mark_reserve_deposit_check_shield(
         context, TARGET_SYMBOL, clear_shield=False
     )
@@ -720,6 +712,27 @@ async def _check_and_execute_guard30_or_reserve_injection(
         re_epoch = mark_reentry_monitor_60s_cycle_shield(
             context=context, symbol=TARGET_SYMBOL, eval_price=exec_order_p
         )
+
+    # MODIFIED [Case 75 & Case 77 : 이미 시드고갈 입금 대기 상태이고 1회 알림도 발송 완료된 경우 중복 카운터 증가 및 매 60초 os.fsync 디스크 쓰기 스킵!]
+    if already_waiting_dep and alert_already_sent:
+        prev_req_dep = safe_float(
+            st_now.get("required_reserve_deposit_usd"), 0.0
+        )
+        if abs(prev_req_dep - rec_dep_usd) >= 1.0:
+            await context.ledger.update_state(
+                TARGET_SYMBOL,
+                required_reserve_deposit_usd=rec_dep_usd,
+            )
+        return False, now_free_cash, eff_bp_for_order, guard_eval
+
+    is_dust_blk = bool(guard_eval.get("is_dust_blocked", False))
+    dust_inc = 1 if is_dust_blk else 0
+    new_dust_cnt = safe_int(st_now.get("dust_guard_blocked_cnt"), 0) + dust_inc
+    new_day_dust_cnt = (
+        safe_int(st_now.get("daily_dust_guard_blocked_cnt"), 0) + dust_inc
+    )
+    new_pass_cnt = safe_int(st_now.get("seed_protect_pass_cnt"), 0) + 1
+    new_day_pass = safe_int(st_now.get("daily_seed_protect_pass_cnt"), 0) + 1
 
     await context.ledger.update_state(
         TARGET_SYMBOL,
@@ -1210,6 +1223,8 @@ async def sync_pending_buy_order_plugin(
     3) 단 1주도 체결되지 않고(filled_q == 0) 취소/거부된 경우:
        - GOLDEN_POCKET / GOLDEN_L1 주문이었으면 last_golden_allin_date 를 "" 로 원복하여
          07:00 ~ 07:50 EST 시간창 내 재타격 기회를 보존한다(Case 80).
+    4) 프로세스 재기동으로 인해 last_modify_mono 단조시계가 역전(last_mod > now_mono)되었거나 0.0 인 경우
+       즉시 현재 단조시계로 자가 치유하여 60.0초(BUY_ORDER_MAX_WAIT_SEC) 타임아웃 안전 취소를 100% 보장한다(Case 65).
     """
     st = context.ledger.get_state(TARGET_SYMBOL)
     buy_oid = str(st.get("buy_order_id") or "").strip()
@@ -1232,6 +1247,16 @@ async def sync_pending_buy_order_plugin(
         else (buckets_now[0].qty if has_active_l1_now else 0)
     )
     is_golden_lot = lot_type in ("GOLDEN_POCKET", "GOLDEN_L1")
+
+    # MODIFIED [Case 65 : 프로세스 재기동 후 단조 시계(last_modify_mono) 역전 또는 결측 시 즉시 자가 치유]
+    now_mono = time.monotonic()
+    last_mod = safe_float(st.get("last_modify_mono"), 0.0)
+    if last_mod <= 0.0 or last_mod > now_mono:
+        last_mod = now_mono
+        await context.ledger.update_state(
+            TARGET_SYMBOL, last_modify_mono=last_mod
+        )
+    elapsed_mod = max(0.0, now_mono - last_mod)
 
     detail = await context.api.get_order_detail(buy_oid)
     if isinstance(detail, dict):
@@ -1262,10 +1287,7 @@ async def sync_pending_buy_order_plugin(
 
         # 2) 부분 체결(PARTIAL_FILLED) 진행 중인 경우 -> 60.0초까지 잔량 체결 대기 후 미체결분 안전 취소 & 기체결분 반영
         if ord_status == "PARTIAL_FILLED" or filled_q > 0:
-            elapsed = time.monotonic() - safe_float(
-                st.get("last_modify_mono"), time.monotonic()
-            )
-            if elapsed >= BUY_ORDER_MAX_WAIT_SEC:
+            if elapsed_mod >= BUY_ORDER_MAX_WAIT_SEC:
                 try:
                     await context.api.cancel_order(buy_oid)
                 except Exception:
@@ -1326,8 +1348,6 @@ async def sync_pending_buy_order_plugin(
             return {"status": f"BUY_ORDER_{ord_status}_CLEARED"}
 
     # 🚨 4) [Case 65, Case 73, Case 76, Case 78 & Case 80] 매도 1호가(Ask 1) 상향 추격 정정 완전 소각! (60초 대기 후 안전 취소)
-    last_mod = safe_float(st.get("last_modify_mono"), 0.0)
-    elapsed_mod = time.monotonic() - last_mod if last_mod > 0.0 else 0.0
     if elapsed_mod >= BUY_ORDER_MAX_WAIT_SEC:
         try:
             await context.api.cancel_order(buy_oid)
@@ -2423,6 +2443,22 @@ async def execute_seed_protected_buy_gate_plugin(
     lot_tag = "DIP_1FL"
 
     if not bool(dip_eval.get("should_buy")):
+        # MODIFIED [Case 75 & Case 77]:
+        # 이미 시드고갈 입금 대기(waiting_reserve_deposit == True) 상태에서 60초 주기로 깨어났는데
+        # 가격이 일시 반등해 있는 경우에는 10분 버킷(last_evaluated_buy_bucket_id)을 소모하거나
+        # 매 60초마다 패스 카운터를 디스크에 기록하지 않고 인메모리 60초 입금 감시 쉴드만 재장전한다!
+        if bool(st.get("waiting_reserve_deposit", False)):
+            mark_reserve_deposit_check_shield(
+                context=context, symbol=TARGET_SYMBOL, clear_shield=False
+            )
+            return {
+                "status": "HOLD_WAITING_RESERVE_DEPOSIT_PRICE_REBOUND",
+                "trigger_tag": dip_eval.get("trigger_tag", "HOLD"),
+                "ref_buy_anchor": round(ref_buy_anchor, 4),
+                "chg_pct": round(chg_for_buy_pct, 2),
+                "required_drop_pct": drop_buy_pct,
+            }
+
         new_pass_cnt = safe_int(st.get("seed_protect_pass_cnt"), 0) + 1
         new_day_pass = safe_int(st.get("daily_seed_protect_pass_cnt"), 0) + 1
         await context.ledger.update_state(

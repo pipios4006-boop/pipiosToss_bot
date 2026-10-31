@@ -14,15 +14,15 @@
 윗꼬리 최고점 박제(max(live_p, fresh_live_p)) 및 장외 재조회 매도 포기(fallback_price=0.0)를 영구 제거하여
 목표 익절 하한가(min_floor_p, +0.50% 초과 대폭 갭상승 시 fresh_live_p * 0.997 마켓터블 지정가)로 직결 지정가(LIMIT) 매도 발주(Case 82) ·
 연타 익절 시 장외 sellableQuantity 정산 시차 대비 폴링 대기 2.0초 확장 및 일시 0주 반환 시 쿨다운 5.0초 단축(진성 422 거래제한 시 60초 묵음 쿨다운 유지 · Case 79, Case 82) ·
-매수 1호가(Bid 1) 하향 추격 정정 100% 영구 소각(Case 65) ·
+매수 1호가(Bid 1) 하향 추격 정정 100% 영구 소각 및 미체결 단조시계(last_modify_mono) 역전 자가 치유(Case 65) ·
 리앵커링 원가 차감 영구 폐기 및 순수 실물 원가(book_price == actual_avg_price) 100% 보존(Case 69, Case 71, Case 72, Case 80) ·
 독립 골든포켓(golden_pocket) 단독 익절 시 기존 1~7층 그리드의 단가·기억저가·목표정량 100% 비오염 보존 및 원리금 복리 환원(Case 80) ·
-1층 익절 후 상단 2~7층 잔존 시 1층 공석(GRID_L2 ~ GRID_L7) 보존 · l1_target_quota_qty = 0 자동 클리어(Case 78) 및 싸이클 최저가(cycle_min_buy_price) 잠금 유지(Case 59, Case 60, Case 71, Case 72, Case 73) ·
+1층 익절 후 상단 2~7층 잔존 시 1층 공석(GRID_L2 ~ GRID_L7) 보존 · l1_target_quota_qty = 0 자동 클리어 및 1층 부분 익절 시 잔여 수량 동기화(허위 TOPUP_1FL 재매수 차단 · Case 78) · 싸이클 최저가(cycle_min_buy_price) 잠금 유지(Case 59, Case 60, Case 71, Case 72, Case 73) ·
 익절 매도로 가용현금 회복 시 시드고갈 입금 대기 및 단 1회 알림 래치(waiting_reserve_deposit_alert_sent) 자동 해제 &
 0주 전량 졸업 시 온디맨드 예비시드 원금 자동 상환 및 6/6회분 한도 원상 복구(compute_reserve_repayment_on_zero · Case 77) ·
 매도 체결(부분 익절 · 골든포켓 익절 및 0주 전량 졸업) 즉시 기정산 주문 ID(last_settled_order_ids) 등록 및
 60초 매도타임쉴드(last_sell_fill_ts / last_cycle_end_ts) & 1층 공석 재장전 타임쉴드 클리어(last_reentry_eval_ts = 0.0) &
-15초 잔고 인덱싱 그레이스 쉴드(last_auto_fill_ts) 동시 각인' 코어 플러그인 (Step 04 / 07)
+15초 잔고 인덱싱 그레이스 쉴드(last_auto_fill_ts) 동시 각인' 코어 플러그인 (Step 02 / 04)
 - 제1헌법 ~ 제6헌법 및 Case 01 ~ 83 완벽 준수
 """
 
@@ -927,7 +927,7 @@ async def _commit_filled_sell_and_reanchor_ledger(
 ) -> Dict[str, Any]:
     """
     🎯 1 ~ 🎯 4 & Case 19, 59, 60, 61, 65, 69, 70, 71, 72, 73, 77, 78, 79, 80, 82, 83:
-    7층 골디락스 멀티 그리드 및 독립 골든포켓 스나이퍼 매도 주문이 체결(FILLED)되었을 때:
+    7층 골디락스 멀티 그리드 및 독립 골든포켓 스나이퍼 매도 주문이 체결(FILLED 또는 부분 체결 후 취소 종료)되었을 때:
     1) pending_sell_pocket_qty (독립 골든포켓) 및 pending_sell_indices (1~7층 그리드)에 해당하는
        순수 매수 원금과 실제 매도 체결가(avg_fill_price)로 왕복 수수료(0.14%) 차감 후 세후 실현 순수익금을 산출한다.
     2) 🚨 [Case 80 골든포켓 단독 익절 시 7층 그리드 100% 비오염 보존]:
@@ -935,7 +935,11 @@ async def _commit_filled_sell_and_reanchor_ledger(
          그리드의 anchor_price, cycle_min_buy_price, l1_target_quota_qty 를 변경하지 않고 그대로 보존한다!
        - 골든포켓에서 발생한 세후 실현순익은 golden_realized_net_usd, daily_golden_realized_net_usd 및
          golden_pocket_sell_cnt, daily_golden_pocket_sell_cnt 에도 별도 누적 기록한다.
-    3) 🚨 [Case 77 & Case 80 : 0주 전량 졸업(len(rem_buckets) == 0 and not rem_gp.is_active) 시 예비시드 자동 상환]
+    3) 🚨 [Case 78 : 1층 부분 익절 시 l1_target_quota_qty 잔여 수량 동기화로 허위 TOPUP_1FL 재매수 원천 차단]:
+       - 1층이 전량 소진되면 l1_target_quota_qty = 0 으로 클리어하고,
+         1층이 일부만 부분 매도되어 rem_buckets[0].qty < buckets[0].qty 가 된 경우에는
+         next_l1_target_q = rem_buckets[0].qty 로 즉시 동기화하여 익절된 물량을 미체결 매수 잔량으로 오인하지 않게 방어한다!
+    4) 🚨 [Case 77 & Case 80 : 0주 전량 졸업(len(rem_buckets) == 0 and not rem_gp.is_active) 시 예비시드 자동 상환]
     """
     st = context.ledger.get_state(TARGET_SYMBOL)
     buckets = buckets_from_dicts(st.get("buckets", []))
@@ -1027,6 +1031,7 @@ async def _commit_filled_sell_and_reanchor_ledger(
 
     # 2) 1층 ~ 7층 그리드(buckets) 매도 수량 배분 및 잔여 지층 산출
     was_active_l1 = has_active_l1_bucket(buckets)
+    orig_l1_qty = buckets[0].qty if (was_active_l1 and buckets) else 0
     raw_p_indices = st.get("pending_sell_indices")
     target_indices: List[int] = []
     if isinstance(raw_p_indices, list) and raw_p_indices:
@@ -1111,10 +1116,16 @@ async def _commit_filled_sell_and_reanchor_ledger(
                 rem_buckets, max_tiers=MAX_GRID_TIERS_7
             )
 
-    # [Case 78 & Case 80]: 1층 익절 또는 그리드 0주 시 l1_target_quota_qty = 0 클리어 (골든포켓 단독 익절 시에는 기존 값 보존)
+    # MODIFIED [Case 78 & Case 80]:
+    # 1) 1층이 전량 익절되었거나 그리드가 0주가 된 경우 l1_target_quota_qty = 0 클리어.
+    # 2) 1층이 부분 익절(rem_buckets[0].qty < orig_l1_qty)된 경우, 방금 익절한 수량을 미체결 잔량(TOPUP_1FL)으로
+    #    오인해 재매수하지 않도록 next_l1_target_q = rem_buckets[0].qty 로 즉시 동기화!
+    # 3) 오직 1층 수량이 전혀 변동하지 않은 경우(예: 골든포켓 단독 익절 또는 상단 개별층 단독 익절)에만 기존 l1_target_quota_qty 보존.
     rem_has_active_l1 = has_active_l1_bucket(rem_buckets)
     if not rem_buckets or not rem_has_active_l1 or sold_l1_flag:
         next_l1_target_q = 0
+    elif orig_l1_qty > 0 and rem_buckets[0].qty < orig_l1_qty:
+        next_l1_target_q = rem_buckets[0].qty
     else:
         prev_target_q = max(0, safe_int(st.get("l1_target_quota_qty"), 0))
         next_l1_target_q = max(rem_buckets[0].qty, prev_target_q)
@@ -1163,14 +1174,25 @@ async def _commit_filled_sell_and_reanchor_ledger(
     )
     day_sell_ev = safe_int(st.get("daily_sell_events"), 0) + 1
 
-    indiv_inc = (
-        1 if mode in ("SELL_GRID_INDIV", "SELL_L1_AND_GRID") else 0
+    # MODIFIED: 상단 지층이 실제로 전량 소진(rem_upper_cnt == 0)되었을 때만 wma_grad_sell_cnt 를 증가시키고,
+    # 상단 부분 체결로 잔여 상단층이 남은 경우에는 indiv_grid_sell_cnt 로 정확히 집계한다.
+    rem_upper_cnt = (
+        max(0, len(rem_buckets) - (1 if rem_has_active_l1 else 0))
+        if rem_buckets
+        else 0
+    )
+    is_wma_mode = bool(
+        mode == "SELL_WMA_UPPER"
+        or (mode == "SELL_ALL_GRAD" and len(buckets) > 1)
     )
     wma_inc = (
+        1 if (is_wma_mode and sold_grid_q > 0 and rem_upper_cnt == 0) else 0
+    )
+    indiv_inc = (
         1
         if (
-            mode == "SELL_WMA_UPPER"
-            or (mode == "SELL_ALL_GRAD" and len(buckets) > 1)
+            mode in ("SELL_GRID_INDIV", "SELL_L1_AND_GRID")
+            or (is_wma_mode and sold_grid_q > 0 and rem_upper_cnt > 0)
         )
         else 0
     )
@@ -1429,7 +1451,8 @@ async def sync_pending_sell_order_plugin(
        알림 메시지 폭탄 없이 조용히 60초 인메모리 묵음 쿨다운을 각인하고 주문 ID를 정리한다(Case 79).
     3) 발주된 지정가 매도 주문이 60.0초(SELL_ORDER_MAX_WAIT_SEC) 동안 체결되지 않으면,
        가격을 하향 추격 정정하지 않고 미체결 주문을 안전하게 취소(cancel_order)한 뒤
-       1.5초 실시간 타점 감시 상태로 즉시 복귀한다.
+       기체결 수량이 있으면 정산 반영하고 0주이면 1.5초 실시간 타점 감시 상태로 즉시 복귀한다.
+       (프로세스 재기동으로 인해 last_modify_mono 단조시계가 역전되었거나 0.0 인 경우 즉시 현재 단조시계로 자가 치유!)
     """
     st = context.ledger.get_state(TARGET_SYMBOL)
     sell_oid = str(st.get("sell_order_id") or "").strip()
@@ -1439,6 +1462,16 @@ async def sync_pending_sell_order_plugin(
     ordered_qty = max(1, safe_int(st.get("ordered_qty"), 1))
     target_p = safe_float(st.get("target_sell_price"), 0.0)
     sell_mode = str(st.get("pending_sell_mode") or "SELL_L1_ONLY")
+
+    # MODIFIED [Case 65 : 프로세스 재기동 후 단조 시계(last_modify_mono) 역전 또는 결측 시 즉시 자가 치유]
+    now_mono = time.monotonic()
+    last_mod = safe_float(st.get("last_modify_mono"), 0.0)
+    if last_mod <= 0.0 or last_mod > now_mono:
+        last_mod = now_mono
+        await context.ledger.update_state(
+            TARGET_SYMBOL, last_modify_mono=last_mod
+        )
+    elapsed_mod = max(0.0, now_mono - last_mod)
 
     detail = await context.api.get_order_detail(sell_oid)
     if isinstance(detail, dict):
@@ -1465,6 +1498,43 @@ async def sync_pending_sell_order_plugin(
                 settled_order_id=sell_oid,
             )
 
+        # MODIFIED [Case 65 & Case 78]: 부분 체결(PARTIAL_FILLED) 진행 중인 경우 60초까지 잔량 체결 대기 후 안전 취소 및 기체결분 정산
+        if ord_status == "PARTIAL_FILLED" or filled_q > 0:
+            if elapsed_mod >= SELL_ORDER_MAX_WAIT_SEC:
+                try:
+                    await context.api.cancel_order(sell_oid)
+                except Exception:
+                    pass
+                final_det = await context.api.get_order_detail(sell_oid)
+                if isinstance(final_det, dict):
+                    f_ex = (
+                        final_det.get("execution")
+                        if isinstance(final_det.get("execution"), dict)
+                        else {}
+                    )
+                    f_q2 = safe_int(f_ex.get("filledQuantity"), filled_q)
+                    f_p2 = safe_float(
+                        f_ex.get("averageFilledPrice"), avg_fill_p
+                    )
+                    if f_q2 > 0:
+                        filled_q = f_q2
+                    if f_p2 > 0.0:
+                        avg_fill_p = f_p2
+                eff_p = avg_fill_p if avg_fill_p > 0.0 else target_p
+                return await _commit_filled_sell_and_reanchor_ledger(
+                    context=context,
+                    filled_qty=filled_q,
+                    avg_fill_price=eff_p,
+                    sell_mode=sell_mode,
+                    settled_order_id=sell_oid,
+                )
+            return {
+                "status": "SELL_PARTIAL_FILLED_WAITING",
+                "did_sell_or_ratchet": True,
+                "filled_qty": filled_q,
+                "ordered_qty": ordered_qty,
+            }
+
         if ord_status in ("CANCELED", "REJECTED") and filled_q == 0:
             if ord_status == "REJECTED":
                 mark_extended_sell_restriction_cooldown(
@@ -1488,11 +1558,7 @@ async def sync_pending_sell_order_plugin(
                 "did_sell_or_ratchet": False,
             }
 
-    last_mod = safe_float(st.get("last_modify_mono"), 0.0)
-    if (
-        last_mod > 0.0
-        and (time.monotonic() - last_mod) >= SELL_ORDER_MAX_WAIT_SEC
-    ):
+    if elapsed_mod >= SELL_ORDER_MAX_WAIT_SEC:
         try:
             await context.api.cancel_order(sell_oid)
         except Exception:

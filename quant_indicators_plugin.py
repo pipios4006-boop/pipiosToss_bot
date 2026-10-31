@@ -4,7 +4,7 @@
 인피니트 스노우볼 (Infinite Snowball) v3.0 — 순수 롱(SOXL) 매수 04:07 ~ 16:00 EST 제한 &
 익절 매도 24시간 전 세션(프리마켓 + 정규장 + 애프터마켓 + 데이마켓 · 방안 C 오버나이트 통합이평 사수) 확장 오버나이트 지층관리 스나이퍼
 시계열 100% 벡터화 지표 엔진 · 실시간 틱 인메모리 1분봉 자체 합성기(_LIVE_1M_BAR_STORE) ·
-10분 고정 매수 게이트 버킷 산출 및 황금시간대(07:00 ~ 07:50 EST & RSI(14) <= 19.0) 실시간 판정 코어 모듈 (Step 02 / 07)
+10분 고정 매수 게이트 버킷 산출 및 황금시간대(07:00 ~ 07:50 EST & RSI(14) <= 19.0) 실시간 판정 코어 모듈 (Step 01 / 04)
 - 제4헌법 & Case 01, Case 79, Case 80 & Case 83:
   1) 모든 시계열 및 세션 경계 연산은 미국 동부 시간(EST_TZ = ZoneInfo('America/New_York')) 단일 소스 락온
   2) 매수 허용 시간창(is_active_buy_window : 평일 04:07 ~ 16:00 EST)과
@@ -13,9 +13,10 @@
   3) 금요일 애프터마켓(16:00 ~ 19:59 EST) 익절 매도를 허용하기 위해 주말 휴장 구간을
      금요일 20:00 EST ~ 일요일 17:59 EST 로 제어 (일요일 18:00 EST 이후 월요일 데이마켓 정상 개방)
   4) 🌟 [Case 80] 미동부 프리장 황금시간대(is_golden_allin_time_window : 평일 07:00 ~ 07:50 EST) 판별기 및
-     API 1분봉 + 실시간 1.5초 틱 인메모리 1분봉 하이브리드 무손실 병합(_sync_api_candles_into_memory_store 경합 방어) ·
+     API 1분봉(공식 거래량 V · 시가 O 우선 보존) + 실시간 1.5초 틱 인메모리 1분봉(고가 H · 저가 L 극단값 보존)
+     하이브리드 무손실 벡터화 병합(_sync_api_candles_into_memory_store 경합 방어) ·
      Wilder's RSI(14) O(1) 상수 시간 무부하 합성 탑재!
-     (RSI(14) 50.0 고정 데드락 영구 소각 및 최소 14개 분봉 확보 시에만 rsi_ready = True 활성화)
+     (RSI(14) 50.0 고정 데드락 및 인메모리 volume=1.0 덮어쓰기로 인한 VWAP 왜곡 영구 소각 · 최소 14개 분봉 확보 시에만 rsi_ready = True 활성화)
 - Case 36 & Case 64: 04:07 ~ 16:00 EST 구간 10분 고정 매수 게이트(LOCKED_BUY_INTERVAL_MIN = 10) 버킷 산출 및
   동일 버킷 내 중복 평가 원천 차단(evaluate_buy_gate_bucket_status)
 - 벡터화 강제: Pandas DataFrame / NumPy 배열 연산 시 for 루프를 100% 배제하고 벡터화 수식으로만
@@ -118,10 +119,10 @@ def _sync_api_candles_into_memory_store(
     df_valid: pd.DataFrame,
 ) -> None:
     """
-    # MODIFIED [Case 80 : API 1분봉 ↔ 인메모리 실시간 틱 덮어쓰기 경합(Race Condition) 원천 차단]:
+    # MODIFIED [Case 80 : API 1분봉 ↔ 인메모리 실시간 틱 덮어쓰기 경합(Race Condition) 및 거래량(volume) 증발 원천 차단]:
     API에서 정상적으로 수신·정제된 1분봉 DataFrame(df_valid)을 인메모리 1분봉 저장소(_LIVE_1M_BAR_STORE)와
     동기화하되, 차트 연산 도중 1.5초 메인 스나이퍼 루프가 기록한 최신 분봉(_min_key)의
-    고가(max)·저가(min)·최신 종가(closePrice) 및 연산 도중 새로 열린 분봉이 절대 덮어써져 유실되지 않도록
+    고가(max)·저가(min)·최신 종가(closePrice)·거래량(max) 및 연산 도중 새로 열린 분봉이 절대 덮어써져 유실되지 않도록
     _LIVE_1M_BAR_LOCK 내부에서 원자적으로 병합 보존한다.
     """
     if df_valid is None or df_valid.empty:
@@ -149,7 +150,7 @@ def _sync_api_candles_into_memory_store(
                     "highPrice": round(float(h_v), 4),
                     "lowPrice": round(float(l_v), 4),
                     "closePrice": round(float(c_v), 4),
-                    "volume": round(float(v_v), 2),
+                    "volume": round(max(1.0, float(v_v)), 2),
                     "currency": "USD",
                 }
             )
@@ -166,6 +167,7 @@ def _sync_api_candles_into_memory_store(
                             eb_h = safe_float(eb.get("highPrice"), 0.0)
                             eb_l = safe_float(eb.get("lowPrice"), 0.0)
                             eb_c = safe_float(eb.get("closePrice"), 0.0)
+                            eb_v = safe_float(eb.get("volume"), 0.0)
                             cur_s = synced_bars[-1]
                             if eb_h > 0.0:
                                 cur_s["highPrice"] = round(
@@ -185,6 +187,14 @@ def _sync_api_candles_into_memory_store(
                                 )
                             if eb_c > 0.0:
                                 cur_s["closePrice"] = round(eb_c, 4)
+                            if eb_v > 0.0:
+                                cur_s["volume"] = round(
+                                    max(
+                                        safe_float(cur_s.get("volume"), 1.0),
+                                        eb_v,
+                                    ),
+                                    2,
+                                )
                         elif eb_key > last_sync_key:
                             synced_bars.append(dict(eb))
                             last_sync_key = eb_key
@@ -198,17 +208,19 @@ def _merge_api_and_memory_candles(
     symbol: str = TARGET_SYMBOL,
 ) -> List[Dict[str, Any]]:
     """
-    # NEW [Case 80]:
-    브로커 API 1분봉 리스트와 인메모리 실시간 합성 1분봉 리스트를 합쳐서 반환한다.
+    # MODIFIED [Case 80 : 인메모리 1분봉 선행 + 토스 API 공식 1분봉 후행 배치]:
+    인메모리 실시간 합성 1분봉(mem_bars, volume=1.0)을 먼저 배치하고,
+    브로커 API 공식 1분봉(api_candles, 실제 거래량 및 공식 시가 보유)을 뒤에 배치하여
+    동일 분(dt_min) 중복 제거(keep="last") 시 공식 시가(O)·종가(C)·거래량(V)이 우선 채택되도록 보장한다.
     """
     sym = str(symbol or TARGET_SYMBOL).upper().strip()
     combined: List[Dict[str, Any]] = []
-    if isinstance(api_candles, list) and api_candles:
-        combined.extend(c for c in api_candles if isinstance(c, dict))
     with _LIVE_1M_BAR_LOCK:
         mem_bars = list(_LIVE_1M_BAR_STORE.get(sym, []))
     if mem_bars:
         combined.extend(mem_bars)
+    if isinstance(api_candles, list) and api_candles:
+        combined.extend(c for c in api_candles if isinstance(c, dict))
     return combined
 
 
@@ -802,8 +814,6 @@ def compute_soxl_quant_metrics_1m(
 
         df["dt_est"] = ts_utc[valid_ts].dt.tz_convert(EST_TZ)
         df["dt_min"] = df["dt_est"].dt.floor("min")
-        df.sort_values("dt_est", ascending=True, inplace=True)
-        df.drop_duplicates(subset=["dt_min"], keep="last", inplace=True)
 
         df["O"] = pd.to_numeric(
             df.get("openPrice", df.get("open", df.get("price"))),
@@ -834,6 +844,19 @@ def compute_soxl_quant_metrics_1m(
         ].copy()
         if df.empty:
             return default_out
+
+        # MODIFIED [Case 80 : 동일 분(dt_min) 내 인메모리 틱 고/저가 극단값 및 거래소 공식 거래량(V)·시가(O) 벡터화 병합]:
+        # _merge_api_and_memory_candles 에서 mem_bars(선행) + api_candles(후행) 순으로 결합되었으므로,
+        # groupby transform 으로 분 단위 최고가(H), 최저가(L), 최대 거래량(V)을 먼저 보존한 뒤
+        # keep="last" 로 중복을 제거하면 거래소 API의 공식 시가(O)·종가(C)·거래량(V)과 실시간 고/저가(H/L)가 100% 결합된다!
+        if df.duplicated(subset=["dt_min"]).any():
+            grp_min = df.groupby("dt_min", sort=False)
+            df["H"] = grp_min["H"].transform("max")
+            df["L"] = grp_min["L"].transform("min")
+            df["V"] = grp_min["V"].transform("max")
+            df.drop_duplicates(subset=["dt_min"], keep="last", inplace=True)
+
+        df.sort_values("dt_min", ascending=True, inplace=True)
 
         # API + 메모리 병합 정제본을 인메모리 1분봉 저장소에 다시 동기화하여 히스토리 영구 보존
         _sync_api_candles_into_memory_store(TARGET_SYMBOL, df)
@@ -936,7 +959,7 @@ def refresh_metrics_with_live_tick(
        Wilder's RSI(14) 공식에 즉시 합성하여 레이더와 황금시간 모니터에 살아 움직이는 실시간 RSI(14)를 제공한다!
     """
     dt_now = now_est.astimezone(EST_TZ) if now_est else datetime.now(EST_TZ)
-    hm = dt_now.hour * 100 + dt_now.minute
+    hm = dt_now.hour * 100 + dt.minute
     _, cur_bucket_id, _, gate_info = evaluate_buy_gate_bucket_status(
         now_est=dt_now, buy_interval_min=LOCKED_BUY_INTERVAL_MIN
     )

@@ -3,13 +3,13 @@
 # MODIFIED: defense_plugin.py
 순수 롱(SOXL) 매수 04:07 ~ 16:00 EST 제한 & 익절 매도 24시간 전 세션(프리마켓 + 정규장 + 애프터마켓 + 데이마켓) 확장
 오버나이트 7층 골디락스 멀티 그리드(1층 공격수 + 2 ~ 6층 개별 완충층 + 통합 7층 본대) 및
-황금시간대(07:00 ~ 07:50 EST & RSI <= 19.0) 독립 골든포켓(GoldenAllInPocket) 지층관리 스나이퍼 전용 (Step 01 / 01):
-1) 🚨 [Case 66 & Case 79 봇 주문 진행 중 가로채기 차단 및 04:00 / 16:00 세션 경계 미결 매수·매도 선행 정산 가드]
-   원장에 미결 매수(buy_order_id) 또는 미결 매도(sell_order_id)가 존재할 때 reconcile 모듈이나
-   04:00 EST 오프닝 안정화 / 16:00 EST 마감 결산이 호출되면, 미체결 일괄 취소 전에
-   즉시 sync_pending_buy_order_plugin() / sync_pending_sell_order_plugin() 을 선행 호출하여
-   데이마켓·애프터마켓·정규장 막판 체결분의 텔레그램 체결 알림 · 세후 실현익 및 자투리 절약금 복리 누적 ·
-   양방향 60초 타임쉴드 각인이 100% 완수되도록 보장!
+황금시간대(07:00 ~ 07:50 EST & RSI <= 19.0) 독립 골든포켓(GoldenAllInPocket) 지층관리 스나이퍼 전용 (Step 04 / 04):
+1) 🚨 [Case 66, Case 78, Case 79 & Case 80 봇 주문 진행 중 가로채기 차단 및 04:00 / 16:00 세션 경계 선취소-후정산(Cancel-then-Sync) 가드]
+   - 평시 원장에 미결 매수(buy_order_id) 또는 미결 매도(sell_order_id)가 존재할 때 reconcile 모듈이 호출되면
+     즉시 sync_pending_buy_order_plugin() / sync_pending_sell_order_plugin() 을 선행 호출하여 가로채기를 차단한다.
+   - 04:00 EST 오프닝 안정화 및 16:00 EST 정규장 마감 결산 진입 시에는 먼저 cancel_all_open_orders() 로 거래소 미체결 잔량을 확정 취소 종료시킨 직후
+     sync_pending_buy_order_plugin() / sync_pending_sell_order_plugin() 을 호출하여, 부분 체결(PARTIAL_FILLED) 대기 물량이나 취소 직전 체결분의
+     비례 자투리 절약금 · 골든포켓 분리 기록 · 세후 실현익 복리 산입 · 텔레그램 체결 알림 · 양방향 60초 타임쉴드 각인이 단 1주도 유실되지 않도록 100% 보장!
 2) 🛡️ [Case 61, Case 65, Case 69 & Case 80 양방향 15초 인덱싱 그레이스 쉴드 전 구간(h_qty != ledger_qty) 최우선 적용]
    - 원장 총 보유 수량을 ledger_qty = sum(b.qty for b in buckets) + golden_pocket.qty 로 통합 산출하여
      골든포켓 보유 중에도 유령 추매/매도 오판을 원천 차단!
@@ -20,7 +20,7 @@
      보유 지층 및 골든포켓의 순수 매수 원금 대비 세후 실현수익(net_pnl_usd)을 원장(cumulative_realized_net_usd · free_cash_usd)에 즉시 복리 산입하고,
      l1_target_quota_qty = 0 클리어(Case 78) 및 compute_reserve_repayment_on_zero() 로 온디맨드 예비시드 원금을 자동 상환(Case 77)하며,
      mark_post_sell_time_shield(is_cycle_end=True) 와 last_sell_fill_ts / last_cycle_end_ts / last_reentry_eval_ts=0.0 을 각인하여 60.0초 타임쉴드를 강제!
-3) 🛡️ [Case 63, Case 69, Case 71 ~ Case 80 : 수동 매수·매도 CLOSED 체결가 역추적 · 단가 비교 층간 편입 · 수동 매수 실시간 텔레그램 알림 타전 · 층별/포켓별 순수 원가 1:1 매칭 복리 정산]
+3) 🛡️ [Case 63, Case 69, Case 71 ~ Case 80 : 수동 매수·매도 CLOSED 체결가 역추적 · 단가 비교 층간 편입 · 수동 매수 실시간 텔레그램 알림 타전 · 층별/포켓별 순수 원가 1:1 매칭 복리 정산 및 수동 부분매도 시 1층 목표정량 동기화]
    - 0주 상태에서 수동 신규 매수(h_qty > 0 and ledger_qty == 0) 시 CLOSED 체결원장 ID 역추적 등록 및
      ➕ [SOXL 수동 신규매수 1층 동기화] 텔레그램 슬림 알림 즉시 발송!
    - 기보유 상태에서 수동 추가 매수(h_qty > ledger_qty) 시 토스 CLOSED 주문 원장에서 실제 수동 매수 체결가를 조회한 뒤,
@@ -29,13 +29,13 @@
      ➕ [SOXL 수동 추가매수 그리드 편입] 텔레그램 슬림 알림을 즉시 발송!
    - h_qty < ledger_qty 수동 부분매도 화해 시 토스 이동평균법으로 희석된 매입금액(h_pur)을 덮어쓰지 않고,
      match_and_remove_sold_buckets_7tier(..., golden_pocket=gp) 로 차감된 물량의 순수 매수 원가만 1:1 매칭해 세후 실현수익을 복리 산입하며
-     남은 각 그리드 층 및 골든포켓 고유의 순수 매수 단가(book_price == actual_avg_price)를 100% 보존!
+     1층 수량이 부분 차감된 경우 l1_target_quota_qty 를 잔여 1층 수량으로 즉시 하향 동기화하여 허위 TOPUP_1FL 재매수를 원천 차단!
 4) 🔗 [tg_ui_plugin.py 심볼 완벽 호환] 전술 제어반(/settlement)에서 봇 작동 OFF ➔ ON 재개 시 호출되는
    relock_stratum_on_bot_resume() 함수를 정식 제공하여 AST 심볼 임포트 무결성 100% 충족!
 5) 04:00 ~ 04:06 EST 프리장 개장 초기 호가 안정화 및 당일 시드보호 패스(Case 74) · 당일 스텝업 해금(Case 76) ·
    당일 황금시간 전액매수/포켓익절(Case 80) · 당일 예비수혈/자투리차단(Case 77) 0회 리셋(단 1회 입금 알림 래치 보존) ·
    16:00 EST 일일 결산 후 애프터·데이마켓 익절 감시 무중단 직결(Case 79) · 17:00 EST 일일 GC 및 3중 금고 스냅샷 백업(Case 68)
-- 제1헌법 ~ 제6헌법 및 Case 01 ~ 80 완벽 준수
+- 제1헌법 ~ 제6헌법 및 Case 01 ~ 83 완벽 준수
 """
 
 from __future__ import annotations
@@ -858,6 +858,11 @@ async def reconcile_stratum_with_broker_holdings_plugin(
 
     # 4-2) h_qty < ledger_qty (수동 부분 매도 또는 체결 후 잔여 수량 조정):
     delta_remove = ledger_qty - h_qty
+    orig_l1_qty = (
+        buckets[0].qty
+        if (buckets and has_active_l1_bucket(buckets))
+        else 0
+    )
     default_part_p = (
         buckets[0].actual_avg_price
         if buckets
@@ -906,17 +911,25 @@ async def reconcile_stratum_with_broker_holdings_plugin(
         )
         pocket_net_pnl = safe_float(p_pnl.get("net_pnl_usd"), 0.0)
 
-    # Case 78: 수동 부분매도로 1층이 소진되었으면 l1_target_quota_qty = 0 클리어
+    # MODIFIED [Case 63 & Case 78]:
+    # 1) 수동 부분매도로 1층이 전량 소진되었으면 l1_target_quota_qty = 0 클리어.
+    # 2) 수동 부분매도로 1층 수량이 일부 차감(rem_buckets[0].qty < orig_l1_qty)된 경우에는
+    #    방금 매도한 수량을 미체결 잔량(TOPUP_1FL)으로 오인해 자동 재매수하지 않도록
+    #    next_l1_target_q = rem_buckets[0].qty 로 즉시 하향 동기화!
+    # 3) 오직 1층 수량이 전혀 줄어들지 않은 경우(예: 골든포켓만 수동 매도된 경우)에만 기존 l1_target_quota_qty 보존.
     rem_has_l1 = has_active_l1_bucket(rem_buckets)
-    next_l1_target_q = (
-        max(rem_buckets[0].qty, safe_int(st.get("l1_target_quota_qty"), 0))
-        if (
-            rem_buckets
-            and rem_has_l1
-            and not bool(match_res.get("sold_l1_completely"))
+    if (
+        not rem_buckets
+        or not rem_has_l1
+        or bool(match_res.get("sold_l1_completely"))
+    ):
+        next_l1_target_q = 0
+    elif orig_l1_qty > 0 and rem_buckets[0].qty < orig_l1_qty:
+        next_l1_target_q = rem_buckets[0].qty
+    else:
+        next_l1_target_q = max(
+            rem_buckets[0].qty, safe_int(st.get("l1_target_quota_qty"), 0)
         )
-        else 0
-    )
 
     tot_sell_ev = safe_int(st.get("total_sell_events"), 0) + 1
     tot_sold_sh = safe_int(st.get("total_sold_shares"), 0) + delta_remove
@@ -1023,7 +1036,7 @@ async def reconcile_stratum_with_broker_holdings_plugin(
     )
     free_cash_now = safe_float(updated_st.get("free_cash_usd"), 0.0)
     logger.info(
-        "➖ [Case 69/72/80 SOXL 수동 부분매도 순수원가 정산 완료] %d주 -> %d주(%d개층+포켓 %d주) 조정 (매칭층: %s @ 체결가 $%.2f · 세후손익 %+.2f$ 복리산입 · 잔여순수평단 $%.2f 보존 · 토스이평 $%.2f 오염 차단)",
+        "➖ [Case 69/72/78/80 SOXL 수동 부분매도 순수원가 정산 완료] %d주 -> %d주(%d개층+포켓 %d주) 조정 (매칭층: %s @ 체결가 $%.2f · 세후손익 %+.2f$ 복리산입 · 1층목표 %d주 · 잔여순수평단 $%.2f 보존)",
         ledger_qty,
         h_qty,
         len(rem_buckets),
@@ -1031,8 +1044,8 @@ async def reconcile_stratum_with_broker_holdings_plugin(
         match_res.get("sold_tier_desc"),
         manual_sell_p,
         net_pnl,
+        next_l1_target_q,
         pure_overall_avg,
-        h_avg,
     )
     if hasattr(context, "send_slim_alert"):
         s_sign = "+" if net_pnl >= 0.0 else "-"
@@ -1056,6 +1069,7 @@ async def reconcile_stratum_with_broker_holdings_plugin(
         "net_pnl_usd": net_pnl,
         "tiers": len(rem_buckets),
         "pocket_shares": rem_gp_obj.qty,
+        "l1_target_quota_qty": next_l1_target_q,
         "actual_avg_price": pure_overall_avg,
         "book_price": pure_overall_avg,
     }
@@ -1112,7 +1126,7 @@ async def relock_stratum_on_bot_resume(
 
 
 # ---------------------------------------------------------------------------
-# [핵심 2] 04:00 ~ 04:06 EST 프리장 개장 초기 호가 안정화 · 데이마켓 미결 선행정산 · 일일 카운터 롤오버 (Case 66, 74, 76, 77, 79, 80)
+# [핵심 2] 04:00 ~ 04:06 EST 프리장 개장 초기 호가 안정화 · 선취소-후정산(Cancel-then-Sync) · 일일 카운터 롤오버 (Case 66, 74, 76, 77, 78, 79, 80)
 # ---------------------------------------------------------------------------
 async def execute_0400_premarket_stabilization_plugin(
     context: Any,
@@ -1121,9 +1135,11 @@ async def execute_0400_premarket_stabilization_plugin(
     now_est: Optional[datetime] = None,
 ) -> Dict[str, Any]:
     """
-    # MODIFIED [Case 66, Case 73, Case 74, Case 76, Case 77, Case 79 & Case 80]:
+    # MODIFIED [Case 66, Case 73, Case 74, Case 76, Case 77, Case 78, Case 79 & Case 80]:
     🔹 04:00 ~ 04:06 EST:
-    1) 데이마켓 막판 체결분 선행 정산 후 잔류 미체결 주문을 취소한다.
+    1) 데이마켓 잔류 미체결 주문을 먼저 취소(cancel_all_open_orders)하여 주문 상태를 최종 확정(CANCELED / FILLED)한 직후,
+       sync_pending_sell_order_plugin() / sync_pending_buy_order_plugin() 을 호출하여 부분 체결 또는 취소 직전 체결분을
+       단 1주도 유실하지 않고 100% 정식 커밋 정산한다 (Cancel-then-Sync 파이프라인).
     2) 일일 카운터(시드보호패스 · 스텝업해금 · 황금시간 전액매수/포켓익절 · 예비수혈 · 자투리차단)를 0회로 리셋한다
        (단, waiting_reserve_deposit_alert_sent 단 1회 입금 알림 래치는 보존).
     3) 오버나이트 이월 SOXL 1 ~ 7층 지층 및 golden_pocket 을 실계좌와 대조 동기화한다.
@@ -1132,26 +1148,35 @@ async def execute_0400_premarket_stabilization_plugin(
     today_str = dt_now.strftime("%Y-%m-%d")
 
     st_pre = context.ledger.get_state(TARGET_SYMBOL)
-    if str(st_pre.get("sell_order_id") or "").strip():
+    has_pending_pre = bool(
+        str(st_pre.get("sell_order_id") or "").strip()
+        or str(st_pre.get("buy_order_id") or "").strip()
+    )
+    if has_pending_pre:
         try:
-            await sync_pending_sell_order_plugin(
-                context=context,
-                holdings=holdings,
-                prices=prices,
-                now_est=dt_now,
-            )
-        except Exception as exc:
-            logger.debug("04:00 EST 미결 매도 선행 정산 예외(묵음): %s", exc)
-    if str(st_pre.get("buy_order_id") or "").strip():
-        try:
-            await sync_pending_buy_order_plugin(
-                context=context,
-                holdings=holdings,
-                prices=prices,
-                now_est=dt_now,
-            )
-        except Exception as exc:
-            logger.debug("04:00 EST 미결 매수 선행 정산 예외(묵음): %s", exc)
+            await context.api.cancel_all_open_orders(symbol=TARGET_SYMBOL)
+        except Exception:
+            pass
+        if str(st_pre.get("sell_order_id") or "").strip():
+            try:
+                await sync_pending_sell_order_plugin(
+                    context=context,
+                    holdings=holdings,
+                    prices=prices,
+                    now_est=dt_now,
+                )
+            except Exception as exc:
+                logger.debug("04:00 EST 미결 매도 후정산 예외(묵음): %s", exc)
+        if str(st_pre.get("buy_order_id") or "").strip():
+            try:
+                await sync_pending_buy_order_plugin(
+                    context=context,
+                    holdings=holdings,
+                    prices=prices,
+                    now_est=dt_now,
+                )
+            except Exception as exc:
+                logger.debug("04:00 EST 미결 매수 후정산 예외(묵음): %s", exc)
 
     if hasattr(context.ledger, "rollover_daily_counters_if_needed"):
         try:
@@ -1168,6 +1193,29 @@ async def execute_0400_premarket_stabilization_plugin(
     canceled_cnt = await context.api.cancel_all_open_orders(
         symbol=TARGET_SYMBOL
     )
+    # 취소 직후 혹시 남아 있던 미결 주문이 부분/전량 체결되었는지 한 번 더 확인 커밋
+    st_after_cancel = context.ledger.get_state(TARGET_SYMBOL)
+    if str(st_after_cancel.get("sell_order_id") or "").strip():
+        try:
+            await sync_pending_sell_order_plugin(
+                context=context,
+                holdings=holdings,
+                prices=prices,
+                now_est=dt_now,
+            )
+        except Exception:
+            pass
+    if str(st_after_cancel.get("buy_order_id") or "").strip():
+        try:
+            await sync_pending_buy_order_plugin(
+                context=context,
+                holdings=holdings,
+                prices=prices,
+                now_est=dt_now,
+            )
+        except Exception:
+            pass
+
     mark_reentry_monitor_60s_cycle_shield(
         context=context, symbol=TARGET_SYMBOL, clear_shield=True
     )
@@ -1228,7 +1276,7 @@ async def execute_0400_premarket_stabilization_plugin(
 
 
 # ---------------------------------------------------------------------------
-# [핵심 3] 16:00 ~ 16:59 EST 정규장 마감 일일 결산 보고 & 애프터마켓 익절 감시 무중단 직결 (Case 66 ~ 80)
+# [핵심 3] 16:00 ~ 16:59 EST 정규장 마감 일일 결산 보고 & 선취소-후정산 · 애프터마켓 익절 감시 무중단 직결 (Case 66 ~ 80)
 # ---------------------------------------------------------------------------
 async def execute_1600_daily_closing_settlement_plugin(
     context: Any,
@@ -1237,9 +1285,11 @@ async def execute_1600_daily_closing_settlement_plugin(
     now_est: Optional[datetime] = None,
 ) -> Dict[str, Any]:
     """
-    # MODIFIED [Case 66, Case 68, Case 72, Case 74, Case 76, Case 77, Case 79 & Case 80]:
+    # MODIFIED [Case 66, Case 68, Case 72, Case 74, Case 76, Case 77, Case 78, Case 79 & Case 80]:
     🔹 16:00 ~ 16:59 EST:
-    1) 정규장 마감 미결 주문 선행 정산 후 잔류 정규장 주문을 정리한다.
+    1) 정규장 마감 진입 시 먼저 cancel_all_open_orders() 로 미체결 잔량을 확정 취소 종료시킨 직후,
+       sync_pending_buy_order_plugin() / sync_pending_sell_order_plugin() 을 호출하여 부분 체결 또는 마감 직전 체결분을
+       단 1주도 유실하지 않고 100% 정식 커밋(비례 자투리 절약금 · 골든포켓 · 세후 실현익) 정산한다.
     2) 보유 지층(1층 ~ 7층 및 golden_pocket)을 100% 오버나이트 안전 보존하며 당일 결산 보고를 단 1회 발송한다.
     3) 결산 직후 애프터마켓 및 데이마켓 ⚡1.5초 실시간 익절 매도 모니터가 무중단으로 이어진다!
     """
@@ -1253,8 +1303,13 @@ async def execute_1600_daily_closing_settlement_plugin(
     if str(st.get("last_closing_report_date") or "") == today_str:
         return {"status": "CLOSING_REPORT_ALREADY_SENT", "date": today_str}
 
-    # Case 66: 16:00 마감 정리 전 미결 주문 체결 여부 선행 정산
-    if str(st.get("buy_order_id") or "").strip():
+    # MODIFIED [Case 66, Case 78 & Case 80 : 16:00 마감 시 선(先) 미체결 취소 ➔ 후(後) 체결 정산(Cancel-then-Sync)]:
+    # 먼저 미체결 잔량을 취소하여 PARTIAL_FILLED 주문을 CANCELED(부분 체결 완료) 상태로 확정시킨 직후
+    # sync_pending_buy/sell_order_plugin 을 호출함으로써 부분 체결 및 직전 체결 물량을 100% 정식 커밋한다!
+    await context.api.cancel_all_open_orders(symbol=TARGET_SYMBOL)
+
+    st_after_cancel = context.ledger.get_state(TARGET_SYMBOL)
+    if str(st_after_cancel.get("buy_order_id") or "").strip():
         try:
             await sync_pending_buy_order_plugin(
                 context=context,
@@ -1263,8 +1318,8 @@ async def execute_1600_daily_closing_settlement_plugin(
                 now_est=dt_now,
             )
         except Exception as exc:
-            logger.debug("16:00 마감 전 미결 매수 선행 정산 예외(묵음): %s", exc)
-    if str(st.get("sell_order_id") or "").strip():
+            logger.debug("16:00 마감 미결 매수 후정산 예외(묵음): %s", exc)
+    if str(st_after_cancel.get("sell_order_id") or "").strip():
         try:
             await sync_pending_sell_order_plugin(
                 context=context,
@@ -1273,9 +1328,8 @@ async def execute_1600_daily_closing_settlement_plugin(
                 now_est=dt_now,
             )
         except Exception as exc:
-            logger.debug("16:00 마감 전 미결 매도 선행 정산 예외(묵음): %s", exc)
+            logger.debug("16:00 마감 미결 매도 후정산 예외(묵음): %s", exc)
 
-    await context.api.cancel_all_open_orders(symbol=TARGET_SYMBOL)
     updated_st = await context.ledger.update_state(
         TARGET_SYMBOL,
         buy_order_id="",
