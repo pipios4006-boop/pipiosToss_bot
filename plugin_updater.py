@@ -6,7 +6,7 @@
 11대 코어 모듈(quant_engine_core.py + quant_engine.py 2분할 및 main_runtime.py + main.py 2분할 포함)
 무디스크 인메모리 프리플라이트 컴파일 · AST 심볼 교차 검증 · 4배수 선제 스냅 치유기 · 텔레그램 잔류 큐 소각 ·
 폴더별 원장/환경변수/오프셋 스냅샷 Dirty-Check 철벽 보존 · 무인 Git 업데이트 및
-Case 81 커널 레벨 인플레이스 프로세스 자가 교체(os.execv + 3.5초 하드 워치독) 코어 모듈 (Step 05 / 05)
+Case 81 커널 레벨 인플레이스 프로세스 자가 교체(os.execv + 3.5초 하드 워치독) 코어 모듈 (Step 02 / 02)
 - 제1헌법: 모든 파일 I/O 및 git/python 서브프로세스 실행을 asyncio.to_thread 로 비동기 격리 및 타임아웃 적용
 - 제3헌법: 구버전 폐기 파일(daymarket_sim_plugin.py, whipsaw_plugin.py, state_SOXS.json 등) 디스크 영구 소각
 - Case 07: 평일 04:00 ~ 16:05 EST 장중 백그라운드 무인 업데이트 재기동 전면 차단 및 systemd ExecStartPre 장중 락다운 지원
@@ -17,8 +17,9 @@ Case 81 커널 레벨 인플레이스 프로세스 자가 교체(os.execv + 3.5�
      AST 파싱 전에 4배수로 선제 스냅 교정하여 다음 줄이 오염되는 현상을 100% 원천 차단(_auto_heal_indentation_glitches)
   3) /update 실행 시 구버전 RAM 캐시(sys.modules) 간섭을 막기 위해 `python3 plugin_updater.py --verify-only` 를
      독립 서브프로세스로 호출하고 실패 시 직전 정상 커밋 해시로 즉시 원자적 롤백 수행
-  4) 프리플라이트 및 업데이트 시점에 텔레그램 서버의 미확인 적체 큐(getUpdates offset = max_uid + 1)를
-     즉시 강제 소각(_flush_telegram_pending_updates_sync)하고, 원격 저장소에 신규 커밋이 없을 때 로컬 수정본을 안전 보존!
+  4) 부팅(ExecStartPre) 및 실제 원격 신규 커밋(remote_ahead > 0) 감지 시점에만 텔레그램 서버의 미확인 적체 큐를
+     소각(_flush_telegram_pending_updates_sync)하고, --verify-only 및 remote_ahead == 0 평시 점검 시에는
+     getUpdates 호출과 원장 재초기화를 스킵하여 살아있는 폴링 루프와의 HTTP 409 Conflict 경합을 0%로 원천 차단!
 - 🚨 [Case 68 & Case 80 폴더 위치(base_dir) 기반 격리 & git reset --hard 원장(골든포켓·모드 설정 포함)/환경변수 증발 100% 차단 쉴드]:
   1) "/home/pipiosToss" 고정 경로 하드코딩 100% 영구 제거 -> 오직 현재 실행 폴더(base_dir)의 .env 와 원장만 참조
   2) git reset --hard 실행 직전 해당 폴더 내 모든 원장(*ledger*.json, ledger_backups/*.json), 환경설정(.env*, *config*.json),
@@ -29,8 +30,8 @@ Case 81 커널 레벨 인플레이스 프로세스 자가 교체(os.execv + 3.5�
   1) verify_all_modules_compile() 에서 디스크에 __pycache__/*.pyc 파일을 강제 기록하다가 디스크 풀 상태에서
      [Errno 28] No space left on device 예외를 유발하던 py_compile.compile() 디스크 쓰기를 제거하고,
      디스크 쓰기 0 Byte 순수 인메모리 컴파일(compile(src, fpath, "exec") + ast.parse)로 100% 검증!
-  2) remote_ahead == 0 (원격 신규 커밋 없음) 시 git reset --hard 를 수행하지 않으므로 불필요한 20여 개 백업·원장 파일
-     재작성(_restore_protected_local_files_sync)을 전면 스킵하고, 복원 시에도 바이트 Dirty-Check 적용!
+  2) remote_ahead == 0 (원격 신규 커밋 없음) 시 git reset --hard 및 스냅샷 생성을 수행하지 않으므로 불필요한 백업·원장 파일
+     재작성(_restore_protected_local_files_sync)과 원장 재로드 로그를 전면 스킵하고, 복원 시에도 바이트 Dirty-Check 적용!
   3) 프리플라이트 및 업데이트 전후 emergency_free_disk_space_sync() 로 고아 임시 파일(*.tmp.*, *.heal.tmp) 및
      __pycache__ 바이트코드 캐시를 자동 소각하여 디스크 블록 및 Inode 고갈을 원천 방어!
 - 🚨 [Case 81 장외 무인 자동 업데이트(run_auto_update_loop) 및 수동 /update 직후 텔레그램 먹통(Deaf Zombie Process) ·
@@ -443,9 +444,9 @@ def _flush_telegram_pending_updates_sync(
 ) -> int:
     """
     # [Case 81]:
-    데몬 기동 전(ExecStartPre / --verify-only) 또는 /update 실행 직후에
-    텔레그램 서버 큐에 남아 있는 모든 미확인 메시지(/start, /update, callback_query 등)의
-    최대 update_id 를 조회하여 즉시 `offset = max_update_id + 1` 로 소비 확정(Ack)하고
+    데몬 기동 전(ExecStartPre) 또는 실제 원격 신규 커밋이 감지(remote_ahead > 0)되어
+    재기동이 확정된 시점에 텔레그램 서버 큐에 남아 있는 미확인 메시지의 최대 update_id 를 조회하여
+    `offset = max_update_id + 1` 로 소비 확정(Ack)하고
     폴더별 오프셋 파일(`.tg_update_offset_<folder_slug>.dat`) 및 3중 원장의 `last_tg_update_id` 에 동시 기록한다.
     """
     target_dir = get_bot_base_dir(base_dir)
@@ -510,7 +511,7 @@ def _flush_telegram_pending_updates_sync(
 def _snapshot_protected_local_files_sync(target_dir: str) -> Dict[str, bytes]:
     """
     🚨 Case 68, Case 75, Case 80 & Case 81:
-    git reset --hard 가 실행되기 직전에 현재 폴더(target_dir) 내의:
+    git reset --hard 가 실행되기 직전(remote_ahead > 0 확인 후)에 현재 폴더(target_dir) 내의:
     1) 고아 임시 파일(*.tmp.*) 및 __pycache__ 선제 청소로 여유 공간 확보
     2) 3중 안전 원장(SoxlStratumLedger) 선행 동기화 실행 (Dirty-Check 로 변경된 경우에만 기록)
     3) 모든 `*ledger*.json` 파일, `ledger_backups/*.json` 파일, `.env*`, `*config*.json`, `secrets.json` 및
@@ -928,7 +929,7 @@ def verify_all_modules_compile(
 
 
 # ---------------------------------------------------------------------------
-# [핵심 4] 스마트 Git 동기화 · Case 68/81 원장·오프셋 철벽 보존 쉴드 · Case 75 불필요 복원 쓰기 제거 및 독립 서브프로세스 검증
+# [핵심 4] 스마트 Git 동기화 · Case 68/81 원장·오프셋 철벽 보존 쉴드 · Case 75/81 HTTP 409 및 불필요 복원 쓰기 원천 차단
 # ---------------------------------------------------------------------------
 def _run_cmd_sync(
     cmd: List[str], cwd: str, timeout_sec: float = 30.0
@@ -951,23 +952,24 @@ def _execute_git_pull_and_preflight_sync(
     base_dir: Optional[str] = None,
 ) -> Tuple[bool, str, bool]:
     """
-    🚨 Case 62, Case 68, Case 75, Case 80 & Case 81 [장외 업데이트 시 로컬 원장·환경변수·오프셋 증발 원천 차단 & 디스크 Write 최소화]:
-    1) 실행 즉시 `_flush_telegram_pending_updates_sync()` 로 텔레그램 서버의 미확인 `/update` 큐를 선제 소각하고,
-       `emergency_free_disk_space_sync()` 로 고아 `.tmp.*` 파일 및 `__pycache__` 를 청소하여 디스크 여유 공간을 확보한다.
-    2) `_snapshot_protected_local_files_sync(target_dir)` 를 호출하여 현재 폴더의 모든 `*ledger*.json`,
-       `ledger_backups/*.json`, `.env*`, `.tg_update_offset*.dat`, `*config*.json` 파일을 메모리에 스냅샷 보존한다.
-    3) `git fetch --all --prune` 후 원격 저장소에 신규 커밋이 실제로 존재할 때(`remote_ahead > 0`)만
-       `git reset --hard origin/<branch>` 를 수행하고, 직후 0.001초 내에 `_restore_protected_local_files_sync()` 로
-       로컬 원장과 `.env`, `.tg_update_offset*.dat` 파일을 원상 복원한다!
+    🚨 Case 62, Case 68, Case 75, Case 80 & Case 81 [장외 업데이트 시 로컬 원장·환경변수·오프셋 증발 원천 차단 & HTTP 409 경합 0%]:
+    1) 먼저 `git fetch --all --prune` 및 `git rev-list --count HEAD..origin/<branch>` 로 원격 저장소에
+       신규 커밋이 존재하는지(`remote_ahead > 0`)부터 확인한다.
+    2) MODIFIED [Case 75 & Case 81 핵심]:
+       만약 `remote_ahead == 0` (원격 신규 커밋 없음)이면 살아있는 텔레그램 폴링 루프와 충돌(HTTP 409 Conflict)을 일으키는
+       `_flush_telegram_pending_updates_sync()` 나 원장 재초기화 로그를 유발하는 `_snapshot_protected_local_files_sync()` 를
+       호출하지 않고, 즉시 로컬 인메모리 컴파일 검증(`verify_all_modules_compile`)만 수행한 뒤 `(ok, msg, False)` 를 반환한다!
+    3) 오직 `remote_ahead > 0` (신규 커밋 존재)일 때만:
+       - `_flush_telegram_pending_updates_sync(target_dir)` 로 잔류 큐를 선제 소각하고,
+       - `_snapshot_protected_local_files_sync(target_dir)` 로 현재 폴더의 모든 `*ledger*.json`,
+         `ledger_backups/*.json`, `.env*`, `.tg_update_offset*.dat`, `*config*.json` 파일을 메모리에 스냅샷 보존하며,
+       - `git reset --hard origin/<branch>` 직후 0.001초 내에 `_restore_protected_local_files_sync()` 로 원상 복원한다!
     4) 구버전 RAM 캐시(sys.modules) 간섭 및 `.pyc` 디스크 생성을 차단하기 위해
-       `[sys.executable, "-B", updater_script, "--verify-only", "--base-dir", target_dir]` 를 독립 서브프로세스로 실행한다!
-    5) 서브프로세스 검증 실패 시 즉시 이전 정상 커밋 해시로 자동 롤백하고 로컬 원장을 재복원한다.
+       `[sys.executable, "-B", updater_script, "--verify-only", "--base-dir", target_dir]` 를 독립 서브프로세스로 실행하고,
+       검증 실패 시 즉시 이전 정상 커밋 해시로 자동 롤백하고 로컬 원장을 재복원한다.
     """
     target_dir = get_bot_base_dir(base_dir)
-
-    _flush_telegram_pending_updates_sync(target_dir)
-
-    protected_snapshots = _snapshot_protected_local_files_sync(target_dir)
+    protected_snapshots: Dict[str, bytes] = {}
     did_git_reset = False
 
     try:
@@ -1026,52 +1028,75 @@ def _execute_git_pull_and_preflight_sync(
         )
         remote_ahead = safe_int(cnt_str, 0) if rc_cnt == 0 else 0
 
-        changed = False
-        new_hash = prev_hash
-        if remote_ahead > 0:
-            did_git_reset = True
-            rc_r, _, err_r = _run_cmd_sync(
-                ["git", "reset", "--hard", target_ref],
-                cwd=target_dir,
-                timeout_sec=15.0,
+        # MODIFIED [Case 75 & Case 81]: 원격 신규 커밋이 없을 때(remote_ahead == 0)는
+        # getUpdates 호출(HTTP 409 유발)이나 SoxlStratumLedger 재초기화 없이 즉시 인메모리 검증만 수행!
+        if remote_ahead <= 0:
+            purged_list = purge_deprecated_legacy_files(target_dir)
+            ok_local, msg_local = verify_all_modules_compile(target_dir)
+            short_hash = prev_hash[:7] if prev_hash else "local"
+            purge_note = (
+                f" · 폐기파일 {len(purged_list)}개 소각" if purged_list else ""
             )
-            _restore_protected_local_files_sync(
-                target_dir, protected_snapshots
+            if not ok_local:
+                return (
+                    False,
+                    f"🚨 로컬 프리플라이트 검증 실패:\n{msg_local}",
+                    False,
+                )
+            return (
+                True,
+                f"현재 버전({short_hash}) 유지 · 원장 100% 보존 · {msg_local}{purge_note}",
+                False,
             )
-            try:
-                _run_cmd_sync(
-                    [
-                        "git",
-                        "rm",
-                        "--cached",
-                        "--ignore-unmatch",
-                        "soxl_stratum_ledger.json",
-                    ],
-                    cwd=target_dir,
-                    timeout_sec=5.0,
-                )
-            except Exception:
-                pass
-            try:
-                _run_cmd_sync(
-                    [
-                        "git",
-                        "update-index",
-                        "--assume-unchanged",
-                        "soxl_stratum_ledger.json",
-                    ],
-                    cwd=target_dir,
-                    timeout_sec=5.0,
-                )
-            except Exception:
-                pass
 
-            if rc_r != 0:
-                return False, f"git reset 실패: {err_r}", False
-            _, new_hash, _ = _run_cmd_sync(
-                ["git", "rev-parse", "HEAD"], cwd=target_dir, timeout_sec=10.0
+        # 원격 신규 커밋(remote_ahead > 0)이 존재하여 실제 업데이트를 적용할 때만 스냅샷 보존 및 큐 소각 수행!
+        _flush_telegram_pending_updates_sync(target_dir)
+        protected_snapshots = _snapshot_protected_local_files_sync(target_dir)
+
+        did_git_reset = True
+        rc_r, _, err_r = _run_cmd_sync(
+            ["git", "reset", "--hard", target_ref],
+            cwd=target_dir,
+            timeout_sec=15.0,
+        )
+        _restore_protected_local_files_sync(
+            target_dir, protected_snapshots
+        )
+        try:
+            _run_cmd_sync(
+                [
+                    "git",
+                    "rm",
+                    "--cached",
+                    "--ignore-unmatch",
+                    "soxl_stratum_ledger.json",
+                ],
+                cwd=target_dir,
+                timeout_sec=5.0,
             )
-            changed = bool(prev_hash and new_hash and prev_hash != new_hash)
+        except Exception:
+            pass
+        try:
+            _run_cmd_sync(
+                [
+                    "git",
+                    "update-index",
+                    "--assume-unchanged",
+                    "soxl_stratum_ledger.json",
+                ],
+                cwd=target_dir,
+                timeout_sec=5.0,
+            )
+        except Exception:
+            pass
+
+        if rc_r != 0:
+            return False, f"git reset 실패: {err_r}", False
+
+        _, new_hash, _ = _run_cmd_sync(
+            ["git", "rev-parse", "HEAD"], cwd=target_dir, timeout_sec=10.0
+        )
+        changed = bool(prev_hash and new_hash and prev_hash != new_hash)
 
         purged_list = purge_deprecated_legacy_files(target_dir)
 
@@ -1124,7 +1149,7 @@ def _execute_git_pull_and_preflight_sync(
         return True, summary_msg, changed
 
     except Exception as exc:
-        if did_git_reset:
+        if did_git_reset and protected_snapshots:
             _restore_protected_local_files_sync(
                 target_dir, protected_snapshots
             )
@@ -1264,8 +1289,9 @@ def _cli_main() -> int:
 
     purge_deprecated_legacy_files(target_dir)
 
+    # MODIFIED [Case 81]: --verify-only 서브프로세스에서는 텔레그램 getUpdates 호출을 배제하여
+    # 살아있는 메인 폴링 루프와의 HTTP 409 Conflict 충돌을 원천 차단한다!
     if args.verify_only:
-        _flush_telegram_pending_updates_sync(target_dir)
         ok, msg = verify_all_modules_compile(target_dir)
         if ok:
             print(msg)
