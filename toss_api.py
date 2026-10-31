@@ -264,7 +264,7 @@ def resolve_folder_isolated_ledger_paths(
     legacy_path = os.path.join(target_dir, "soxl_stratum_ledger.json")
     backup_dir = os.path.join(target_dir, "ledger_backups")
     backup_path = os.path.join(
-        backup_dir, f"soxl_stratum_ledger_{folder_slug>.bak.json".replace(">", "")
+        backup_dir, f"soxl_stratum_ledger_{folder_slug}.bak.json"
     )
     return primary_path, legacy_path, backup_path, folder_slug
 
@@ -1039,7 +1039,7 @@ class SoxlStratumLedger:
             st["last_sell_gate_eval_ts"] = round(
                 max(0.0, safe_float(st.get("last_sell_gate_eval_ts"), 0.0)), 4
             )
-            # MODIFIED [Case 67, Case 73 & Case 78]:
+            # [Case 67, Case 73 & Case 78]:
             # 활성 1층 보유 중 신규 1층 추매 주문(DIP_1FL / QUOTA_L1 / REENTRY_1FL / GOLDEN_L1)이 발주 대기 중일 때,
             # 기존 1층 수량(cur_l1_q)과 max() 를 취해 신규 추매의 목표 정량(raw_target_q)을 덮어쓰는 오염을 원천 차단!
             has_active_l1 = not self._is_upper_grid_tag(
@@ -1268,7 +1268,6 @@ class SoxlStratumLedger:
                     gp_q = safe_int(
                         (sanitized.get("golden_pocket") or {}).get("qty"), 0
                     )
-                    # MODIFIED [Case 68 ~ 84]: 원장 락온 로그 배너 동기화
                     logger.info(
                         "📂 [Case 68~84 폴더별 3중 7층 골디락스 그리드 원장 락온 완료] 폴더=[%s] · 채택소스=%s · 시드=$%.2f · 그리드=%d주(%d개층) · 골든포켓=%d주(모드=%s) · 예비수혈=%d/%d회분($%.2f) · 고유원장=%s",
                         self.folder_slug,
