@@ -1,18 +1,18 @@
 # -*- coding: utf-8 -*-
 """
 # MODIFIED: main_runtime.py
-인피니트 스노우볼 (Infinite Snowball) v3.0 — 메인 런타임 서포트 브릿지 (메인 코드 2분할 리팩토링 Part 1 / 2 · Step 10 / 11)
+인피니트 스노우볼 (Infinite Snowball) v3.0 — 메인 런타임 서포트 브릿지 (메인 코드 2분할 리팩토링 Part 1 / 2 · Step 02 / 02)
 - 역할:
   1) 적응형 비동기 플러그인 호출기(_call_plugin_adaptive) 및 동적 심볼 리졸버(_resolve_module_attr) (Case 13)
-  2) TossApiClient 런타임 메서드 호환성 폴리필 어댑터(_install_toss_api_compatibility_patches · get_commissions / ensure_us_commission_rate 포함)
+  2) TossApiClient 런타임 메서드 호환성 폴리필 어댑터(_install_toss_api_compatibility_patches · get_commissions / ensure_us_commission_rate 포함 · Case 86)
   3) 폴더별 3중 원장 인스턴스 팩토리(_instantiate_stratum_ledger · Case 68) 및 주말 휴장 판별(_check_weekend_nyse_closed_dynamic · Case 01, 79, 83)
   4) 100% 벡터화 1분봉/일봉 지표 및 실시간 틱 Wilder's RSI(14) 무손실 직결(_compute_candle_metrics_dynamic · Case 80 RSI 50.0 고정 버그 영구 소각)
   5) 폴더 위치(base_dir) 전용 텔레그램 토큰·채팅방 ID 자동 탐색기(_discover_telegram_credentials · Case 68)
   6) 내장형 사용자 중심 초슬림 텔레그램 불사조 롱폴링/관제탑 브릿지(_AdaptiveTelegramBridge · tg_ui_plugin 단일 렌더러 직결 ·
      12대 코어 모듈 프리플라이트 안내 동기화 · /avwap 조회 시 1분봉 미확보 상태면 즉시 온디맨드 프리워밍 수행 ·
-     /sync 조회 시 계좌별 미국 주식 수수료율 자동 확인 · 전술 제어반 황금시간[07:00~07:50 EST & RSI <= 19.0] 전액매수 모드 선택기 완벽 지원 ·
-     Case 75 httpx/httpcore INFO 로그 묵음화 & Case 81 전용 httpx.AsyncClient 자동 재생성 불사조 폴링 · 오프셋 파일 선행 영속화 · os.execv 인플레이스 자가 교체 · Case 84/85 완벽 준수)
-- 제1헌법 ~ 제6헌법 및 Case 01 ~ 85 전수 락온
+     /sync 조회 시 계좌별 미국 주식 수수료율 자동 확인[Case 86] · 전술 제어반 황금시간[07:00~07:50 EST & RSI <= 19.0] 전액매수 모드 선택기 완벽 지원 ·
+     Case 75 httpx/httpcore INFO 로그 묵음화 & Case 81 전용 httpx.AsyncClient 자동 재생성 불사조 폴링 · 오프셋 파일 선행 영속화 · os.execv 인플레이스 자가 교체 · Case 84/85/86 완벽 준수)
+- 제1헌법 ~ 제6헌법 및 Case 01 ~ 86 전수 락온
 """
 
 from __future__ import annotations
@@ -417,8 +417,9 @@ def _extract_candles_list(
     raw_res: Any,
 ) -> Tuple[List[Dict[str, Any]], Optional[str]]:
     """
-    # [Case 80]:
+    # MODIFIED [Case 80]:
     result.candles 표준 스키마뿐만 아니라 result 직접 리스트, items, data 키 응답을 모두 파싱한다.
+    (중첩 삼항식 내부의 비괄호 walrus 연산자를 제거하고 명시적 if/elif/else 분기로 교체하여 SyntaxError 원천 소각)
     """
     if isinstance(raw_res, list):
         return [c for c in raw_res if isinstance(c, dict)], None
@@ -427,15 +428,12 @@ def _extract_candles_list(
         if isinstance(res_obj, list):
             return [c for c in res_obj if isinstance(c, dict)], None
         if isinstance(res_obj, dict):
-            c_list = (
-                res_obj.get("candles")
-                if res_obj.get("candles") is not None
-                else (
-                    res_obj.get("items")
-                    if r_items := res_obj.get("items") is not None
-                    else res_obj.get("data")
-                )
-            )
+            if res_obj.get("candles") is not None:
+                c_list = res_obj.get("candles")
+            elif res_obj.get("items") is not None:
+                c_list = res_obj.get("items")
+            else:
+                c_list = res_obj.get("data")
             next_b = res_obj.get("nextBefore")
             if isinstance(c_list, list):
                 return (
@@ -1320,11 +1318,11 @@ def _discover_telegram_credentials(
 
 
 # ---------------------------------------------------------------------------
-# [핵심 5] 내장형 텔레그램 브릿지 (_AdaptiveTelegramBridge — tg_ui_plugin 렌더러 직결 & Case 80/81/83/84/85 완벽 통합)
+# [핵심 5] 내장형 텔레그램 브릿지 (_AdaptiveTelegramBridge — tg_ui_plugin 렌더러 직결 & Case 80/81/83/84/85/86 완벽 통합)
 # ---------------------------------------------------------------------------
 class _AdaptiveTelegramBridge:
     """
-    # MODIFIED [Case 62 ~ 85]:
+    # MODIFIED [Case 62 ~ 86]:
     tg_ui_plugin 의 4대 관제 보드 렌더러(build_start_schedule_message, build_avwap_radar_message,
     build_sync_instruction_message, build_settlement_control_message)를 단일 소스로 재사용하여
     코드 중복을 제거하고,
@@ -1716,7 +1714,7 @@ class _AdaptiveTelegramBridge:
         now_est = datetime.now(EST_TZ)
         live_p, _ = await self._refresh_live_price_and_metrics()
 
-        # NEW: /sync 호출 시 계좌별 미국 주식 수수료율(GET /api/v1/commissions) 동기화 확인
+        # NEW [Case 86]: /sync 호출 시 계좌별 미국 주식 수수료율(GET /api/v1/commissions) 동기화 확인
         ensure_comm_fn = getattr(
             self.context.api, "ensure_us_commission_rate", None
         )
@@ -1866,7 +1864,7 @@ class _AdaptiveTelegramBridge:
 
     async def _reset_realized_profit_only(self, chat_id: str) -> None:
         """
-        # [Case 02, Case 74, Case 76, Case 77 & Case 80]:
+        # [Case 02, Case 74, Case 76, Case 77, Case 80 & Case 86]:
         보유 중인 주식 지층(buckets) 및 독립 골든포켓(golden_pocket)과 기준 시드머니(initial_seed_usd),
         계좌별 수수료율(us_commission_rate, round_trip_fee_rate_pct)은 100% 보존하고,
         오직 누적/당일 세후 실현수익금 및 자투리 절약금·스텝업 해금·황금시간 통계·예비시드 통계만 0점으로 초기화한다.

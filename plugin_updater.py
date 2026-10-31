@@ -7,21 +7,21 @@
 12대 코어 모듈(quant_engine_core.py + quant_engine.py 2분할 · sniper_plugin_core.py + sniper_plugin.py 2분할 · main_runtime.py + main.py 2분할 포함)
 무디스크 인메모리 프리플라이트 컴파일 · AST 심볼 교차 검증 · Case 85 f-string 중괄호 정규식 자동 치유 및 4배수 선제 스냅 치유기 ·
 텔레그램 잔류 큐 소각 · 폴더별 원장/환경변수/오프셋 스냅샷 Dirty-Check 철벽 보존 · 무인 Git 업데이트 및
-Case 81 커널 레벨 인플레이스 프로세스 자가 교체(os.execv + 3.5초 하드 워치독) 코어 모듈 (Step 09 / 11)
+Case 81 커널 레벨 인플레이스 프로세스 자가 교체(os.execv + 3.5초 하드 워치독) 코어 모듈 (Step 01 / 02)
 - 제1헌법: 모든 파일 I/O 및 git/python 서브프로세스 실행을 asyncio.to_thread 로 비동기 격리 및 타임아웃 적용
 - 제3헌법: 구버전 폐기 파일(daymarket_sim_plugin.py, whipsaw_plugin.py, state_SOXS.json 등) 디스크 영구 소각
 - Case 07: 평일 04:00 ~ 16:05 EST 장중 백그라운드 무인 업데이트 재기동 전면 차단 및 systemd ExecStartPre 장중 락다운 지원
-- Case 11 & Case 62 & Case 85:
+- Case 11 & Case 62 & Case 85 & Case 86:
   1) 12대 필수 코어 모듈(REQUIRED_CORE_MODULES : quant_engine_core.py + quant_engine.py · sniper_plugin_core.py + sniper_plugin.py ·
      main_runtime.py + main.py 분할 반영) 인메모리 compile() 문법 검증 + AST ImportFrom 심볼 테이블 정적 교차 검증
   2) 모바일 복사·붙여넣기 과정에서 발생한 f-string 닫는 중괄호 오기(f"...{var>.ext" -> f"...{var}.ext" · Case 85),
-     마크다운 펜스 및 홀수 공백(1칸 -> 0칸, 9칸 -> 8칸)을 AST 파싱 전에 선제 스냅 교정(_auto_heal_indentation_glitches)
+     삼항 연산자 조건절 내 비괄호 walrus 오기, 마크다운 펜스 및 홀수 공백(1칸 -> 0칸, 9칸 -> 8칸)을 AST 파싱 전에 선제 스냅 교정(_auto_heal_indentation_glitches)
   3) /update 실행 시 구버전 RAM 캐시(sys.modules) 간섭을 막기 위해 `python3 plugin_updater.py --verify-only` 를
      독립 서브프로세스로 호출하고 실패 시 직전 정상 커밋 해시로 즉시 원자적 롤백 수행
   4) 부팅(ExecStartPre) 및 실제 원격 신규 커밋(remote_ahead > 0) 감지 시점에만 텔레그램 서버의 미확인 적체 큐를
      소각(_flush_telegram_pending_updates_sync)하고, --verify-only 및 remote_ahead == 0 평시 점검 시에는
      getUpdates 호출과 원장 재초기화를 스킵하여 살아있는 폴링 루프와의 HTTP 409 Conflict 경합을 0%로 원천 차단!
-- 🚨 [Case 68 & Case 80 폴더 위치(base_dir) 기반 격리 & git reset --hard 원장(골든포켓·모드·수수료율 설정 포함)/환경변수 증발 100% 차단 쉴드]
+- 🚨 [Case 68 & Case 80 & Case 86 폴더 위치(base_dir) 기반 격리 & git reset --hard 원장(골든포켓·모드·수수료율 설정 포함)/환경변수 증발 100% 차단 쉴드]
 - 🚨 [Case 75 클라우드 VM 디스크 고갈([Errno 28] No space left on device) 원천 차단 및 디스크 Write 90% 감축]
 - 🚨 [Case 81 장외 무인 자동 업데이트(run_auto_update_loop) 및 수동 /update 직후 텔레그램 먹통(Deaf Zombie Process) ·
   asyncio.to_thread 종료 데드락 · systemd Exit Code 0 재기동 거부 원천 차단]
@@ -626,11 +626,10 @@ def purge_deprecated_legacy_files(
 def _auto_heal_indentation_glitches(
     filepath: str, max_passes: int = 6
 ) -> bool:
-    """
-    # MODIFIED [Case 75 & Case 85 역방향 들여쓰기 오염 및 f-string 닫는 중괄호('}' -> '>') 오기 선제 자동 치유기]:
-    1) [Case 85 핵심]: 외부 편집 과정에서 f"...{var>.ext" 패턴이 유입되었을 경우,
-       ast.parse() 실행 전에 정규식 `re.sub(r'(\{[A-Za-z_][A-Za-z0-9_]*)>(\.[A-Za-z0-9_]+)', r'\1}\2', src)` 로
-       즉시 정상 닫는 중괄호 `}` 로 선제 치유한다!
+    r"""
+    # MODIFIED [Case 75 & Case 85 역방향 들여쓰기 오염 · f-string 닫는 중괄호('}' -> '>') 오기 · 삼항식 walrus 선제 자동 치유기]:
+    1) [Case 85 핵심]: 외부 편집 과정에서 f"...{var>.ext" 패턴이나 삼항식 조건절 내 비괄호 walrus(r_items :=) 패턴이 유입되었을 경우,
+       ast.parse() 실행 전에 정규식(_FSTRING_BROKEN_BRACE_RE) 및 문자열 치환으로 즉시 정상 구문으로 선제 치유한다!
     2) 파일 상단에 복사 시 섞여 들어간 텍스트나 마크다운 코드펜스(```)를 제거하고,
        홀수 공백(1칸 -> 0칸, 9칸 -> 8칸)을 4의 배수로 일괄 선제 스냅 교정한다.
     3) 치유본 저장 시 OSError(errno.ENOSPC == 28)가 발생하면 미완성 .heal.tmp 를 삭제하고
@@ -648,8 +647,12 @@ def _auto_heal_indentation_glitches(
             with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
                 orig_src = f.read()
 
-            # 0단계 [Case 85]: f-string 닫는 중괄호 '>' 오기 정규식 선제 치유
+            # 0단계 [Case 85]: f-string 닫는 중괄호 '>' 오기 및 삼항식 내 비괄호 walrus 선제 치유
             src = _FSTRING_BROKEN_BRACE_RE.sub(r"\1}\2", orig_src)
+            src = src.replace(
+                'if r_items := res_obj.get("items") is not None',
+                'if res_obj.get("items") is not None',
+            )
 
             # 이미 문법적으로 완벽하고 변경 사항이 없으면 디스크 쓰기 없이 즉시 통과
             try:
@@ -682,6 +685,10 @@ def _auto_heal_indentation_glitches(
 
                 src = "\n".join(snapped_lines) + "\n"
                 src = _FSTRING_BROKEN_BRACE_RE.sub(r"\1}\2", src)
+                src = src.replace(
+                    'if r_items := res_obj.get("items") is not None',
+                    'if res_obj.get("items") is not None',
+                )
 
                 # 2단계: 선제 스냅 후에도 남은 IndentationError 미세 교정
                 for _ in range(max_passes):
