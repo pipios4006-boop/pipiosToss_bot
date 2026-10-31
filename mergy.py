@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-# FIXED: /home/pipiosToss/mergy.py
-인피니트 스노우볼 (Infinite Snowball) v3.0 — 11대 코어 파이썬 모듈 단일 파일 병합기
-- 어디에서 실행하더라도 /home/pipiosToss 내의 11대 코어 *.py 파일을 아키텍처 순서대로 병합하여
+# MODIFIED: /home/pipiosToss/mergy.py
+인피니트 스노우볼 (Infinite Snowball) v3.0 — 12대 코어 파이썬 모듈 단일 파일 병합기
+- quant_engine 2분할(quant_engine_core.py + quant_engine.py),
+  sniper_plugin 2분할(sniper_plugin_core.py + sniper_plugin.py),
+  main 2분할(main_runtime.py + main.py)이 반영된 12대 코어 *.py 파일을
+  어디에서 실행하더라도 /home/pipiosToss 에서 아키텍처 순서대로 병합하여
   /home/pipios4006/code.txt 파일로 원자적(Atomic) 저장합니다.
 """
 
@@ -19,11 +22,13 @@ OUTPUT_DIR: str = "/home/pipios4006"
 OUTPUT_FILE: str = os.path.join(OUTPUT_DIR, "code.txt")
 SELF_FILENAME: str = "mergy.py"
 
+# MODIFIED: sniper_plugin_core.py 를 [FILE 05 / 12] 위치에 정식 등록하여 12대 코어 모듈 순서 100% 동기화
 CORE_MODULE_ORDER: Tuple[str, ...] = (
     "toss_api.py",
     "quant_indicators_plugin.py",
     "quant_engine_core.py",
     "quant_engine.py",
+    "sniper_plugin_core.py",
     "sniper_plugin.py",
     "sniper_exit_plugin.py",
     "defense_plugin.py",
@@ -62,6 +67,7 @@ def collect_target_py_files(src_dir: str) -> List[str]:
         and f not in ordered_targets
         and f not in EXCLUDED_FILES
         and ".tmp" not in f
+        and not f.endswith(".heal.tmp")
         and os.path.isfile(os.path.join(src_dir, f))
     )
     ordered_targets.extend(extra_py)
