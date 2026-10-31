@@ -4,7 +4,7 @@
 인피니트 스노우볼 (Infinite Snowball) v3.0 — 순수 롱(🐂 SOXL 단독) 매수 04:07 ~ 16:00 EST 제한
 (정규장 마감 30분 전 15:30 ~ 16:00 EST 0주 새 사이클 1층 진입 및 1층 공석 +1.0% 돌파 추격 차단 · Case 84) &
 익절 매도 24시간 전 세션(프리마켓 + 정규장 + 애프터마켓 + 데이마켓) 확장 오버나이트 7층 골디락스 멀티 그리드 지층관리 스나이퍼
-텔레그램 관제탑 사용자 중심 초슬림 UI 렌더러 · 불사조 롱폴링(Immortal Telegram Polling) 및 명령어·콜백 비동기 컨트롤러 코어 모듈 (Step 05 / 06)
+텔레그램 관제탑 사용자 중심 초슬림 UI 렌더러 · 계좌별 수수료율(편도/왕복) 실시간 표출 · 불사조 롱폴링(Immortal Telegram Polling) 및 명령어·콜백 비동기 컨트롤러 코어 모듈 (Step 08 / 11)
 - 제1헌법: 모든 파일 I/O 및 동기 HTTP 폴백 호출을 asyncio.to_thread 로 비동기 격리 및 타임아웃 적용
 - 제4헌법: 모든 논리 시계열은 미국 동부 시간(EST/EDT) 100% 락온
 - Case 11 & Case 62:
@@ -23,7 +23,7 @@
   2) 보유 지층(buckets 및 golden_pocket)을 날려버리는 /reset 기능을 사용자 메뉴 및 명령어에서 전면 차단하고,
      보유 주식 지층(1~7층 단가·수량·정적 기억저가 및 독립 골든포켓)과 기준 시드머니는 100% 보존한 채 누적 실현수익만 0점으로 초기화하여
      설정된 기준 시드머니(예: $10,000 또는 $19,000)의 8% 정량 투입으로 복귀시키는 `/reset_profit` 전용 기능으로 대체!
-- Case 70, Case 73, Case 74, Case 75, Case 76, Case 77, Case 78, Case 79, Case 80, Case 81, Case 83 & Case 84:
+- Case 70, Case 73, Case 74, Case 75, Case 76, Case 77, Case 78, Case 79, Case 80, Case 81, Case 83, Case 84 & Case 85:
   1) 매수 직후 최초 60.0초 타임쉴드 유지 & 보유 중 60초 블라인드 대기 락 전면 해제 -> `/avwap` 레이더 상단 `⚡1.5s 실시간타점` 및 실시간 `RSI(14)` 표출
      (/avwap 호출 시 1분봉 기저값 미확보 상태면 즉시 온디맨드 1분봉 프리워밍 수행으로 RSI 50.0 박제 현상 원천 차단!)
   2) 0주 상태 / 상단 2층 ~ 7층 보유 중 1층 공석 / 활성 1층 보유 중 3대 매수 모니터 상태 및
@@ -34,9 +34,10 @@
      개별 층 쪼개 팔기 잠금(`🔒장외잠금(04:07해금)`) 및 `2~7층 통합이평(+1.0%) 일괄졸업 ⚡1.5s 감시` 상태를 명확히 분리 표출!
   6) 🛡️ [Case 84] 정규장 마감 30분 전(15:30 ~ 16:00 EST) 구간에서 0주 보유 시 새 사이클 1층 진입 차단 배지 및
      상단 2~7층 보유 · 1층 공석 시 +1.0% 상승돌파 추격 차단 / -1.0% 눌림목 재장전 감시 상태 실시간 표출!
-  7) 🛡️ [Case 75 & Case 81] httpx/httpcore 단순 조회 INFO 로그 WARNING 묵음화 · 텔레그램 전용 독립 httpx.AsyncClient 분리 운용 ·
-     HTTP 409 Conflict 또는 연속 3회 오류 시 클라이언트 자동 재생성 · 종료/재기동 시 롱폴링 소켓 즉시 반납(aclose) 및
-     불사조 감독 루프(Immortal Supervisor Wrapper)로 텔레그램 무응답(먹통) 현상 0% 원천 봉쇄!
+  7) 💰 [NEW] 지시서(/sync) 및 전술 제어반(/settlement)에 계좌별 적용 미국 주식 수수료율(예: 편도 0.070% / 왕복 0.14% 또는 편도 0.100% / 왕복 0.20%) 실시간 표출!
+  8) 🛡️ [Case 75, Case 81 & Case 85] httpx/httpcore 단순 조회 INFO 로그 WARNING 묵음화 · 텔레그램 전용 독립 httpx.AsyncClient 분리 운용 ·
+     HTTP 409 Conflict 또는 연속 3회 오류 시 클라이언트 자동 재생성 · 종료/재기동 시 롱폴링 소켓 즉시 반납(aclose) ·
+     불사조 감독 루프(Immortal Supervisor Wrapper) 및 전 라인 f-string 중괄호({}) 짝 무결성 100% 보장!
 """
 
 from __future__ import annotations
@@ -293,7 +294,7 @@ def build_start_schedule_message(
     context: Optional[Any] = None,
 ) -> str:
     """
-    # MODIFIED [Case 02, Case 79, Case 80, Case 83 & Case 84]:
+    # [Case 02, Case 79, Case 80, Case 83 & Case 84]:
     - /reset 을 메뉴에서 완전 삭제하고 그 자리에 /reset_profit 만 배치
     - 황금시간대(07:00 ~ 07:50 EST & RSI <= 19.0) 선택 옵션,
       정규장 마감 30분 전(15:30 ~ 16:00 EST) 0주 새 사이클 1층 진입 및 1층 공석 +1% 돌파 차단(Case 84),
@@ -332,23 +333,16 @@ def _format_multi_grid_stratum_lines(
     is_late_cutoff: bool = False,
 ) -> List[str]:
     """
-    # MODIFIED [Case 71, Case 72, Case 73, Case 78, Case 79, Case 80, Case 83 & Case 84]:
+    # [Case 71, Case 72, Case 73, Case 78, Case 79, Case 80, Case 83 & Case 84]:
     독립 골든포켓(golden_pocket · 보유 시 최상단 표출) 및
     1층(활성 공격수 · 부분체결 시 미체결 잔량 및 1.5s 감시 표시 / 또는 60초 주기 공석 감시 & 2층 단가 상한) 및
     상단 2층 ~ 6층 개별 완충층 · 통합 7층 본대와 2~7층 통합 이동평균 목표가를 모바일 화면에 최적화된 형태로 전수 렌더링한다.
-    - 🚨 [Case 83 방안 C] 오버나이트(is_ext_sell_only == True)이면서 상단 2~7층이 존재할 때는:
-      1) 상단 2~7층 통합이평 라인에 `⚡장외 일괄졸업` 활성 감시 배지를 표출하고,
-      2) 개별 1층 및 개별 2~7층 라인에는 `🔒장외잠금(04:07해금)` 상태를 표시하여 평단 도망 방지 규율을 명확히 시각화한다.
-    - 🛡️ [Case 84] 정규장 마감 30분 전(15:30 ~ 16:00 EST, is_late_cutoff == True) 구간에서는:
-      1) 0주 상태(held_sh <= 0)일 때 새 사이클 1층 진입 차단 및 익일 04:07 EST 대기 안내를 표출하고,
-      2) 상단 2~7층 보유 · 1층 공석 상태(not active_l1)일 때 +1.0% 돌파 추격 차단 및 -1.0% 눌림목 감시 안내를 표출한다.
     """
     held_sh = safe_int(summary.get("held_shares"), 0)
     gp_qty = safe_int(summary.get("golden_pocket_qty"), 0)
     buckets = summary.get("buckets", [])
     lines: List[str] = []
 
-    # [Case 80]: 독립 골든포켓(golden_pocket) 보유 시 최상단에 별도 분리 표출
     if gp_qty > 0:
         gp_p = safe_float(summary.get("golden_pocket_price"), 0.0)
         gp_t = safe_float(summary.get("golden_pocket_target_price"), 0.0)
@@ -384,7 +378,6 @@ def _format_multi_grid_stratum_lines(
         l1_t = safe_float(summary.get("l1_target_price"), 0.0)
         l1_g = safe_float(summary.get("l1_gain_pct"), 0.0)
         g1_sign = "+" if l1_g >= 0.0 else ""
-        # [Case 78]: 1층 부분 체결 미체결 잔량(l1_rem_quota_qty > 0) 존재 시 목표 정량 및 1.5s 잔량 감시 표출
         l1_rem_q = safe_int(summary.get("l1_rem_quota_qty"), 0)
         l1_target_q = safe_int(summary.get("l1_target_quota_qty"), b1.qty)
         if l1_rem_q > 0 and l1_target_q > b1.qty:
@@ -400,7 +393,6 @@ def _format_multi_grid_stratum_lines(
         else:
             l1_qty_label = f"공격수 {b1.qty}주"
 
-        # Case 83 방안 C: 상단층(2~7층) 보유 중 장외에서는 1층 단독 조기 이탈을 잠그고 통합졸업 시 동시 졸업
         l1_ov_lock_note = (
             " · 🔒장외잠금(통합졸업/04:07해금)"
             if (is_ext_sell_only and has_upper_tiers)
@@ -450,7 +442,6 @@ def _format_multi_grid_stratum_lines(
             f"이평 <b>${u_wma_p:.2f}</b> · {wma_act_badge} <b>${u_wma_t:.2f}</b>(+1.0%) [{ug_sign}{u_gain:.2f}%]"
         )
 
-        # 7-Layer 에서는 상단 그리드가 최대 6개(2층 ~ 7층)이므로 전 층을 중략 없이 개별 표출
         indiv_ov_lock_note = (
             " · 🔒장외잠금(04:07해금)" if is_ext_sell_only else ""
         )
@@ -491,12 +482,8 @@ def build_avwap_radar_message(
     now_est: Optional[datetime] = None,
 ) -> str:
     """
-    # MODIFIED [Case 65, Case 70, Case 71, Case 72, Case 73, Case 74, Case 76, Case 77, Case 78, Case 79, Case 80, Case 83 & Case 84]:
-    📡 /avwap 사용자 중심 초슬림 레이더 메시지 생성:
-    - 상단 배지를 ⚡1.5s 실시간타점 (미체결 체결 감시 중일 때는 ⚡0.4s 체결감시)으로 표출하고 현재가 옆에 실시간 RSI(14)를 함께 표출한다.
-    - 장외(애프터·데이장) 구간에서 상단 2~7층 보유 시 방안 C(개별층 매도 잠금 · 통합이평 일괄졸업 감시 · 04:07 EST 해금) 상태를 명확히 표출한다.
-    - 정규장 마감 30분 전(15:30 ~ 16:00 EST) 구간에서 0주 보유 시 새 사이클 진입 차단 배지를 표출하고,
-      상단 2~7층 보유 · 1층 공석 시 +1.0% 돌파 추격 차단 / -1.0% 눌림목 재장전 감시 상태를 실시간 표출한다.
+    # [Case 65, Case 70 ~ 85]:
+    📡 /avwap 사용자 중심 초슬림 레이더 메시지 생성
     """
     dt_now = now_est.astimezone(EST_TZ) if now_est else datetime.now(EST_TZ)
     hm_now = dt_now.hour * 100 + dt_now.minute
@@ -515,7 +502,7 @@ def build_avwap_radar_message(
     )
     rsi_14 = safe_float(met.get("rsi_14"), 50.0)
 
-    summary = summarize_stratum_portfolio(st, live_price=lp)
+    summary = summarize_stratum_portfolio(st, live_price=lp, now_est=dt_now)
     is_active = bool(st.get("is_active", True))
     active_badge = "🟢 ON" if is_active else "🔴 OFF"
     fast_badge = (
@@ -550,7 +537,6 @@ def build_avwap_radar_message(
         or get_golden_allin_mode_label(g_mode)
     )
 
-    # 🛡️ Case 65, Case 70, Case 73, Case 77, Case 78, Case 79, Case 80, Case 83 & Case 84: 타임쉴드 및 장외/황금시간/장마감30분전 상태 확인
     in_buy_shield, rem_buy_sec = is_within_post_buy_time_shield(
         context, st, TARGET_SYMBOL
     )
@@ -813,7 +799,8 @@ def build_sync_instruction_message(
     context: Optional[Any] = None,
 ) -> str:
     """
-    # 📜 /sync 사용자 중심 초슬림 지층 지시서 메시지 생성 (7칸 공백 들여쓰기 및 Case 77 예비시드 / Case 78 잔량 / Case 80 골든포켓 상태 적용)
+    # MODIFIED: 📜 /sync 사용자 중심 초슬림 지층 지시서 메시지 생성
+    (7칸 공백 들여쓰기 · 계좌별 미국 주식 수수료율 표출 · Case 77 예비시드 / Case 78 잔량 / Case 80 골든포켓 상태 적용)
     """
     dt_now = now_est.astimezone(EST_TZ) if now_est else datetime.now(EST_TZ)
     h_info = (holdings or {}).get(TARGET_SYMBOL, {})
@@ -823,11 +810,13 @@ def build_sync_instruction_message(
             h_info.get("last_price"), safe_float(st.get("anchor_price"), 0.0)
         ),
     )
-    summary = summarize_stratum_portfolio(st, live_price=lp)
+    summary = summarize_stratum_portfolio(st, live_price=lp, now_est=dt_now)
 
     init_seed = safe_float(summary.get("initial_seed_usd"), 10000.0)
     free_cash = safe_float(summary.get("free_cash_usd"), 0.0)
     actual_inv = safe_float(summary.get("actual_invested_usd"), 0.0)
+    us_comm_pct = safe_float(summary.get("us_commission_rate"), 0.0007) * 100.0
+    rt_fee_pct = safe_float(summary.get("round_trip_fee_rate_pct"), 0.14)
 
     held_sh = safe_int(summary.get("held_shares"), 0)
     gp_qty = safe_int(summary.get("golden_pocket_qty"), 0)
@@ -867,7 +856,7 @@ def build_sync_instruction_message(
 
     lines = [
         "📜 <b>[스나이퍼 지시서]</b>",
-        f"💵 설정 기준시드: <b>${init_seed:,.2f}</b>",
+        f"💵 설정 기준시드: <b>${init_seed:,.2f}</b> (적용수수료: 편도 {us_comm_pct:.3g}% / 왕복 <b>{rt_fee_pct:.2f}%</b>)",
         f"🏦 스나이퍼 가용현금: <b>${free_cash:,.2f}</b>",
         f"       토스 실주문가능: ${broker_bp_usd:,.2f} (입금여력 +${unalloc_dep_usd:,.2f})",
         f"💉 예비시드 탄창: 사용 <b>{used_res_cnt}/{max_res_cnt}회분</b> (수혈잔액 ${inj_res_usd:,.2f} · 누적상환 ${cum_repaid_usd:,.2f})",
@@ -887,18 +876,20 @@ def build_settlement_control_message(
     context: Optional[Any] = None,
 ) -> str:
     """
-    # [Case 64 & Case 80]:
-    ⚙️ /settlement 사용자 중심 초슬림 전술 제어반 메시지 생성 (0️⃣ ~ 5️⃣ 넘버링 · 황금시간 전액매수 모드 선택 상태 표시)
+    # MODIFIED [Case 64, Case 80 & 계좌별 수수료율 표시]:
+    ⚙️ /settlement 사용자 중심 초슬림 전술 제어반 메시지 생성
     """
     dt_now = now_est.astimezone(EST_TZ) if now_est else datetime.now(EST_TZ)
     lp = safe_float(live_price, safe_float(st.get("anchor_price"), 100.0))
-    summary = summarize_stratum_portfolio(st, live_price=lp)
+    summary = summarize_stratum_portfolio(st, live_price=lp, now_est=dt_now)
 
     is_active = bool(st.get("is_active", True))
     power_str = "🟢 가동 중 (ON)" if is_active else "🔴 일시정지 (OFF)"
     init_seed = safe_float(summary.get("initial_seed_usd"), 10000.0)
     free_cash = safe_float(summary.get("free_cash_usd"), 0.0)
     real_eq = safe_float(summary.get("realized_equity_usd"), init_seed)
+    us_comm_pct = safe_float(summary.get("us_commission_rate"), 0.0007) * 100.0
+    rt_fee_pct = safe_float(summary.get("round_trip_fee_rate_pct"), 0.14)
     next_bud = safe_float(
         summary.get("next_portion_budget"), init_seed * 0.08
     )
@@ -939,7 +930,7 @@ def build_settlement_control_message(
 
     lines = [
         "⚙️ <b>[전술 제어반]</b>",
-        f"0️⃣ 마스터 전원: <b>{power_str}</b>",
+        f"0️⃣ 마스터 전원: <b>{power_str}</b> (수수료: 편도 {us_comm_pct:.3g}% / 왕복 <b>{rt_fee_pct:.2f}%</b>)",
         f"1️⃣ 기준 시드머니: <b>${init_seed:,.2f}</b> (실현기준 총자산 ${real_eq:,.2f})",
         f"2️⃣ 차기 1회(8%) 정량: 예산 <b>${next_bud:,.2f}</b> ➔ {quota_badge_str} (가용현금 ${free_cash:,.2f})",
         f"3️⃣ 현재 보유 지층: <b>{held_sh}주</b> ({held_tiers}개층 · {held_lots}회차{gp_note}{rem_note})",
@@ -957,12 +948,8 @@ def build_settlement_control_message(
 # ---------------------------------------------------------------------------
 class TelegramCommandController:
     """
-    🚨 제1헌법 & Case 02, 15, 16, 62, 64, 65, 66, 67, 68, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 83, 84:
+    🚨 제1헌법 & Case 02, 15, 16, 62, 64, 65, 66, 67, 68, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 83, 84, 85:
     main.py 의 SniperAppContext 와 정식 결속되는 텔레그램 봇 컨트롤러.
-    - [Case 81] 토스 API 세션과 완전히 분리된 텔레그램 전용 httpx.AsyncClient(미설치 시 urllib 비동기 폴백)를 운용하며,
-      HTTP 409 Conflict 또는 연속 통신 오류(3회 이상) 발생 시 기존 클라이언트를 즉시 닫고(aclose) 새 클라이언트를 자동 재생성한다.
-    - [Case 81] /update 실행 시 오프셋을 로컬 파일(.tg_update_offset_<slug>.dat), 3중 원장, 텔레그램 서버에 선행 커밋하고
-      3.5초 데몬 하드 워치독 및 os.execv 인플레이스 프로세스 교체로 100% 무중단 자가 재기동한다.
     """
 
     def __init__(self, context: Any) -> None:
@@ -1289,8 +1276,6 @@ class TelegramCommandController:
     ) -> Tuple[float, Dict[str, Any]]:
         """
         # [Case 80 : /avwap 조회 시 1분봉 미확보 상태면 즉시 온디맨드 프리워밍 수행]:
-        현재가를 최신화한 뒤, candle_metrics_cache 에 아직 prev_bar_close 가 세팅되어 있지 않다면
-        그 자리에서 get_candles_1m(total_count=200)을 1회 호출하여 Wilder's RSI(14) 기저값을 생성한다.
         """
         now_est = datetime.now(EST_TZ)
         live_p = safe_float(
@@ -1357,6 +1342,26 @@ class TelegramCommandController:
     ) -> None:
         now_est = datetime.now(EST_TZ)
         live_p, _ = await self._refresh_live_price_and_metrics()
+
+        # NEW: /sync 호출 시 계좌별 미국 주식 수수료율(GET /api/v1/commissions) 동기화 확인
+        ensure_comm_fn = getattr(
+            self.context.api, "ensure_us_commission_rate", None
+        )
+        if callable(ensure_comm_fn):
+            try:
+                c_res = await ensure_comm_fn()
+                if isinstance(c_res, tuple) and len(c_res) == 2:
+                    us_c = safe_float(c_res[0], 0.0)
+                    rt_p = safe_float(c_res[1], 0.0)
+                    if us_c > 0.0 and rt_p > 0.0:
+                        await self.context.ledger.update_state(
+                            TARGET_SYMBOL,
+                            us_commission_rate=us_c,
+                            round_trip_fee_rate_pct=rt_p,
+                        )
+            except Exception:
+                pass
+
         holdings_map, fetch_ok = (
             await self.context.api.get_holdings_map_with_status()
         )
@@ -1487,8 +1492,8 @@ class TelegramCommandController:
     async def _reset_realized_profit_only(self, chat_id: str) -> None:
         """
         # [Case 02, Case 74, Case 76, Case 77 & Case 80]:
-        보유 중인 주식 지층(buckets · 1~7층 개별 단가 · 정적 기억저가 cycle_min_buy_price) 및
-        독립 골든포켓(golden_pocket)과 설정된 기준 시드머니(initial_seed_usd)는 100% 보존하고,
+        보유 중인 주식 지층(buckets) 및 독립 골든포켓(golden_pocket)과 설정된 기준 시드머니(initial_seed_usd),
+        계좌별 수수료율(us_commission_rate, round_trip_fee_rate_pct)은 100% 보존하고,
         오직 누적/당일 세후 실현수익금 및 자투리 절약금·스텝업 해금 횟수·황금시간 매매 통계·예비시드 통계·입금 알림 래치만
         0점으로 초기화하여 설정된 기준 시드머니의 8% 정량 투입으로 복귀시킨다.
         """
@@ -1587,11 +1592,6 @@ class TelegramCommandController:
     async def _execute_manual_update_command(self, chat_id: str) -> None:
         """
         # [Case 62, Case 68, Case 75 & Case 81]:
-        1) /update 수신 즉시 오프셋을 로컬 파일(.tg_update_offset_<slug>.dat), 원장, 텔레그램 서버에 선행 커밋한다.
-        2) execute_git_pull_and_preflight() 로 최신 커밋 동기화 및 서브프로세스 검증을 수행한다.
-        3) 신규 커밋(changed == True)이 적용되었을 때는 구버전 os._exit(0) 대신
-           텔레그램 HTTP 세션을 닫고(_close_tg_http_client) Case 81 3.5초 하드 워치독 및
-           perform_self_restart_execv(os.execv + os._exit(1) 폴백)를 통해 무중단 인플레이스 자가 재기동한다!
         """
         await self._ack_telegram_offset(self._last_update_id)
         await self.send_message(
@@ -1873,11 +1873,6 @@ class TelegramCommandController:
     async def run_polling_loop(self) -> None:
         """
         🚨 [Case 81 : 텔레그램 전용 클라이언트 불사조 폴링 루프 (Immortal Supervisor Wrapper)]:
-        1) 어떠한 네트워크 순단, HTTP 409 Conflict, JSON 파싱 오류, 핸들러 내부 예외가 발생하더라도
-           shutdown_event.is_set() 전에는 폴링 태스크가 절대 단독 사망하지 않는다.
-        2) HTTP 409 Conflict 또는 연속 3회 이상 통신 오류 감지 시 기존 httpx.AsyncClient 소켓 풀을 즉시 닫고
-           새 클라이언트로 자동 재생성한다.
-        3) 종료/재기동 시 finally 블록에서 열린 롱폴링 세션을 즉시 닫아(aclose) 다음 프로세스와의 충돌을 원천 차단한다.
         """
         if not self.bot_token:
             logger.warning(
@@ -1887,7 +1882,6 @@ class TelegramCommandController:
                 await asyncio.sleep(10.0)
             return
 
-        # 최상위 불사조 감독 루프 (Immortal Supervisor Wrapper)
         try:
             while not self.context.shutdown_event.is_set():
                 try:
@@ -2046,8 +2040,6 @@ async def telegram_polling_loop(
 ) -> None:
     """
     # [Case 81 호환 최상위 폴링 엔트리 함수]:
-    context.tg 가 존재하면 해당 인스턴스의 run_polling_loop() 를 호출하고,
-    없으면 TelegramCommandController(context) 를 생성하여 불사조 폴링 루프를 가동한다.
     """
     tg_obj = getattr(context, "tg", None)
     if tg_obj is not None and hasattr(tg_obj, "run_polling_loop"):

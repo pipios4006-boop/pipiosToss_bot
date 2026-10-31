@@ -1,24 +1,25 @@
 # -*- coding: utf-8 -*-
 """
 # MODIFIED: quant_engine.py
-인피니트 스노우볼 (Infinite Snowball) v3.0 — 퀀트 엔진 코어 Part 2 / 2 (Step 03 / 09)
+인피니트 스노우볼 (Infinite Snowball) v3.0 — 퀀트 엔진 코어 Part 2 / 2 (Step 03 / 11)
 역할:
-1) quant_engine_core.py (Part 1 / 2) 의 모든 상수·구조체·정량/수혈/스텝업/컷오프 판정 심볼 명시적 재익스포트(Facade Re-export)로
+1) quant_engine_core.py (Part 1 / 2) 의 모든 상수·구조체·정량/수혈/스텝업/컷오프/동적수수료 판정 심볼 명시적 재익스포트(Facade Re-export)로
    타 모듈 AST 임포트 호환성 100% 보장
 2) 1층 ~ 7층 골디락스 순수 멀티 그리드 배치 및 병합기(vrev_add_quota_lot_and_merge_2tier :
    REENTRY_1FL 독립 1층 배치 / TOPUP_1FL 기존 1층 무승격 원자적 합산[Case 78] /
    DIP_1FL·GOLDEN_L1 2~6층 개별 승격 및 7층 초과분 최상단 통합 7층 본대[GRID_L7] 가중평균 병합[Case 53, 72] /
    수동 추가매수 시 단가 비교 오름차순 층간 스마트 중간 편입[Case 63])
-3) 수동 매도 시 독립 골든포켓 및 1~7층 순수 원가 1:1 매칭 정산기(match_and_remove_sold_buckets_7tier · Case 63, 69, 80)
+3) 수동 매도 시 독립 골든포켓 및 1~7층 순수 원가 1:1 매칭 정산기(match_and_remove_sold_buckets_7tier · Case 63, 69, 80) 및
+   계좌별 동적 왕복 수수료율(0.14% / 0.20%) · 실측 매도 수수료(execution.commission + tax) 반영 세후 실현손익 산출기(calc_sell_realized_pnl)
 4) 상단 2층 ~ 7층 통합 이동평균(compute_upper_2_to_7_moving_avg) 산출 및
    🚨 [Case 83 방안 C] 오버나이트(애프터·데이마켓, is_overnight_session=True) 중 상단 2~7층 보유 시
    개별 층(1층 및 2~6층 개별) 쪼개 팔기를 잠가 통합 이동평균(wma_2_to_7) 도망을 원천 봉쇄하고,
    장외에서는 통합 이동평균(+1.00%) 일괄 졸업(1층 본전 이상 시 SELL_ALL_GRAD 전량 졸업 / 1층 본전 미달 시 SELL_WMA_UPPER 상단 일괄 졸업,
    또는 1층 단독 보유 +1.50% / 독립 골든포켓 +1.50%)만 허용한 뒤
    04:07 EST 프리장 개장(is_overnight_session=False) 즉시 4중 다중 익절을 전면 개방하는 하이브리드 매도 판정기(evaluate_multi_grid_sell_targets)
-5) 포트폴리오 통합 요약기(summarize_stratum_portfolio · Case 84 15:30~16:00 돌파 차단 상태 동기화) 및
-   기동 전 TDD 사전 무결성 검증 슈트(run_quant_engine_tdd · Case 25 ~ 84 전수 검증)
-- 제1헌법 ~ 제6헌법 및 Case 01 ~ 84 완벽 준수
+5) 포트폴리오 통합 요약기(summarize_stratum_portfolio · Case 84 15:30~16:00 돌파 차단 및 계좌별 수수료율 동기화) 및
+   기동 전 TDD 사전 무결성 검증 슈트(run_quant_engine_tdd · Case 25 ~ 85 전수 검증)
+- 제1헌법 ~ 제6헌법 및 Case 01 ~ 85 완벽 준수
 """
 
 from __future__ import annotations
@@ -33,6 +34,7 @@ from quant_engine_core import (
     DEFAULT_GOLDEN_ALLIN_MODE,
     DEFAULT_INITIAL_SEED_USD,
     DEFAULT_UNLOCK_MODE,
+    DEFAULT_US_COMMISSION_RATE,
     GOLDEN_ALLIN_MODES,
     GOLDEN_POCKET_RISE_PCT,
     GOLDEN_RSI_MAX_THRESHOLD,
@@ -68,6 +70,8 @@ from quant_engine_core import (
     evaluate_step_up_2x_dip_signal,
     get_golden8_prog_thresholds,
     get_golden_allin_mode_label,
+    get_runtime_round_trip_fee_rate_pct,
+    get_runtime_us_commission_rate,
     has_active_golden_pocket,
     has_active_l1_bucket,
     is_upper_grid_tier,
@@ -76,6 +80,8 @@ from quant_engine_core import (
     relabel_upper_grid_tiers,
     resolve_affordable_buy_qty,
     resolve_allin_affordable_buy_qty,
+    resolve_effective_round_trip_fee_rate_pct,
+    set_runtime_round_trip_fee_rate_pct,
 )
 from toss_api import EST_TZ, safe_float, safe_int
 
@@ -83,7 +89,7 @@ logger = logging.getLogger("toss_sniper.quant_engine")
 
 
 # ---------------------------------------------------------------------------
-# [핵심 4 · Case 63, Case 71 ~ 84] 1층 ~ 7층 골디락스 순수 멀티 그리드 배치 & 매도 층/포켓 원가 매칭 정산기
+# [핵심 4 · Case 63, Case 71 ~ 85] 1층 ~ 7층 골디락스 순수 멀티 그리드 배치 & 매도 층/포켓 원가 매칭 정산기
 # ---------------------------------------------------------------------------
 def vrev_add_quota_lot_and_merge_2tier(
     queue: Sequence[StratumBucket],
@@ -94,7 +100,7 @@ def vrev_add_quota_lot_and_merge_2tier(
     max_tiers: int = MAX_GRID_TIERS_7,
 ) -> List[StratumBucket]:
     """
-    🎯 3 & 🎯 4 & Case 46 ~ 84 (함수명은 타 모듈 AST 호환을 위해 유지하되 내부는 1~7층 골디락스 멀티 그리드로 작동):
+    🎯 3 & 🎯 4 & Case 46 ~ 85 (함수명은 타 모듈 AST 호환을 위해 유지하되 내부는 1~7층 골디락스 멀티 그리드로 작동):
     신규 정량 매수(또는 GRID_L1_ALLIN 모드 1층 전액편입 GOLDEN_L1) 체결 시
     최대 7개 지층(1층 공격수 + 2~6층 개별 완충층[5개] + 통합 7층 본대[GRID_L7])을 관리한다.
     """
@@ -167,7 +173,6 @@ def vrev_add_quota_lot_and_merge_2tier(
         )
         return [merged_l1] + preserved_uppers
 
-    # 2-Layer 레거시 모드 호환 분기
     if eff_max_tiers <= 2:
         old_total_qty = sum(b.qty for b in existing)
         old_actual_cost = round(sum(b.actual_cost_usd for b in existing), 4)
@@ -189,7 +194,6 @@ def vrev_add_quota_lot_and_merge_2tier(
         return [new_l1, merged_l2]
 
     # 🚨 [Case 63 & Case 72 : 단가 비교 오름차순(저가 1층 ➔ 고가 7층) 층간 중간 편입]
-    # 단, GOLDEN_L1 은 백테스트 GRID_L1_ALLIN 규격대로 항상 새 1층(index 0)으로 편입하고 기존 지층을 승격시킨다.
     if tag != "GOLDEN_L1" and pure_p > existing[0].book_price + 1e-6:
         combined = list(existing) + [new_l1]
         combined.sort(key=lambda b: round(b.book_price, 4))
@@ -220,13 +224,15 @@ def match_and_remove_sold_buckets_7tier(
     sell_exec_price: float = 0.0,
     max_tiers: int = MAX_GRID_TIERS_7,
     golden_pocket: Optional[Any] = None,
+    round_trip_fee_rate_pct: Optional[float] = None,
+    actual_sell_fee_usd: Optional[float] = None,
 ) -> Dict[str, Any]:
     """
-    # [Case 63, Case 69, Case 71, Case 72 & Case 80 : 매도 수량 층/골든포켓 판별 및 순수 원가 1:1 매칭 정산기]:
+    # MODIFIED [Case 63, Case 69, Case 71, Case 72, Case 80 & 계좌별 동적/실측 수수료 연동]:
     수동 매도(전량 또는 부분 매도)로 보유 수량이 delta_remove_qty 만큼 줄었을 때:
     1) 독립 골든포켓(golden_pocket)이 존재하고 수량이 일치하거나 단가가 하단 층 이하일 때 골든포켓부터(또는 하단 층부터)
        순차 차감하여 골든포켓과 1층 ~ 7층 각 레이어의 고유 순수 원가를 100% 보존한다.
-    2) 실제로 차감된 물량의 고유 순수 매수 원금(sold_actual_cost_usd)만 적용하여
+    2) 실제로 차감된 물량의 고유 순수 매수 원금(sold_actual_cost_usd)과 계좌별 수수료율을 적용하여
        calc_sell_realized_pnl() 로 세후 실현수익(net_pnl_usd)을 정밀 산출한다.
     """
     valid = [
@@ -250,7 +256,13 @@ def match_and_remove_sold_buckets_7tier(
             "sold_tier_desc": "없음",
             "sold_l1_completely": False,
             "sold_upper_tier": False,
-            "pnl_info": calc_sell_realized_pnl(0, exec_p, 0.0),
+            "pnl_info": calc_sell_realized_pnl(
+                0,
+                exec_p,
+                0.0,
+                round_trip_fee_rate_pct=round_trip_fee_rate_pct,
+                actual_sell_fee_usd=actual_sell_fee_usd,
+            ),
         }
 
     sold_pocket_qty = 0
@@ -293,7 +305,6 @@ def match_and_remove_sold_buckets_7tier(
         )
         return taken
 
-    # 골든포켓 수량과 정확히 일치하거나 골든포켓 단가가 최저 그리드 층 단가 이하(또는 그리드가 비어 있음)면 골든포켓 우선 차감
     if rem_gp.is_active and (
         not valid
         or rem_to_cut == rem_gp.qty
@@ -397,6 +408,8 @@ def match_and_remove_sold_buckets_7tier(
         sold_qty=sold_qty_total,
         sell_exec_price=eff_sell_p,
         sold_actual_cost_usd=sold_cost_total,
+        round_trip_fee_rate_pct=round_trip_fee_rate_pct,
+        actual_sell_fee_usd=actual_sell_fee_usd,
     )
 
     return {
@@ -422,7 +435,6 @@ def compute_upper_2_to_12_moving_avg(
 ) -> Dict[str, Any]:
     """
     🚨 [Case 71 & Case 72 상단 2층 ~ 7층 통합 이동평균법(수량 가중평균) 단가 및 목표가 산출기]:
-    (타 모듈 AST 임포트 호환을 위해 함수명 compute_upper_2_to_12_moving_avg 를 유지하며 compute_upper_2_to_7_moving_avg 별칭 동시 제공)
     """
     valid = [
         b
@@ -499,23 +511,6 @@ def evaluate_multi_grid_sell_targets(
 ) -> Dict[str, Any]:
     """
     🚨 [Case 69, Case 70, Case 71, Case 72, Case 80 & Case 83 (방안 C 오버나이트 통합이평 사수 하이브리드)]:
-    매수 후 60초 타임쉴드 뒤 매 1.5초 실시간 현재가(live_price)로 매도 조건을 스캔한다:
-    1) [조건 ① : 독립 골든포켓(golden_pocket) +1.50% 이상 도래 (Case 80)]
-       gp.is_active == True 이고 live_price >= gp.target_sell_price(rise_pocket_pct) 이면
-       전 세션(프리·정규·애프터·데이장) 언제든 sell_pocket_qty = gp.qty 를 매도 물량에 즉시 포함!
-    2) [Case 83 방안 C : 오버나이트(애프터·데이마켓, is_overnight_session == True) 구간에서의 그리드 보호 규율]
-       - 상단 지층(2층 ~ 7층)이 존재할 때(has_upper_tiers == True):
-         하단 1층(+1.50%)이나 개별 완충층(2~6층 +1.00%)을 장외에서 먼저 쪼개 팔면 저가 물량 가중치가 사라져
-         2~7층 통합 이동평균(wma_2_to_7)이 위로 도망가고 04:07 EST 프리장 시초가 갭상승 수익을 잃게 된다.
-         따라서 오버나이트 중 상단 지층 보유 시에는 개별 층 매도(hit_l1 단독 및 hit_indiv_grid)를 전면 잠그고,
-         오직 '상단 2층 ~ 7층 통합 이동평균(wma_2_to_7) +1.00% 도달' 시의 상단 일괄 졸업(SELL_WMA_UPPER,
-         활성 1층 보유 중 1층 본전 이상 동시 충족 시 1층까지 포함한 전량 졸업 SELL_ALL_GRAD)만 허용한다!
-       - 단, 상단 지층 없이 활성 1층 단독 1개 층만 보유 중(has_upper_tiers == False)일 때는
-         통합이평 도망 역설이 없으므로 오버나이트 중에도 +1.50% 도달 시 즉시 익절(SELL_L1_ONLY)한다.
-    3) [프리마켓 + 정규장 (04:07 ~ 16:00 EST, is_overnight_session == False) 구간에서의 4중 다중 익절 전면 개방]
-       - 04:07 EST 프리장 개장과 동시에 ① 골든포켓(+1.50%), ② 활성 1층(+1.50%),
-         ③ 상단 2~7층 통합 이동평균(+1.00% 일괄 졸업), ④ 상단 2~7층 개별 완충층(+1.00% 개별 익절)을
-         모두 개방하여 프리장이 상승(또는 갭상승) 시작한 가격으로 즉시 익절한다!
     """
     valid = [
         b
@@ -562,8 +557,6 @@ def evaluate_multi_grid_sell_targets(
     has_upper_tiers = bool(len(valid) > upper_start_idx)
 
     # ② 활성 1층(index 0) +1.50% 개별 익절 판정
-    # [Case 83 방안 C]: 오버나이트(is_overnight_session == True)이면서 상단 지층(2~7층)이 함께 존재할 때는
-    # 1층 단독 조기 이탈을 잠그고 통합이평 일괄 졸업 시 함께 졸업시키거나 04:07 EST 프리장 시초가에 매도한다!
     if active_l1 and valid:
         b1 = valid[0]
         min_l1_target_p = (
@@ -586,10 +579,6 @@ def evaluate_multi_grid_sell_targets(
             valid, rise_upper_pct=rise_upper_pct
         )
         wma_target_p = safe_float(wma_info.get("upper_wma_target_price"), 0.0)
-        # [Case 69, Case 71 & Case 83]:
-        # 1) 소수점 절사로 인한 원금 손실을 막기 위해 1층 본전 하한가(b1_breakeven_p)를 math.ceil 로 정밀 산출한다.
-        # 2) 오버나이트 중에도 lp >= wma_target_p 이면 상단 2~7층 일괄 졸업(SELL_WMA_UPPER)을 항상 허용하고,
-        #    동시에 1층 본전 이상(lp >= b1_breakeven_p)이면 1층까지 포함하여 전량 졸업(SELL_ALL_GRAD)시킨다!
         b1_breakeven_p = (
             round(
                 math.ceil(
@@ -618,8 +607,6 @@ def evaluate_multi_grid_sell_targets(
                 floor_candidates.append(b1_breakeven_p)
         else:
             # ④ 상단 2~7층 개별 층(+1.00%) 판정
-            # [Case 83 방안 C]: 오버나이트(is_overnight_session == True) 중에는 개별 상단층 쪼개 팔기를 잠가
-            # 하단 완충층(2~3층) 조기 이탈로 인한 통합이평(wma_2_to_7) 도망을 100% 원천 봉쇄한다!
             for k in range(upper_start_idx, len(valid)):
                 bk = valid[k]
                 bk_target_p = (
@@ -758,10 +745,16 @@ def calc_sell_realized_pnl(
     sold_qty: int,
     sell_exec_price: float,
     sold_actual_cost_usd: float,
+    round_trip_fee_rate_pct: Optional[float] = None,
+    actual_sell_fee_usd: Optional[float] = None,
 ) -> Dict[str, float]:
     """
+    # MODIFIED [계좌별 동적 왕복 수수료율(0.14% / 0.20%) 및 토스 실측 매도 수수료(execution.commission + tax) 연동 정산]:
     매도 체결 수량(sold_qty), 실제 체결 단가(sell_exec_price), 매도 지층/포켓들의 실제 매수 원금 합계(sold_actual_cost_usd)를
-    기반으로 왕복 수수료(0.14%) 차감 후 세후 실현 손익을 정밀 산출한다.
+    기반으로 왕복 수수료 차감 후 세후 실현 손익을 정밀 산출한다.
+    - actual_sell_fee_usd (토스 GET /api/v1/orders/{orderId} 의 execution.commission + execution.tax 실측값)가
+      양수(> 0.0)로 전달되면: 매수 당시 편도 수수료(actual_cost * one_way_rate) + 실측 매도 수수료(actual_sell_fee_usd)를 합산 차감한다.
+    - 미전달 시에는 계좌 고유 왕복 수수료율(eff_rt_pct : pipiosToss 0.14% / wonToss 0.20%)을 적용하여 차감한다.
     """
     q_int = max(0, safe_int(sold_qty, 0))
     exec_p = max(0.0, safe_float(sell_exec_price, 0.0))
@@ -776,11 +769,27 @@ def calc_sell_realized_pnl(
             "net_rate_pct": 0.0,
         }
 
+    eff_rt_pct = resolve_effective_round_trip_fee_rate_pct(
+        round_trip_fee_rate_pct
+    )
+    one_way_rate = (eff_rt_pct / 100.0) * 0.5
+
     proceeds = round(float(q_int) * exec_p, 4)
     gross_pnl = round(proceeds - actual_cost, 4)
-    fee_usd = round(
-        ((actual_cost + proceeds) * 0.5) * (ROUND_TRIP_FEE_RATE_PCT / 100.0), 4
+
+    sell_fee_actual = (
+        safe_float(actual_sell_fee_usd, 0.0)
+        if actual_sell_fee_usd is not None
+        else 0.0
     )
+    if sell_fee_actual > 0.0:
+        buy_side_fee = actual_cost * one_way_rate
+        fee_usd = round(buy_side_fee + sell_fee_actual, 4)
+    else:
+        fee_usd = round(
+            ((actual_cost + proceeds) * 0.5) * (eff_rt_pct / 100.0), 4
+        )
+
     net_pnl = round(gross_pnl - fee_usd, 4)
     net_rate_pct = (
         round((net_pnl / actual_cost) * 100.0, 4) if actual_cost > 0.0 else 0.0
@@ -796,7 +805,7 @@ def calc_sell_realized_pnl(
 
 
 # ---------------------------------------------------------------------------
-# [핵심 5] 포트폴리오 · 1~7층 골디락스 멀티 그리드 · 독립 골든포켓 · 2~7층 이동평균 · STEP2X_15PCT_C20 · GUARD30 · Case 84 통합 요약기 (Case 59 ~ 84)
+# [핵심 5] 포트폴리오 · 1~7층 골디락스 멀티 그리드 · 독립 골든포켓 · 2~7층 이동평균 · STEP2X_15PCT_C20 · GUARD30 · Case 84 통합 요약기 (Case 59 ~ 85)
 # ---------------------------------------------------------------------------
 def summarize_stratum_portfolio(
     state_dict: Dict[str, Any],
@@ -804,18 +813,7 @@ def summarize_stratum_portfolio(
     now_est: Optional[datetime] = None,
 ) -> Dict[str, Any]:
     """
-    # MODIFIED [🎯 1 ~ 🎯 5 & Case 59, 60, 67, 69, 71, 72, 73, 74, 76, 77, 78, 80, 83, 84]:
-    원장 상태(state_dict)와 현재가(live_price)를 받아:
-    - 1층(활성 공격수) 및 상단 2층 ~ 6층 개별 완충층 · 통합 7층 본대(GRID_L2 ~ GRID_L7) 현황
-    - 🌟 Case 80: 황금시간대 전액매수 모드(golden_allin_mode · 기본값 "NONE") 및 독립 골든포켓(golden_pocket) 보유 현황,
-      +1.50% 목표가(golden_pocket_target_price), 수익률(golden_pocket_gain_pct), 황금시간 매매 통계 요약
-    - 🎯 Case 78: 활성 1층 현재 보유 주수(l1_cur_qty), 1층 목표 정량(l1_target_quota_qty),
-      미체결 잔량(l1_rem_quota_qty = max(0, l1_target_quota_qty - l1_cur_qty)) 산출
-    - 상단 2층 ~ 7층 통합 이동평균 단가(upper_wma_price) 및 +1.00% 일괄 익절 목표가
-    - 🛡️ Case 84: 현재 시각이 정규장 마감 30분 전(평일 15:30 ~ 16:00 EST)인지 판별하여
-      evaluate_l2_only_hybrid_reentry_signal(..., is_late_new_cycle_cutoff=is_late_cutoff)에 반영
-    - 💉 Case 77 & Case 80: 온디맨드 예비시드 수혈 잔액(injected_reserve_usd)을 제외한 순수 코어 자산(core_equity_for_quota) 기반
-      8% 정량 산출 및 30% 자투리 가드 최소 필요 현금(min_req_cash_guard30), 예비시드 한도(used/6회분) 요약을 반환한다.
+    # MODIFIED [🎯 1 ~ 🎯 5 & Case 59 ~ 85 & 계좌별 수수료율 요약 통합]:
     """
     st = state_dict if isinstance(state_dict, dict) else {}
     dt_now = now_est.astimezone(EST_TZ) if now_est else datetime.now(EST_TZ)
@@ -827,6 +825,14 @@ def summarize_stratum_portfolio(
     raw_buckets = buckets_from_dicts(st.get("buckets", []))
     buckets = enforce_true_breakeven_floor_on_buckets(raw_buckets)
     gp = pocket_from_dict(st.get("golden_pocket"))
+
+    eff_rt_fee_pct = resolve_effective_round_trip_fee_rate_pct(state_dict=st)
+    us_comm_rate = safe_float(
+        st.get("us_commission_rate"),
+        round((eff_rt_fee_pct / 100.0) * 0.5, 6),
+    )
+    if us_comm_rate <= 0.0 or us_comm_rate > 0.01:
+        us_comm_rate = round((eff_rt_fee_pct / 100.0) * 0.5, 6)
 
     init_seed = max(
         100.0, safe_float(st.get("initial_seed_usd"), DEFAULT_INITIAL_SEED_USD)
@@ -861,7 +867,6 @@ def summarize_stratum_portfolio(
     actual_invested = round(actual_invested_buckets + gp_cost, 4)
     book_invested = round(book_invested_buckets + gp_cost, 4)
 
-    # [Case 77 & Case 80 회계 항등식 확장]:
     expected_free_cash = round(
         max(
             0.0,
@@ -928,7 +933,6 @@ def summarize_stratum_portfolio(
     active_l1 = has_active_l1_bucket(buckets)
     is_l2_only = bool(len(buckets) > 0 and not active_l1)
 
-    # [Case 78 : 활성 1층 현재 보유 주수, 목표 정량 및 미체결 잔량(l1_rem_quota_qty) 산출]
     raw_l1_target_q = max(0, safe_int(st.get("l1_target_quota_qty"), 0))
     pending_lot_tag = str(st.get("pending_lot_type") or "").upper().strip()
     if active_l1 and buckets:
@@ -998,7 +1002,6 @@ def summarize_stratum_portfolio(
     ratchet_p = safe_float(st.get("ratchet_anchor_price"), anchor_p)
     realized_equity_usd = round(max(0.0, init_seed + cum_realized), 4)
 
-    # 🚨 Case 73 & Case 84: 1층 공석 시 상단 최하단 층(2층, min_indiv_upper_price) 및 장마감 30분전 돌파 차단 여부를 함께 전달!
     reentry_sig = evaluate_l2_only_hybrid_reentry_signal(
         live_price=lp,
         anchor_price=anchor_p,
@@ -1027,7 +1030,6 @@ def summarize_stratum_portfolio(
         reentry_sig.get("signal_type") or "HOLD_WAIT_GATE"
     )
 
-    # 🚨 Case 60, Case 67, Case 72 & Case 76:
     if buckets:
         candidates = [
             p
@@ -1048,7 +1050,6 @@ def summarize_stratum_portfolio(
         else 0.0
     )
 
-    # Case 76: 활성 1층 보유 중 STEP2X_15PCT_C20 스텝업 해금 자격 및 목표가 평가
     eff_step_drop = (
         0.0 if unlock_mode in ("STATIC", "NONE", "OFF") else STEP_UP_2X_DROP_PCT
     )
@@ -1088,7 +1089,6 @@ def summarize_stratum_portfolio(
             else 0.0
         )
 
-    # [Case 77 & Case 80 : 온디맨드 예비시드 수혈금(injected_reserve_usd)을 제외한 순수 코어 자산 기준으로 8% 정량 예산 산출]:
     core_equity_for_quota = max(
         init_seed, (free_cash + actual_invested) - injected_reserve_usd
     )
@@ -1120,7 +1120,6 @@ def summarize_stratum_portfolio(
     )
     next_target_qty = min(budget_cap_qty, anchor_quota_qty)
 
-    # [Case 77]: 현재 상태에서의 30% 자투리 승격 방지 가드 최소 필요 현금(min_req_cash_guard30) 산출
     l1_cost_now = (
         buckets[0].actual_cost_usd if (active_l1 and buckets) else 0.0
     )
@@ -1133,6 +1132,7 @@ def summarize_stratum_portfolio(
         is_dip_promotion=bool(active_l1 and len(buckets) > 0),
         used_reserve_portions_cnt=used_reserve_portions_cnt,
         max_reserve_portions=MAX_RESERVE_PORTIONS,
+        round_trip_fee_rate_pct=eff_rt_fee_pct,
     )
     min_req_cash_guard30 = safe_float(guard30_eval.get("min_req_cash"), 0.0)
 
@@ -1154,7 +1154,6 @@ def summarize_stratum_portfolio(
 
     realized_roi_pct = round((cum_realized / init_seed) * 100.0, 2)
     gross_mark_equity_usd = round(free_cash + market_eval_usd, 4)
-    # 순수 자기자본 시가평가 총자산 (수혈받은 예비시드 원금 injected_reserve_usd 차감 기준)
     total_mark_equity_usd = round(
         max(0.0, gross_mark_equity_usd - injected_reserve_usd), 4
     )
@@ -1168,7 +1167,6 @@ def summarize_stratum_portfolio(
     indiv_grid_sell_cnt = safe_int(st.get("indiv_grid_sell_cnt"), 0)
     wma_grad_sell_cnt = safe_int(st.get("wma_grad_sell_cnt"), 0)
 
-    # Case 74: 🛡️ 시드보호 패스는 당일 프리장 ~ 정규장(04:07 ~ 16:00 EST) 일일 주기 카운터(daily_seed_protect_pass_cnt)로 바인딩!
     daily_seed_protect_pass_cnt = safe_int(
         st.get("daily_seed_protect_pass_cnt"), 0
     )
@@ -1184,7 +1182,6 @@ def summarize_stratum_portfolio(
         safe_float(st.get("cumulative_leftover_saved_usd"), 0.0), 4
     )
 
-    # [Case 80]: 황금시간대 전액매수 및 골든포켓 통계 바인딩
     golden_allin_buy_events = safe_int(st.get("golden_allin_buy_events"), 0)
     daily_golden_allin_buy_events = safe_int(
         st.get("daily_golden_allin_buy_events"), 0
@@ -1224,6 +1221,8 @@ def summarize_stratum_portfolio(
 
     return {
         "buckets": buckets,
+        "us_commission_rate": us_comm_rate,
+        "round_trip_fee_rate_pct": eff_rt_fee_pct,
         "golden_allin_mode": golden_allin_mode,
         "golden_allin_mode_label": get_golden_allin_mode_label(
             golden_allin_mode
@@ -1340,7 +1339,7 @@ def summarize_stratum_portfolio(
 
 
 # ---------------------------------------------------------------------------
-# [핵심 6] TDD 사전 무결성 자동 검증 슈트 (Case 25 ~ 84 전수 검증)
+# [핵심 6] TDD 사전 무결성 자동 검증 슈트 (Case 25 ~ 85 전수 검증)
 # ---------------------------------------------------------------------------
 def run_quant_engine_tdd() -> bool:
     """
@@ -1352,11 +1351,14 @@ def run_quant_engine_tdd() -> bool:
     상단 그리드 단독 보유(1층 공석) 시 2층 단가 상한 역전 차단(HOLD_PREVENT_INVERSION · Case 73) 및
     눌림/돌파 독립 1층 재장전(Case 59, 73),
     🛡️ Case 84 정규장 마감 30분 전(is_late_new_cycle_cutoff=True, 15:30 ~ 16:00 EST) 구간 +1.0% 상승돌파 추격 차단 및 -1.0% 눌림목 정상 허용,
-    정적 기억저가 잠금 및 🔓 06_STEP2X_15PCT_C20 3중 안전문 스텝업 해금(Case 60, 72, 76),
+    정적 기억저가 잠금 및 🔓 06_STEP2X_15PCT_C20 3중 안전문 스텝업 저가 해금(Case 60, 72, 76),
     💉 05_RESV_6P_GUARD30 30% 자투리 승격 방지 가드 · 토스 계좌 여유자금 감지 자동 수혈 · 0주 졸업 자동 상환(Case 77),
     🎯 Case 78 지정가 부분 체결 후 미체결 잔량(TOPUP_1FL) 기존 1층 무승격 원자적 합산,
-    🌟 Case 80 황금시간대(07:00 ~ 07:50 EST & RSI <= 19.0) 기본값 OFF("NONE") 및 POCKET_ALLIN / GRID_L1_ALLIN 판정 검증을 전수 수행한다.
+    🌟 Case 80 황금시간대(07:00 ~ 07:50 EST & RSI <= 19.0) 기본값 OFF("NONE") 및 POCKET_ALLIN / GRID_L1_ALLIN 판정 검증,
+    💰 계좌별 동적 왕복 수수료율(0.14% vs 0.20%) 및 실측 수수료(actual_sell_fee_usd) 정산 검증을 전수 수행한다.
     """
+    set_runtime_round_trip_fee_rate_pct(0.14, us_commission_rate=0.0007)
+
     assert DEFAULT_GOLDEN_ALLIN_MODE == "NONE", (
         f"TDD 실패(Case 80 기본값 OFF 위반): {DEFAULT_GOLDEN_ALLIN_MODE}"
     )
@@ -1372,7 +1374,6 @@ def run_quant_engine_tdd() -> bool:
         f"TDD 실패(Case 67): q_dip={q_dip}, q_brk={q_brk}"
     )
 
-    # Case 67: 0주 상태에서 직전 anchor_price($85.00)가 존재하고 현재가($80.00)가 낮을 때 정량 일치 검증
     mock_zero_st = {
         "buckets": [],
         "initial_seed_usd": 10000.0,
@@ -1432,7 +1433,6 @@ def run_quant_engine_tdd() -> bool:
         StratumBucket(10, 85.0, 850.0, 850.0, 1, "GRID_L3"),
         StratumBucket(10, 90.0, 900.0, 900.0, 1, "GRID_L4"),
     ]
-    # 4-A) 프리장/정규장(is_overnight_session=False)에서는 $81.90 에 1층+2층 개별 익절 정상 작동
     res_part = evaluate_multi_grid_sell_targets(
         test_grid, live_price=81.90, is_overnight_session=False
     )
@@ -1444,7 +1444,6 @@ def run_quant_engine_tdd() -> bool:
         and res_part["hit_indiv_grid"]
     ), f"TDD 실패(Case 71/72 프리·정규 부분 다중익절): {res_part}"
 
-    # 4-B) [Case 83 방안 C] 오버나이트(is_overnight_session=True) 중에는 $81.90 에 1층+2층 개별 매도를 잠그고 통합이평($85.33 -> 목표 $86.19) 사수!
     res_ov_lock = evaluate_multi_grid_sell_targets(
         test_grid, live_price=81.90, is_overnight_session=True
     )
@@ -1454,7 +1453,6 @@ def run_quant_engine_tdd() -> bool:
         and res_ov_lock["reason_tag"] == "HOLD_OVERNIGHT_WMA_LOCK"
     ), f"TDD 실패(Case 83 방안 C 오버나이트 개별층 잠금 미작동): {res_ov_lock}"
 
-    # 4-C) [Case 83 방안 C] 오버나이트(is_overnight_session=True) 중에도 2~4층 통합이평 목표가($86.19) 이상 도달 시 전량 졸업!
     res_ov_grad = evaluate_multi_grid_sell_targets(
         test_grid, live_price=86.25, is_overnight_session=True
     )
@@ -1466,7 +1464,6 @@ def run_quant_engine_tdd() -> bool:
         and res_ov_grad["reason_tag"] == "SELL_ALL_GRAD"
     ), f"TDD 실패(Case 83 방안 C 오버나이트 통합이평 전량 졸업 미작동): {res_ov_grad}"
 
-    # 4-D) [Case 83 방안 C] 1층 단독 1개 층만 보유 시에는 오버나이트 중에도 +1.50% 에 즉시 익절!
     res_ov_l1_single = evaluate_multi_grid_sell_targets(
         [StratumBucket(10, 80.0, 800.0, 800.0, 1, "REENTRY_1FL")],
         live_price=81.25,
@@ -1479,7 +1476,6 @@ def run_quant_engine_tdd() -> bool:
         and res_ov_l1_single["reason_tag"] == "SELL_L1_ONLY"
     ), f"TDD 실패(Case 83 1층 단독 오버나이트 익절 미작동): {res_ov_l1_single}"
 
-    # 4-E) [Case 83 방안 C] GOLDEN_L1 등으로 1층 단가($88.00) > 상단 2~3층 통합이평 목표가($83.83)일 때 오버나이트 중 상단 일괄 졸업(SELL_WMA_UPPER) 정상 작동 검증
     res_ov_wma_upper = evaluate_multi_grid_sell_targets(
         [
             StratumBucket(20, 88.0, 1760.0, 1760.0, 1, "GOLDEN_L1"),
@@ -1496,7 +1492,6 @@ def run_quant_engine_tdd() -> bool:
         and res_ov_wma_upper["reason_tag"] == "SELL_WMA_UPPER"
     ), f"TDD 실패(Case 83 1층 고단가 시 상단 일괄졸업 SELL_WMA_UPPER 미작동): {res_ov_wma_upper}"
 
-    # Case 80: 독립 골든포켓 단독 익절(+1.50%) 및 오버나이트 중 골든포켓 단독 익절 검증
     mock_gp = GoldenAllInPocket(
         qty=50,
         book_price=70.00,
@@ -1550,7 +1545,6 @@ def run_quant_engine_tdd() -> bool:
         and sig_brk_ok["signal_type"] == "BREAKOUT_RELOAD"
     ), f"TDD 실패(Case 73 2층 이하 안전 돌파 승인): {sig_brk_ok}"
 
-    # NEW [Case 84 TDD 검증 1]: 15:30 ~ 16:00 EST (is_late_new_cycle_cutoff=True) 구간에서 +1.0% 돌파 추격 차단 검증
     sig_brk_late_blocked = evaluate_l2_only_hybrid_reentry_signal(
         live_price=84.30,
         anchor_price=83.41,
@@ -1564,7 +1558,6 @@ def run_quant_engine_tdd() -> bool:
         == "HOLD_LATE_SESSION_BREAKOUT_CUTOFF"
     ), f"TDD 실패(Case 84 장마감 30분전 1층공석 돌파차단 미작동): {sig_brk_late_blocked}"
 
-    # NEW [Case 84 TDD 검증 2]: 15:30 ~ 16:00 EST (is_late_new_cycle_cutoff=True) 구간에서도 -1.0% 눌림목 재장전은 정상 허용 검증
     sig_pull_ok = evaluate_l2_only_hybrid_reentry_signal(
         live_price=82.50,
         anchor_price=83.41,
@@ -1807,7 +1800,26 @@ def run_quant_engine_tdd() -> bool:
         f"TDD 실패(Case 80 전액매수 주수 산출 오류): q={allin_q}, spent={allin_spent}"
     )
 
+    # 12) [NEW : 계좌별 동적 왕복 수수료율(0.14% vs 0.20%) 및 실측 수수료(actual_sell_fee_usd) 정산 검증]
+    pnl_014 = calc_sell_realized_pnl(
+        sold_qty=10,
+        sell_exec_price=74.29,
+        sold_actual_cost_usd=731.00,
+        round_trip_fee_rate_pct=0.14,
+    )
+    pnl_020 = calc_sell_realized_pnl(
+        sold_qty=10,
+        sell_exec_price=74.29,
+        sold_actual_cost_usd=731.00,
+        round_trip_fee_rate_pct=0.20,
+    )
+    assert (
+        abs(pnl_014["net_pnl_usd"] - 10.8683) < 1e-3
+        and abs(pnl_020["net_pnl_usd"] - 10.4261) < 1e-3
+        and pnl_014["net_pnl_usd"] > pnl_020["net_pnl_usd"]
+    ), f"TDD 실패(계좌별 0.14% vs 0.20% 수수료 정산 불일치): {pnl_014} vs {pnl_020}"
+
     logger.info(
-        "✅ [QuantEngine TDD 사전 무결성 검증 통과] 챔피언 🌟 POCKET_ALLIN / 🔥 GRID_L1_ALLIN × 💉 05_RESV_6P_GUARD30 × 🔓 06_STEP2X_15PCT_C20 & 방안 C · Case 84(Case 59~84) 검증 완료"
+        "✅ [QuantEngine TDD 사전 무결성 검증 통과] 챔피언 🌟 POCKET_ALLIN / 🔥 GRID_L1_ALLIN × 💉 05_RESV_6P_GUARD30 × 🔓 06_STEP2X_15PCT_C20 & 방안 C · Case 84 · 동적수수료(Case 59~85) 검증 완료"
     )
     return True

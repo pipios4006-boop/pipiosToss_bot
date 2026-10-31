@@ -4,7 +4,7 @@
 순수 롱(SOXL) 매수 04:07 ~ 16:00 EST 제한(정규장 마감 30분 전 15:30 ~ 16:00 EST 0주 새 사이클 1층 진입 및 1층 공석 +1.0% 돌파 추격 차단 · Case 84) &
 익절 매도 24시간 전 세션(프리마켓 + 정규장 + 애프터마켓 + 데이마켓 · 방안 C 오버나이트 통합이평 사수 · Case 83) 확장
 오버나이트 7층 골디락스 멀티 그리드(1층 공격수 + 2 ~ 6층 개별 완충층 + 통합 7층 본대) 및
-황금시간대(07:00 ~ 07:50 EST & RSI <= 19.0) 독립 골든포켓(GoldenAllInPocket) 지층관리 스나이퍼 전용 (Step 07 / 09):
+황금시간대(07:00 ~ 07:50 EST & RSI <= 19.0) 독립 골든포켓(GoldenAllInPocket) 지층관리 스나이퍼 전용 (Step 07 / 11):
 1) 🚨 [Case 66, Case 78, Case 79 & Case 80 봇 주문 진행 중 가로채기 차단 및 04:00 / 16:01 세션 경계 force_settle 선취소-후정산(Cancel-then-Sync) 가드]
    - 평시 원장에 미결 매수(buy_order_id) 또는 미결 매도(sell_order_id)가 존재할 때 reconcile 모듈이 호출되면
      즉시 sync_pending_buy_order_plugin() / sync_pending_sell_order_plugin() 을 선행 호출하여 가로채기를 차단한다.
@@ -20,18 +20,18 @@
    - 매수 체결뿐만 아니라 매도 체결(개별 층 익절 · 골든포켓 익절 및 0주 졸업) 직후 15.0초 동안은 모든 수량 불일치(h_qty != ledger_qty)에서
      즉시 PROTECTED_BY_AUTO_FILL_GRACE_SHIELD 를 반환하여, 토스 잔고 API 인덱싱 시차(0.1 ~ 0.4초)로 인한
      유령 추매(h_qty > ledger_qty) ➔ 유령 부분매도(h_qty < ledger_qty) 핑퐁 오염 및 0주 졸업 직후 과거 백업 덮어쓰기를 원천 봉쇄!
-   - 수동 전량 청산(CLEARED_TO_ZERO_HOLDINGS)으로 0주 싸이클이 끝나는 순간에도 토스 CLOSED 체결원장에서 실제 매도 체결가를 역추적하여
-     보유 지층 및 골든포켓의 순수 매수 원금 대비 세후 실현수익(net_pnl_usd)을 원장(cumulative_realized_net_usd · free_cash_usd)에 즉시 복리 산입하고,
+   - 수동 전량 청산(CLEARED_TO_ZERO_HOLDINGS)으로 0주 싸이클이 끝나는 순간에도 토스 CLOSED 체결원장에서 실제 매도 체결가와 실측 수수료(commission + tax)를 역추적하여
+     보유 지층 및 골든포켓의 순수 매수 원금 대비 세후 실현수익(net_pnl_usd, 계좌 고유 수수료율 0.14% / 0.20% 반영)을 원장에 즉시 복리 산입하고,
      l1_target_quota_qty = 0 클리어(Case 78) 및 compute_reserve_repayment_on_zero() 로 온디맨드 예비시드 원금을 자동 상환(Case 77)하며,
      mark_post_sell_time_shield(is_cycle_end=True) 와 last_sell_fill_ts / last_cycle_end_ts / last_reentry_eval_ts=0.0 을 각인하여 60.0초 타임쉴드를 강제하고
      15:29:01 ~ 16:00:00 EST 구간에는 Case 84 새 사이클 진입 차단 안내를 표출!
-3) 🛡️ [Case 63, Case 69, Case 71 ~ Case 80 : 수동 매수·매도 CLOSED 체결가 역추적 · 단가 비교 층간 편입 · 수동 매수 실시간 텔레그램 알림 타전 · 층별/포켓별 순수 원가 1:1 매칭 복리 정산 및 수동 부분매도 시 1층 목표정량 동기화]
+3) 🛡️ [Case 63, Case 69, Case 71 ~ Case 80 : 수동 매수·매도 CLOSED 체결가 및 실측 수수료 역추적 · 단가 비교 층간 편입 · 수동 매수 실시간 텔레그램 알림 타전 · 층별/포켓별 순수 원가 1:1 매칭 복리 정산 및 수동 부분매도 시 1층 목표정량 동기화]
 4) 🔗 [tg_ui_plugin.py 심볼 완벽 호환] 전술 제어반(/settlement)에서 봇 작동 OFF ➔ ON 재개 시 호출되는
    relock_stratum_on_bot_resume() 함수를 정식 제공하여 AST 심볼 임포트 무결성 100% 충족!
-5) 04:00 ~ 04:06 EST 프리장 개장 초기 호가 안정화 및 당일 시드보호 패스(Case 74) · 당일 스텝업 해금(Case 76) ·
+5) 04:00 ~ 04:06 EST 프리장 개장 초기 호가 안정화 · 계좌별 미국 주식 수수료율(GET /api/v1/commissions) 일일 갱신 및 당일 시드보호 패스(Case 74) · 당일 스텝업 해금(Case 76) ·
    당일 황금시간 전액매수/포켓익절(Case 80) · 당일 예비수혈/자투리차단(Case 77) 0회 리셋(단 1회 입금 알림 래치 보존) ·
    16:00 EST 일일 결산 후 애프터·데이마켓 익절 감시 무중단 직결(Case 79, Case 83) · 17:00 EST 일일 GC 및 3중 금고 스냅샷 백업(Case 68)
-- 제1헌법 ~ 제6헌법 및 Case 01 ~ 84 완벽 준수
+- 제1헌법 ~ 제6헌법 및 Case 01 ~ 85 완벽 준수
 """
 
 from __future__ import annotations
@@ -60,6 +60,7 @@ from quant_engine import (
     pocket_from_dict,
     pocket_to_dict,
     relabel_upper_grid_tiers,
+    resolve_effective_round_trip_fee_rate_pct,
     summarize_stratum_portfolio,
     vrev_add_quota_lot_and_merge_2tier,
 )
@@ -125,6 +126,10 @@ async def _probe_manual_fill_price_safe(
     폴백 시 fallback_price 를 안전하게 반환한다.
     """
     settled_oids: List[str] = list(st.get("last_settled_order_ids") or [])
+    if hasattr(context, "api") and hasattr(
+        context.api, "last_probed_manual_fee_usd"
+    ):
+        context.api.last_probed_manual_fee_usd = 0.0
     probe_fn = getattr(context.api, "probe_latest_manual_fill_price", None)
     if callable(probe_fn):
         try:
@@ -140,14 +145,31 @@ async def _probe_manual_fill_price_safe(
                     s_mid = str(mid or "").strip()
                     if s_mid and s_mid not in settled_oids:
                         settled_oids.append(s_mid)
-                return round(safe_float(exec_p, fallback_price), 4), settled_oids[-50:]
+                return (
+                    round(safe_float(exec_p, fallback_price), 4),
+                    settled_oids[-50:],
+                )
         except Exception as exc:
             logger.debug("수동 체결 단가 역추적 폴백 사용(%s): %s", side, exc)
-    return round(max(0.01, safe_float(fallback_price, 0.01)), 4), settled_oids[-50:]
+    return (
+        round(max(0.01, safe_float(fallback_price, 0.01)), 4),
+        settled_oids[-50:],
+    )
+
+
+def _get_last_probed_manual_fee(context: Any) -> Optional[float]:
+    api_obj = getattr(context, "api", None)
+    if api_obj is not None:
+        f_val = safe_float(
+            getattr(api_obj, "last_probed_manual_fee_usd", 0.0), 0.0
+        )
+        if f_val > 0.0:
+            return round(f_val, 4)
+    return None
 
 
 # ---------------------------------------------------------------------------
-# [핵심 1] 로컬 7층 골디락스 그리드 + 독립 골든포켓 원장 ↔ 토스 실보유 잔고(/api/v1/holdings) 무결성 화해 (Case 58 ~ 84)
+# [핵심 1] 로컬 7층 골디락스 그리드 + 독립 골든포켓 원장 ↔ 토스 실보유 잔고(/api/v1/holdings) 무결성 화해 (Case 58 ~ 85)
 # ---------------------------------------------------------------------------
 async def reconcile_stratum_with_broker_holdings_plugin(
     context: Any,
@@ -157,7 +179,7 @@ async def reconcile_stratum_with_broker_holdings_plugin(
     force_sync: bool = False,
 ) -> Dict[str, Any]:
     """
-    🚨 Case 58, Case 60, Case 61, Case 63, Case 65, Case 66, Case 68, Case 69, Case 71 ~ Case 84:
+    🚨 Case 58, Case 60, Case 61, Case 63, Case 65, Case 66, Case 68, Case 69, Case 71 ~ Case 85:
     프로세스 재기동 시, 04:00 EST 오프닝 동기화 시, 또는 장중/애프터장/데이장 사용자가 토스 앱에서 수동 매매했을 때
     로컬 7층 그리드 원장(buckets)과 독립 골든포켓(golden_pocket)의 합산 보유 주수(ledger_qty = grid_qty + gp_qty)를
     토스 실계좌 보유 주수(h_qty)와 대조하여 화해한다.
@@ -205,8 +227,8 @@ async def reconcile_stratum_with_broker_holdings_plugin(
     gp = pocket_from_dict(st.get("golden_pocket"))
     grid_qty = sum(b.qty for b in buckets)
     gp_qty = gp.qty if gp.is_active else 0
-    # [Case 80]: 그리드 보유 수량 + 독립 골든포켓 수량 통합 대조
     ledger_qty = grid_qty + gp_qty
+    eff_rt_pct = resolve_effective_round_trip_fee_rate_pct(state_dict=st)
 
     h_info = holdings.get(TARGET_SYMBOL, {})
     h_qty = max(0, safe_int(h_info.get("qty"), 0))
@@ -283,12 +305,16 @@ async def reconcile_stratum_with_broker_holdings_plugin(
             st=st,
             fallback_price=fb_sell_p,
         )
+        probed_fee = _get_last_probed_manual_fee(context)
+
         match_res = match_and_remove_sold_buckets_7tier(
             buckets=buckets,
             delta_remove_qty=ledger_qty,
             sell_exec_price=manual_sell_p,
             max_tiers=MAX_GRID_TIERS_7,
             golden_pocket=gp,
+            round_trip_fee_rate_pct=eff_rt_pct,
+            actual_sell_fee_usd=probed_fee,
         )
         pnl_info = match_res["pnl_info"]
         gross_pnl = safe_float(pnl_info.get("gross_pnl_usd"), 0.0)
@@ -300,10 +326,17 @@ async def reconcile_stratum_with_broker_holdings_plugin(
         gp_sell_inc = 1 if sold_pocket_q > 0 else 0
         pocket_net_pnl = 0.0
         if sold_pocket_q > 0 and gp.is_active:
+            pocket_fee_part: Optional[float] = None
+            if probed_fee is not None and ledger_qty > 0:
+                pocket_fee_part = round(
+                    probed_fee * (float(sold_pocket_q) / float(ledger_qty)), 4
+                )
             p_pnl = calc_sell_realized_pnl(
                 sold_qty=sold_pocket_q,
                 sell_exec_price=manual_sell_p,
                 sold_actual_cost_usd=gp.actual_cost_usd,
+                round_trip_fee_rate_pct=eff_rt_pct,
+                actual_sell_fee_usd=pocket_fee_part,
             )
             pocket_net_pnl = safe_float(p_pnl.get("net_pnl_usd"), 0.0)
 
@@ -463,7 +496,6 @@ async def reconcile_stratum_with_broker_holdings_plugin(
                     f" · 💉예비시드 원금 ${repaid_this_time:,.2f} 자동상환"
                     f"({avail_p}/{MAX_RESERVE_PORTIONS}회분 복구)"
                 )
-            # MODIFIED [Case 79 & Case 84]: 수동 전량매도 시 현재 세션(장외 또는 15:29:01 ~ 16:00:00 EST 마감 30분전 컷오프)에 따른 안내 문구 분기
             dt_chk = now_est.astimezone(EST_TZ) if now_est else datetime.now(EST_TZ)
             hm_chk = dt_chk.hour * 100 + dt_chk.minute
             is_ext_now = is_extended_sell_only_window(hm_chk, now_est=dt_chk)
@@ -549,7 +581,6 @@ async def reconcile_stratum_with_broker_holdings_plugin(
                 restored_kw["pending_sell_indices"] = []
                 restored_kw["pending_sell_pocket_qty"] = 0
                 restored_kw["pending_step_up_min_price"] = 0.0
-                # [Case 68 & Case 78]: 백업 금고 복원 시 활성 1층 여부에 따라 l1_target_quota_qty 정합성 보장
                 if has_active_l1_bucket(vault_buckets):
                     restored_kw["last_reentry_eval_ts"] = 0.0
                     restored_kw["l1_target_quota_qty"] = max(
@@ -574,8 +605,6 @@ async def reconcile_stratum_with_broker_holdings_plugin(
                     "pocket_shares": vault_gp.qty,
                 }
 
-        # [Case 19 & Case 63]: 백업 금고에 일치하는 지층이 없는 경우(0주 상태에서 수동 신규 매수 진입):
-        # 토스 CLOSED 주문 원장에서 수동 매수 체결단가 및 orderId를 역추적하여 기정산 목록에 등록하고 텔레그램 알림을 즉시 타전!
         ref_p = h_avg if h_avg > 0.0 else (live_p if live_p > 0.0 else 100.0)
         probed_0sh_p, updated_settled_oids = await _probe_manual_fill_price_safe(
             context=context,
@@ -655,6 +684,8 @@ async def reconcile_stratum_with_broker_holdings_plugin(
             if vault_st.get("golden_allin_mode"):
                 update_kw["golden_allin_mode"] = vault_st["golden_allin_mode"]
             for stat_k in (
+                "us_commission_rate",
+                "round_trip_fee_rate_pct",
                 "cumulative_realized_net_usd",
                 "cumulative_realized_gross_usd",
                 "cumulative_realized_fee_usd",
@@ -710,7 +741,6 @@ async def reconcile_stratum_with_broker_holdings_plugin(
             est_lots,
             pure_ref_p,
         )
-        # [Case 63 수동 신규 매수 1층 동기화 텔레그램 슬림 알림 즉시 타전]
         if hasattr(context, "send_slim_alert"):
             await context.send_slim_alert(
                 title=f"➕ [SOXL 수동 신규매수 1층 동기화] {h_qty}주 @ ${pure_ref_p:.2f}",
@@ -729,7 +759,6 @@ async def reconcile_stratum_with_broker_holdings_plugin(
 
     # [케이스 4] 토스 실보유 수량(h_qty > 0)과 로컬 원장 수량(ledger_qty > 0)이 부분 불일치하는 경우
     if h_qty > ledger_qty:
-        # 4-1) 수동 추가 매수 동기화:
         delta_q = h_qty - ledger_qty
         fb_buy_p = live_p if live_p > 0.0 else h_avg
         if fb_buy_p <= 0.0:
@@ -759,10 +788,6 @@ async def reconcile_stratum_with_broker_holdings_plugin(
             max_tiers=MAX_GRID_TIERS_7,
         )
 
-        # [Case 63 & Case 78]:
-        # 수동 추가매수 물량이 기존 1층보다 높아서 상단 층(GRID_L2~L7)으로 중간 편입된 경우에는 기존 1층의 l1_target_quota_qty 를 유지하고,
-        # 수동 추가매수 물량이 새로운 1층(merged_buckets[0])이 된 경우에는 새 1층 수량(merged_buckets[0].qty)으로 동기화하여
-        # 이전 1층 목표 정량과의 차이로 인한 허위 잔량 발주(TOPUP_1FL)를 100% 원천 차단!
         is_mid_tier_inserted = bool(
             prev_had_active_l1
             and est_buy_p > (prev_l1_p + 1e-6)
@@ -841,7 +866,6 @@ async def reconcile_stratum_with_broker_holdings_plugin(
             next_l1_target_q_manual,
             new_min_p,
         )
-        # [Case 63 수동 추가매수 7층 그리드 편입 텔레그램 슬림 알림 즉시 타전]
         if hasattr(context, "send_slim_alert"):
             if not prev_had_active_l1:
                 pos_desc = "공석 1층 독립 편입(상단 비병합)"
@@ -896,12 +920,16 @@ async def reconcile_stratum_with_broker_holdings_plugin(
         st=st,
         fallback_price=fb_part_sell_p,
     )
+    probed_part_fee = _get_last_probed_manual_fee(context)
+
     match_res = match_and_remove_sold_buckets_7tier(
         buckets=buckets,
         delta_remove_qty=delta_remove,
         sell_exec_price=manual_sell_p,
         max_tiers=MAX_GRID_TIERS_7,
         golden_pocket=gp,
+        round_trip_fee_rate_pct=eff_rt_pct,
+        actual_sell_fee_usd=probed_part_fee,
     )
     rem_buckets: List[StratumBucket] = match_res["rem_buckets"]
     rem_gp_dict: Dict[str, Any] = match_res.get(
@@ -924,19 +952,22 @@ async def reconcile_stratum_with_broker_holdings_plugin(
             - (rem_gp_obj.actual_cost_usd if rem_gp_obj.is_active else 0.0),
             4,
         )
+        pocket_fee_part2: Optional[float] = None
+        if probed_part_fee is not None and delta_remove > 0:
+            pocket_fee_part2 = round(
+                probed_part_fee
+                * (float(sold_pocket_q) / float(delta_remove)),
+                4,
+            )
         p_pnl = calc_sell_realized_pnl(
             sold_qty=sold_pocket_q,
             sell_exec_price=manual_sell_p,
             sold_actual_cost_usd=max(0.0, sold_gp_cost),
+            round_trip_fee_rate_pct=eff_rt_pct,
+            actual_sell_fee_usd=pocket_fee_part2,
         )
         pocket_net_pnl = safe_float(p_pnl.get("net_pnl_usd"), 0.0)
 
-    # [Case 63 & Case 78]:
-    # 1) 수동 부분매도로 1층이 전량 소진되었으면 l1_target_quota_qty = 0 클리어.
-    # 2) 수동 부분매도로 1층 수량이 일부 차감(rem_buckets[0].qty < orig_l1_qty)된 경우에는
-    #    방금 매도한 수량을 미체결 잔량(TOPUP_1FL)으로 오인해 자동 재매수하지 않도록
-    #    next_l1_target_q = rem_buckets[0].qty 로 즉시 하향 동기화!
-    # 3) 오직 1층 수량이 전혀 줄어들지 않은 경우(예: 골든포켓만 수동 매도된 경우)에만 기존 l1_target_quota_qty 보존.
     rem_has_l1 = has_active_l1_bucket(rem_buckets)
     if (
         not rem_buckets
@@ -992,7 +1023,6 @@ async def reconcile_stratum_with_broker_holdings_plugin(
         round(total_rem_cost / float(h_qty), 4) if h_qty > 0 else 0.0
     )
 
-    # 골든포켓만 수동 부분매도된 경우 기존 그리드 anchor_price 보존
     is_pocket_only_manual = bool(
         sold_pocket_q == delta_remove and len(rem_buckets) == len(buckets)
     )
@@ -1146,7 +1176,7 @@ async def relock_stratum_on_bot_resume(
 
 
 # ---------------------------------------------------------------------------
-# [핵심 2] 04:00 ~ 04:06 EST 프리장 개장 초기 호가 안정화 · force_settle 선취소-후정산(Cancel-then-Sync) · 일일 카운터 롤오버 (Case 66, 74, 76, 77, 78, 79, 80)
+# [핵심 2] 04:00 ~ 04:06 EST 프리장 개장 초기 호가 안정화 · force_settle 선취소-후정산(Cancel-then-Sync) · 계좌 수수료율 갱신 · 일일 카운터 롤오버 (Case 66, 74, 76, 77, 78, 79, 80)
 # ---------------------------------------------------------------------------
 async def execute_0400_premarket_stabilization_plugin(
     context: Any,
@@ -1155,15 +1185,12 @@ async def execute_0400_premarket_stabilization_plugin(
     now_est: Optional[datetime] = None,
 ) -> Dict[str, Any]:
     """
-    # MODIFIED [Case 66, Case 73, Case 74, Case 76, Case 77, Case 78, Case 79 & Case 80]:
+    # MODIFIED [Case 66, Case 73, Case 74, Case 76, Case 77, Case 78, Case 79, Case 80 & 계좌별 수수료율 일일 갱신]:
     🔹 04:00 ~ 04:06 EST:
-    1) 데이마켓 잔류 미체결 주문을 먼저 취소(cancel_all_open_orders)하여 주문 상태를 최종 확정(CANCELED / FILLED)한 직후,
-       sync_pending_sell_order_plugin(..., force_settle=True) / sync_pending_buy_order_plugin(..., force_settle=True) 를 호출하여
-       발주 후 60초 미만인 부분 체결(PARTIAL_FILLED / PENDING_CANCEL) 또는 취소 직전 체결분을
-       단 1주도 유실하지 않고 100% 정식 커밋 정산한다 (Cancel-then-Force-Sync 파이프라인).
-    2) 일일 카운터(시드보호패스 · 스텝업해금 · 황금시간 전액매수/포켓익절 · 예비수혈 · 자투리차단)를 0회로 리셋한다
-       (단, waiting_reserve_deposit_alert_sent 단 1회 입금 알림 래치는 보존).
-    3) 오버나이트 이월 SOXL 1 ~ 7층 지층 및 golden_pocket 을 실계좌와 대조 동기화한다.
+    1) 데이마켓 잔류 미체결 주문을 먼저 취소(cancel_all_open_orders)하여 주문 상태를 최종 확정한 직후,
+       force_settle=True 로 부분/전량 체결분을 100% 정식 커밋 정산한다.
+    2) GET /api/v1/commissions 를 호출하여 계좌의 미국 주식 수수료율(0.07% 우대 -> 왕복 0.14% / 0.10% 기본 -> 왕복 0.20%)을 갱신한다.
+    3) 일일 카운터를 0회로 리셋하고 오버나이트 이월 지층을 실계좌와 대조 동기화한다.
     """
     dt_now = now_est.astimezone(EST_TZ) if now_est else datetime.now(EST_TZ)
     today_str = dt_now.strftime("%Y-%m-%d")
@@ -1216,7 +1243,6 @@ async def execute_0400_premarket_stabilization_plugin(
     canceled_cnt = await context.api.cancel_all_open_orders(
         symbol=TARGET_SYMBOL
     )
-    # 취소 직후 혹시 남아 있던 미결 주문이 부분/전량 체결되었는지 force_settle=True 로 한 번 더 확인 커밋
     st_after_cancel = context.ledger.get_state(TARGET_SYMBOL)
     if str(st_after_cancel.get("sell_order_id") or "").strip():
         try:
@@ -1241,6 +1267,23 @@ async def execute_0400_premarket_stabilization_plugin(
         except Exception:
             pass
 
+    # NEW: 04:00 EST 오프닝 시 계좌의 미국 주식 수수료율(GET /api/v1/commissions) 최신화
+    us_comm_r = safe_float(
+        st_after_cancel.get("us_commission_rate"), 0.0007
+    )
+    rt_fee_pct = safe_float(
+        st_after_cancel.get("round_trip_fee_rate_pct"), 0.14
+    )
+    ensure_comm_fn = getattr(context.api, "ensure_us_commission_rate", None)
+    if callable(ensure_comm_fn):
+        try:
+            c_res = await ensure_comm_fn(force_refresh=True)
+            if isinstance(c_res, tuple) and len(c_res) == 2:
+                us_comm_r = safe_float(c_res[0], us_comm_r)
+                rt_fee_pct = safe_float(c_res[1], rt_fee_pct)
+        except Exception as exc:
+            logger.debug("04:00 EST 수수료율 갱신 폴백 사용: %s", exc)
+
     mark_reentry_monitor_60s_cycle_shield(
         context=context, symbol=TARGET_SYMBOL, clear_shield=True
     )
@@ -1258,6 +1301,8 @@ async def execute_0400_premarket_stabilization_plugin(
 
     await context.ledger.update_state(
         TARGET_SYMBOL,
+        us_commission_rate=us_comm_r,
+        round_trip_fee_rate_pct=rt_fee_pct,
         buy_order_id="",
         sell_order_id="",
         ordered_qty=0,
@@ -1289,19 +1334,21 @@ async def execute_0400_premarket_stabilization_plugin(
     )
 
     logger.info(
-        "🌅 [04:00 EST 프리장 오프닝 안정화 완료] 당일 패스/해금/골든/예비수혈 0회 리셋 · 잔류주문 취소=%d건 · 7층그리드동기화=%s",
+        "🌅 [04:00 EST 프리장 오프닝 안정화 완료] 당일 패스/해금/골든/예비수혈 0회 리셋 · 왕복수수료=%.2f%% · 잔류주문 취소=%d건 · 7층그리드동기화=%s",
+        rt_fee_pct,
         canceled_cnt,
         sync_res.get("status"),
     )
     return {
         "status": "PREMARKET_0400_STABILIZED",
         "canceled_orders": canceled_cnt,
+        "round_trip_fee_rate_pct": rt_fee_pct,
         "sync_result": sync_res,
     }
 
 
 # ---------------------------------------------------------------------------
-# [핵심 3] 16:00 ~ 16:59 EST 정규장 마감 일일 결산 보고 & force_settle 선취소-후정산 · 애프터마켓 익절 감시 무중단 직결 (Case 66 ~ 84)
+# [핵심 3] 16:00 ~ 16:59 EST 정규장 마감 일일 결산 보고 & force_settle 선취소-후정산 · 애프터마켓 익절 감시 무중단 직결 (Case 66 ~ 85)
 # ---------------------------------------------------------------------------
 async def execute_1600_daily_closing_settlement_plugin(
     context: Any,
@@ -1310,18 +1357,10 @@ async def execute_1600_daily_closing_settlement_plugin(
     now_est: Optional[datetime] = None,
 ) -> Dict[str, Any]:
     """
-    # MODIFIED [Case 01, Case 65, Case 66, Case 68, Case 72, Case 74, Case 76, Case 77, Case 78, Case 79, Case 80, Case 83 & Case 84]:
+    # [Case 01, Case 65, Case 66, Case 68, Case 72, Case 74, Case 76, Case 77, Case 78, Case 79, Case 80, Case 83 & Case 84]:
     🔹 16:00 ~ 16:59 EST:
-    0) 만약 현재 시각이 정확히 16:00:xx EST (hm == 1600)이고 원장에 아직 60.0초 대기 중인 미결 주문(buy_order_id / sell_order_id)이
-       살아 있다면, 15:59:xx EST 또는 16:00:00 EST(72번 마감 버킷)에 발주된 주문이 60초를 채우지 못하고 조기 취소되는 일을 막기 위해
-       먼저 일반 동기화(force_settle=False)만 수행하고 미결 주문이 유지 중이면 WAIT_1600_PENDING_ORDER_SETTLEMENT 를 반환하여
-       주문이 완료되거나 16:01 EST 가 될 때까지 결산을 잠시 유예한다!
-    1) 정규장 마감 결산 확정 시 먼저 cancel_all_open_orders() 로 미체결 잔량을 확정 취소 종료시킨 직후,
-       sync_pending_buy_order_plugin(..., force_settle=True) / sync_pending_sell_order_plugin(..., force_settle=True) 를 호출하여
-       발주 후 60초 미만인 부분 체결(PARTIAL_FILLED / PENDING_CANCEL) 또는 마감 직전 체결분을
-       단 1주도 유실하지 않고 100% 정식 커밋(비례 자투리 절약금 · 골든포켓 · 세후 실현익) 정산한다.
-    2) 보유 지층(1층 ~ 7층 및 golden_pocket)을 100% 오버나이트 안전 보존하며 당일 결산 보고를 단 1회 발송한다.
-    3) 결산 직후 애프터마켓 및 데이마켓 ⚡1.5초 실시간 익절 매도 모니터가 무중단으로 이어진다!
+    1) 16:00:xx EST 에 아직 60.0초 대기 중인 미결 주문이 있으면 대기를 보호하고,
+    2) 마감 결산 시 미체결 잔량 취소 및 force_settle=True 정산 후 오버나이트 이월 보고를 단 1회 발송한다.
     """
     dt_now = now_est.astimezone(EST_TZ) if now_est else datetime.now(EST_TZ)
     hm = dt_now.hour * 100 + dt_now.minute
@@ -1333,7 +1372,6 @@ async def execute_1600_daily_closing_settlement_plugin(
     if str(st.get("last_closing_report_date") or "") == today_str:
         return {"status": "CLOSING_REPORT_ALREADY_SENT", "date": today_str}
 
-    # NEW [Case 01, Case 65 & Case 66 : 16:00:xx EST 진행 중 미결 주문의 60초 대기 보호]
     if hm == 1600 and (
         str(st.get("buy_order_id") or "").strip()
         or str(st.get("sell_order_id") or "").strip()
@@ -1370,9 +1408,6 @@ async def execute_1600_daily_closing_settlement_plugin(
                 "sell_order_id": st_recheck.get("sell_order_id"),
             }
 
-    # MODIFIED [Case 66, Case 78 & Case 80 : 16:00/16:01 마감 시 선(先) 미체결 취소 ➔ 후(後) force_settle=True 체결 정산]:
-    # 먼저 미체결 잔량을 취소하여 PARTIAL_FILLED 주문을 CANCELED(부분 체결 완료) 상태로 확정시킨 직후
-    # force_settle=True 로 sync_pending_buy/sell_order_plugin 을 호출함으로써 60초 미만 부분 체결 및 직전 체결 물량을 100% 정식 커밋한다!
     await context.api.cancel_all_open_orders(symbol=TARGET_SYMBOL)
 
     st_after_cancel = context.ledger.get_state(TARGET_SYMBOL)
@@ -1413,7 +1448,6 @@ async def execute_1600_daily_closing_settlement_plugin(
         last_closing_report_date=today_str,
     )
 
-    # 🛡️ Case 68: 정규장 마감 시점의 원장 상태를 날짜별 백업 금고에 즉시 스냅샷 저장
     snap_fn = getattr(context.ledger, "create_daily_backup_snapshot", None)
     if callable(snap_fn):
         try:
@@ -1524,12 +1558,6 @@ async def execute_daily_1700_gc_and_backup_plugin(
 ) -> Dict[str, Any]:
     """
     🔹 17:00 EST (Case 22, Case 68, Case 74, Case 76, Case 77, Case 79 & Case 80):
-    1) 롤오버 직전 당일 원장 상태를 `ledger_backups/soxl_stratum_ledger_<folder_slug>_YYYY-MM-DD.json` 에
-       날짜별 물리적 스냅샷으로 백업(최근 14일분 유지)한다.
-    2) 원장 일일 카운터(daily_seed_protect_pass_cnt=0, daily_unlock_buy_events=0,
-       daily_golden_allin_buy_events=0, daily_golden_pocket_sell_cnt=0, daily_golden_realized_net_usd=0.0,
-       daily_reserve_injected_cnt=0, daily_dust_guard_blocked_cnt=0, last_reentry_eval_ts=0.0 등)를
-       새 거래일 기준으로 확실히 리셋하고 가비지 컬렉션(gc.collect)을 수행한다.
     """
     dt_now = now_est.astimezone(EST_TZ) if now_est else datetime.now(EST_TZ)
     logical_date = dt_now.strftime("%Y-%m-%d")

@@ -1,18 +1,18 @@
 # -*- coding: utf-8 -*-
 """
 # MODIFIED: main_runtime.py
-인피니트 스노우볼 (Infinite Snowball) v3.0 — 메인 런타임 서포트 브릿지 (메인 코드 2분할 리팩토링 Part 1 / 2 · Step 08 / 09)
+인피니트 스노우볼 (Infinite Snowball) v3.0 — 메인 런타임 서포트 브릿지 (메인 코드 2분할 리팩토링 Part 1 / 2 · Step 10 / 11)
 - 역할:
   1) 적응형 비동기 플러그인 호출기(_call_plugin_adaptive) 및 동적 심볼 리졸버(_resolve_module_attr) (Case 13)
-  2) TossApiClient 런타임 메서드 호환성 폴리필 어댑터(_install_toss_api_compatibility_patches · 보조 폴리필 5종 및 close 전수 포함)
+  2) TossApiClient 런타임 메서드 호환성 폴리필 어댑터(_install_toss_api_compatibility_patches · get_commissions / ensure_us_commission_rate 포함)
   3) 폴더별 3중 원장 인스턴스 팩토리(_instantiate_stratum_ledger · Case 68) 및 주말 휴장 판별(_check_weekend_nyse_closed_dynamic · Case 01, 79, 83)
   4) 100% 벡터화 1분봉/일봉 지표 및 실시간 틱 Wilder's RSI(14) 무손실 직결(_compute_candle_metrics_dynamic · Case 80 RSI 50.0 고정 버그 영구 소각)
   5) 폴더 위치(base_dir) 전용 텔레그램 토큰·채팅방 ID 자동 탐색기(_discover_telegram_credentials · Case 68)
   6) 내장형 사용자 중심 초슬림 텔레그램 불사조 롱폴링/관제탑 브릿지(_AdaptiveTelegramBridge · tg_ui_plugin 단일 렌더러 직결 ·
      12대 코어 모듈 프리플라이트 안내 동기화 · /avwap 조회 시 1분봉 미확보 상태면 즉시 온디맨드 프리워밍 수행 ·
-     전술 제어반 황금시간[07:00~07:50 EST & RSI <= 19.0] 전액매수 모드 선택기[기본값 NONE(OFF) ↔ POCKET_ALLIN ↔ GRID_L1_ALLIN] 완벽 지원 ·
-     Case 75 httpx/httpcore INFO 로그 묵음화 & Case 81 전용 httpx.AsyncClient 자동 재생성 불사조 폴링 · 오프셋 파일 선행 영속화 · os.execv 인플레이스 자가 교체 · Case 84 실시간 EST 연동 탑재)
-- 제1헌법 ~ 제6헌법 및 Case 01 ~ 84 전수 락온
+     /sync 조회 시 계좌별 미국 주식 수수료율 자동 확인 · 전술 제어반 황금시간[07:00~07:50 EST & RSI <= 19.0] 전액매수 모드 선택기 완벽 지원 ·
+     Case 75 httpx/httpcore INFO 로그 묵음화 & Case 81 전용 httpx.AsyncClient 자동 재생성 불사조 폴링 · 오프셋 파일 선행 영속화 · os.execv 인플레이스 자가 교체 · Case 84/85 완벽 준수)
+- 제1헌법 ~ 제6헌법 및 Case 01 ~ 85 전수 락온
 """
 
 from __future__ import annotations
@@ -60,6 +60,7 @@ from plugin_updater import (
 from quant_engine import (
     DEFAULT_GOLDEN_ALLIN_MODE,
     GOLDEN_ALLIN_MODES,
+    set_runtime_round_trip_fee_rate_pct,
     summarize_stratum_portfolio,
 )
 from quant_indicators_plugin import (
@@ -160,7 +161,7 @@ def _resolve_module_attr(
 
 
 # ---------------------------------------------------------------------------
-# [핵심 2] TossApiClient 런타임 메서드 호환성 폴리필 어댑터 (보조 폴리필 5종 및 close 포함)
+# [핵심 2] TossApiClient 런타임 메서드 호환성 폴리필 어댑터 (get_commissions / ensure_us_commission_rate 포함)
 # ---------------------------------------------------------------------------
 def _empty_soxl_holding_entry() -> Dict[str, Any]:
     return {
@@ -223,7 +224,7 @@ def _normalize_single_holding_item(
     )
     pl_obj = (
         item.get("profitLoss")
-        if isinstance(it_pl := item.get("profitLoss"), dict)
+        if isinstance(item.get("profitLoss"), dict)
         else {}
     )
 
@@ -431,7 +432,7 @@ def _extract_candles_list(
                 if res_obj.get("candles") is not None
                 else (
                     res_obj.get("items")
-                    if res_obj.get("items") is not None
+                    if r_items := res_obj.get("items") is not None
                     else res_obj.get("data")
                 )
             )
@@ -447,9 +448,70 @@ def _extract_candles_list(
 def _install_toss_api_compatibility_patches() -> None:
     """
     TossApiClient 에 필수 메서드가 누락된 구버전 환경에서도 런타임 AttributeError 를 0건으로 차단한다.
-    (보조 폴리필 5종: get_open_orders, cancel_all_open_orders, find_latest_open_order_id,
-     get_buying_power_usd, get_usd_krw_rate 및 close 포함)
+    (보조 폴리필: get_commissions, ensure_us_commission_rate, get_open_orders, cancel_all_open_orders,
+     find_latest_open_order_id, get_buying_power_usd, get_usd_krw_rate 및 close 포함)
     """
+    if not hasattr(TossApiClient, "get_commissions"):
+
+        async def _poly_get_commissions(self: Any) -> List[Dict[str, Any]]:
+            try:
+                raw = await _invoke_raw_toss_api(
+                    self,
+                    method="GET",
+                    path="/api/v1/commissions",
+                    require_account=True,
+                )
+                if isinstance(raw, dict):
+                    items = raw.get("result")
+                    if isinstance(items, list):
+                        return [c for c in items if isinstance(c, dict)]
+            except Exception:
+                pass
+            return []
+
+        setattr(TossApiClient, "get_commissions", _poly_get_commissions)
+
+    if not hasattr(TossApiClient, "ensure_us_commission_rate"):
+
+        async def _poly_ensure_us_commission_rate(
+            self: Any, force_refresh: bool = False
+        ) -> Tuple[float, float]:
+            cur_one = safe_float(
+                getattr(self, "us_commission_rate", 0.0007), 0.0007
+            )
+            cur_rt = safe_float(
+                getattr(self, "round_trip_fee_rate_pct", 0.14), 0.14
+            )
+            if not force_refresh and getattr(
+                self, "_commission_locked", False
+            ):
+                return cur_one, cur_rt
+            try:
+                items = await self.get_commissions()
+                for it in items:
+                    mkt = str(it.get("marketCountry") or "").upper().strip()
+                    if mkt == "US":
+                        r_val = safe_float(it.get("commissionRate"), 0.0)
+                        if 0.0 < r_val <= 0.01:
+                            cur_one = round(r_val, 6)
+                            cur_rt = round(cur_one * 200.0, 4)
+                            setattr(self, "us_commission_rate", cur_one)
+                            setattr(self, "round_trip_fee_rate_pct", cur_rt)
+                            setattr(self, "_commission_locked", True)
+                            set_runtime_round_trip_fee_rate_pct(
+                                cur_rt, us_commission_rate=cur_one
+                            )
+                            break
+            except Exception:
+                pass
+            return cur_one, cur_rt
+
+        setattr(
+            TossApiClient,
+            "ensure_us_commission_rate",
+            _poly_ensure_us_commission_rate,
+        )
+
     if not hasattr(TossApiClient, "get_holdings_map_with_status"):
 
         async def _poly_get_holdings_map_with_status(
@@ -1003,7 +1065,6 @@ def _compute_vectorized_metrics_fallback(
         out["cur_bar_high"] = round(float(highs[-1]), 4)
         out["cur_bar_low"] = round(float(lows[-1]), 4)
 
-        # Case 80: np.diff 기반 Wilder's RSI(14) 및 직전 봉 기저값 산출
         n_c = len(closes)
         if n_c >= 2:
             deltas = np.diff(closes)
@@ -1259,11 +1320,11 @@ def _discover_telegram_credentials(
 
 
 # ---------------------------------------------------------------------------
-# [핵심 5] 내장형 텔레그램 브릿지 (_AdaptiveTelegramBridge — tg_ui_plugin 렌더러 직결 & Case 80/81/83/84 완벽 통합)
+# [핵심 5] 내장형 텔레그램 브릿지 (_AdaptiveTelegramBridge — tg_ui_plugin 렌더러 직결 & Case 80/81/83/84/85 완벽 통합)
 # ---------------------------------------------------------------------------
 class _AdaptiveTelegramBridge:
     """
-    # MODIFIED [Case 62 ~ 84]:
+    # MODIFIED [Case 62 ~ 85]:
     tg_ui_plugin 의 4대 관제 보드 렌더러(build_start_schedule_message, build_avwap_radar_message,
     build_sync_instruction_message, build_settlement_control_message)를 단일 소스로 재사용하여
     코드 중복을 제거하고,
@@ -1588,8 +1649,6 @@ class _AdaptiveTelegramBridge:
     ) -> Tuple[float, Dict[str, Any]]:
         """
         # [Case 80 : /avwap 조회 시 1분봉 미확보 상태면 즉시 온디맨드 프리워밍 수행]:
-        현재가를 최신화한 뒤, 만약 candle_metrics_cache 에 아직 prev_bar_close 가 세팅되어 있지 않다면
-        그 자리에서 get_candles_1m(total_count=200)을 1회 호출하여 Wilder's RSI(14) 기저값을 생성한다.
         """
         now_est = datetime.now(EST_TZ)
         live_p = safe_float(
@@ -1656,6 +1715,26 @@ class _AdaptiveTelegramBridge:
     ) -> None:
         now_est = datetime.now(EST_TZ)
         live_p, _ = await self._refresh_live_price_and_metrics()
+
+        # NEW: /sync 호출 시 계좌별 미국 주식 수수료율(GET /api/v1/commissions) 동기화 확인
+        ensure_comm_fn = getattr(
+            self.context.api, "ensure_us_commission_rate", None
+        )
+        if callable(ensure_comm_fn):
+            try:
+                c_res = await ensure_comm_fn()
+                if isinstance(c_res, tuple) and len(c_res) == 2:
+                    us_c = safe_float(c_res[0], 0.0)
+                    rt_p = safe_float(c_res[1], 0.0)
+                    if us_c > 0.0 and rt_p > 0.0:
+                        await self.context.ledger.update_state(
+                            TARGET_SYMBOL,
+                            us_commission_rate=us_c,
+                            round_trip_fee_rate_pct=rt_p,
+                        )
+            except Exception:
+                pass
+
         holdings_map, fetch_ok = (
             await self.context.api.get_holdings_map_with_status()
         )
@@ -1788,7 +1867,8 @@ class _AdaptiveTelegramBridge:
     async def _reset_realized_profit_only(self, chat_id: str) -> None:
         """
         # [Case 02, Case 74, Case 76, Case 77 & Case 80]:
-        보유 중인 주식 지층(buckets) 및 독립 골든포켓(golden_pocket)과 기준 시드머니(initial_seed_usd)는 100% 보존하고,
+        보유 중인 주식 지층(buckets) 및 독립 골든포켓(golden_pocket)과 기준 시드머니(initial_seed_usd),
+        계좌별 수수료율(us_commission_rate, round_trip_fee_rate_pct)은 100% 보존하고,
         오직 누적/당일 세후 실현수익금 및 자투리 절약금·스텝업 해금·황금시간 통계·예비시드 통계만 0점으로 초기화한다.
         """
         mark_reserve_deposit_check_shield(
@@ -1887,12 +1967,7 @@ class _AdaptiveTelegramBridge:
 
     async def _execute_manual_update_command(self, chat_id: str) -> None:
         """
-        # MODIFIED [Case 62, Case 68, Case 75 & Case 81]:
-        1) /update 수신 즉시 오프셋을 로컬 파일(.tg_update_offset_<slug>.dat), 원장, 텔레그램 서버에 선행 확정한다.
-        2) execute_git_pull_and_preflight() 로 업데이트 및 12대 코어 모듈 서브프로세스 검증을 수행한다.
-        3) 신규 커밋(changed == True)이 적용되었을 때는 구버전 os._exit(0) 을 제거하고,
-           텔레그램 HTTP 세션을 즉시 닫은(_close_tg_http_client) 뒤 Case 81 3.5초 하드 워치독 및
-           perform_self_restart_execv(os.execv + os._exit(1) 폴백)로 무중단 인플레이스 자가 재기동한다!
+        # [Case 62, Case 68, Case 75 & Case 81]:
         """
         await self._ack_telegram_offset(self._last_update_id)
         await self.send_message(
@@ -2204,9 +2279,6 @@ class _AdaptiveTelegramBridge:
     async def run_polling_loop(self) -> None:
         """
         🚨 [Case 81 : 내장 텔레그램 브릿지 불사조 폴링 루프 (Immortal Supervisor Wrapper)]:
-        - 텔레그램 전용 httpx.AsyncClient 분리 운용 및 HTTP 409 Conflict / 연속 3회 오류 시 자동 재생성
-        - 개별 명령어 처리 예외 격리 및 최상위 감독 루프를 통해 shutdown_event.is_set() 전까지
-          어떠한 예외에서도 텔레그램 수신 태스크가 단독 사망하지 않도록 100% 보장한다.
         """
         if not _extract_valid_tg_token(self.bot_token):
             self.bot_token, discovered_cid = _discover_telegram_credentials(

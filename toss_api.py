@@ -3,18 +3,18 @@
 # MODIFIED: toss_api.py
 인피니트 스노우볼 (Infinite Snowball) v3.0 — 토스증권 Open API (v1.2.14) 방탄 통신 통제소 &
 SOXL 단일 롱 7-Tier 순수 멀티 그리드(1층 공격수 + 2 ~ 6층 개별 완충층 + 통합 7층 본대) 및
-황금시간대(07:00 ~ 07:50 EST & RSI <= 19.0) 독립 골든포켓(GoldenAllInPocket · 기본값 NONE[OFF]) 폴더별 3중 지층 원장(SoxlStratumLedger) 코어 모듈 (Step 01 / 09)
+황금시간대(07:00 ~ 07:50 EST & RSI <= 19.0) 독립 골든포켓(GoldenAllInPocket · 기본값 NONE[OFF]) 폴더별 3중 지층 원장(SoxlStratumLedger) 코어 모듈 (Step 01 / 11)
 - 제1헌법: 모든 파일 I/O 및 네트워크 통신의 asyncio.to_thread 비동기 격리 + GlobalThrottle 중앙 통제
 - 제2헌법: 기동 시 GET /api/v1/accounts 1회 호출로 BROKERAGE accountSeq 메모리 락온 및 X-Tossinvest-Account 자동 주입
-- 제3헌법 ~ 제6헌법 및 Case 01 ~ 84 전수 락온:
+- 제3헌법 ~ 제6헌법 및 Case 01 ~ 85 전수 락온:
   1) REAL_ALLOWED_SYMBOLS = ("SOXL",) 단일 롱 화이트리스트 물리적 강제 (인버스 숏 SOXS 원천 차단)
   2) get_holdings_map_with_status, get_candles_1m, get_candles_1d, get_recent_trades, get_recent_wick_high_price,
-     get_current_prices_batch, get_orderbook, get_buying_power_usd, get_sellable_quantity, create_order, modify_order,
-     cancel_order, get_order_detail, get_open_orders, get_closed_orders, probe_latest_manual_fill_price,
-     get_usd_krw_rate 등 전 메서드 100% 정식 구현!
+     get_current_prices_batch, get_orderbook, get_buying_power_usd, get_sellable_quantity, get_commissions,
+     ensure_us_commission_rate, create_order, modify_order, cancel_order, get_order_detail, get_open_orders,
+     get_closed_orders, probe_latest_manual_fill_price, get_usd_krw_rate 등 전 메서드 100% 정식 구현!
   3) 미국 주식 주문 정정(/modify) 시 quantity 필드 원천 배제(400 us-modify-quantity-not-supported 차단) 및
      주문 취소(/cancel) 시 빈 JSON 객체 {} 전송 강제(HTTP 415 차단)
-  4) 🚨 [Case 68 폴더 위치(base_dir) 기반 멀티 봇 자동 식별 격리 & 3중 원장 금고 & 시드 $100 변조 방어]
+  4) 🚨 [Case 68 & Case 85 폴더 위치(base_dir) 기반 멀티 봇 자동 식별 격리 & 3중 원장 금고 & f-string 중괄호 무결성]
      - "/home/pipiosToss" 고정 경로 하드코딩 100% 영구 소각 -> 오직 실행 파일이 위치한 폴더(base_dir)의 .env 만 로드
      - 폴더명(folder_slug) 기반 ① 고유 원장(soxl_stratum_ledger_<폴더명>.json), ② 호환 원장(soxl_stratum_ledger.json),
        ③ 실시간 백업 금고(ledger_backups/soxl_stratum_ledger_<폴더명>.bak.json) 3중 원자적 동기화 및 기존 데이터 무손실 자동 이관
@@ -28,25 +28,17 @@ SOXL 단일 롱 7-Tier 순수 멀티 그리드(1층 공격수 + 2 ~ 6층 개별 
      - emergency_free_disk_space_sync() 로 고아 임시 파일(*.tmp.*, *.heal.tmp) · __pycache__ · 초과 백업 스냅샷 자동 소각 및
        ENOSPC(Errno 28) 감지 시 즉시 자가 치유 후 원자적 쓰기 재시도
   8) 🚨 [Case 76 : 🔓 06_STEP2X_15PCT_C20 3중 안전문 조건부 스텝업 저가 해금 상수 및 원장 상태 필드 탑재]
-     - STEP_UP_2X_MIN_REBOUND_MULT(2.0x), STEP_UP_2X_MAX_TIERS(2), STEP_UP_2X_MIN_CASH_RATIO(0.20), STEP_UP_2X_DROP_PCT(15.0) 락온
-     - unlock_mode, pending_step_up_min_price, cond_unlock_buy_events, daily_unlock_buy_events 원장 영속화 및 정규화
   9) 🚨 [Case 77 : 💉 05_RESV_6P_GUARD30 (30% 자투리 1주 승격 방지 가드 + 시드고갈 단 1회 입금 요청 알림 래치 +
      토스 실계좌 여유자금 감지 기반 최대 +6회분 온디맨드 예비시드 자동 수혈 및 0주 졸업 시 원금 자동 상환) 상수 및 원장 필드 탑재]
-     - MAX_RESERVE_PORTIONS(6), MIN_DIP_BUDGET_RATIO(0.30), MIN_DIP_VS_L1_RATIO(0.30), RESERVE_DEPOSIT_TOLERANCE_RATIO(0.95) 락온
-     - used_reserve_portions_cnt, injected_reserve_usd, total_reserve_injected_cnt, daily_reserve_injected_cnt,
-       cumulative_reserve_repaid_usd, dust_guard_blocked_cnt, daily_dust_guard_blocked_cnt,
-       waiting_reserve_deposit, waiting_reserve_deposit_alert_sent(스팸 차단 영구 래치),
-       required_reserve_deposit_usd, last_reserve_check_ts 원장 영속화 및 회계 항등식 확장
   10) 🚨 [Case 67 & Case 78 : 지정가 부분 체결 후 미체결 잔량(l1_target_quota_qty) 보존 및 신규 1층 추매 발주 중 기존 1층 수량 덮어쓰기 차단]
-      - l1_target_quota_qty 원장 영속화 및 0주 졸업 / 1층 익절 공석 전환 시 자동 클리어 정규화 탑재
-      - 신규 1층 생성형 주문(DIP_1FL / QUOTA_L1 / REENTRY_1FL / GOLDEN_L1) 대기 중 기존 1층 수량과의 max() 오염 원천 차단
   11) 🚨 [Case 80 : 미동부 프리장 황금시간대(07:00 ~ 07:50 EST & RSI(14) <= 19.0) 가용현금 100% 전액 추가매수 &
       독립 골든포켓(golden_pocket) 분리회계 & 전술 제어반(/settlement) 3대 모드 선택기(기본값 "NONE" [OFF]) &
-      1분봉 캔들 페이지네이션 방탄화(1페이지 200봉 유실 차단 및 스키마 다변화 대응) 탑재]
-  12) 🚨 [Case 82 : 1분봉 윗꼬리(Upper-Wick) 슈팅 100% 포착을 위한 GET /api/v1/trades 최근 5.0초 내 유효 체결 최고가 추출기
-      (get_recent_wick_high_price & _parse_iso_timestamp_to_epoch · 서버 시차 -5.0s 허용) 탑재]
+      1분봉 캔들 페이지네이션 방탄화 탑재]
+  12) 🚨 [Case 82 : 1분봉 윗꼬리(Upper-Wick) 슈팅 100% 포착을 위한 GET /api/v1/trades 최근 5.0초 내 유효 체결 최고가 추출기 탑재]
   13) 🚨 [Case 83 & Case 84 : 방안 C 오버나이트 통합이평 사수 하이브리드 및 정규장 마감 30분 전(15:30 ~ 16:00 EST · NEW_CYCLE_BUY_CUTOFF_HM = 1530)
       0주 새 사이클 첫 1층 진입 및 1층 공석 +1.0% 돌파 추격 차단 상수 연동]
+  14) 💰 [NEW : GET /api/v1/commissions 계좌별 미국 주식 실제 수수료율(0.07% 우대 -> 왕복 0.14% / 0.10% 기본 -> 왕복 0.20%)
+      자동 조회·락온(ensure_us_commission_rate) 및 원장(us_commission_rate, round_trip_fee_rate_pct) 영속화 탑재]
 """
 
 from __future__ import annotations
@@ -73,7 +65,7 @@ from zoneinfo import ZoneInfo
 logger = logging.getLogger("toss_sniper.toss_api")
 
 # ---------------------------------------------------------------------------
-# [핵심 상수] 제4헌법 EST 단일 타임존 & 최종 확정 진화 챔피언 (Case 72 ~ 84) 전역 상수
+# [핵심 상수] 제4헌법 EST 단일 타임존 & 최종 확정 진화 챔피언 (Case 72 ~ 85) 전역 상수
 # ---------------------------------------------------------------------------
 EST_TZ = ZoneInfo("America/New_York")
 KST_TZ = ZoneInfo("Asia/Seoul")
@@ -118,11 +110,12 @@ GOLDEN_WINDOW_END_HM: int = 750
 GOLDEN_RSI_MAX_THRESHOLD: float = 19.0
 GOLDEN_POCKET_RISE_PCT: float = 1.50
 
-# NEW [Case 84 : 정규장 마감 30분 전(15:30 ~ 16:00 EST) 0주 새 사이클 1층 진입 및 1층 공석 +1.0% 돌파 추격 차단 기준 시각(HHMM)]
+# [Case 84 : 정규장 마감 30분 전(15:30 ~ 16:00 EST) 0주 새 사이클 1층 진입 및 1층 공석 +1.0% 돌파 추격 차단 기준 시각(HHMM)]
 NEW_CYCLE_BUY_CUTOFF_HM: int = 1530
 
 LOCKED_BUY_INTERVAL_MIN: int = 10
 LOCKED_SELL_INTERVAL_MIN: int = 1
+DEFAULT_US_COMMISSION_RATE: float = 0.0007
 ROUND_TRIP_FEE_RATE: float = 0.0014
 ROUND_TRIP_FEE_RATE_PCT: float = 0.14
 REANCHOR_NET_BUFFER_MULT: float = 0.994
@@ -130,9 +123,14 @@ KRW_PER_USD_DEFAULT: float = 1380.0
 
 TOSS_OPENAPI_BASE_URL: str = "https://openapi.tossinvest.com"
 
+# NEW: 계좌별 런타임 왕복 수수료율(%) 동적 캐시 (기본값 0.14% 락온 -> ensure_us_commission_rate 호출 시 실계좌 수수료율로 갱신)
+_RUNTIME_FEE_LOCK = threading.RLock()
+_RUNTIME_US_COMMISSION_RATE: float = DEFAULT_US_COMMISSION_RATE
+_RUNTIME_ROUND_TRIP_FEE_RATE_PCT: float = ROUND_TRIP_FEE_RATE_PCT
+
 
 # ---------------------------------------------------------------------------
-# [유틸리티] 안전한 수치 형변환 (ZeroDivision / NaN / inf / null 방어 — Case 03, 23)
+# [유틸리티] 안전한 수치 형변환 및 런타임 수수료율 동기화기 (Case 03, 23)
 # ---------------------------------------------------------------------------
 def safe_float(val: Any, default: float = 0.0) -> float:
     if val is None or isinstance(val, bool):
@@ -166,6 +164,50 @@ def safe_int(val: Any, default: int = 0) -> int:
         )
     except Exception:
         return int(default)
+
+
+def get_runtime_us_commission_rate() -> float:
+    """
+    # NEW: 현재 프로세스에 락온된 미국 주식 편도 수수료율(소수 비율, 예: 0.0007 또는 0.001)을 반환한다.
+    """
+    with _RUNTIME_FEE_LOCK:
+        return _RUNTIME_US_COMMISSION_RATE
+
+
+def get_runtime_round_trip_fee_rate_pct() -> float:
+    """
+    # NEW: 현재 프로세스에 락온된 미국 주식 왕복 수수료율(%, 예: 0.14 또는 0.20)을 반환한다.
+    """
+    with _RUNTIME_FEE_LOCK:
+        return _RUNTIME_ROUND_TRIP_FEE_RATE_PCT
+
+
+def set_runtime_round_trip_fee_rate_pct(
+    round_trip_pct: float,
+    us_commission_rate: Optional[float] = None,
+) -> float:
+    """
+    # NEW: GET /api/v1/commissions 또는 원장에서 확인된 계좌별 왕복 수수료율(%)을 런타임 메모리에 동기화한다.
+    """
+    global _RUNTIME_US_COMMISSION_RATE, _RUNTIME_ROUND_TRIP_FEE_RATE_PCT
+    clean_rt = safe_float(round_trip_pct, ROUND_TRIP_FEE_RATE_PCT)
+    if clean_rt <= 0.0 or clean_rt > 2.0:
+        clean_rt = ROUND_TRIP_FEE_RATE_PCT
+    clean_rt = round(clean_rt, 4)
+
+    if us_commission_rate is not None:
+        clean_one = safe_float(us_commission_rate, DEFAULT_US_COMMISSION_RATE)
+        if clean_one <= 0.0 or clean_one > 0.01:
+            clean_one = round((clean_rt / 100.0) * 0.5, 6)
+        else:
+            clean_one = round(clean_one, 6)
+    else:
+        clean_one = round((clean_rt / 100.0) * 0.5, 6)
+
+    with _RUNTIME_FEE_LOCK:
+        _RUNTIME_US_COMMISSION_RATE = clean_one
+        _RUNTIME_ROUND_TRIP_FEE_RATE_PCT = clean_rt
+        return _RUNTIME_ROUND_TRIP_FEE_RATE_PCT
 
 
 def generate_client_order_id(prefix: str = "SNIPER") -> str:
@@ -206,7 +248,7 @@ class _NonRetryableApiError(Exception):
 
 
 # ---------------------------------------------------------------------------
-# [Case 68 & Case 75] 폴더 위치(base_dir) 기반 자동 식별기 · 격리 환경변수 로더 · 디스크 자가 치유기
+# [Case 68, Case 75 & Case 85] 폴더 위치(base_dir) 기반 자동 식별기 · 격리 환경변수 로더 · 디스크 자가 치유기
 # ("/home/pipiosToss" 고정 경로 하드코딩 100% 영구 소각)
 # ---------------------------------------------------------------------------
 def get_bot_base_dir(explicit_dir: Optional[str] = None) -> str:
@@ -240,7 +282,7 @@ def resolve_folder_isolated_ledger_paths(
     explicit_filepath: Optional[str] = None,
 ) -> Tuple[str, str, str, str]:
     """
-    🚨 Case 68 [폴더별 3중 안전 원장 경로 결정기]:
+    🚨 Case 68 & Case 85 [폴더별 3중 안전 원장 경로 결정기]:
     단일 서버 내 여러 폴더에서 다중 봇을 운영할 때 각 폴더 위치를 기준으로:
     1) primary_path : <base_dir>/soxl_stratum_ledger_<folder_slug>.json (Git 추적 면역 폴더 고유 원장)
     2) legacy_path  : <base_dir>/soxl_stratum_ledger.json (하위 호환 미러 원장)
@@ -288,7 +330,6 @@ def emergency_free_disk_space_sync(
     backup_dir = os.path.join(target_dir, "ledger_backups")
     removed_cnt = 0
 
-    # 1) 고아 임시 파일(*.tmp.*, *.heal.tmp) 전수 청소
     tmp_patterns = (
         os.path.join(target_dir, "*.tmp.*"),
         os.path.join(target_dir, ".*.tmp.*"),
@@ -305,7 +346,6 @@ def emergency_free_disk_space_sync(
             except Exception:
                 pass
 
-    # 2) __pycache__ 바이트코드 캐시 청소
     if remove_pycache:
         pycache_dir = os.path.join(target_dir, "__pycache__")
         if os.path.isdir(pycache_dir):
@@ -320,7 +360,6 @@ def emergency_free_disk_space_sync(
                     except Exception:
                         pass
 
-    # 3) 오래된 일일 스냅샷 백업 정리 (최근 keep_backup_days 개수만 보존)
     if os.path.isdir(backup_dir):
         try:
             snap_pat = os.path.join(
@@ -478,26 +517,22 @@ class GlobalThrottle:
 
 
 # ---------------------------------------------------------------------------
-# [핵심 2] SOXL 단일 롱 7-Tier 순수 멀티 그리드 및 골든포켓 폴더별 3중 안전 지층 원장 (SoxlStratumLedger — Case 68 ~ 84)
+# [핵심 2] SOXL 단일 롱 7-Tier 순수 멀티 그리드 및 골든포켓 폴더별 3중 안전 지층 원장 (SoxlStratumLedger — Case 68 ~ 85)
 # ---------------------------------------------------------------------------
 class SoxlStratumLedger:
     """
-    🎯 1 ~ 🎯 5 & Case 02, 05, 06, 58 ~ 84:
+    🎯 1 ~ 🎯 5 & Case 02, 05, 06, 58 ~ 85:
     현재 봇이 위치한 폴더(`base_dir`)를 기준으로:
     ① 폴더 고유 원장(`soxl_stratum_ledger_<folder_slug>.json` — Git 덮어쓰기 100% 면역)
     ② 표준 호환 원장(`soxl_stratum_ledger.json` — 기존 코드 및 외부 도구 호환 미러)
     ③ 실시간 백업 금고(`ledger_backups/soxl_stratum_ledger_<folder_slug>.bak.json`)
-    3곳에 SOXL 1 ~ 7층 순수 멀티 그리드 지층(1층 공격수 + 2 ~ 6층 개별 완충층 + 통합 7층 본대),
-    황금시간대(07:00 ~ 07:50 EST & RSI <= 19.0) 선택 모드(`golden_allin_mode`, 기본값 `"NONE"` [OFF]) 및
-    독립 골든포켓(`golden_pocket`), 가용 현금 시드(`free_cash_usd`), 정적 잠금/조건부 스텝업 사이클 최저 매수가(`cycle_min_buy_price`),
-    STEP2X_15PCT_C20 스텝업 해금 대기 가격(`pending_step_up_min_price`) 및 해금 횟수(`cond_unlock_buy_events`),
-    💉 05_RESV_6P_GUARD30 예비시드 수혈 잔액(`injected_reserve_usd`) · 사용 회분(`used_reserve_portions_cnt`) ·
-    시드고갈 입금 대기 플래그(`waiting_reserve_deposit`) · 단 1회 입금 알림 영구 래치(`waiting_reserve_deposit_alert_sent`),
-    🎯 Case 78 현재 1층 목표 정량 주수(`l1_target_quota_qty` — 부분 체결 시 미체결 잔량 계산 및 1.5초 모니터 재대기용),
-    양방향·주기 60초 타임쉴드 시각(`last_buy_fill_ts`, `last_sell_fill_ts`, `last_cycle_end_ts`, `last_sell_gate_eval_ts`, `last_reentry_eval_ts`),
-    다중 그리드 및 골든포켓 매도 대기 정보(`pending_sell_indices`, `pending_sell_pocket_qty`), 기정산 주문 ID 링버퍼(`last_settled_order_ids`),
-    누적 세후 실현수익금 및 자투리 절약금을 원자적(.tmp -> os.replace)으로 동시 영속화하되,
-    Case 75 Dirty-Check 를 적용하여 변경이 없을 때는 불필요한 os.fsync() 디스크 쓰기를 스킵한다.
+    3곳에 SOXL 1 ~ 7층 순수 멀티 그리드 지층, 황금시간대 선택 모드(`golden_allin_mode`, 기본값 `"NONE"` [OFF]) 및
+    독립 골든포켓(`golden_pocket`), 가용 현금 시드(`free_cash_usd`), 계좌별 미국 주식 수수료율(`us_commission_rate`, `round_trip_fee_rate_pct`),
+    정적 잠금/조건부 스텝업 사이클 최저 매수가(`cycle_min_buy_price`), STEP2X_15PCT_C20 스텝업 해금 대기 가격 및 해금 횟수,
+    💉 05_RESV_6P_GUARD30 예비시드 수혈 잔액 · 사용 회분 · 시드고갈 입금 대기 플래그 · 단 1회 입금 알림 영구 래치,
+    🎯 Case 78 현재 1층 목표 정량 주수(`l1_target_quota_qty`), 양방향·주기 60초 타임쉴드 시각,
+    다중 그리드 및 골든포켓 매도 대기 정보, 기정산 주문 ID 링버퍼, 누적 세후 실현수익금 및 자투리 절약금을
+    Dirty-Check 적용 후 원자적(.tmp -> os.replace)으로 동시 영속화한다.
     """
 
     ALLOWED_SYMBOLS: Tuple[str, ...] = ("SOXL",)
@@ -617,6 +652,9 @@ class SoxlStratumLedger:
             "initial_seed_usd": clean_seed,
             "seed_explicitly_set_100": False,
             "free_cash_usd": clean_seed,
+            # NEW: 계좌별 미국 주식 편도 수수료율(소수) 및 왕복 수수료율(%) 영속화 필드 (기본값 0.0007 / 0.14%)
+            "us_commission_rate": DEFAULT_US_COMMISSION_RATE,
+            "round_trip_fee_rate_pct": ROUND_TRIP_FEE_RATE_PCT,
             "portion_mode": "COMP_08PCT",
             "threshold_mode": "WIDE_RUNWAY",
             "reentry_mode": "HYBRID_PULL_OR_BRK",
@@ -823,14 +861,10 @@ class SoxlStratumLedger:
         1) buy_interval_min = 10, sell_interval_min = 1, max_grid_tiers = 7 (MAX_GRID_TIERS_7),
            portion_mode = "COMP_08PCT", threshold_mode = "WIDE_RUNWAY", unlock_mode = "STEP2X_15PCT_C20" 를 강제 동기화하고,
            golden_allin_mode 는 GOLDEN_ALLIN_MODES ("NONE", "POCKET_ALLIN", "GRID_L1_ALLIN") 중 하나로 검증한다(기본값 "NONE").
-        2) 시드머니 결측 또는 0.0 유입 시 $100.0 으로 변조되지 않도록 _resolve_safe_initial_seed() 를 적용한다.
-        3) 🛡️ [Case 69, Case 71, Case 72 & Case 80 순수 실물 원가 100% 보존 강제 (리앵커링 원가 차감 영구 폐기)]:
-           - 모든 보유 지층(1층 ~ 7층) 및 독립 골든포켓(golden_pocket)의 장부 단가(book_price)와 장부 투자금(book_invested_usd)을
-             순수 실물 매수 원가(actual_avg_price = ac / q, actual_cost_usd = ac)와 100% 일치시켜,
-             리앵커링 차감이나 이동평균 희석으로 인한 조기 손절 착시를 물리적으로 원천 봉쇄한다!
-        4) 🛡️ [Case 67, Case 73, Case 76, Case 78 & Case 80 타임쉴드 · 스텝업 대기값 · 1층 목표 정량 · 골든포켓 매도수량 정규화]
-        5) 💉 [Case 77 & Case 80 온디맨드 예비시드 수혈 잔액(injected_reserve_usd) · 골든포켓 투입원금 통합 회계 항등식]:
-           - 회계 항등식: free_cash_usd = round(max(0.0, (init_seed + cum_net + injected_reserve_usd) - (actual_inv_buckets + pocket_cost)), 4) 를 정밀 유지한다.
+        2) 계좌별 미국 주식 수수료율(us_commission_rate, round_trip_fee_rate_pct)을 유효 범위(왕복 0.01% ~ 1.00%)로 정규화한다.
+        3) 시드머니 결측 또는 0.0 유입 시 $100.0 으로 변조되지 않도록 _resolve_safe_initial_seed() 를 적용한다.
+        4) 🛡️ [Case 69, Case 71, Case 72 & Case 80 순수 실물 원가 100% 보존 강제 (리앵커링 원가 차감 영구 폐기)]
+        5) 💉 [Case 77 & Case 80 온디맨드 예비시드 수혈 잔액(injected_reserve_usd) · 골든포켓 투입원금 통합 회계 항등식]
         """
         st = self._default_symbol_state(
             folder_slug=self.folder_slug,
@@ -855,6 +889,21 @@ class SoxlStratumLedger:
         st["daily_unlock_buy_events"] = max(
             0, safe_int(st.get("daily_unlock_buy_events"), 0)
         )
+
+        # NEW: 계좌별 미국 주식 수수료율 정규화 (기본 편도 0.0007 [0.07%] / 왕복 0.14%)
+        raw_us_comm = safe_float(
+            st.get("us_commission_rate"), DEFAULT_US_COMMISSION_RATE
+        )
+        if raw_us_comm <= 0.0 or raw_us_comm > 0.01:
+            raw_us_comm = DEFAULT_US_COMMISSION_RATE
+        raw_rt_pct = safe_float(
+            st.get("round_trip_fee_rate_pct"),
+            round(raw_us_comm * 200.0, 4),
+        )
+        if raw_rt_pct <= 0.0 or raw_rt_pct > 2.0:
+            raw_rt_pct = round(raw_us_comm * 200.0, 4)
+        st["us_commission_rate"] = round(raw_us_comm, 6)
+        st["round_trip_fee_rate_pct"] = round(raw_rt_pct, 4)
 
         # [Case 80]: 황금시간대 전액매수 모드 검증 (기본값 "NONE" [OFF]) 및 통계 정규화
         raw_g_mode = (
@@ -993,7 +1042,6 @@ class SoxlStratumLedger:
         st["buckets"] = clean_buckets
         st["cycle_reanchor_credit_usd"] = 0.0
 
-        # 기정산 주문 ID 링버퍼(최근 50개) 정규화
         raw_settled_ids = st.get("last_settled_order_ids")
         if isinstance(raw_settled_ids, list):
             clean_oids: List[str] = []
@@ -1025,11 +1073,9 @@ class SoxlStratumLedger:
 
         if not clean_buckets:
             st["last_sell_gate_eval_ts"] = 0.0
-            # Case 73: 0주 상태에서는 1층 공석 재장전 타임쉴드 시각을 0.0 으로 클리어
             st["last_reentry_eval_ts"] = 0.0
             st["pending_sell_indices"] = []
             st["pending_step_up_min_price"] = 0.0
-            # [Case 78 & Case 80]: 그리드 0주 상태에서 미결 그리드 매수가 없으면 l1_target_quota_qty 를 0 으로 클리어
             st["l1_target_quota_qty"] = (
                 raw_target_q
                 if (has_pending_buy and pending_lot_tag != "GOLDEN_POCKET")
@@ -1039,9 +1085,6 @@ class SoxlStratumLedger:
             st["last_sell_gate_eval_ts"] = round(
                 max(0.0, safe_float(st.get("last_sell_gate_eval_ts"), 0.0)), 4
             )
-            # [Case 67, Case 73 & Case 78]:
-            # 활성 1층 보유 중 신규 1층 추매 주문(DIP_1FL / QUOTA_L1 / REENTRY_1FL / GOLDEN_L1)이 발주 대기 중일 때,
-            # 기존 1층 수량(cur_l1_q)과 max() 를 취해 신규 추매의 목표 정량(raw_target_q)을 덮어쓰는 오염을 원천 차단!
             has_active_l1 = not self._is_upper_grid_tag(
                 str(clean_buckets[0].get("lot_type") or "")
             )
@@ -1068,7 +1111,6 @@ class SoxlStratumLedger:
                     max(0.0, safe_float(st.get("last_reentry_eval_ts"), 0.0)),
                     4,
                 )
-                # 1층이 익절되어 공석(상단 2~7층만 보유)이고 미결 그리드 매수가 없으면 l1_target_quota_qty 를 0 으로 클리어
                 st["l1_target_quota_qty"] = (
                     raw_target_q
                     if (has_pending_buy and pending_lot_tag != "GOLDEN_POCKET")
@@ -1104,8 +1146,6 @@ class SoxlStratumLedger:
             4,
         )
         actual_inv_total = round(actual_inv_buckets + pocket_cost, 4)
-        # Case 77 & Case 80 회계 항등식 확장:
-        # 가용현금(free_cash_usd) = max(0.0, (초기시드 + 누적세후실현순익 + 온디맨드 예비시드 수혈잔액) - (보유지층 원금 합계 + 골든포켓 원금))
         realized_equity = max(0.0, init_seed + cum_net)
         total_pool_equity = realized_equity + inj_res_usd
         st["free_cash_usd"] = round(
@@ -1136,8 +1176,7 @@ class SoxlStratumLedger:
         """
         # [Case 75 : 원장 Dirty-Check 비교기]:
         두 원장 상태 딕셔너리에서 매 호출마다 바뀌는 타임스탬프("updated_at")만 제외하고
-        나머지 모든 실질 필드(buckets, golden_pocket, free_cash_usd, 주문 ID, 타임쉴드 시각, 카운터 등)가
-        100% 동일한지 판별한다.
+        나머지 모든 실질 필드가 100% 동일한지 판별한다.
         """
         if not isinstance(st_a, dict) or not isinstance(st_b, dict):
             return False
@@ -1151,8 +1190,7 @@ class SoxlStratumLedger:
     ) -> Tuple[int, int, int, float, str]:
         """
         🚨 Case 68, Case 77 & Case 80 [다중 원장 상태 비교 자가 치유 스코어링]:
-        폴더 내 3개 원장 후보(고유 원장 · 실시간 백업 금고 · 호환 원장) 중
-        실수로 초기화된 빈 파일 대신 실제 매매 데이터를 보유한 최적 원장을 선택하기 위한 우선순위 튜플.
+        폴더 내 3개 원장 후보 중 실제 매매 데이터를 보유한 최적 원장을 선택하기 위한 우선순위 튜플.
         """
         buckets = (
             st.get("buckets") if isinstance(st.get("buckets"), list) else []
@@ -1212,13 +1250,7 @@ class SoxlStratumLedger:
 
     def _load_sync(self) -> None:
         """
-        🚨 Case 68, Case 75, Case 80 & Case 84 [기존 soxl_stratum_ledger.json 100% 무손실 자동 이관 & 3중 금고 Dirty-Check 자가 치유]:
-        1) primary_filepath (`soxl_stratum_ledger_<폴더명>.json`)
-        2) backup_filepath  (`ledger_backups/soxl_stratum_ledger_<폴더명>.bak.json`)
-        3) legacy_filepath  (`soxl_stratum_ledger.json`)
-        3개 파일을 모두 검사하여 가장 풍부하고 유효한 상태를 가진 원장을 채택한 뒤,
-        _save_sync_unlocked() 내부의 파일별 Dirty-Check 를 통해 실제로 차이가 있거나 누락된 파일에만
-        원자적으로 기록한다.
+        🚨 Case 68, Case 75, Case 80 & Case 85 [기존 soxl_stratum_ledger.json 100% 무손실 자동 이관 & 3중 금고 Dirty-Check 자가 치유]:
         """
         with GlobalThrottle.get_file_lock(self.primary_filepath):
             with GlobalThrottle.get_file_lock(self.legacy_filepath):
@@ -1269,10 +1301,14 @@ class SoxlStratumLedger:
                         (sanitized.get("golden_pocket") or {}).get("qty"), 0
                     )
                     logger.info(
-                        "📂 [Case 68~84 폴더별 3중 7층 골디락스 그리드 원장 락온 완료] 폴더=[%s] · 채택소스=%s · 시드=$%.2f · 그리드=%d주(%d개층) · 골든포켓=%d주(모드=%s) · 예비수혈=%d/%d회분($%.2f) · 고유원장=%s",
+                        "📂 [Case 68~85 폴더별 3중 7층 골디락스 그리드 원장 락온 완료] 폴더=[%s] · 채택소스=%s · 시드=$%.2f · 왕복수수료=%.2f%% · 그리드=%d주(%d개층) · 골든포켓=%d주(모드=%s) · 예비수혈=%d/%d회분($%.2f) · 고유원장=%s",
                         self.folder_slug,
                         best_label,
                         safe_float(sanitized.get("initial_seed_usd"), 10000.0),
+                        safe_float(
+                            sanitized.get("round_trip_fee_rate_pct"),
+                            ROUND_TRIP_FEE_RATE_PCT,
+                        ),
                         held_q,
                         len(sanitized.get("buckets", [])),
                         gp_q,
@@ -1295,12 +1331,8 @@ class SoxlStratumLedger:
     ) -> bool:
         """
         # [Case 05, Case 68 & Case 75]:
-        1) force_write=False 일 때 디스크에 이미 target_path 파일이 존재하면 읽어와
-           _is_state_materially_equal() 로 비교하여 실질 데이터 변경이 없을 경우
-           .tmp 파일 생성과 os.fsync() 디스크 쓰기를 즉시 스킵(False 반환)한다!
-        2) 쓰기 도중 OSError(errno.ENOSPC == 28, No space left on device)가 감지되면
-           미완성 .tmp 파일을 즉시 삭제하고 emergency_free_disk_space_sync() 로
-           고아 파일·캐시·오래된 백업을 청소한 뒤 1회 재시도하여 원장 0바이트 파손을 철벽 방어한다.
+        Dirty-Check 후 실질 데이터 변경이 있을 때만 원자적(.tmp -> os.replace)으로 기록하고,
+        ENOSPC(Errno 28) 감지 시 즉시 고아 파일·캐시를 청소 후 재시도한다.
         """
         if not target_path:
             return False
@@ -1385,13 +1417,6 @@ class SoxlStratumLedger:
         return False
 
     def _save_sync_unlocked(self, force_write: bool = False) -> None:
-        """
-        🚨 Case 05, Case 68 & Case 75:
-        1) 폴더 고유 원장 (`soxl_stratum_ledger_<folder_slug>.json`)
-        2) 호환 미러 원장 (`soxl_stratum_ledger.json`)
-        3) 실시간 백업 금고 (`ledger_backups/soxl_stratum_ledger_<folder_slug>.bak.json`)
-        3곳 모두 Dirty-Check 후 변경이 있을 때만 원자적(.tmp -> os.replace)으로 동시 기록한다.
-        """
         payload = {TARGET_SYMBOL: self._data[TARGET_SYMBOL]}
         self._atomic_write_json_sync(
             self.primary_filepath, payload, force_write=force_write
@@ -1411,8 +1436,6 @@ class SoxlStratumLedger:
     ) -> str:
         """
         Case 68 & Case 75 [일일 날짜별 스냅샷 금고 보관 및 고아 파일 청소]:
-        16:00 / 17:00 EST 일일 결산 및 GC 시 고아 임시 파일과 오래된 스냅샷을 먼저 정리한 뒤,
-        `ledger_backups/soxl_stratum_ledger_<folder_slug>_YYYY-MM-DD.json` 파일을 생성한다.
         """
         emergency_free_disk_space_sync(
             base_dir=self.base_dir,
@@ -1443,11 +1466,6 @@ class SoxlStratumLedger:
         )
 
     def recover_from_backup_vault_sync(self) -> Optional[Dict[str, Any]]:
-        """
-        Case 68 & Case 80:
-        백업 금고(`backup_filepath` 또는 최신 일일 스냅샷)에서 유효한 지층(`buckets` 또는 `golden_pocket`)이나
-        시드/수익 데이터가 존재하면 읽어와 반환한다.
-        """
         cand_paths = [self.backup_filepath, self.primary_filepath]
         try:
             pattern = os.path.join(
@@ -1522,7 +1540,6 @@ class SoxlStratumLedger:
                         )
                     cur.update(kwargs)
                     sanitized = self._sanitize_and_enforce_identity(cur)
-                    # Case 75: 인메모리 상태가 실질적으로 변경되었을 때만 디스크 저장 호출
                     if not self._is_state_materially_equal(prev_st, sanitized):
                         self._data[sym] = sanitized
                         self._save_sync_unlocked(force_write=False)
@@ -1540,12 +1557,6 @@ class SoxlStratumLedger:
     async def cycle_golden_allin_mode(
         self, target_mode: Optional[str] = None
     ) -> Dict[str, Any]:
-        """
-        # [Case 80 : 전술 제어반(/settlement) 황금시간대(07:00 ~ 07:50 EST & RSI <= 19.0) 전액매수 모드 순환 선택기]:
-        - target_mode 가 지정되면 해당 모드로 즉시 설정하고,
-        - 미지정(인라인 버튼 클릭) 시 "NONE" (⚪ OFF) -> "POCKET_ALLIN" (🌟 독립 골든포켓 ON) ->
-          "GRID_L1_ALLIN" (🔥 7층 그리드 1층편입 ON) -> "NONE" (⚪ OFF) 순서로 순환 전환한다.
-        """
         st = self.get_state(TARGET_SYMBOL)
         cur_m = (
             str(st.get("golden_allin_mode") or DEFAULT_GOLDEN_ALLIN_MODE)
@@ -1582,14 +1593,6 @@ class SoxlStratumLedger:
         new_seed_usd: Optional[float] = None,
         preserve_realized_profit: bool = True,
     ) -> Dict[str, Any]:
-        """
-        🚨 Case 02, Case 65, Case 69, Case 70, Case 71, Case 72, Case 73, Case 76, Case 77, Case 78 & Case 80:
-        하위 호환용 지층 초기화 메서드 (텔레그램 메뉴/명령어에서는 /reset_profit 으로 대체됨):
-        지층 큐(buckets), 독립 골든포켓(golden_pocket), 기준가, 기억된 최저가, 리앵커링 크레딧,
-        1층 목표 정량(l1_target_quota_qty), 다중 그리드/포켓 매도 대기 정보, 스텝업 대기 기준가,
-        예비시드 수혈 잔액 및 입금 대기 상태, 타임쉴드 시각, 미체결 주문 ID를 원자적으로 0점 초기화하고,
-        0주 싸이클 종료 타임쉴드(last_sell_fill_ts, last_cycle_end_ts)를 각인한다.
-        """
         sym = self._assert_allowed_symbol(symbol)
         st = self.get_state(sym)
         if new_seed_usd is not None and safe_float(new_seed_usd, 0.0) >= 100.0:
@@ -1668,12 +1671,6 @@ class SoxlStratumLedger:
     async def rollover_daily_counters_if_needed(
         self, logical_date: str
     ) -> Dict[str, Any]:
-        """
-        # [Case 74, Case 76, Case 77 & Case 80]:
-        일일 카운터를 새 영업일 기준으로 0회 롤오버하되,
-        시드고갈 입금 요청 알림 스팸 방지 래치(`waiting_reserve_deposit_alert_sent`)는
-        일일 롤오버 시에도 절대 해제하지 않고 그대로 유지하여 날짜 변경 시 중복 알림 발송을 원천 차단한다!
-        """
         st = self.get_state(TARGET_SYMBOL)
         cur_date = str(st.get("logical_date") or "")
         if cur_date == str(logical_date):
@@ -1714,6 +1711,7 @@ class TossApiClient:
     🏛️ 제1헌법 ~ 제6헌법 & API.txt (v1.2.14) 100% 완벽 구현:
     - OAuth2 토큰 자동 발급 및 만료 전 선제 갱신 (`POST /oauth2/token`)
     - 종합매매 계좌(`BROKERAGE`) `accountSeq` 자동 락온 및 `X-Tossinvest-Account` 헤더 원자적 주입 (`GET /api/v1/accounts`)
+    - 계좌별 미국 주식(`US`) 매매 수수료율 조회 및 왕복 수수료율 자동 락온 (`GET /api/v1/commissions`)
     - `REAL_ALLOWED_SYMBOLS = ("SOXL",)` 외 제3종목(SOXS 등) 주문 물리적 차단 (`Case 09`)
     - 외부 패키지(`httpx`/`aiohttp`) 유무에 영향받지 않는 표준 `urllib.request` + `asyncio.to_thread` 방탄 비동기 엔진
     """
@@ -1761,6 +1759,13 @@ class TossApiClient:
 
         self.account_seq: Optional[int] = None
         self._account_lock: asyncio.Lock = asyncio.Lock()
+
+        # NEW: 계좌별 미국 주식 수수료율 캐시 (GET /api/v1/commissions 연동)
+        self.us_commission_rate: float = DEFAULT_US_COMMISSION_RATE
+        self.round_trip_fee_rate_pct: float = ROUND_TRIP_FEE_RATE_PCT
+        self._commission_locked: bool = False
+        self._commission_lock: asyncio.Lock = asyncio.Lock()
+        self.last_probed_manual_fee_usd: float = 0.0
 
         self._fx_cache_rate: float = KRW_PER_USD_DEFAULT
         self._fx_cache_mono: float = 0.0
@@ -1935,6 +1940,65 @@ class TossApiClient:
             self.account_seq = 1
             return self.account_seq
 
+    async def get_commissions(self) -> List[Dict[str, Any]]:
+        """
+        # NEW [API.txt v1.2.14 정식 규격]:
+        GET /api/v1/commissions (X-Tossinvest-Account 헤더 포함)를 호출하여
+        현재 계좌의 시장별(KR, US) 매매 수수료율 배열을 반환한다.
+        """
+        try:
+            res = await self._request(
+                method="GET",
+                path="/api/v1/commissions",
+                require_account=True,
+                rate_group="ORDER_INFO",
+            )
+            items = res.get("result") if isinstance(res, dict) else []
+            if isinstance(items, list):
+                return [c for c in items if isinstance(c, dict)]
+        except Exception as exc:
+            logger.debug("get_commissions 조회 폴백 사용: %s", exc)
+        return []
+
+    async def ensure_us_commission_rate(
+        self, force_refresh: bool = False
+    ) -> Tuple[float, float]:
+        """
+        # NEW [계좌별 미국 주식 실제 수수료율 자동 락온기]:
+        GET /api/v1/commissions 를 호출하여 "marketCountry": "US" 항목의 "commissionRate" (소수 비율)를 추출한다.
+        - 예: pipiosToss 계좌("0.0007") -> 편도 0.0007 (0.07%) / 왕복 0.14% 자동 락온
+        - 예: wonToss 계좌("0.001")     -> 편도 0.0010 (0.10%) / 왕복 0.20% 자동 락온
+        반환값: (us_commission_rate_decimal, round_trip_fee_rate_pct)
+        """
+        if not force_refresh and self._commission_locked:
+            return self.us_commission_rate, self.round_trip_fee_rate_pct
+
+        async with self._commission_lock:
+            if not force_refresh and self._commission_locked:
+                return self.us_commission_rate, self.round_trip_fee_rate_pct
+
+            items = await self.get_commissions()
+            found_us_rate = 0.0
+            for it in items:
+                mkt = str(it.get("marketCountry") or "").upper().strip()
+                if mkt == "US":
+                    r_val = safe_float(it.get("commissionRate"), 0.0)
+                    if 0.0 < r_val <= 0.01:
+                        found_us_rate = round(r_val, 6)
+                        break
+
+            if found_us_rate > 0.0:
+                rt_pct = round(found_us_rate * 200.0, 4)
+                self.us_commission_rate = found_us_rate
+                self.round_trip_fee_rate_pct = rt_pct
+                self._commission_locked = True
+                set_runtime_round_trip_fee_rate_pct(
+                    rt_pct, us_commission_rate=found_us_rate
+                )
+                return self.us_commission_rate, self.round_trip_fee_rate_pct
+
+            return self.us_commission_rate, self.round_trip_fee_rate_pct
+
     async def _request(
         self,
         method: str,
@@ -2107,8 +2171,6 @@ class TossApiClient:
         """
         # [API.txt v1.2.14 & Case 80, Case 82]:
         GET /api/v1/trades?symbol=SOXL&count=50
-        당일 최근 체결 내역(price, volume, timestamp)을 조회하여 캔들 차트 지연 시 보조 시계열 및
-        1분봉 윗꼬리(Upper-Wick) 순간 체결 최고가 포착에 활용한다.
         """
         q_cnt = max(1, min(50, safe_int(count, 50)))
         try:
@@ -2131,11 +2193,6 @@ class TossApiClient:
 
     @staticmethod
     def _parse_iso_timestamp_to_epoch(ts_val: Any) -> float:
-        """
-        # [Case 82 : GET /api/v1/trades ISO 8601 체결 시각 -> UTC Epoch(float) 변환기]:
-        예: "2026-03-25T22:30:42.100+09:00" 또는 "2026-10-29T06:57:02.120Z" 또는 숫자형 epoch 를
-        초 단위 float 타임스탬프로 안전하게 변환한다.
-        """
         if ts_val is None or isinstance(ts_val, bool):
             return 0.0
         if isinstance(ts_val, (int, float)):
@@ -2167,13 +2224,7 @@ class TossApiClient:
         count: int = 15,
     ) -> Tuple[float, float]:
         """
-        # MODIFIED [Case 82 : 1분봉 윗꼬리(Upper-Wick) 슈팅 포착용 최근 체결 최고가 추출기 (서버 시차 -5.0s 허용)]:
-        GET /api/v1/prices 는 단일 스냅샷(lastPrice)만 반환하므로 1.5 ~ 2.5초 폴링 간격 사이에
-        0.3초 동안만 찍히고 내려온 $104.00 윗꼬리 체결틱을 놓칠 수 있다.
-        이를 원천 보완하기 위해 GET /api/v1/trades?symbol=SOXL&count=15 를 호출하여:
-        1) 체결 시각(trade_epoch)이 현재 시각 기준 최근 lookback_sec(기본 5.0초, 서버 NTP 시차 -5.0초 허용) 이내이고,
-        2) 직전 매수/매도 체결 시각 및 기소모된 윗꼬리 시각(min_after_ts) 이후에 발생한 유효 체결틱 중
-           가장 높은 체결가(best_price)와 해당 체결 시각(best_ts)을 (best_price, best_ts) 튜플로 반환한다.
+        # [Case 82 : 1분봉 윗꼬리(Upper-Wick) 슈팅 포착용 최근 체결 최고가 추출기 (서버 시차 -5.0s 허용)]:
         """
         trades = await self.get_recent_trades(
             symbol=symbol, count=max(1, min(50, safe_int(count, 15)))
@@ -2280,12 +2331,6 @@ class TossApiClient:
     def _parse_candle_page_result(
         res: Any,
     ) -> Tuple[List[Dict[str, Any]], Optional[str]]:
-        """
-        # [Case 80 캔들 응답 스키마 다변화 방탄 파서]:
-        API 응답이 {"result": {"candles": [...], "nextBefore": ...}} 표준 형식일 때뿐만 아니라,
-        {"result": [...]} 리스트 직접 반환 또는 {"candles": [...]} / {"items": [...]} / {"data": [...]}
-        구조일 때도 단 1건의 누락 없이 캔들 배열과 nextBefore 커서를 추출한다.
-        """
         if not isinstance(res, dict):
             if isinstance(res, list):
                 return [c for c in res if isinstance(c, dict)], None
@@ -2321,12 +2366,6 @@ class TossApiClient:
         before: Optional[str] = None,
         adjusted: bool = True,
     ) -> Tuple[List[Dict[str, Any]], Optional[str]]:
-        """
-        # [Case 80 : GET /api/v1/candles 방탄 폴백 탑재]:
-        1) 요청된 count(최대 200) 및 adjusted 파라미터로 1차 조회한다.
-        2) 만약 브로커 서버가 특정 세션에서 adjusted 또는 count=200 에 대해 에러나 빈 배열을 반환하면
-           즉시 기본 파라미터(count=min(100, q_cnt), adjusted 생략)로 자동 폴백 재시도한다.
-        """
         sym_clean = str(symbol or TARGET_SYMBOL).upper().strip()
         intv_clean = str(interval or "1m").strip()
         q_cnt = max(1, min(200, safe_int(count, 100)))
@@ -2359,7 +2398,6 @@ class TossApiClient:
                 exc,
             )
 
-        # 폴백 재시도: before 가 없을 때 adjusted 파라미터를 생략하고 표준 기본 count(최대 100)로 재요청
         if not before:
             fb_params: Dict[str, Any] = {
                 "symbol": sym_clean,
@@ -2386,14 +2424,6 @@ class TossApiClient:
         total_count: int = 300,
         adjusted: bool = True,
     ) -> List[Dict[str, Any]]:
-        """
-        # [Case 80 : 1분봉 다중 페이지네이션 페이지별 독립 예외 격리]:
-        GET /api/v1/candles (interval="1m") 를 nextBefore 페이지네이션으로 호출하여
-        최대 total_count(기본 300)개의 1분봉 리스트를 반환한다.
-        - 1페이지(최신 200봉) 수신 성공 후 2페이지(before 커서) 조회에서 에러가 발생하더라도
-          이미 확보한 1페이지 200봉이 절대 유실되지 않도록 페이지별로 예외를 격리한다!
-        - nextBefore 커서가 직전 커서와 동일할 경우 즉시 루프를 종료하여 무한 루프를 차단한다.
-        """
         target_cnt = max(1, min(600, safe_int(total_count, 300)))
         collected: List[Dict[str, Any]] = []
         seen_ts: Set[str] = set()
@@ -2466,9 +2496,6 @@ class TossApiClient:
         count: int = 10,
         adjusted: bool = True,
     ) -> List[Dict[str, Any]]:
-        """
-        GET /api/v1/candles (interval="1d") 일봉 데이터를 조회한다.
-        """
         try:
             batch, _ = await self.get_candles(
                 symbol=symbol,
@@ -2486,9 +2513,6 @@ class TossApiClient:
     # [Market Info 그룹] USD/KRW 환율 및 미국 장 캘린더 (API.txt v1.2.14)
     # -----------------------------------------------------------------------
     async def get_usd_krw_rate(self) -> float:
-        """
-        GET /api/v1/exchange-rate?baseCurrency=USD&quoteCurrency=KRW (60초 캐시)
-        """
         now_m = time.monotonic()
         if (
             self._fx_cache_rate > 0.0
@@ -2525,9 +2549,6 @@ class TossApiClient:
     async def get_us_market_calendar(
         self, date_str: Optional[str] = None
     ) -> Dict[str, Any]:
-        """
-        GET /api/v1/market-calendar/US
-        """
         params: Dict[str, Any] = {}
         if date_str:
             params["date"] = str(date_str)
@@ -2568,10 +2589,6 @@ class TossApiClient:
     async def get_holdings_map_with_status(
         self, symbol: Optional[str] = None
     ) -> Tuple[Dict[str, Dict[str, Any]], bool]:
-        """
-        🚨 Case 03:
-        GET /api/v1/holdings 를 호출하여 (holdings_map, fetch_ok) 튜플을 반환한다.
-        """
         out_map: Dict[str, Dict[str, Any]] = {
             TARGET_SYMBOL: self._empty_holding_dict(TARGET_SYMBOL)
         }
@@ -2775,15 +2792,12 @@ class TossApiClient:
         """
         🎯 5 & 제5헌법 & Case 01, 09, 18, 79:
         POST /api/v1/orders (오직 SOXL LIMIT 지정가 주문만 허용)
-        - enforce_daymarket_block=True 이고 BUY 주문일 때는 주말(토·일요일) 및
-          평일 04:07 ~ 16:00 EST 외 모든 매수 주문을 물리적으로 원천 차단한다.
         """
         sym = self._assert_real_order_symbol(symbol)
         clean_side = str(side or "BUY").upper().strip()
         if clean_side not in ("BUY", "SELL"):
             raise ValueError(f"유효하지 않은 주문 방향: {clean_side}")
 
-        # [Case 01 & Case 79]: 평일 04:07 ~ 16:00 EST 외(주말 토·일요일 포함) 모든 매수 주문 물리적 차단
         if enforce_daymarket_block and clean_side == "BUY":
             now_est = datetime.now(EST_TZ)
             hm = now_est.hour * 100 + now_est.minute
@@ -2827,12 +2841,6 @@ class TossApiClient:
         order_type: str = "LIMIT",
         **kwargs: Any,
     ) -> Dict[str, Any]:
-        """
-        🎯 5 (토스 US 주식 정정 규격 엄수):
-        POST /api/v1/orders/{orderId}/modify
-        미국 주식 주문 정정 시 `quantity` 를 전달하면 `400 us-modify-quantity-not-supported` 에러가 발생하므로
-        오직 `orderType` 과 `price` 만 전송한다.
-        """
         oid = str(order_id or "").strip()
         if not oid:
             raise ValueError("modify_order: order_id 가 비어 있습니다.")
@@ -2852,10 +2860,6 @@ class TossApiClient:
         return r_obj if isinstance(r_obj, dict) else {}
 
     async def cancel_order(self, order_id: str) -> Dict[str, Any]:
-        """
-        🎯 5 (HTTP 415 원천 방어):
-        POST /api/v1/orders/{orderId}/cancel 호출 시 반드시 빈 JSON 객체 `{}` 를 전송한다.
-        """
         oid = str(order_id or "").strip()
         if not oid:
             return {}
@@ -2872,9 +2876,6 @@ class TossApiClient:
     async def get_order_detail(
         self, order_id: str
     ) -> Optional[Dict[str, Any]]:
-        """
-        GET /api/v1/orders/{orderId}
-        """
         oid = str(order_id or "").strip()
         if not oid:
             return None
@@ -2894,9 +2895,6 @@ class TossApiClient:
     async def get_open_orders(
         self, symbol: str = TARGET_SYMBOL
     ) -> List[Dict[str, Any]]:
-        """
-        GET /api/v1/orders?status=OPEN&symbol=SOXL
-        """
         params: Dict[str, Any] = {"status": "OPEN"}
         if symbol:
             params["symbol"] = str(symbol).upper().strip()
@@ -2922,11 +2920,6 @@ class TossApiClient:
     async def get_closed_orders(
         self, symbol: str = TARGET_SYMBOL, limit: int = 20
     ) -> List[Dict[str, Any]]:
-        """
-        # (API.txt v1.2.14 준수):
-        GET /api/v1/orders?status=CLOSED&symbol=SOXL&limit=20
-        종료된 주문(FILLED, CANCELED, REJECTED, REPLACED 등) 목록을 최신순으로 조회한다.
-        """
         params: Dict[str, Any] = {
             "status": "CLOSED",
             "limit": max(1, min(100, safe_int(limit, 20))),
@@ -2961,14 +2954,7 @@ class TossApiClient:
         symbol: str = TARGET_SYMBOL,
     ) -> Tuple[float, List[str]]:
         """
-        # [Case 19 & Case 63 수동 매수·매도 실체결가 역추적기 (API.txt OrderStatus 규격 엄수)]:
-        GET /api/v1/orders?status=CLOSED&symbol=SOXL 응답에서:
-        1) 봇이 이미 정산한 settled_order_ids 를 제외하고,
-        2) CANCEL_REJECTED (취소 거부 별도 레코드), REPLACE_REJECTED (정정 거부 별도 레코드),
-           REJECTED (주문 거부), REPLACED (정정 대체된 원주문) 등 중복/미체결 오인 위험 상태를 원천 배제하며,
-        3) 요청된 방향(side="BUY" 또는 "SELL")의 실제 체결 완료 건(FILLED 및 부분 체결 후 종료된 PARTIAL_FILLED / CANCELED 중
-           execution.filledQuantity > 0 & averageFilledPrice > 0)들을 target_qty 수량만큼 역추적하여
-           수량 가중평균 체결단가와 매칭된 orderId 리스트를 반환한다.
+        # [Case 19 & Case 63 수동 매수·매도 실체결가 및 실측 수수료 역추적기]:
         """
         target_side = str(side or "SELL").upper().strip()
         need_q = max(1, safe_int(target_qty, 1))
@@ -2976,6 +2962,7 @@ class TossApiClient:
             str(x).strip() for x in (settled_order_ids or ()) if str(x).strip()
         }
         fb_p = round(max(0.0, safe_float(fallback_price, 0.0)), 4)
+        self.last_probed_manual_fee_usd = 0.0
 
         closed_list = await self.get_closed_orders(symbol=symbol, limit=30)
         if not closed_list:
@@ -2983,6 +2970,7 @@ class TossApiClient:
 
         acc_qty = 0
         acc_val = 0.0
+        acc_fee = 0.0
         matched_ids: List[str] = []
 
         for ord_item in closed_list:
@@ -2995,7 +2983,6 @@ class TossApiClient:
             if o_side != target_side:
                 continue
 
-            # Case 19 & API.txt OrderStatus: 정정/취소 거부로 생성된 별도 레코드 및 정정 대체된 원주문(REPLACED) 배제
             ord_status = str(ord_item.get("status") or "").upper().strip()
             if ord_status and ord_status not in (
                 "FILLED",
@@ -3004,7 +2991,6 @@ class TossApiClient:
             ):
                 continue
 
-            # Case 19: 오직 실제 체결 데이터(execution.filledQuantity & averageFilledPrice)만 인정!
             exec_obj = (
                 ord_item.get("execution")
                 if isinstance(ord_item.get("execution"), dict)
@@ -3020,11 +3006,19 @@ class TossApiClient:
                 break
             acc_qty += take_q
             acc_val += float(take_q) * f_avg
+
+            f_comm = max(0.0, safe_float(exec_obj.get("commission"), 0.0))
+            f_tax = max(0.0, safe_float(exec_obj.get("tax"), 0.0))
+            if (f_comm + f_tax) > 0.0:
+                ratio_q = float(take_q) / float(max(1, f_qty))
+                acc_fee += (f_comm + f_tax) * ratio_q
+
             matched_ids.append(oid)
             if acc_qty >= need_q:
                 break
 
         if acc_qty > 0 and acc_val > 0.0:
+            self.last_probed_manual_fee_usd = round(acc_fee, 4)
             return round(acc_val / float(acc_qty), 4), matched_ids
         return fb_p, []
 

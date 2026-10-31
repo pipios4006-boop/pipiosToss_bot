@@ -1,13 +1,13 @@
 # -*- coding: utf-8 -*-
 """
 # MODIFIED: sniper_plugin.py
-인피니트 스노우볼 (Infinite Snowball) v3.0 — 스나이퍼 매수 코어 Part 2 / 2 (Step 05 / 09)
+인피니트 스노우볼 (Infinite Snowball) v3.0 — 스나이퍼 매수 코어 Part 2 / 2 (Step 05 / 11)
 역할:
 1) sniper_plugin_core.py (Part 1 / 2) 의 모든 상수·타임쉴드·GUARD30 예비수혈·체결커밋·미체결 동기화 심볼 명시적 재익스포트(Facade Re-export)로
    타 모듈(defense_plugin.py, tg_ui_plugin.py, main_runtime.py, main.py, plugin_updater.py) AST 임포트 호환성 100% 보장
 2) 04:07 ~ 16:00 EST 비대칭 매수 타격 게이트 실행기 (execute_seed_protected_buy_gate_plugin):
    - 🌟 [분기 G · Case 80] : 미동부 프리장 황금시간대(07:00 ~ 07:50 EST & 14봉 이상 확보된 1분봉 Wilder RSI(14) <= 19.0) 도달 시
-     전술 제어반 선택 모드(기본값 NONE[OFF] ↔ POCKET_ALLIN ↔ GRID_L1_ALLIN)에 따라 가용 현금 시드 100% 전액 추가매수 발주
+     전술 제어반 선택 모드(기본값 NONE[OFF] ↔ POCKET_ALLIN ↔ GRID_L1_ALLIN)에 따라 가용 현금 시드 100% 전액 추가매수 발주 (계좌별 동적 왕복 수수료율 반영)
    - 🛡️ [분기 A · Case 65, 80, 84] : 그리드 0주 상태(is_zero_shares)에서 0주 종료 후 60.0초 타임쉴드 경과 뒤 현재가 지정가 첫 1층(REENTRY_1FL) 산입하되,
      정규장 마감 30분 전(15:30 ~ 16:00 EST, is_late_regular_new_cycle_cutoff_window) 구간에서는 고점 오버나이트 방어를 위해
      0주 새 사이클 첫 1층 진입을 100% 원천 차단(HOLD_LATE_SESSION_NEW_CYCLE_CUTOFF)!
@@ -21,7 +21,7 @@
    - 🔵 [분기 B-2 · Case 60, 72, 76, 77] : 활성 1층 보유 중 04:07 EST 기점 10분 고정 매수 게이트 도래 시
      정적 기억 최저가 대비 4단 와이드 활주로(-1.0% / -2.0% / -3.5% / -5.5%) 신저가 OR STEP2X_15PCT_C20 3중 안전문(-15.0% 스텝업) 추매(DIP_1FL) 집행
      (15:30 ~ 16:00 EST 정상 허용)
-- 제1헌법 ~ 제6헌법 및 Case 01 ~ 84 완벽 준수
+- 제1헌법 ~ 제6헌법 및 Case 01 ~ 85 완벽 준수
 """
 
 from __future__ import annotations
@@ -51,6 +51,7 @@ from quant_engine import (
     pocket_from_dict,
     resolve_affordable_buy_qty,
     resolve_allin_affordable_buy_qty,
+    resolve_effective_round_trip_fee_rate_pct,
 )
 from quant_indicators_plugin import (
     NEW_CYCLE_BUY_CUTOFF_HM,
@@ -119,7 +120,7 @@ async def execute_seed_protected_buy_gate_plugin(
     now_est: Optional[datetime] = None,
 ) -> Dict[str, Any]:
     """
-    🎯 1, 🎯 2, 🎯 4 & Case 25 ~ 84 (챔피언 : 🌟 POCKET_ALLIN / 🔥 GRID_L1_ALLIN × 💉 05_RESV_6P_GUARD30 × 🔓 06_STEP2X_15PCT_C20 × 🛡️ Case 84):
+    🎯 1, 🎯 2, 🎯 4 & Case 25 ~ 85 (챔피언 : 🌟 POCKET_ALLIN / 🔥 GRID_L1_ALLIN × 💉 05_RESV_6P_GUARD30 × 🔓 06_STEP2X_15PCT_C20 × 🛡️ Case 84):
     04:07:00 ~ 16:00:00 EST 운용 구간에서 작동하는 비대칭 매수 타격 엔진.
     """
     dt_now = now_est.astimezone(EST_TZ) if now_est else datetime.now(EST_TZ)
@@ -187,6 +188,7 @@ async def execute_seed_protected_buy_gate_plugin(
     gp = pocket_from_dict(st.get("golden_pocket"))
     h_qty = safe_int((holdings or {}).get(TARGET_SYMBOL, {}).get("qty"), 0)
 
+    eff_rt_pct = resolve_effective_round_trip_fee_rate_pct(state_dict=st)
     init_seed = max(
         100.0,
         safe_float(st.get("initial_seed_usd"), DEFAULT_INITIAL_SEED_USD),
@@ -233,7 +235,6 @@ async def execute_seed_protected_buy_gate_plugin(
         )
         met = refresh_metrics_with_live_tick(base_met, live_p, now_est=dt_now)
         rsi_val = safe_float(met.get("rsi_14"), 50.0)
-        # [Case 80]: 최소 14개 이상의 1분봉이 확보된 rsi_ready == True 만 엄격히 신뢰!
         rsi_ready = bool(met.get("rsi_ready", False))
 
         golden_sig = evaluate_golden_allin_signal(
@@ -328,6 +329,9 @@ async def execute_seed_protected_buy_gate_plugin(
                             now_init_seed,
                             (now_free_cash + now_inv_tot) - now_inj_res,
                         )
+                        eff_rt_pct_g = resolve_effective_round_trip_fee_rate_pct(
+                            state_dict=st_now
+                        )
                         _, portion_budget_g = compute_golden8_quota_qty(
                             anchor_price=exec_order_p,
                             current_total_equity=now_core_eq,
@@ -366,6 +370,7 @@ async def execute_seed_protected_buy_gate_plugin(
                                 broker_buying_power_usd=(
                                     bp_usd_g if bp_usd_g > 0.0 else None
                                 ),
+                                round_trip_fee_rate_pct=eff_rt_pct_g,
                             )
                         )
                         if buy_qty_g > 0:
@@ -392,9 +397,6 @@ async def execute_seed_protected_buy_gate_plugin(
                                 oid = str(
                                     ord_res.get("orderId") or ""
                                 ).strip()
-                                # [Case 78 & Case 80]:
-                                # 이미 활성 1층이 존재하는 상태에서 GOLDEN_L1 이 발주될 때는 기존 1층의 l1_target_quota_qty 를 유지하고
-                                # 실제 체결 커밋 시점에 체결 수량으로 확정하여, 0주 미체결 취소 시 기존 1층 정량이 오염되지 않게 보호!
                                 has_l1_g = has_active_l1_bucket(now_buckets)
                                 prev_target_q_g = safe_int(
                                     st_now.get("l1_target_quota_qty"), 0
@@ -456,12 +458,9 @@ async def execute_seed_protected_buy_gate_plugin(
 
     # -----------------------------------------------------------------------
     # [분기 A : 그리드 보유 잔고 0주 상태 (is_zero_shares)]
-    # -> 0주 싸이클 종료 후 60.0초 타임쉴드 경과 확인 완료 뒤 실시간 현재가를 직접 조회하여 '현재가 지정가(LIMIT)'로 1층 산입!
-    # -> 🛡️ [Case 84 핵심 방어] : 정규장 마감 30분 전(15:30 ~ 16:00 EST) 구간에서는 장 막판 랠리 고점 박제 및
-    #    익일 급락 오버나이트 리스크를 원천 차단하기 위해 0주 새 사이클 첫 1층(REENTRY_1FL) 진입을 100% 금지한다!
+    # -> 🛡️ [Case 84 핵심 방어] : 정규장 마감 30분 전(15:30 ~ 16:00 EST) 구간에서는 0주 새 사이클 첫 1층(REENTRY_1FL) 진입 100% 금지!
     # -----------------------------------------------------------------------
     if is_zero_shares:
-        # [Case 84 : 정규장 마감 30분 전(15:30 ~ 16:00 EST) 0주 새 사이클 첫 1층 진입 원천 차단]
         if is_late_regular_new_cycle_cutoff_window(hm, now_est=dt_now):
             return {
                 "status": "HOLD_LATE_SESSION_NEW_CYCLE_CUTOFF",
@@ -469,10 +468,8 @@ async def execute_seed_protected_buy_gate_plugin(
                 "cutoff_hm": NEW_CYCLE_BUY_CUTOFF_HM,
             }
 
-        # [Case 80]: 그리드가 0주인데 독립 골든포켓(gp.is_active)에 가용 현금 100%가 투입되어 있는 동안에는
-        # 매 1.5초마다 불필요하게 시세 API를 재조회하지 않고 골든포켓(+1.50%) 익절로 현금이 환원될 때까지 조용히 대기한다!
         min_req_0sh_guard = max(
-            live_p * (1.0 + ROUND_TRIP_FEE_RATE_PCT / 100.0),
+            live_p * (1.0 + eff_rt_pct / 100.0),
             (core_equity * PORTION_RATIO_LOCKED) * MIN_DIP_BUDGET_RATIO,
         )
         if gp.is_active and free_cash < min_req_0sh_guard:
@@ -538,7 +535,9 @@ async def execute_seed_protected_buy_gate_plugin(
                     0.01, math.floor((fresh_live_p + 1e-9) * 100.0) / 100.0
                 )
 
-                # 🚨 Case 67 & Case 77: 0주 진입 시 순수 코어 총자산 기준 min(1회분 상한, 기준가 정량) 적용
+                eff_rt_pct_0sh = resolve_effective_round_trip_fee_rate_pct(
+                    state_dict=st_now
+                )
                 prev_anchor_p = safe_float(st_now.get("anchor_price"), 0.0)
                 ref_zero_anchor = (
                     prev_anchor_p if prev_anchor_p > 0.0 else exec_order_p
@@ -580,6 +579,7 @@ async def execute_seed_protected_buy_gate_plugin(
                         bp_usd_0sh if bp_usd_0sh > 0.0 else None
                     ),
                     max_portion_budget_usd=portion_budget,
+                    round_trip_fee_rate_pct=eff_rt_pct_0sh,
                 )
 
                 if buy_qty <= 0:
@@ -648,9 +648,6 @@ async def execute_seed_protected_buy_gate_plugin(
 
     # -----------------------------------------------------------------------
     # [분기 B-1 · Case 73, Case 77 & Case 84 : 상단 그리드(2층 ~ 7층)만 보유 중 (1층 공석, is_l2_only_vacant_l1 == True)]
-    # -> 2층 단가 상한 가드(HOLD_PREVENT_INVERSION) 하에서 눌림목(-1.00%) OR 상승돌파(+1.00%) 판정!
-    # -> 🛡️ [Case 84 핵심 방어] : 정규장 마감 30분 전(15:30 ~ 16:00 EST) 구간에서는 +1.00% 상승돌파(BREAKOUT_RELOAD)
-    #    추격 재장전만 핀포인트 차단(HOLD_LATE_SESSION_BREAKOUT_CUTOFF)하고, -1.00% 눌림목(PULLBACK_RELOAD) 재장전은 정상 허용!
     # -----------------------------------------------------------------------
     if is_l2_only_vacant_l1:
         in_re_shield, rem_re_sec = is_within_reentry_monitor_time_shield(
@@ -668,7 +665,6 @@ async def execute_seed_protected_buy_gate_plugin(
         if fresh_live_p <= 0.0:
             return {"status": "NO_FRESH_LIVE_PRICE"}
 
-        # 상단 최하단 층인 2층의 순수 매수 단가(min_upper_tier_price) 추출
         min_upper_tier_p = min(b.book_price for b in buckets)
         wma_info = compute_upper_2_to_7_moving_avg(buckets)
         upper_wma_p = safe_float(
@@ -679,7 +675,6 @@ async def execute_seed_protected_buy_gate_plugin(
             hm, now_est=dt_now
         )
 
-        # MODIFIED [Case 84]: 코어 판정기 evaluate_l2_only_hybrid_reentry_signal 에 is_late_new_cycle_cutoff 직접 주입
         reentry_sig = evaluate_l2_only_hybrid_reentry_signal(
             live_price=fresh_live_p,
             anchor_price=anchor_p,
@@ -791,7 +786,6 @@ async def execute_seed_protected_buy_gate_plugin(
                 if in_re_m:
                     return {"status": "HOLD_60S_REENTRY_TIME_SHIELD_IN_MUTEX"}
 
-                # [Case 84 뮤텍스 내부 2차 시각 재검문 : 15:30 ~ 16:00 EST 구간 BREAKOUT_RELOAD 원천 차단]
                 dt_mutex = (
                     now_est.astimezone(EST_TZ)
                     if now_est
@@ -865,6 +859,9 @@ async def execute_seed_protected_buy_gate_plugin(
                         "seed_protect_pass_cnt": new_day_pass,
                     }
 
+                eff_rt_pct_re = resolve_effective_round_trip_fee_rate_pct(
+                    state_dict=st_now
+                )
                 now_gp = pocket_from_dict(st_now.get("golden_pocket"))
                 now_free_cash = max(
                     0.0, safe_float(st_now.get("free_cash_usd"), 0.0)
@@ -931,6 +928,7 @@ async def execute_seed_protected_buy_gate_plugin(
                         bp_usd_re if bp_usd_re > 0.0 else None
                     ),
                     max_portion_budget_usd=portion_budget,
+                    round_trip_fee_rate_pct=eff_rt_pct_re,
                 )
 
                 if buy_qty <= 0:
@@ -1008,7 +1006,6 @@ async def execute_seed_protected_buy_gate_plugin(
                     "l2_ceiling_price": min_upper_tier_p,
                 }
 
-    # 원장 그리드가 비어 있으나(len(buckets) == 0) 실계좌 잔고(h_qty)와 일시 시차가 존재하는 경우 IndexError 원천 차단
     if not buckets or not has_active_l1:
         return {
             "status": "WAIT_HOLDINGS_RECONCILE_SYNC",
@@ -1019,7 +1016,6 @@ async def execute_seed_protected_buy_gate_plugin(
 
     # -----------------------------------------------------------------------
     # [분기 B-0 · Case 77, Case 78 & Case 80 : 활성 1층 부분 체결 미체결 잔량(rem_quota_qty > 0) 존재 시]
-    # -> 이미 진입한 1층의 미체결 잔량이므로 15:30 ~ 16:00 EST 에도 100% 정상 보충 허용!
     # -----------------------------------------------------------------------
     l1_target_q = max(
         buckets[0].qty, safe_int(st.get("l1_target_quota_qty"), 0)
@@ -1063,6 +1059,9 @@ async def execute_seed_protected_buy_gate_plugin(
                     if fresh_live_p > 0.0 and fresh_live_p <= (
                         now_l1_book_p + 1e-6
                     ):
+                        eff_rt_pct_top = resolve_effective_round_trip_fee_rate_pct(
+                            state_dict=st_now
+                        )
                         cur_lim_p = (
                             math.floor((fresh_live_p + 1e-9) * 100.0) / 100.0
                         )
@@ -1076,7 +1075,7 @@ async def execute_seed_protected_buy_gate_plugin(
                             0.0, safe_float(st_now.get("free_cash_usd"), 0.0)
                         )
                         one_share_top_cost = exec_order_p * (
-                            1.0 + ROUND_TRIP_FEE_RATE_PCT / 100.0
+                            1.0 + eff_rt_pct_top / 100.0
                         )
                         now_gp_top = pocket_from_dict(
                             st_now.get("golden_pocket")
@@ -1095,7 +1094,6 @@ async def execute_seed_protected_buy_gate_plugin(
                                 "golden_pocket_qty": now_gp_top.qty,
                             }
 
-                        # [Case 77 & Case 78 : 예수금 API 0.0 반환 시 0.25초 재시도 및 None 우회 422 루프 원천 차단]:
                         raw_bp_top = await context.api.get_buying_power_usd(
                             safety_buffer_pct=0.2
                         )
@@ -1126,6 +1124,7 @@ async def execute_seed_protected_buy_gate_plugin(
                             free_cash_usd=now_free_cash,
                             broker_buying_power_usd=raw_bp_top,
                             max_portion_budget_usd=topup_budget,
+                            round_trip_fee_rate_pct=eff_rt_pct_top,
                         )
                         if buy_qty_top > 0:
                             eff_topup_budget = round(
@@ -1194,7 +1193,6 @@ async def execute_seed_protected_buy_gate_plugin(
     # -----------------------------------------------------------------------
     # [분기 B-2 : 활성 1층 보유 중 (has_active_l1_bucket(buckets) == True)]
     # -> 04:07 EST 기점 10분 고정 매수 게이트 신규 버킷 도래 시 정적 기억 최저가 4단 와이드 OR STEP2X_15PCT_C20 스텝업 추매 판정!
-    # -> 기보유 지층의 신저가/스텝업 추매이므로 15:30 ~ 16:00 EST 에도 100% 정상 가동!
     # -----------------------------------------------------------------------
     is_gate_open, cur_bucket_id, today_str, b_info = (
         evaluate_buy_gate_bucket_status(
@@ -1259,10 +1257,6 @@ async def execute_seed_protected_buy_gate_plugin(
     lot_tag = "DIP_1FL"
 
     if not bool(dip_eval.get("should_buy")):
-        # [Case 75 & Case 77]:
-        # 이미 시드고갈 입금 대기(waiting_reserve_deposit == True) 상태에서 60초 주기로 깨어났는데
-        # 가격이 일시 반등해 있는 경우에는 10분 버킷(last_evaluated_buy_bucket_id)을 소모하거나
-        # 매 60초마다 패스 카운터를 디스크에 기록하지 않고 인메모리 60초 입금 감시 쉴드만 재장전한다!
         if bool(st.get("waiting_reserve_deposit", False)):
             mark_reserve_deposit_check_shield(
                 context=context, symbol=TARGET_SYMBOL, clear_shield=False
@@ -1331,6 +1325,9 @@ async def execute_seed_protected_buy_gate_plugin(
             if in_s_sh or in_b_sh:
                 return {"status": "HOLD_60S_TIME_SHIELD_IN_MUTEX"}
 
+            eff_rt_pct_dip = resolve_effective_round_trip_fee_rate_pct(
+                state_dict=st_now
+            )
             now_held_lots = sum(b.lot_count for b in now_buckets)
             now_drop_pct, _, _ = get_golden8_prog_thresholds(
                 held_lots=now_held_lots, threshold_mode=threshold_mode
@@ -1452,6 +1449,7 @@ async def execute_seed_protected_buy_gate_plugin(
                     bp_usd_dip if bp_usd_dip > 0.0 else None
                 ),
                 max_portion_budget_usd=portion_budget,
+                round_trip_fee_rate_pct=eff_rt_pct_dip,
             )
 
             if buy_qty <= 0:
