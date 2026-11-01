@@ -1,27 +1,28 @@
 # -*- coding: utf-8 -*-
 """
 # MODIFIED: sniper_plugin.py
-인피니트 스노우볼 (Infinite Snowball) v3.0 — 스나이퍼 매수 코어 Part 2 / 2 (Step 07 / 10)
+인피니트 스노우볼 (Infinite Snowball) v3.0 — 스나이퍼 매수 코어 Part 2 / 2 (Step 07 / 13)
 역할:
 1) sniper_plugin_core.py (Part 1 / 2) 의 모든 상수·타임쉴드·GUARD30 예비수혈·체결커밋·미체결 동기화 심볼 명시적 재익스포트(Facade Re-export)로
    타 모듈(defense_plugin.py, tg_ui_plugin.py, main_runtime.py, main.py, plugin_updater.py) AST 임포트 호환성 100% 보장
-2) 04:07 ~ 16:00 EST 비대칭 매수 타격 게이트 실행기 (execute_seed_protected_buy_gate_plugin):
+2) 🛡️ [Case 88 : 13_SUB_L1L3_RESV05_CAP4L] 스위치 없는 100% 기본 상시 적용(Default ON) 3층 서브 그리드 매수 엔진(_execute_sub_grid_buy_engine_plugin):
+   - 본 그리드 1개 층 이상 보유 중(len(buckets) > 0) 본 그리드 5영업일 이상 연속 무매매(main_consec_frozen_days >= 5) 도달 시 또는 서브 그리드 기가동 중(len(sub_buckets) > 0) 상시 작동
+   - 본 그리드 0.5회분(4.0%) 보호예수금(reserved_for_main_usd) 차감 가용 유휴 현금(avail_idle_cash_usd) 및 서브 최대 누적 4회분(16.0%) 상한 캡(SUB_MAX_TOTAL_LOTS_4 = 4) 엄격 적용
+   - 분기 S-A (서브 0주 첫 진입 SUB_REENTRY_1FL : 15:30 ~ 16:00 EST 차단 Case 84) ·
+     분기 S-B1 (서브 1층 공석 60초 주기 눌림/돌파 재장전 SUB_REENTRY_1FL : 서브 2층 단가 상한 가드 Case 73 & 15:30 ~ 16:00 EST 돌파 차단 Case 84) ·
+     분기 S-B0 (서브 1층 부분체결 잔량 SUB_TOPUP_1FL 1.5초 모니터 재대기 Case 78) ·
+     분기 S-B2 (서브 활성 1층 보유 중 10분 게이트 : 서브 최고도달회차 4단 와이드 신저가 OR 서브 10영업일 무매매 & -10.0% 저가해금 SUB_UNLOCK_10D_D10 추매 SUB_DIP_1FL)
+3) 04:07 ~ 16:00 EST 비대칭 매수 타격 게이트 실행기 (execute_seed_protected_buy_gate_plugin):
    - 🌟 [분기 G · Case 80] : 미동부 프리장 황금시간대(07:00 ~ 07:50 EST & 14봉 이상 확보된 1분봉 Wilder RSI(14) <= 19.0) 도달 시
      전술 제어반 선택 모드(기본값 NONE[OFF] ↔ POCKET_ALLIN ↔ GRID_L1_ALLIN)에 따라 가용 현금 시드 100% 전액 추가매수 발주 (계좌별 동적 왕복 수수료율 반영 · Case 86)
-   - 🛡️ [분기 A · Case 65, 67, 77, 80, 84] : 그리드 0주 상태(is_zero_shares)에서 0주 종료 후 60.0초 타임쉴드 경과 뒤 현재가 지정가 첫 1층(REENTRY_1FL) 산입하되
-     (뮤텍스 내부 st_now 기준 now_core_eq 재산출 동기화), 정규장 마감 30분 전(15:30 ~ 16:00 EST, is_late_regular_new_cycle_cutoff_window) 구간에서는
-     고점 오버나이트 방어를 위해 0주 새 사이클 첫 1층 진입을 100% 원천 차단(HOLD_LATE_SESSION_NEW_CYCLE_CUTOFF)!
-   - 🔥 [분기 B-1 · Case 67, 73, 77, 84 원복] : 상단 2층 ~ 7층(GRID_L2 ~ GRID_L7) 보유 중 1층 공석(is_l2_only_vacant_l1) 시
-     매 60.0초(1분) 타임쉴드 주기마다 실시간 현재가를 조회하되, 현재가 <= 2층 단가 상한 가드(HOLD_PREVENT_INVERSION · Case 73) 하에서
-     직전 익절가 대비 눌림목(-1.00%, PULLBACK_RELOAD · 04:07 ~ 16:00 EST 전 구간 허용) OR 상승돌파(+1.00%, BREAKOUT_RELOAD · 04:07 ~ 15:29 EST 허용 /
-     15:30 ~ 16:00 EST 구간에서는 데드캣 고점 추격 방어를 위해 HOLD_LATE_SESSION_BREAKOUT_CUTOFF 로 원천 차단!) 시 독립 실물 1층(REENTRY_1FL)을 재장전!
-   - 🎯 [분기 B-0 · Case 78] : 활성 1층 지정가 부분 체결(buckets[0].qty < l1_target_quota_qty) 시 매수 후 60.0초 타임쉴드 경과 뒤
-     매 1.5초 실시간 모니터에서 현재가 <= 1층 단가(buckets[0].book_price) 재도래 시 미체결 잔량(TOPUP_1FL) 지정가 60.0초 재대기 발주 (15:30 ~ 16:00 EST 정상 허용)
-   - 🔵 [분기 B-2 · Case 60, 72, 76, 77, 87] : 활성 1층 보유 중 04:07 EST 기점 10분 고정 매수 게이트 도래 시
-     정적 기억 최저가 및 사이클 최고 도달 회차(eff_lots = max(held_lots, cycle_ratchet_max_lots) · Case 87) 잠금 기준
-     4단 와이드 활주로(-1.0% / -2.0% / -3.5% / -5.5%) 신저가 OR STEP2X_15PCT_C20 3중 안전문(-15.0% 스텝업) 추매(DIP_1FL) 집행
-     (15:30 ~ 16:00 EST 정상 허용)
-- 제1헌법 ~ 제6헌법 및 Case 01 ~ 87 완벽 준수
+   - 🛡️ [분기 A · Case 65, 67, 77, 80, 84] : 본 그리드 0주 상태(is_zero_shares)에서 0주 종료 후 60.0초 타임쉴드 경과 뒤 현재가 지정가 첫 1층(REENTRY_1FL) 산입하되,
+     정규장 마감 30분 전(15:30 ~ 16:00 EST, is_late_regular_new_cycle_cutoff_window) 구간에서는 0주 새 사이클 첫 1층 진입을 100% 원천 차단(HOLD_LATE_SESSION_NEW_CYCLE_CUTOFF)!
+   - 🔥 [분기 B-1 · Case 67, 73, 77, 84, 88] : 본 그리드 상단 2층 ~ 7층(GRID_L2 ~ GRID_L7) 보유 중 1층 공석 시 매 60.0초 주기 재장전 모니터
+     (본 그리드 패스/대기 시 즉시 Default-ON 3층 서브 그리드 엔진으로 제어권 인계)
+   - 🎯 [분기 B-0 · Case 78, 88] : 본 그리드 활성 1층 지정가 부분 체결 미체결 잔량(TOPUP_1FL) 1.5초 모니터
+   - 🔵 [분기 B-2 · Case 60, 72, 76, 77, 87, 88] : 본 그리드 활성 1층 보유 중 10분 고정 매수 게이트(4단 와이드 신저가 OR STEP2X_15PCT_C20 스텝업 해금) 및
+     본 그리드 대기/패스 틱에서 Default-ON 3층 서브 그리드 매수 엔진 연속 가동
+- 제1헌법 ~ 제6헌법 및 Case 01 ~ 88 완벽 준수
 """
 
 from __future__ import annotations
@@ -39,14 +40,28 @@ from quant_engine import (
     GOLDEN_ALLIN_MODES,
     MAX_RESERVE_PORTIONS,
     MIN_DIP_BUDGET_RATIO,
+    MIN_DIP_VS_L1_RATIO,
     PORTION_RATIO_LOCKED,
     ROUND_TRIP_FEE_RATE_PCT,
+    SUB_FROZEN_DAYS_TRIGGER,
+    SUB_GRID_DEFAULT_ENABLED,
+    SUB_MAX_TIERS_3,
+    SUB_MAX_TOTAL_LOTS_4,
+    SUB_MERGE_MODE_L1_L3,
+    SUB_PORTION_RATIO_4PCT,
+    SUB_RESERVE_MAIN_PORTIONS,
+    SUB_UNLOCK_DROP_FROM_L1_PCT,
+    SUB_UNLOCK_FROZEN_DAYS_10,
     buckets_from_dicts,
     compute_golden8_quota_qty,
+    compute_sub4_quota_qty,
+    compute_sub_grid_available_idle_cash,
+    compute_sub_upper_2_to_3_moving_avg,
     compute_upper_2_to_7_moving_avg,
     evaluate_golden_allin_signal,
     evaluate_l2_only_hybrid_reentry_signal,
     evaluate_step_up_2x_dip_signal,
+    evaluate_sub_grid_dip_signal,
     get_golden8_prog_thresholds,
     has_active_l1_bucket,
     pocket_from_dict,
@@ -85,9 +100,11 @@ from sniper_plugin_core import (
     is_within_auto_fill_grace_shield,
     is_within_reentry_monitor_time_shield,
     is_within_reserve_deposit_check_shield,
+    is_within_sub_reentry_monitor_time_shield,
     mark_auto_fill_grace_shield,
     mark_reentry_monitor_60s_cycle_shield,
     mark_reserve_deposit_check_shield,
+    mark_sub_reentry_monitor_60s_cycle_shield,
     min_req_cash_str,
     sync_dynamic_vwap_buy_order_modify,
     sync_pending_buy_order_plugin,
@@ -106,13 +123,1070 @@ logger = logging.getLogger("toss_sniper.sniper_plugin")
 
 
 # ---------------------------------------------------------------------------
-# [핵심 2] 진화 챔피언 (👑 06_L2L7_RATCHET_8PCT × 🌟 POCKET_ALLIN / 🔥 GRID_L1_ALLIN × 💉 05_RESV_6P_GUARD30 × 🔓 06_STEP2X_15PCT_C20 × 🛡️ Case 84 원복) : 비대칭 매수 타격 엔진
+# [핵심 1 · Case 88] 스위치 없는 100% 기본 상시 적용(Default ON) 3층 서브 그리드 매수 엔진 (_execute_sub_grid_buy_engine_plugin)
+# ---------------------------------------------------------------------------
+async def _execute_sub_grid_buy_engine_plugin(
+    context: Any,
+    holdings: Dict[str, Dict[str, Any]],
+    prices: Dict[str, float],
+    dt_now: datetime,
+    live_p: float,
+) -> Optional[Dict[str, Any]]:
+    """
+    # NEW [Case 88 : 🛡️ 13_SUB_L1L3_RESV05_CAP4L — Default-ON 3층 서브 그리드 매수 엔진]:
+    본 그리드가 대기/패스한 틱에서 호출되어:
+    1) 본 그리드가 최소 1개 층 이상 보유 중(len(buckets) > 0)이고,
+       본 그리드 연속 무매매일(main_consec_frozen_days >= 5)이 5영업일 이상이거나 이미 서브 그리드가 가동 중(len(sub_buckets) > 0)일 때 작동한다.
+    2) 본 그리드 보호예수금 0.5회분(reserved_for_main_usd = round(core_equity * 0.08 * 0.5, 4), 코어자산의 4.0%)을 차감한
+       순수 유휴 현금(avail_idle_cash_usd) 범위 내에서만 매수하며, 온디맨드 예비시드 차입이나 시드고갈 알림을 절대 발동하지 않는다.
+    3) 서브 누적 합병 회차가 최대 상한 4회분(SUB_MAX_TOTAL_LOTS_4 = 4, 코어시드의 16.0%)에 도달하면
+       미체결 잔량 보충(SUB_TOPUP_1FL) 외의 모든 신규/추가 서브 매수를 차단(HOLD_SUB_CAP_4_LOTS_REACHED)하여 본 그리드 탄약을 보전한다.
+    """
+    st = context.ledger.get_state(TARGET_SYMBOL)
+    if str(st.get("buy_order_id") or "").strip() or str(
+        st.get("sell_order_id") or ""
+    ).strip():
+        return None
+
+    buckets = buckets_from_dicts(st.get("buckets", []))
+    if not buckets:
+        return None
+
+    sub_buckets = buckets_from_dicts(st.get("sub_buckets", []))
+    main_frozen_d = max(0, safe_int(st.get("main_consec_frozen_days"), 0))
+    if main_frozen_d < SUB_FROZEN_DAYS_TRIGGER and len(sub_buckets) == 0:
+        return None
+
+    hm = dt_now.hour * 100 + dt_now.minute
+    if not is_active_buy_window(hm, now_est=dt_now):
+        return None
+
+    in_sell_sh, _ = is_within_post_sell_time_shield(context, st, TARGET_SYMBOL)
+    in_buy_sh, _ = is_within_post_buy_time_shield(context, st, TARGET_SYMBOL)
+    if in_sell_sh or in_buy_sh:
+        return None
+
+    gp = pocket_from_dict(st.get("golden_pocket"))
+    eff_rt_pct = resolve_effective_round_trip_fee_rate_pct(state_dict=st)
+    fee_mult = 1.0 + (eff_rt_pct / 100.0)
+
+    init_seed = max(
+        100.0, safe_float(st.get("initial_seed_usd"), DEFAULT_INITIAL_SEED_USD)
+    )
+    free_cash = max(0.0, safe_float(st.get("free_cash_usd"), 0.0))
+    inj_res_usd = max(0.0, safe_float(st.get("injected_reserve_usd"), 0.0))
+    actual_inv_total = (
+        sum(b.actual_cost_usd for b in buckets)
+        + sum(sb.actual_cost_usd for sb in sub_buckets)
+        + (gp.actual_cost_usd if gp.is_active else 0.0)
+    )
+    core_equity = max(init_seed, (free_cash + actual_inv_total) - inj_res_usd)
+
+    idle_info = compute_sub_grid_available_idle_cash(
+        free_cash_usd=free_cash,
+        core_equity_usd=core_equity,
+        broker_buying_power_usd=None,
+        reserve_main_portions=SUB_RESERVE_MAIN_PORTIONS,
+    )
+    avail_idle_ledger = safe_float(idle_info.get("avail_idle_cash_usd"), 0.0)
+    sub_portion_budget = safe_float(
+        idle_info.get("sub_portion_budget"), round(core_equity * 0.04, 4)
+    )
+
+    sub_cur_total_lots = sum(max(1, sb.lot_count) for sb in sub_buckets)
+    sub_max_lots_cap = max(
+        1, safe_int(st.get("sub_max_total_lots"), SUB_MAX_TOTAL_LOTS_4)
+    )
+    has_sub_active_l1 = has_active_l1_bucket(sub_buckets)
+    is_sub_l2_only = bool(len(sub_buckets) > 0 and not has_sub_active_l1)
+
+    # -----------------------------------------------------------------------
+    # [서브 분기 S-A : 서브 그리드 0주 첫 진입 (len(sub_buckets) == 0 and main_consec_frozen_days >= 5)]
+    # -> 15:30 ~ 16:00 EST 구간에서는 서브 0주 새 사이클 첫 1층 진입 차단 (Case 84 & Case 88)
+    # -----------------------------------------------------------------------
+    if len(sub_buckets) == 0:
+        if is_late_regular_new_cycle_cutoff_window(hm, now_est=dt_now):
+            return {
+                "status": "HOLD_SUB_LATE_SESSION_NEW_CYCLE_CUTOFF",
+                "hm": hm,
+                "cutoff_hm": NEW_CYCLE_BUY_CUTOFF_HM,
+            }
+
+        in_sub_re_sh, rem_sub_re = is_within_sub_reentry_monitor_time_shield(
+            context, st, TARGET_SYMBOL
+        )
+        if in_sub_re_sh:
+            return {
+                "status": "HOLD_SUB_POST_SELL_60S_SHIELD",
+                "remain_shield_sec": rem_sub_re,
+            }
+
+        min_req_sub_0sh = max(
+            live_p * fee_mult, sub_portion_budget * MIN_DIP_BUDGET_RATIO
+        )
+        if avail_idle_ledger < min_req_sub_0sh:
+            return {
+                "status": "HOLD_SUB_INSUFFICIENT_IDLE_CASH",
+                "avail_idle_cash_usd": avail_idle_ledger,
+                "min_req_cash_usd": round(min_req_sub_0sh, 4),
+            }
+
+        async with context.in_memory_ordering_lock:
+            async with context.dual_strike_mutex:
+                st_now = context.ledger.get_state(TARGET_SYMBOL)
+                if str(st_now.get("buy_order_id") or "").strip() or str(
+                    st_now.get("sell_order_id") or ""
+                ).strip():
+                    return {"status": "ALREADY_ORDERING_IN_MUTEX"}
+
+                now_buckets = buckets_from_dicts(st_now.get("buckets", []))
+                now_sub_buckets = buckets_from_dicts(
+                    st_now.get("sub_buckets", [])
+                )
+                now_main_frozen = max(
+                    0, safe_int(st_now.get("main_consec_frozen_days"), 0)
+                )
+                if (
+                    not now_buckets
+                    or len(now_sub_buckets) > 0
+                    or now_main_frozen < SUB_FROZEN_DAYS_TRIGGER
+                ):
+                    return {"status": "SUB_STATE_CHANGED_IN_MUTEX"}
+
+                dt_mutex = datetime.now(EST_TZ)
+                hm_mutex = dt_mutex.hour * 100 + dt_mutex.minute
+                if is_late_regular_new_cycle_cutoff_window(
+                    hm_mutex, now_est=dt_mutex
+                ):
+                    return {
+                        "status": "HOLD_SUB_LATE_SESSION_NEW_CYCLE_CUTOFF",
+                        "hm": hm_mutex,
+                    }
+
+                fresh_live_p = await _fetch_fresh_current_soxl_price(
+                    context, fallback_price=live_p
+                )
+                if fresh_live_p <= 0.0:
+                    return {"status": "NO_FRESH_LIVE_PRICE"}
+
+                exec_order_p = max(
+                    0.01, math.floor((fresh_live_p + 1e-9) * 100.0) / 100.0
+                )
+                eff_rt_pct_m = resolve_effective_round_trip_fee_rate_pct(
+                    state_dict=st_now
+                )
+                fee_mult_m = 1.0 + (eff_rt_pct_m / 100.0)
+                now_gp = pocket_from_dict(st_now.get("golden_pocket"))
+                now_free_cash = max(
+                    0.0, safe_float(st_now.get("free_cash_usd"), 0.0)
+                )
+                now_init_seed = max(
+                    100.0,
+                    safe_float(
+                        st_now.get("initial_seed_usd"),
+                        DEFAULT_INITIAL_SEED_USD,
+                    ),
+                )
+                now_inj_res = max(
+                    0.0, safe_float(st_now.get("injected_reserve_usd"), 0.0)
+                )
+                now_inv_tot = (
+                    sum(b.actual_cost_usd for b in now_buckets)
+                    + (now_gp.actual_cost_usd if now_gp.is_active else 0.0)
+                )
+                now_core_eq = max(
+                    now_init_seed, (now_free_cash + now_inv_tot) - now_inj_res
+                )
+
+                raw_bp_sub = await context.api.get_buying_power_usd(
+                    safety_buffer_pct=0.2
+                )
+                if raw_bp_sub <= 0.0 and now_free_cash >= (
+                    exec_order_p * fee_mult_m
+                ):
+                    await asyncio.sleep(0.25)
+                    raw_bp_sub = await context.api.get_buying_power_usd(
+                        safety_buffer_pct=0.2
+                    )
+
+                idle_m = compute_sub_grid_available_idle_cash(
+                    free_cash_usd=now_free_cash,
+                    core_equity_usd=now_core_eq,
+                    broker_buying_power_usd=(
+                        raw_bp_sub if raw_bp_sub > 0.0 else 0.0
+                    ),
+                    reserve_main_portions=SUB_RESERVE_MAIN_PORTIONS,
+                )
+                avail_idle_m = safe_float(
+                    idle_m.get("avail_idle_cash_usd"), 0.0
+                )
+                prev_sub_anc = safe_float(st_now.get("sub_anchor_price"), 0.0)
+                ref_sub_anc = (
+                    prev_sub_anc if prev_sub_anc > 0.0 else exec_order_p
+                )
+                sub_target_qty, sub_p_bud = compute_sub4_quota_qty(
+                    sub_anchor_price=ref_sub_anc,
+                    current_core_equity=now_core_eq,
+                    initial_seed_usd=now_init_seed,
+                    exec_price=exec_order_p,
+                )
+                min_req_sub_m = max(
+                    exec_order_p * fee_mult_m,
+                    sub_p_bud * MIN_DIP_BUDGET_RATIO,
+                )
+                if avail_idle_m < min_req_sub_m:
+                    mark_sub_reentry_monitor_60s_cycle_shield(
+                        context=context,
+                        symbol=TARGET_SYMBOL,
+                        eval_price=exec_order_p,
+                    )
+                    return {
+                        "status": "HOLD_SUB_INSUFFICIENT_IDLE_CASH_IN_MUTEX",
+                        "avail_idle_cash_usd": avail_idle_m,
+                    }
+
+                buy_qty_sub, _ = resolve_affordable_buy_qty(
+                    target_qty=sub_target_qty,
+                    price_t=exec_order_p,
+                    free_cash_usd=avail_idle_m,
+                    broker_buying_power_usd=avail_idle_m,
+                    max_portion_budget_usd=sub_p_bud,
+                    round_trip_fee_rate_pct=eff_rt_pct_m,
+                )
+                if buy_qty_sub <= 0:
+                    return {"status": "INSUFFICIENT_IDLE_CASH_FOR_SUB_0SH"}
+
+                _, sub_cur_bucket_id, sub_today_str, _ = (
+                    evaluate_buy_gate_bucket_status(
+                        now_est=dt_now,
+                        buy_interval_min=LOCKED_BUY_INTERVAL_MIN,
+                        last_evaluated_bucket_id=safe_int(
+                            st_now.get("sub_last_evaluated_buy_bucket_id"), -1
+                        ),
+                        last_evaluated_date=str(
+                            st_now.get("sub_last_evaluated_date") or ""
+                        ),
+                    )
+                )
+                cid = generate_client_order_id(prefix="SUB1FL")
+                try:
+                    ord_res = await context.api.create_order(
+                        symbol=TARGET_SYMBOL,
+                        side="BUY",
+                        quantity=buy_qty_sub,
+                        price=exec_order_p,
+                        order_type="LIMIT",
+                        time_in_force="DAY",
+                        client_order_id=cid,
+                        enforce_daymarket_block=True,
+                    )
+                except Exception as exc:
+                    mark_sub_reentry_monitor_60s_cycle_shield(
+                        context=context,
+                        symbol=TARGET_SYMBOL,
+                        eval_price=exec_order_p,
+                    )
+                    logger.warning(
+                        "Case 88 서브그리드 0주 첫 1층(SUB_REENTRY_1FL) 주문 예외: %s",
+                        exc,
+                    )
+                    return {"status": "SUB_ORDER_ERROR", "error": str(exc)}
+
+                oid = str(ord_res.get("orderId") or "").strip()
+                await context.ledger.update_state(
+                    TARGET_SYMBOL,
+                    sub_l1_target_quota_qty=buy_qty_sub,
+                    buy_order_id=oid,
+                    client_order_id=cid,
+                    ordered_qty=buy_qty_sub,
+                    buy_price=exec_order_p,
+                    pending_portion_budget=sub_p_bud,
+                    pending_lot_type="SUB_REENTRY_1FL",
+                    pending_step_up_min_price=0.0,
+                    pending_sub_step_up_min_price=0.0,
+                    sub_last_evaluated_buy_bucket_id=sub_cur_bucket_id,
+                    sub_last_evaluated_date=sub_today_str,
+                    last_modify_mono=time.monotonic(),
+                    last_sub_reentry_eval_ts=0.0,
+                )
+                context.wakeup_event.set()
+                logger.info(
+                    "🛡️ [Case 88 SOXL 본그리드 %d일 무매매 동결 -> 3층 서브그리드 첫 1층(SUB_REENTRY_1FL) 발주] %d주 @ 지정가 $%.2f (4%%예산 $%.2f · 유휴현금 $%.2f · orderId=%s)",
+                    now_main_frozen,
+                    buy_qty_sub,
+                    exec_order_p,
+                    sub_p_bud,
+                    avail_idle_m,
+                    oid,
+                )
+                return {
+                    "status": "SUB_ZERO_SHARES_1FL_ORDERED",
+                    "orderId": oid,
+                    "qty": buy_qty_sub,
+                    "price": exec_order_p,
+                    "main_consec_frozen_days": now_main_frozen,
+                }
+
+    # -----------------------------------------------------------------------
+    # [서브 분기 S-B1 : 서브 상단(2~3층)만 보유 중 (서브 1층 공석, is_sub_l2_only == True)]
+    # -> 서브 누적 4회분 미만 & 매 60.0초 주기 & 서브 2층 단가 상한(Case 73) & 15:30 돌파 차단(Case 84)
+    # -----------------------------------------------------------------------
+    if is_sub_l2_only:
+        if sub_cur_total_lots >= sub_max_lots_cap:
+            return {
+                "status": "HOLD_SUB_CAP_4_LOTS_REACHED",
+                "sub_cur_total_lots": sub_cur_total_lots,
+                "sub_max_total_lots": sub_max_lots_cap,
+            }
+
+        in_sub_re_sh, rem_sub_re = is_within_sub_reentry_monitor_time_shield(
+            context, st, TARGET_SYMBOL
+        )
+        if in_sub_re_sh:
+            return {
+                "status": "HOLD_SUB_REENTRY_60S_TIME_SHIELD",
+                "remain_shield_sec": rem_sub_re,
+            }
+
+        fresh_live_p = await _fetch_fresh_current_soxl_price(
+            context, fallback_price=live_p
+        )
+        if fresh_live_p <= 0.0:
+            return {"status": "NO_FRESH_LIVE_PRICE"}
+
+        sub_min_upper_p = min(sb.book_price for sb in sub_buckets)
+        sub_anchor_p = safe_float(
+            st.get("sub_anchor_price"), sub_min_upper_p
+        )
+        is_late_cutoff = is_late_regular_new_cycle_cutoff_window(
+            hm, now_est=dt_now
+        )
+
+        sub_re_sig = evaluate_l2_only_hybrid_reentry_signal(
+            live_price=fresh_live_p,
+            anchor_price=sub_anchor_p,
+            l2_book_price=sub_min_upper_p,
+            min_upper_tier_price=sub_min_upper_p,
+            is_late_new_cycle_cutoff=is_late_cutoff,
+            is_late_cutoff=is_late_cutoff,
+        )
+        sub_sig_type = str(sub_re_sig.get("signal_type") or "HOLD_WAIT_GATE")
+
+        if not bool(sub_re_sig.get("should_buy")):
+            sub_re_epoch = mark_sub_reentry_monitor_60s_cycle_shield(
+                context=context,
+                symbol=TARGET_SYMBOL,
+                eval_price=fresh_live_p,
+            )
+            await context.ledger.update_state(
+                TARGET_SYMBOL,
+                last_sub_reentry_eval_ts=sub_re_epoch,
+            )
+            return {
+                "status": "SUB_L2_ONLY_REENTRY_HOLD",
+                "signal_type": sub_sig_type,
+                "live_price": fresh_live_p,
+                "sub_l2_ceiling_price": sub_min_upper_p,
+            }
+
+        async with context.in_memory_ordering_lock:
+            async with context.dual_strike_mutex:
+                st_now = context.ledger.get_state(TARGET_SYMBOL)
+                if str(st_now.get("buy_order_id") or "").strip() or str(
+                    st_now.get("sell_order_id") or ""
+                ).strip():
+                    return {"status": "ALREADY_ORDERING_IN_MUTEX"}
+
+                now_buckets = buckets_from_dicts(st_now.get("buckets", []))
+                now_sub_buckets = buckets_from_dicts(
+                    st_now.get("sub_buckets", [])
+                )
+                if (
+                    not now_buckets
+                    or not now_sub_buckets
+                    or has_active_l1_bucket(now_sub_buckets)
+                ):
+                    return {"status": "SUB_L1_STATE_CHANGED_IN_MUTEX"}
+
+                now_sub_lots = sum(
+                    max(1, sb.lot_count) for sb in now_sub_buckets
+                )
+                if now_sub_lots >= sub_max_lots_cap:
+                    return {"status": "HOLD_SUB_CAP_4_LOTS_REACHED"}
+
+                dt_re_m = datetime.now(EST_TZ)
+                hm_re_m = dt_re_m.hour * 100 + dt_re_m.minute
+                if (
+                    sub_sig_type == "BREAKOUT_RELOAD"
+                    and is_late_regular_new_cycle_cutoff_window(
+                        hm_re_m, now_est=dt_re_m
+                    )
+                ):
+                    sub_re_epoch = mark_sub_reentry_monitor_60s_cycle_shield(
+                        context=context,
+                        symbol=TARGET_SYMBOL,
+                        eval_price=fresh_live_p,
+                    )
+                    await context.ledger.update_state(
+                        TARGET_SYMBOL,
+                        last_sub_reentry_eval_ts=sub_re_epoch,
+                    )
+                    return {
+                        "status": "SUB_L2_ONLY_LATE_BREAKOUT_BLOCKED",
+                        "signal_type": "HOLD_LATE_SESSION_BREAKOUT_CUTOFF",
+                    }
+
+                sub_min_upper_p = min(sb.book_price for sb in now_sub_buckets)
+                exec_order_p = max(
+                    0.01, math.floor((fresh_live_p + 1e-9) * 100.0) / 100.0
+                )
+                if sub_min_upper_p > 0.0 and exec_order_p > (
+                    sub_min_upper_p + 1e-6
+                ):
+                    sub_re_epoch = mark_sub_reentry_monitor_60s_cycle_shield(
+                        context=context,
+                        symbol=TARGET_SYMBOL,
+                        eval_price=fresh_live_p,
+                    )
+                    await context.ledger.update_state(
+                        TARGET_SYMBOL,
+                        last_sub_reentry_eval_ts=sub_re_epoch,
+                    )
+                    return {
+                        "status": "SUB_L2_ONLY_INVERSION_BLOCKED",
+                        "signal_type": "HOLD_PREVENT_INVERSION",
+                    }
+
+                eff_rt_pct_re = resolve_effective_round_trip_fee_rate_pct(
+                    state_dict=st_now
+                )
+                fee_mult_re = 1.0 + (eff_rt_pct_re / 100.0)
+                now_gp = pocket_from_dict(st_now.get("golden_pocket"))
+                now_free_cash = max(
+                    0.0, safe_float(st_now.get("free_cash_usd"), 0.0)
+                )
+                now_init_seed = max(
+                    100.0,
+                    safe_float(
+                        st_now.get("initial_seed_usd"),
+                        DEFAULT_INITIAL_SEED_USD,
+                    ),
+                )
+                now_inj_res = max(
+                    0.0, safe_float(st_now.get("injected_reserve_usd"), 0.0)
+                )
+                now_inv_tot = (
+                    sum(b.actual_cost_usd for b in now_buckets)
+                    + sum(sb.actual_cost_usd for sb in now_sub_buckets)
+                    + (now_gp.actual_cost_usd if now_gp.is_active else 0.0)
+                )
+                now_core_eq = max(
+                    now_init_seed, (now_free_cash + now_inv_tot) - now_inj_res
+                )
+
+                raw_bp_re = await context.api.get_buying_power_usd(
+                    safety_buffer_pct=0.2
+                )
+                if raw_bp_re <= 0.0 and now_free_cash >= (
+                    exec_order_p * fee_mult_re
+                ):
+                    await asyncio.sleep(0.25)
+                    raw_bp_re = await context.api.get_buying_power_usd(
+                        safety_buffer_pct=0.2
+                    )
+
+                idle_re = compute_sub_grid_available_idle_cash(
+                    free_cash_usd=now_free_cash,
+                    core_equity_usd=now_core_eq,
+                    broker_buying_power_usd=(
+                        raw_bp_re if raw_bp_re > 0.0 else 0.0
+                    ),
+                    reserve_main_portions=SUB_RESERVE_MAIN_PORTIONS,
+                )
+                avail_idle_re = safe_float(
+                    idle_re.get("avail_idle_cash_usd"), 0.0
+                )
+                quota_ref_p = max(
+                    0.01,
+                    safe_float(
+                        sub_re_sig.get("ref_anchor"),
+                        sub_anchor_p if sub_anchor_p > 0.0 else exec_order_p,
+                    ),
+                )
+                sub_target_qty, sub_p_bud = compute_sub4_quota_qty(
+                    sub_anchor_price=quota_ref_p,
+                    current_core_equity=now_core_eq,
+                    initial_seed_usd=now_init_seed,
+                    exec_price=exec_order_p,
+                )
+                min_req_sub_re = max(
+                    exec_order_p * fee_mult_re,
+                    sub_p_bud * MIN_DIP_BUDGET_RATIO,
+                )
+                if avail_idle_re < min_req_sub_re:
+                    sub_re_epoch = mark_sub_reentry_monitor_60s_cycle_shield(
+                        context=context,
+                        symbol=TARGET_SYMBOL,
+                        eval_price=exec_order_p,
+                    )
+                    await context.ledger.update_state(
+                        TARGET_SYMBOL,
+                        last_sub_reentry_eval_ts=sub_re_epoch,
+                    )
+                    return {"status": "HOLD_SUB_REENTRY_NO_IDLE_CASH"}
+
+                buy_qty_sub, _ = resolve_affordable_buy_qty(
+                    target_qty=sub_target_qty,
+                    price_t=exec_order_p,
+                    free_cash_usd=avail_idle_re,
+                    broker_buying_power_usd=avail_idle_re,
+                    max_portion_budget_usd=sub_p_bud,
+                    round_trip_fee_rate_pct=eff_rt_pct_re,
+                )
+                if buy_qty_sub <= 0:
+                    return {"status": "HOLD_SUB_REENTRY_ZERO_QTY"}
+
+                sub_re_epoch = mark_sub_reentry_monitor_60s_cycle_shield(
+                    context=context,
+                    symbol=TARGET_SYMBOL,
+                    eval_price=exec_order_p,
+                )
+                pending_sub_lot_tag = (
+                    "SUB_REENTRY_1FL_BREAKOUT"
+                    if sub_sig_type == "BREAKOUT_RELOAD"
+                    else "SUB_REENTRY_1FL"
+                )
+                cid = generate_client_order_id(prefix="SRE1FL")
+                try:
+                    ord_res = await context.api.create_order(
+                        symbol=TARGET_SYMBOL,
+                        side="BUY",
+                        quantity=buy_qty_sub,
+                        price=exec_order_p,
+                        order_type="LIMIT",
+                        time_in_force="DAY",
+                        client_order_id=cid,
+                        enforce_daymarket_block=True,
+                    )
+                except Exception as exc:
+                    await context.ledger.update_state(
+                        TARGET_SYMBOL, last_sub_reentry_eval_ts=sub_re_epoch
+                    )
+                    logger.warning(
+                        "Case 88 서브그리드 1층 공석 재장전 주문 예외: %s",
+                        exc,
+                    )
+                    return {"status": "SUB_ORDER_ERROR", "error": str(exc)}
+
+                oid = str(ord_res.get("orderId") or "").strip()
+                await context.ledger.update_state(
+                    TARGET_SYMBOL,
+                    sub_l1_target_quota_qty=buy_qty_sub,
+                    buy_order_id=oid,
+                    client_order_id=cid,
+                    ordered_qty=buy_qty_sub,
+                    buy_price=exec_order_p,
+                    pending_portion_budget=sub_p_bud,
+                    pending_lot_type=pending_sub_lot_tag,
+                    pending_step_up_min_price=0.0,
+                    pending_sub_step_up_min_price=0.0,
+                    last_modify_mono=time.monotonic(),
+                    last_sub_reentry_eval_ts=sub_re_epoch,
+                )
+                context.wakeup_event.set()
+                logger.info(
+                    "🛡️ [Case 88 SOXL 서브그리드 상단 %d개층 보유 중 60초 주기 서브 1층 재장전(%s) 발주] %d주 @ 지정가 $%.2f <= 서브2층상한 $%.2f (4%%예산 $%.2f · orderId=%s)",
+                    len(now_sub_buckets),
+                    sub_sig_type,
+                    buy_qty_sub,
+                    exec_order_p,
+                    sub_min_upper_p,
+                    sub_p_bud,
+                    oid,
+                )
+                return {
+                    "status": "SUB_L2_HELD_HYBRID_1FL_ORDERED",
+                    "signal_type": sub_sig_type,
+                    "orderId": oid,
+                    "qty": buy_qty_sub,
+                    "price": exec_order_p,
+                }
+
+    if not sub_buckets or not has_sub_active_l1:
+        return None
+
+    # -----------------------------------------------------------------------
+    # [서브 분기 S-B0 · Case 78 & Case 88 : 서브 활성 1층 부분 체결 잔량(sub_rem_quota_qty > 0) 존재 시 1.5초 모니터]
+    # -----------------------------------------------------------------------
+    sub_l1_target_q = max(
+        sub_buckets[0].qty, safe_int(st.get("sub_l1_target_quota_qty"), 0)
+    )
+    sub_rem_quota_qty = max(0, sub_l1_target_q - sub_buckets[0].qty)
+    sub_l1_book_p = round(sub_buckets[0].book_price, 2)
+
+    if sub_rem_quota_qty > 0 and live_p <= (sub_l1_book_p + 1e-6):
+        async with context.in_memory_ordering_lock:
+            async with context.dual_strike_mutex:
+                st_now = context.ledger.get_state(TARGET_SYMBOL)
+                if str(st_now.get("buy_order_id") or "").strip() or str(
+                    st_now.get("sell_order_id") or ""
+                ).strip():
+                    return {"status": "ALREADY_ORDERING_IN_MUTEX"}
+
+                now_buckets = buckets_from_dicts(st_now.get("buckets", []))
+                now_sub_buckets = buckets_from_dicts(
+                    st_now.get("sub_buckets", [])
+                )
+                if (
+                    not now_buckets
+                    or not now_sub_buckets
+                    or not has_active_l1_bucket(now_sub_buckets)
+                ):
+                    return {"status": "SUB_L1_STATE_CHANGED_IN_MUTEX"}
+
+                now_sub_target_q = max(
+                    now_sub_buckets[0].qty,
+                    safe_int(st_now.get("sub_l1_target_quota_qty"), 0),
+                )
+                now_sub_rem_q = max(
+                    0, now_sub_target_q - now_sub_buckets[0].qty
+                )
+                now_sub_l1_book_p = round(now_sub_buckets[0].book_price, 2)
+
+                if now_sub_rem_q > 0:
+                    fresh_live_p = await _fetch_fresh_current_soxl_price(
+                        context, fallback_price=live_p
+                    )
+                    if fresh_live_p > 0.0 and fresh_live_p <= (
+                        now_sub_l1_book_p + 1e-6
+                    ):
+                        eff_rt_pct_top = resolve_effective_round_trip_fee_rate_pct(
+                            state_dict=st_now
+                        )
+                        cur_lim_p = (
+                            math.floor((fresh_live_p + 1e-9) * 100.0) / 100.0
+                        )
+                        exec_order_p = max(
+                            0.01, min(cur_lim_p, now_sub_l1_book_p)
+                        )
+                        sub_topup_budget = round(
+                            float(now_sub_rem_q) * now_sub_l1_book_p, 4
+                        )
+                        now_gp = pocket_from_dict(st_now.get("golden_pocket"))
+                        now_free_cash = max(
+                            0.0, safe_float(st_now.get("free_cash_usd"), 0.0)
+                        )
+                        now_init_seed = max(
+                            100.0,
+                            safe_float(
+                                st_now.get("initial_seed_usd"),
+                                DEFAULT_INITIAL_SEED_USD,
+                            ),
+                        )
+                        now_inj_res = max(
+                            0.0,
+                            safe_float(st_now.get("injected_reserve_usd"), 0.0),
+                        )
+                        now_inv_tot = (
+                            sum(b.actual_cost_usd for b in now_buckets)
+                            + sum(sb.actual_cost_usd for sb in now_sub_buckets)
+                            + (now_gp.actual_cost_usd if now_gp.is_active else 0.0)
+                        )
+                        now_core_eq = max(
+                            now_init_seed,
+                            (now_free_cash + now_inv_tot) - now_inj_res,
+                        )
+                        raw_bp_top = await context.api.get_buying_power_usd(
+                            safety_buffer_pct=0.2
+                        )
+                        idle_top = compute_sub_grid_available_idle_cash(
+                            free_cash_usd=now_free_cash,
+                            core_equity_usd=now_core_eq,
+                            broker_buying_power_usd=(
+                                raw_bp_top if raw_bp_top > 0.0 else 0.0
+                            ),
+                            reserve_main_portions=SUB_RESERVE_MAIN_PORTIONS,
+                        )
+                        avail_idle_top = safe_float(
+                            idle_top.get("avail_idle_cash_usd"), 0.0
+                        )
+                        buy_qty_sub_top, _ = resolve_affordable_buy_qty(
+                            target_qty=now_sub_rem_q,
+                            price_t=exec_order_p,
+                            free_cash_usd=avail_idle_top,
+                            broker_buying_power_usd=avail_idle_top,
+                            max_portion_budget_usd=sub_topup_budget,
+                            round_trip_fee_rate_pct=eff_rt_pct_top,
+                        )
+                        if buy_qty_sub_top > 0:
+                            eff_sub_top_bud = round(
+                                float(buy_qty_sub_top) * now_sub_l1_book_p, 4
+                            )
+                            cid = generate_client_order_id(prefix="STOP1F")
+                            try:
+                                ord_res = await context.api.create_order(
+                                    symbol=TARGET_SYMBOL,
+                                    side="BUY",
+                                    quantity=buy_qty_sub_top,
+                                    price=exec_order_p,
+                                    order_type="LIMIT",
+                                    time_in_force="DAY",
+                                    client_order_id=cid,
+                                    enforce_daymarket_block=True,
+                                )
+                                oid = str(
+                                    ord_res.get("orderId") or ""
+                                ).strip()
+                                await context.ledger.update_state(
+                                    TARGET_SYMBOL,
+                                    sub_l1_target_quota_qty=now_sub_target_q,
+                                    buy_order_id=oid,
+                                    client_order_id=cid,
+                                    ordered_qty=buy_qty_sub_top,
+                                    buy_price=exec_order_p,
+                                    pending_portion_budget=eff_sub_top_bud,
+                                    pending_lot_type="SUB_TOPUP_1FL",
+                                    pending_step_up_min_price=0.0,
+                                    pending_sub_step_up_min_price=0.0,
+                                    last_modify_mono=time.monotonic(),
+                                )
+                                context.wakeup_event.set()
+                                logger.info(
+                                    "🎯 [Case 78/88 SOXL 서브 1층 단가($%.2f) 재도래 -> 서브 미체결 잔량(SUB_TOPUP_1FL) 발주] +%d주 @ 지정가 $%.2f (orderId=%s)",
+                                    now_sub_l1_book_p,
+                                    buy_qty_sub_top,
+                                    exec_order_p,
+                                    oid,
+                                )
+                                return {
+                                    "status": "SUB_L1_PARTIAL_TOPUP_ORDERED",
+                                    "orderId": oid,
+                                    "qty": buy_qty_sub_top,
+                                    "price": exec_order_p,
+                                }
+                            except Exception as exc:
+                                logger.debug(
+                                    "서브 1층 잔량(SUB_TOPUP_1FL) 주문 예외: %s",
+                                    exc,
+                                )
+
+    # -----------------------------------------------------------------------
+    # [서브 분기 S-B2 · Case 88 : 서브 활성 1층 보유 중 10분 고정 매수 게이트 (4단 와이드 신저가 OR 10영업일/-10% 저가해금)]
+    # -----------------------------------------------------------------------
+    if sub_cur_total_lots >= sub_max_lots_cap:
+        return {
+            "status": "HOLD_SUB_CAP_4_LOTS_REACHED",
+            "sub_cur_total_lots": sub_cur_total_lots,
+            "sub_max_total_lots": sub_max_lots_cap,
+        }
+
+    sub_gate_open, sub_cur_bucket_id, sub_today_str, _ = (
+        evaluate_buy_gate_bucket_status(
+            now_est=dt_now,
+            buy_interval_min=LOCKED_BUY_INTERVAL_MIN,
+            last_evaluated_bucket_id=safe_int(
+                st.get("sub_last_evaluated_buy_bucket_id"), -1
+            ),
+            last_evaluated_date=str(st.get("sub_last_evaluated_date") or ""),
+        )
+    )
+    if not sub_gate_open:
+        return None
+
+    fresh_live_p = await _fetch_fresh_current_soxl_price(
+        context, fallback_price=live_p
+    )
+    if fresh_live_p <= 0.0:
+        return None
+
+    sub_ratchet_lots = max(
+        sub_cur_total_lots, safe_int(st.get("sub_ratchet_max_lots"), 0)
+    )
+    threshold_mode = str(st.get("threshold_mode") or "WIDE_RUNWAY").upper()
+    sub_drop_pct, _, _ = get_golden8_prog_thresholds(
+        held_lots=sub_cur_total_lots,
+        threshold_mode=threshold_mode,
+        cycle_ratchet_max_lots=sub_ratchet_lots,
+    )
+    sub_anchor_p = safe_float(
+        st.get("sub_anchor_price"), sub_buckets[0].book_price
+    )
+    sub_cycle_min_p = safe_float(
+        st.get("sub_cycle_min_buy_price"), sub_anchor_p
+    )
+    sub_frozen_d = max(0, safe_int(st.get("sub_consec_frozen_days"), 0))
+
+    sub_dip_eval = evaluate_sub_grid_dip_signal(
+        live_price=fresh_live_p,
+        sub_buckets=sub_buckets,
+        sub_anchor_price=sub_anchor_p,
+        sub_cycle_min_buy_price=sub_cycle_min_p,
+        sub_drop_buy_pct=sub_drop_pct,
+        sub_consec_frozen_days=sub_frozen_d,
+        sub_max_total_lots=sub_max_lots_cap,
+    )
+    if not bool(sub_dip_eval.get("should_buy")):
+        await context.ledger.update_state(
+            TARGET_SYMBOL,
+            sub_last_evaluated_buy_bucket_id=sub_cur_bucket_id,
+            sub_last_evaluated_date=sub_today_str,
+        )
+        return {
+            "status": "SUB_GATE_HOLD_PASSED",
+            "trigger_tag": sub_dip_eval.get("trigger_tag"),
+            "sub_cur_total_lots": sub_cur_total_lots,
+        }
+
+    async with context.in_memory_ordering_lock:
+        async with context.dual_strike_mutex:
+            st_now = context.ledger.get_state(TARGET_SYMBOL)
+            if str(st_now.get("buy_order_id") or "").strip() or str(
+                st_now.get("sell_order_id") or ""
+            ).strip():
+                return {"status": "ALREADY_ORDERING_IN_MUTEX"}
+
+            now_buckets = buckets_from_dicts(st_now.get("buckets", []))
+            now_sub_buckets = buckets_from_dicts(st_now.get("sub_buckets", []))
+            if (
+                not now_buckets
+                or not now_sub_buckets
+                or not has_active_l1_bucket(now_sub_buckets)
+            ):
+                return {"status": "SUB_L1_STATE_CHANGED_IN_MUTEX"}
+
+            now_sub_lots = sum(max(1, sb.lot_count) for sb in now_sub_buckets)
+            if now_sub_lots >= sub_max_lots_cap:
+                return {"status": "HOLD_SUB_CAP_4_LOTS_REACHED"}
+
+            sub_gate_m, _, _, _ = evaluate_buy_gate_bucket_status(
+                now_est=dt_now,
+                buy_interval_min=LOCKED_BUY_INTERVAL_MIN,
+                last_evaluated_bucket_id=safe_int(
+                    st_now.get("sub_last_evaluated_buy_bucket_id"), -1
+                ),
+                last_evaluated_date=str(
+                    st_now.get("sub_last_evaluated_date") or ""
+                ),
+            )
+            if not sub_gate_m:
+                return {"status": "SUB_BUCKET_ALREADY_EVALUATED_IN_MUTEX"}
+
+            now_sub_ratchet = max(
+                now_sub_lots, safe_int(st_now.get("sub_ratchet_max_lots"), 0)
+            )
+            now_sub_drop, _, _ = get_golden8_prog_thresholds(
+                held_lots=now_sub_lots,
+                threshold_mode=threshold_mode,
+                cycle_ratchet_max_lots=now_sub_ratchet,
+            )
+            now_sub_anc = safe_float(
+                st_now.get("sub_anchor_price"), now_sub_buckets[0].book_price
+            )
+            now_sub_min_p = safe_float(
+                st_now.get("sub_cycle_min_buy_price"), now_sub_anc
+            )
+            now_sub_frozen = max(
+                0, safe_int(st_now.get("sub_consec_frozen_days"), 0)
+            )
+
+            now_sub_dip_eval = evaluate_sub_grid_dip_signal(
+                live_price=fresh_live_p,
+                sub_buckets=now_sub_buckets,
+                sub_anchor_price=now_sub_anc,
+                sub_cycle_min_buy_price=now_sub_min_p,
+                sub_drop_buy_pct=now_sub_drop,
+                sub_consec_frozen_days=now_sub_frozen,
+                sub_max_total_lots=sub_max_lots_cap,
+            )
+            if not bool(now_sub_dip_eval.get("should_buy")):
+                return {"status": "SUB_DIP_SIGNAL_CHANGED_IN_MUTEX"}
+
+            is_sub_unlock = bool(now_sub_dip_eval.get("is_sub_unlock", False))
+            sub_trig_tag = str(
+                now_sub_dip_eval.get("trigger_tag") or "SUB_STATIC_NEW_LOW"
+            )
+            sub_ref_static = safe_float(
+                now_sub_dip_eval.get("ref_static_anchor"),
+                now_sub_buckets[0].book_price,
+            )
+            sub_quota_ref_p = max(
+                0.01,
+                safe_float(
+                    now_sub_dip_eval.get("quota_ref_price"), sub_ref_static
+                ),
+            )
+            sub_stepped_min_p = safe_float(
+                now_sub_dip_eval.get("sub_stepped_min_price"), 0.0
+            )
+
+            if is_sub_unlock and sub_stepped_min_p > 0.0:
+                max_sub_trig_p = (
+                    math.floor((sub_stepped_min_p + 1e-9) * 100.0) / 100.0
+                )
+            else:
+                max_sub_trig_p = (
+                    math.floor(
+                        (
+                            sub_ref_static * (1.0 + now_sub_drop / 100.0)
+                            + 1e-9
+                        )
+                        * 100.0
+                    )
+                    / 100.0
+                )
+            cur_limit_p = math.floor((fresh_live_p + 1e-9) * 100.0) / 100.0
+            exec_order_p = max(0.01, min(cur_limit_p, max_sub_trig_p))
+
+            eff_rt_pct_dip = resolve_effective_round_trip_fee_rate_pct(
+                state_dict=st_now
+            )
+            fee_mult_dip = 1.0 + (eff_rt_pct_dip / 100.0)
+            now_gp = pocket_from_dict(st_now.get("golden_pocket"))
+            now_free_cash = max(
+                0.0, safe_float(st_now.get("free_cash_usd"), 0.0)
+            )
+            now_init_seed = max(
+                100.0,
+                safe_float(
+                    st_now.get("initial_seed_usd"), DEFAULT_INITIAL_SEED_USD
+                ),
+            )
+            now_inj_res = max(
+                0.0, safe_float(st_now.get("injected_reserve_usd"), 0.0)
+            )
+            now_inv_tot = (
+                sum(b.actual_cost_usd for b in now_buckets)
+                + sum(sb.actual_cost_usd for sb in now_sub_buckets)
+                + (now_gp.actual_cost_usd if now_gp.is_active else 0.0)
+            )
+            now_core_eq = max(
+                now_init_seed, (now_free_cash + now_inv_tot) - now_inj_res
+            )
+
+            raw_bp_dip = await context.api.get_buying_power_usd(
+                safety_buffer_pct=0.2
+            )
+            if raw_bp_dip <= 0.0 and now_free_cash >= (
+                exec_order_p * fee_mult_dip
+            ):
+                await asyncio.sleep(0.25)
+                raw_bp_dip = await context.api.get_buying_power_usd(
+                    safety_buffer_pct=0.2
+                )
+
+            idle_dip = compute_sub_grid_available_idle_cash(
+                free_cash_usd=now_free_cash,
+                core_equity_usd=now_core_eq,
+                broker_buying_power_usd=(
+                    raw_bp_dip if raw_bp_dip > 0.0 else 0.0
+                ),
+                reserve_main_portions=SUB_RESERVE_MAIN_PORTIONS,
+            )
+            avail_idle_dip = safe_float(
+                idle_dip.get("avail_idle_cash_usd"), 0.0
+            )
+            sub_target_qty, sub_p_bud = compute_sub4_quota_qty(
+                sub_anchor_price=sub_quota_ref_p,
+                current_core_equity=now_core_eq,
+                initial_seed_usd=now_init_seed,
+                exec_price=exec_order_p,
+            )
+            min_req_sub_dip = max(
+                exec_order_p * fee_mult_dip,
+                sub_p_bud * MIN_DIP_BUDGET_RATIO,
+                now_sub_buckets[0].actual_cost_usd * MIN_DIP_VS_L1_RATIO,
+            )
+            if avail_idle_dip < min_req_sub_dip:
+                return {
+                    "status": "HOLD_SUB_DIP_INSUFFICIENT_IDLE_CASH",
+                    "avail_idle_cash_usd": avail_idle_dip,
+                }
+
+            buy_qty_sub, _ = resolve_affordable_buy_qty(
+                target_qty=sub_target_qty,
+                price_t=exec_order_p,
+                free_cash_usd=avail_idle_dip,
+                broker_buying_power_usd=avail_idle_dip,
+                max_portion_budget_usd=sub_p_bud,
+                round_trip_fee_rate_pct=eff_rt_pct_dip,
+            )
+            if buy_qty_sub <= 0:
+                return {"status": "HOLD_SUB_DIP_ZERO_QTY"}
+
+            cid_prefix = (
+                f"SU{now_sub_lots + 1}L"
+                if is_sub_unlock
+                else f"SB{now_sub_lots + 1}L"
+            )
+            cid = generate_client_order_id(prefix=cid_prefix)
+            try:
+                ord_res = await context.api.create_order(
+                    symbol=TARGET_SYMBOL,
+                    side="BUY",
+                    quantity=buy_qty_sub,
+                    price=exec_order_p,
+                    order_type="LIMIT",
+                    time_in_force="DAY",
+                    client_order_id=cid,
+                    enforce_daymarket_block=True,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Case 88 서브그리드 10분 게이트(%s) 추매 주문 예외: %s",
+                    sub_trig_tag,
+                    exc,
+                )
+                return {"status": "SUB_BUY_ORDER_ERROR", "error": str(exc)}
+
+            oid = str(ord_res.get("orderId") or "").strip()
+            await context.ledger.update_state(
+                TARGET_SYMBOL,
+                sub_l1_target_quota_qty=buy_qty_sub,
+                buy_order_id=oid,
+                client_order_id=cid,
+                ordered_qty=buy_qty_sub,
+                buy_price=exec_order_p,
+                pending_portion_budget=sub_p_bud,
+                pending_lot_type="SUB_DIP_1FL",
+                pending_step_up_min_price=0.0,
+                pending_sub_step_up_min_price=(
+                    round(sub_stepped_min_p, 4) if is_sub_unlock else 0.0
+                ),
+                sub_last_evaluated_buy_bucket_id=sub_cur_bucket_id,
+                sub_last_evaluated_date=sub_today_str,
+                last_modify_mono=time.monotonic(),
+            )
+            context.wakeup_event.set()
+            logger.info(
+                "🛡️ [Case 88 SOXL 3층 서브그리드 %d/%d회분(%s) 추매 발주] %d주 @ 지정가 $%.2f (4%%예산 $%.2f · 유휴현금 $%.2f · orderId=%s)",
+                now_sub_lots + 1,
+                sub_max_lots_cap,
+                sub_trig_tag,
+                buy_qty_sub,
+                exec_order_p,
+                sub_p_bud,
+                avail_idle_dip,
+                oid,
+            )
+            return {
+                "status": "SUB_QUOTA_DIP_BUY_ORDERED",
+                "trigger_tag": sub_trig_tag,
+                "is_sub_unlock": is_sub_unlock,
+                "orderId": oid,
+                "qty": buy_qty_sub,
+                "price": exec_order_p,
+                "sub_cur_total_lots": now_sub_lots,
+            }
+# ---------------------------------------------------------------------------
+# [핵심 2] 진화 챔피언 (👑 06_L2L7_RATCHET_8PCT × 🛡️ 13_SUB_L1L3_RESV05_CAP4L[Default ON] × 🌟 POCKET_ALLIN / 🔥 GRID_L1_ALLIN × 💉 05_RESV_6P_GUARD30 × 🔓 06_STEP2X_15PCT_C20 × 🛡️ Case 84) : 비대칭 매수 타격 엔진
 #  - 분기 G   : 07:00 ~ 07:50 EST & RSI(14) <= 19.0 황금시간 가용시드 100% 전액 추가매수 (제어반 ON 시 · Case 80)
-#  - 분기 A   : 그리드 0주 상태(사이클 종료) -> 15:30 ~ 16:00 EST 구간에서는 새 사이클 첫 1층 진입 100% 차단(Case 84) · 그 외 60초 타임쉴드 후 첫 1층(REENTRY_1FL) 산입
-#  - 분기 B-1 : 상단 2~7층 보유 중 1층 공석 -> 매 60.0초(1분) 주기 재장전 모니터 & 2층 단가 상한(Case 73) 하에서
-#               -1.00% 눌림목(PULLBACK_RELOAD · 04:07 ~ 16:00 EST 전 구간 허용) 및 +1.00% 상승돌파(BREAKOUT_RELOAD · 04:07 ~ 15:29 EST 허용 / 15:30 ~ 16:00 EST 돌파 차단 · Case 84 원복)
-#  - 분기 B-0 : 활성 1층 부분체결 미체결 잔량(rem_quota_qty > 0) -> 60초 타임쉴드 후 매 1.5초 모니터에서 현재가 <= 1층 단가 도래 시 잔량(TOPUP_1FL) 발주(Case 78)
-#  - 분기 B-2 : 활성 1층 보유 중 -> 10분 고정 게이트 & 정적 기억저가 및 최고도달회차(cycle_ratchet_max_lots · Case 87) 잠금 4단 와이드 신저가 OR STEP2X_15PCT_C20 스텝업 추매(Case 76) & GUARD30/예비수혈(Case 77)
+#  - 분기 A   : 본 그리드 0주 상태(사이클 종료) -> 15:30 ~ 16:00 EST 구간에서는 새 사이클 첫 1층 진입 100% 차단(Case 84) · 그 외 60초 타임쉴드 후 첫 1층(REENTRY_1FL) 산입
+#  - 분기 B-1 : 본 그리드 상단 2~7층 보유 중 1층 공석 -> 매 60.0초(1분) 주기 재장전 모니터 & 2층 단가 상한(Case 73) 하에서
+#               -1.00% 눌림목(PULLBACK_RELOAD · 04:07 ~ 16:00 EST 전 구간 허용) 및 +1.00% 상승돌파(BREAKOUT_RELOAD · 04:07 ~ 15:29 EST 허용 / 15:30 ~ 16:00 EST 돌파 차단 · Case 84)
+#               (본 그리드 대기/패스 시 Default-ON 3층 서브 그리드 엔진 연속 가동 · Case 88)
+#  - 분기 B-0 : 본 그리드 활성 1층 부분체결 미체결 잔량(rem_quota_qty > 0) -> 60초 타임쉴드 후 매 1.5초 모니터에서 현재가 <= 1층 단가 도래 시 잔량(TOPUP_1FL) 발주(Case 78)
+#  - 분기 B-2 : 본 그리드 활성 1층 보유 중 -> 10분 고정 게이트 & 정적 기억저가 및 최고도달회차(cycle_ratchet_max_lots · Case 87) 잠금 4단 와이드 신저가 OR STEP2X_15PCT_C20 스텝업 추매(Case 76) & GUARD30/예비수혈(Case 77)
+#               (본 그리드 대기/패스 시 Default-ON 3층 서브 그리드 엔진 연속 가동 · Case 88)
 # ---------------------------------------------------------------------------
 async def execute_seed_protected_buy_gate_plugin(
     context: Any,
@@ -121,7 +1195,7 @@ async def execute_seed_protected_buy_gate_plugin(
     now_est: Optional[datetime] = None,
 ) -> Dict[str, Any]:
     """
-    🎯 1, 🎯 2, 🎯 4 & Case 25 ~ 87 (챔피언 : 👑 06_L2L7_RATCHET_8PCT × 🌟 POCKET_ALLIN / 🔥 GRID_L1_ALLIN × 💉 05_RESV_6P_GUARD30 × 🔓 06_STEP2X_15PCT_C20 × 🛡️ Case 84 원복):
+    🎯 1, 🎯 2, 🎯 4 & Case 25 ~ 88 (챔피언 : 👑 06_L2L7_RATCHET_8PCT × 🛡️ 13_SUB_L1L3_RESV05_CAP4L[Default ON] × 🌟 POCKET_ALLIN / 🔥 GRID_L1_ALLIN × 💉 05_RESV_6P_GUARD30 × 🔓 06_STEP2X_15PCT_C20 × 🛡️ Case 84):
     04:07:00 ~ 16:00:00 EST 운용 구간에서 작동하는 비대칭 매수 타격 엔진.
     """
     dt_now = now_est.astimezone(EST_TZ) if now_est else datetime.now(EST_TZ)
@@ -168,11 +1242,33 @@ async def execute_seed_protected_buy_gate_plugin(
             "remain_shield_sec": remain_buy_sec,
         }
 
-    # 🛡️ 3-B) [Case 77 & Case 80] 시드고갈 입금 대기 또는 골든포켓 현금 가동 중일 때 60.0초 감지 타임쉴드 검문
+    live_p = _get_live_soxl_price(context, prices, holdings, dt_now)
+    if live_p <= 0.0:
+        return {"status": "NO_LIVE_PRICE"}
+
+    buckets = buckets_from_dicts(st.get("buckets", []))
+    sub_buckets = buckets_from_dicts(st.get("sub_buckets", []))
+    gp = pocket_from_dict(st.get("golden_pocket"))
+    h_qty = safe_int((holdings or {}).get(TARGET_SYMBOL, {}).get("qty"), 0)
+
+    # 🛡️ 3-B) [Case 77, Case 80 & Case 88] 본 그리드 시드고갈 입금 대기 또는 골든포켓 현금 가동 중일 때 60.0초 감지 타임쉴드 검문
+    # (단, 본 그리드가 입금 대기 쉴드 중이더라도 서브 그리드 미체결 잔량 보충 등 서브 엔진 작동 가능 여부를 먼저 점검)
     in_res_sh, rem_res_sec = is_within_reserve_deposit_check_shield(
         context, st, TARGET_SYMBOL
     )
     if in_res_sh:
+        if buckets:
+            sub_res_during_sh = await _execute_sub_grid_buy_engine_plugin(
+                context=context,
+                holdings=holdings,
+                prices=prices,
+                dt_now=dt_now,
+                live_p=live_p,
+            )
+            if isinstance(sub_res_during_sh, dict) and str(
+                sub_res_during_sh.get("status") or ""
+            ).endswith("_ORDERED"):
+                return sub_res_during_sh
         return {
             "status": "HOLD_WAITING_RESERVE_DEPOSIT_60S_SHIELD",
             "remain_shield_sec": rem_res_sec,
@@ -180,14 +1276,6 @@ async def execute_seed_protected_buy_gate_plugin(
                 st.get("required_reserve_deposit_usd"), 0.0
             ),
         }
-
-    live_p = _get_live_soxl_price(context, prices, holdings, dt_now)
-    if live_p <= 0.0:
-        return {"status": "NO_LIVE_PRICE"}
-
-    buckets = buckets_from_dicts(st.get("buckets", []))
-    gp = pocket_from_dict(st.get("golden_pocket"))
-    h_qty = safe_int((holdings or {}).get(TARGET_SYMBOL, {}).get("qty"), 0)
 
     eff_rt_pct = resolve_effective_round_trip_fee_rate_pct(state_dict=st)
     init_seed = max(
@@ -200,10 +1288,12 @@ async def execute_seed_protected_buy_gate_plugin(
     )
     realized_equity = max(100.0, init_seed + cum_realized)
     free_cash = max(0.0, safe_float(st.get("free_cash_usd"), 0.0))
-    actual_invested = sum(b.actual_cost_usd for b in buckets) + (
-        gp.actual_cost_usd if gp.is_active else 0.0
+    actual_invested = (
+        sum(b.actual_cost_usd for b in buckets)
+        + sum(sb.actual_cost_usd for sb in sub_buckets)
+        + (gp.actual_cost_usd if gp.is_active else 0.0)
     )
-    # Case 77 & Case 80: 온디맨드 예비시드 수혈금(injected_reserve_usd)을 제외한 순수 코어 총자산(core_equity) 산출
+    # Case 77, Case 80 & Case 88: 온디맨드 예비시드 수혈금(injected_reserve_usd)을 제외한 순수 코어 총자산(core_equity) 산출
     core_equity = max(
         init_seed, (free_cash + actual_invested) - injected_reserve_usd
     )
@@ -309,6 +1399,9 @@ async def execute_seed_protected_buy_gate_plugin(
                         now_buckets = buckets_from_dicts(
                             st_now.get("buckets", [])
                         )
+                        now_sub_buckets = buckets_from_dicts(
+                            st_now.get("sub_buckets", [])
+                        )
                         now_free_cash = max(
                             0.0, safe_float(st_now.get("free_cash_usd"), 0.0)
                         )
@@ -323,9 +1416,11 @@ async def execute_seed_protected_buy_gate_plugin(
                             0.0,
                             safe_float(st_now.get("injected_reserve_usd"), 0.0),
                         )
-                        now_inv_tot = sum(
-                            b.actual_cost_usd for b in now_buckets
-                        ) + (now_gp.actual_cost_usd if now_gp.is_active else 0.0)
+                        now_inv_tot = (
+                            sum(b.actual_cost_usd for b in now_buckets)
+                            + sum(sb.actual_cost_usd for sb in now_sub_buckets)
+                            + (now_gp.actual_cost_usd if now_gp.is_active else 0.0)
+                        )
                         now_core_eq = max(
                             now_init_seed,
                             (now_free_cash + now_inv_tot) - now_inj_res,
@@ -420,6 +1515,7 @@ async def execute_seed_protected_buy_gate_plugin(
                                     pending_portion_budget=est_spent_g,
                                     pending_lot_type=g_lot_type,
                                     pending_step_up_min_price=0.0,
+                                    pending_sub_step_up_min_price=0.0,
                                     last_modify_mono=time.monotonic(),
                                 )
                                 context.wakeup_event.set()
@@ -452,13 +1548,17 @@ async def execute_seed_protected_buy_gate_plugin(
                                     "error": str(exc),
                                 }
 
-    is_zero_shares = bool(len(buckets) == 0 and (h_qty == 0 or h_qty == gp.qty))
+    sub_total_sh = sum(sb.qty for sb in sub_buckets)
+    is_zero_shares = bool(
+        len(buckets) == 0
+        and (h_qty == 0 or h_qty == (gp.qty + sub_total_sh))
+    )
     has_active_l1 = has_active_l1_bucket(buckets)
-    # 🚨 Case 71, Case 72 & Case 73: 상단에 2층 ~ 7층 그리드(GRID_L2 ~ GRID_L7)가 남아 있고 1층이 익절되어 공석인 상태!
+    # 🚨 Case 71, Case 72 & Case 73: 본 그리드 상단에 2층 ~ 7층 그리드(GRID_L2 ~ GRID_L7)가 남아 있고 1층이 익절되어 공석인 상태!
     is_l2_only_vacant_l1 = bool(len(buckets) > 0 and not has_active_l1)
 
     # -----------------------------------------------------------------------
-    # [분기 A : 그리드 보유 잔고 0주 상태 (is_zero_shares)]
+    # [분기 A : 본 그리드 보유 잔고 0주 상태 (is_zero_shares)]
     # -> 🛡️ [Case 84 핵심 방어] : 정규장 마감 30분 전(15:30 ~ 16:00 EST) 구간에서는 0주 새 사이클 첫 1층(REENTRY_1FL) 진입 100% 금지!
     # -----------------------------------------------------------------------
     if is_zero_shares:
@@ -536,10 +1636,11 @@ async def execute_seed_protected_buy_gate_plugin(
                     0.01, math.floor((fresh_live_p + 1e-9) * 100.0) / 100.0
                 )
 
-                # [Case 67 & Case 77 : 뮤텍스 내부 st_now 기준 now_core_eq 및 now_init_seed 재산출 통일]
+                # [Case 67, Case 77 & Case 88 : 뮤텍스 내부 st_now 기준 now_core_eq 및 now_init_seed 재산출 통일]
                 eff_rt_pct_0sh = resolve_effective_round_trip_fee_rate_pct(
                     state_dict=st_now
                 )
+                now_sub_0sh = buckets_from_dicts(st_now.get("sub_buckets", []))
                 now_gp_0sh = pocket_from_dict(st_now.get("golden_pocket"))
                 now_free_cash_0sh = max(
                     0.0, safe_float(st_now.get("free_cash_usd"), 0.0)
@@ -554,7 +1655,9 @@ async def execute_seed_protected_buy_gate_plugin(
                 now_inj_res_0sh = max(
                     0.0, safe_float(st_now.get("injected_reserve_usd"), 0.0)
                 )
-                now_inv_tot_0sh = (
+                now_inv_tot_0sh = sum(
+                    sb.actual_cost_usd for sb in now_sub_0sh
+                ) + (
                     now_gp_0sh.actual_cost_usd
                     if now_gp_0sh.is_active
                     else 0.0
@@ -652,6 +1755,7 @@ async def execute_seed_protected_buy_gate_plugin(
                     pending_portion_budget=portion_budget,
                     pending_lot_type="REENTRY_1FL",
                     pending_step_up_min_price=0.0,
+                    pending_sub_step_up_min_price=0.0,
                     last_evaluated_buy_bucket_id=cur_bucket_id,
                     last_evaluated_date=today_str,
                     last_modify_mono=time.monotonic(),
@@ -673,17 +1777,29 @@ async def execute_seed_protected_buy_gate_plugin(
                 }
 
     # -----------------------------------------------------------------------
-    # [분기 B-1 · Case 73, Case 77 & Case 84 원복 : 상단 그리드(2층 ~ 7층)만 보유 중 (1층 공석, is_l2_only_vacant_l1 == True)]
+    # [분기 B-1 · Case 73, Case 77, Case 84 & Case 88 : 본 그리드 상단(2층 ~ 7층)만 보유 중 (1층 공석, is_l2_only_vacant_l1 == True)]
     # -> 2층 단가 이하(Case 73) 안전 영역 내에서:
     #    - 눌림목(-1.00%, PULLBACK_RELOAD)은 04:07 ~ 16:00 EST 전 구간 허용!
     #    - 상승돌파(+1.00%, BREAKOUT_RELOAD)는 04:07 ~ 15:29 EST 허용하되,
     #      15:30 ~ 16:00 EST 구간에서는 데드캣 고점 추격 방어를 위해 HOLD_LATE_SESSION_BREAKOUT_CUTOFF 로 원천 차단!
+    #    - 본 그리드가 60초 재장전 쉴드 중이거나 패스했을 때는 즉시 Default-ON 3층 서브 그리드 엔진을 가동!
     # -----------------------------------------------------------------------
     if is_l2_only_vacant_l1:
         in_re_shield, rem_re_sec = is_within_reentry_monitor_time_shield(
             context, st, TARGET_SYMBOL
         )
         if in_re_shield:
+            sub_res_re = await _execute_sub_grid_buy_engine_plugin(
+                context=context,
+                holdings=holdings,
+                prices=prices,
+                dt_now=dt_now,
+                live_p=live_p,
+            )
+            if isinstance(sub_res_re, dict) and str(
+                sub_res_re.get("status") or ""
+            ).endswith("_ORDERED"):
+                return sub_res_re
             return {
                 "status": "HOLD_REENTRY_60S_TIME_SHIELD",
                 "remain_shield_sec": rem_re_sec,
@@ -731,6 +1847,18 @@ async def execute_seed_protected_buy_gate_plugin(
                 seed_protect_pass_cnt=new_pass_cnt,
                 daily_seed_protect_pass_cnt=new_day_pass,
             )
+            sub_res_after_pass = await _execute_sub_grid_buy_engine_plugin(
+                context=context,
+                holdings=holdings,
+                prices=prices,
+                dt_now=dt_now,
+                live_p=fresh_live_p,
+            )
+            if isinstance(sub_res_after_pass, dict) and str(
+                sub_res_after_pass.get("status") or ""
+            ).endswith("_ORDERED"):
+                return sub_res_after_pass
+
             if sig_type == "HOLD_PREVENT_INVERSION":
                 logger.info(
                     "🛡️ [Case 73 1층>2층 단가역전 원천 차단] 현재가 $%.2f > 2층단가 상한 $%.2f (직전익절 $%.2f 대비 %+.2f%%) -> 매수 패스 & 60초 타임쉴드 재장전",
@@ -794,15 +1922,18 @@ async def execute_seed_protected_buy_gate_plugin(
                 if in_re_m:
                     return {"status": "HOLD_60S_REENTRY_TIME_SHIELD_IN_MUTEX"}
 
-                # MODIFIED [Case 84 원복 : 뮤텍스 내부 15:29:59 -> 15:30:00 경계 돌파 추격 2차 차단]
+                # [Case 84 : 뮤텍스 내부 15:29:59 -> 15:30:00 경계 돌파 추격 2차 차단]
                 dt_re_mutex = (
                     now_est.astimezone(EST_TZ)
                     if now_est
                     else datetime.now(EST_TZ)
                 )
                 hm_re_mutex = dt_re_mutex.hour * 100 + dt_re_mutex.minute
-                if sig_type == "BREAKOUT_RELOAD" and is_late_regular_new_cycle_cutoff_window(
-                    hm_re_mutex, now_est=dt_re_mutex
+                if (
+                    sig_type == "BREAKOUT_RELOAD"
+                    and is_late_regular_new_cycle_cutoff_window(
+                        hm_re_mutex, now_est=dt_re_mutex
+                    )
                 ):
                     new_pass_cnt = (
                         safe_int(st_now.get("seed_protect_pass_cnt"), 0) + 1
@@ -865,6 +1996,7 @@ async def execute_seed_protected_buy_gate_plugin(
                 eff_rt_pct_re = resolve_effective_round_trip_fee_rate_pct(
                     state_dict=st_now
                 )
+                now_sub_re = buckets_from_dicts(st_now.get("sub_buckets", []))
                 now_gp = pocket_from_dict(st_now.get("golden_pocket"))
                 now_free_cash = max(
                     0.0, safe_float(st_now.get("free_cash_usd"), 0.0)
@@ -878,8 +2010,10 @@ async def execute_seed_protected_buy_gate_plugin(
                 now_inj_res = max(
                     0.0, safe_float(st_now.get("injected_reserve_usd"), 0.0)
                 )
-                now_inv_tot = sum(b.actual_cost_usd for b in now_buckets) + (
-                    now_gp.actual_cost_usd if now_gp.is_active else 0.0
+                now_inv_tot = (
+                    sum(b.actual_cost_usd for b in now_buckets)
+                    + sum(sb.actual_cost_usd for sb in now_sub_re)
+                    + (now_gp.actual_cost_usd if now_gp.is_active else 0.0)
                 )
                 now_core_eq = max(
                     now_init_seed,
@@ -951,6 +2085,11 @@ async def execute_seed_protected_buy_gate_plugin(
                     symbol=TARGET_SYMBOL,
                     eval_price=exec_order_p,
                 )
+                pending_lot_tag_re = (
+                    "REENTRY_1FL_BREAKOUT"
+                    if sig_type == "BREAKOUT_RELOAD"
+                    else "REENTRY_1FL"
+                )
                 cid = generate_client_order_id(prefix="RE1FL")
                 try:
                     ord_res = await context.api.create_order(
@@ -982,8 +2121,9 @@ async def execute_seed_protected_buy_gate_plugin(
                     ordered_qty=buy_qty,
                     buy_price=exec_order_p,
                     pending_portion_budget=portion_budget,
-                    pending_lot_type="REENTRY_1FL",
+                    pending_lot_type=pending_lot_tag_re,
                     pending_step_up_min_price=0.0,
+                    pending_sub_step_up_min_price=0.0,
                     last_modify_mono=time.monotonic(),
                     last_reentry_eval_ts=re_eval_epoch,
                 )
@@ -1018,7 +2158,7 @@ async def execute_seed_protected_buy_gate_plugin(
         }
 
     # -----------------------------------------------------------------------
-    # [분기 B-0 · Case 77, Case 78 & Case 80 : 활성 1층 부분 체결 미체결 잔량(rem_quota_qty > 0) 존재 시]
+    # [분기 B-0 · Case 77, Case 78 & Case 80 : 본 그리드 활성 1층 부분 체결 미체결 잔량(rem_quota_qty > 0) 존재 시]
     # -----------------------------------------------------------------------
     l1_target_q = max(
         buckets[0].qty, safe_int(st.get("l1_target_quota_qty"), 0)
@@ -1158,6 +2298,7 @@ async def execute_seed_protected_buy_gate_plugin(
                                     pending_portion_budget=eff_topup_budget,
                                     pending_lot_type="TOPUP_1FL",
                                     pending_step_up_min_price=0.0,
+                                    pending_sub_step_up_min_price=0.0,
                                     last_modify_mono=time.monotonic(),
                                 )
                                 context.wakeup_event.set()
@@ -1194,9 +2335,9 @@ async def execute_seed_protected_buy_gate_plugin(
                                 }
 
     # -----------------------------------------------------------------------
-    # [분기 B-2 · Case 60, Case 72, Case 76, Case 77 & Case 87 : 활성 1층 보유 중 (has_active_l1_bucket(buckets) == True)]
+    # [분기 B-2 · Case 60, Case 72, Case 76, Case 77, Case 87 & Case 88 : 본 그리드 활성 1층 보유 중 (has_active_l1_bucket(buckets) == True)]
     # -> 04:07 EST 기점 10분 고정 매수 게이트 신규 버킷 도래 시 정적 기억 최저가 및 최고 도달 회차(cycle_ratchet_max_lots) 잠금 기준
-    #    4단 와이드 OR STEP2X_15PCT_C20 스텝업 추매 판정!
+    #    4단 와이드 OR STEP2X_15PCT_C20 스텝업 추매 판정! (본 그리드 대기/패스 시 Default-ON 3층 서브 그리드 엔진 연속 가동)
     # -----------------------------------------------------------------------
     is_gate_open, cur_bucket_id, today_str, b_info = (
         evaluate_buy_gate_bucket_status(
@@ -1210,6 +2351,18 @@ async def execute_seed_protected_buy_gate_plugin(
     )
 
     if not is_gate_open:
+        sub_res_wait = await _execute_sub_grid_buy_engine_plugin(
+            context=context,
+            holdings=holdings,
+            prices=prices,
+            dt_now=dt_now,
+            live_p=live_p,
+        )
+        if isinstance(sub_res_wait, dict) and str(
+            sub_res_wait.get("status") or ""
+        ).endswith("_ORDERED"):
+            return sub_res_wait
+
         if rem_quota_qty > 0:
             return {
                 "status": "MONITORING_1_5S_L1_TOPUP_PRICE",
@@ -1253,7 +2406,7 @@ async def execute_seed_protected_buy_gate_plugin(
         cycle_min_buy_price=cycle_min_p,
         drop_buy_pct=drop_buy_pct,
         free_cash_usd=free_cash,
-        realized_equity_usd=realized_equity,
+        realized_equity_usd=core_equity,
         step_up_drop_pct=eff_step_drop,
         min_cash_ratio=STEP_UP_2X_MIN_CASH_RATIO,
         min_rebound_mult=STEP_UP_2X_MIN_REBOUND_MULT,
@@ -1270,6 +2423,17 @@ async def execute_seed_protected_buy_gate_plugin(
             mark_reserve_deposit_check_shield(
                 context=context, symbol=TARGET_SYMBOL, clear_shield=False
             )
+            sub_res_dep = await _execute_sub_grid_buy_engine_plugin(
+                context=context,
+                holdings=holdings,
+                prices=prices,
+                dt_now=dt_now,
+                live_p=fresh_live_p,
+            )
+            if isinstance(sub_res_dep, dict) and str(
+                sub_res_dep.get("status") or ""
+            ).endswith("_ORDERED"):
+                return sub_res_dep
             return {
                 "status": "HOLD_WAITING_RESERVE_DEPOSIT_PRICE_REBOUND",
                 "trigger_tag": dip_eval.get("trigger_tag", "HOLD"),
@@ -1287,6 +2451,20 @@ async def execute_seed_protected_buy_gate_plugin(
             seed_protect_pass_cnt=new_pass_cnt,
             daily_seed_protect_pass_cnt=new_day_pass,
         )
+
+        # 🛡️ [Case 88 핵심 : 본 그리드가 10분 게이트를 패스한 즉시 Default-ON 3층 서브 그리드 엔진 가동!]
+        sub_res_gate = await _execute_sub_grid_buy_engine_plugin(
+            context=context,
+            holdings=holdings,
+            prices=prices,
+            dt_now=dt_now,
+            live_p=fresh_live_p,
+        )
+        if isinstance(sub_res_gate, dict) and str(
+            sub_res_gate.get("status") or ""
+        ).endswith("_ORDERED"):
+            return sub_res_gate
+
         return {
             "status": "SEED_PROTECT_PASSED",
             "trigger_tag": dip_eval.get("trigger_tag", "HOLD"),
@@ -1299,6 +2477,7 @@ async def execute_seed_protected_buy_gate_plugin(
                 dip_eval.get("stepped_min_price"), 0.0
             ),
             "seed_protect_pass_cnt": new_day_pass,
+            "sub_grid_eval": sub_res_gate,
         }
 
     async with context.in_memory_ordering_lock:
@@ -1347,6 +2526,7 @@ async def execute_seed_protected_buy_gate_plugin(
                 threshold_mode=threshold_mode,
                 cycle_ratchet_max_lots=now_ratchet_lots,
             )
+            now_sub_dip = buckets_from_dicts(st_now.get("sub_buckets", []))
             now_gp = pocket_from_dict(st_now.get("golden_pocket"))
             now_free_cash = max(0.0, safe_float(st_now.get("free_cash_usd"), 0.0))
             now_init_seed = max(
@@ -1355,15 +2535,13 @@ async def execute_seed_protected_buy_gate_plugin(
                     st_now.get("initial_seed_usd"), DEFAULT_INITIAL_SEED_USD
                 ),
             )
-            now_cum_net = safe_float(
-                st_now.get("cumulative_realized_net_usd"), 0.0
-            )
             now_inj_res = max(
                 0.0, safe_float(st_now.get("injected_reserve_usd"), 0.0)
             )
-            now_real_eq = max(100.0, now_init_seed + now_cum_net)
-            now_inv_tot = sum(b.actual_cost_usd for b in now_buckets) + (
-                now_gp.actual_cost_usd if now_gp.is_active else 0.0
+            now_inv_tot = (
+                sum(b.actual_cost_usd for b in now_buckets)
+                + sum(sb.actual_cost_usd for sb in now_sub_dip)
+                + (now_gp.actual_cost_usd if now_gp.is_active else 0.0)
             )
             now_core_eq = max(
                 now_init_seed,
@@ -1381,7 +2559,7 @@ async def execute_seed_protected_buy_gate_plugin(
                 ),
                 drop_buy_pct=now_drop_pct,
                 free_cash_usd=now_free_cash,
-                realized_equity_usd=now_real_eq,
+                realized_equity_usd=now_core_eq,
                 step_up_drop_pct=eff_step_drop,
                 min_cash_ratio=STEP_UP_2X_MIN_CASH_RATIO,
                 min_rebound_mult=STEP_UP_2X_MIN_REBOUND_MULT,
@@ -1508,6 +2686,7 @@ async def execute_seed_protected_buy_gate_plugin(
                 pending_step_up_min_price=(
                     round(stepped_min_p, 4) if is_step_up_unlock else 0.0
                 ),
+                pending_sub_step_up_min_price=0.0,
                 last_evaluated_buy_bucket_id=cur_bucket_id,
                 last_evaluated_date=today_str,
                 last_modify_mono=time.monotonic(),

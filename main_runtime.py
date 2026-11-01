@@ -1,18 +1,19 @@
 # -*- coding: utf-8 -*-
 """
 # MODIFIED: main_runtime.py
-인피니트 스노우볼 (Infinite Snowball) v3.0 — 메인 런타임 서포트 브릿지 (메인 코드 2분할 리팩토링 Part 1 / 2 · Step 11 / 11)
+인피니트 스노우볼 (Infinite Snowball) v3.0 — 메인 런타임 서포트 브릿지 (메인 코드 2분할 리팩토링 Part 1 / 2 · Step 12 / 13)
 - 역할:
   1) 적응형 비동기 플러그인 호출기(_call_plugin_adaptive) 및 동적 심볼 리졸버(_resolve_module_attr) (Case 13)
   2) TossApiClient 런타임 메서드 호환성 폴리필 어댑터(_install_toss_api_compatibility_patches · get_commissions / ensure_us_commission_rate 런타임 수수료 폴백 보존 포함 · Case 86)
-  3) 폴더별 3중 원장 인스턴스 팩토리(_instantiate_stratum_ledger · Case 68) 및 주말 휴장 판별(_check_weekend_nyse_closed_dynamic · Case 01, 79, 83)
+  3) 폴더별 3중 원장 인스턴스 팩토리(_instantiate_stratum_ledger · Case 68, Case 87, Case 88) 및 주말 휴장 판별(_check_weekend_nyse_closed_dynamic · Case 01, 79, 83)
   4) 100% 벡터화 1분봉/일봉 지표 및 실시간 틱 Wilder's RSI(14) 무손실 직결(_compute_candle_metrics_dynamic · Case 80 RSI 50.0 고정 버그 영구 소각)
   5) 폴더 위치(base_dir) 전용 텔레그램 토큰·채팅방 ID 자동 탐색기(_discover_telegram_credentials · Case 68)
   6) 내장형 사용자 중심 초슬림 텔레그램 불사조 롱폴링/관제탑 브릿지(_AdaptiveTelegramBridge · tg_ui_plugin 단일 렌더러 직결 ·
      13대 코어 모듈 프리플라이트 안내 동기화 · /avwap 조회 시 1분봉 미확보 상태면 즉시 온디맨드 프리워밍 수행 ·
-     /sync 조회 시 계좌별 미국 주식 수수료율 자동 확인[Case 86] · 전술 제어반 황금시간[07:00~07:50 EST & RSI <= 19.0] 전액매수 모드 선택기 완벽 지원 ·
-     Case 75 httpx/httpcore INFO 로그 묵음화 & Case 81 전용 httpx.AsyncClient 자동 재생성 불사조 폴링 · 오프셋 파일 선행 영속화 · os.execv 인플레이스 자가 교체 · Case 84/85/86 완벽 준수)
-- 제1헌법 ~ 제6헌법 및 Case 01 ~ 86 전수 락온
+     /sync 조회 시 계좌별 미국 주식 수수료율 자동 확인[Case 86] · /reset_profit 실행 시 본 그리드 + Default-ON 3층 서브 그리드 + 골든포켓 100% 보존 초기화[Case 88] ·
+     전술 제어반 황금시간[07:00~07:50 EST & RSI <= 19.0] 전액매수 모드 선택기 완벽 지원 ·
+     Case 75 httpx/httpcore INFO 로그 묵음화 & Case 81 전용 httpx.AsyncClient 자동 재생성 불사조 폴링 · 오프셋 파일 선행 영속화 · os.execv 인플레이스 자가 교체 · Case 84/85/86/87/88 완벽 준수)
+- 제1헌법 ~ 제6헌법 및 Case 01 ~ 88 전수 락온
 """
 
 from __future__ import annotations
@@ -75,6 +76,7 @@ from tg_ui_plugin import (
     _build_main_reply_keyboard,
     _build_settlement_inline_keyboard,
     _format_case67_quota_badge,
+    _format_sub_quota_badge,
     build_avwap_radar_message,
     build_settlement_control_message,
     build_start_schedule_message,
@@ -419,7 +421,7 @@ def _extract_candles_list(
     raw_res: Any,
 ) -> Tuple[List[Dict[str, Any]], Optional[str]]:
     """
-    # MODIFIED [Case 80]:
+    # [Case 80]:
     result.candles 표준 스키마뿐만 아니라 result 직접 리스트, items, data 키 응답을 모두 파싱한다.
     """
     if isinstance(raw_res, list):
@@ -475,7 +477,7 @@ def _install_toss_api_compatibility_patches() -> None:
         async def _poly_ensure_us_commission_rate(
             self: Any, force_refresh: bool = False
         ) -> Tuple[float, float]:
-            # MODIFIED [Case 86]: API 일시 조회 실패 시에도 런타임(원장/.env)에 보존된 수수료율 유지
+            # [Case 86]: API 일시 조회 실패 시에도 런타임(원장/.env)에 보존된 수수료율 유지
             fb_one = get_runtime_us_commission_rate()
             fb_rt = get_runtime_round_trip_fee_rate_pct()
             cur_one = safe_float(
@@ -1324,14 +1326,12 @@ def _discover_telegram_credentials(
                     pass
 
     return bot_token, chat_id
-
-
 # ---------------------------------------------------------------------------
-# [핵심 5] 내장형 텔레그램 브릿지 (_AdaptiveTelegramBridge — tg_ui_plugin 렌더러 직결 & Case 80/81/83/84/85/86 완벽 통합)
+# [핵심 5] 내장형 텔레그램 브릿지 (_AdaptiveTelegramBridge — tg_ui_plugin 렌더러 직결 & Case 80/81/83/84/85/86/87/88 완벽 통합)
 # ---------------------------------------------------------------------------
 class _AdaptiveTelegramBridge:
     """
-    # MODIFIED [Case 62 ~ 86]:
+    # MODIFIED [Case 62 ~ 88]:
     tg_ui_plugin 의 4대 관제 보드 렌더러(build_start_schedule_message, build_avwap_radar_message,
     build_sync_instruction_message, build_settlement_control_message)를 단일 소스로 재사용하여
     코드 중복을 제거하고,
@@ -1340,6 +1340,8 @@ class _AdaptiveTelegramBridge:
     - [Case 81] 폴더별 오프셋 파일(.tg_update_offset_<folder_slug>.dat) + 3중 원장 + 서버 3중 선행 영속화
     - [Case 81] /update 완료 후 구버전 os._exit(0) 대신 3.5초 하드 워치독 및 perform_self_restart_execv(os.execv)로
       100% 무중단 자가 교체 수행 (13대 코어 모듈 프리플라이트 안내 동기화 포함)!
+    - [Case 87 & Case 88] /seed 및 /reset_profit 실행 시 본 그리드(cycle_ratchet_max_lots) 및
+      Default-ON 3층 서브 그리드(sub_buckets · sub_ratchet_max_lots) 100% 보존 정합성 보장!
     """
 
     def __init__(self, context: Any) -> None:
@@ -1853,14 +1855,17 @@ class _AdaptiveTelegramBridge:
             updated_st, live_price=live_p, now_est=datetime.now(EST_TZ)
         )
         quota_badge_str = _format_case67_quota_badge(summary)
+        sub_quota_badge = _format_sub_quota_badge(summary)
         await self.send_message(
             chat_id=chat_id,
             text=(
                 "✅ <b>[기준 시드머니 설정 완료]</b>\n"
                 f"🔸 새 기준 시드머니: <b>${val:,.2f}</b>\n"
                 f"🔸 가용 현금시드: <b>${safe_float(summary.get('free_cash_usd'), 0.0):,.2f}</b>\n"
-                f"🔸 차기 1회(8%) 예산: <b>${safe_float(summary.get('next_portion_budget'), 0.0):,.2f}</b> "
-                f"➔ {quota_badge_str}"
+                f"🔸 본그리드 1회(8%) 예산: <b>${safe_float(summary.get('next_portion_budget'), 0.0):,.2f}</b> "
+                f"➔ {quota_badge_str}\n"
+                f"🔸 서브그리드 1회(4%) 예산: <b>${safe_float(summary.get('sub_next_portion_budget'), 0.0):,.2f}</b> "
+                f"➔ {sub_quota_badge}"
             ),
             reply_markup=_build_settlement_inline_keyboard(
                 bool(updated_st.get("is_active", True)),
@@ -1873,16 +1878,17 @@ class _AdaptiveTelegramBridge:
 
     async def _reset_realized_profit_only(self, chat_id: str) -> None:
         """
-        # [Case 02, Case 74, Case 76, Case 77, Case 80 & Case 86]:
-        보유 중인 주식 지층(buckets) 및 독립 골든포켓(golden_pocket)과 기준 시드머니(initial_seed_usd),
-        계좌별 수수료율(us_commission_rate, round_trip_fee_rate_pct)은 100% 보존하고,
-        오직 누적/당일 세후 실현수익금 및 자투리 절약금·스텝업 해금·황금시간 통계·예비시드 통계만 0점으로 초기화한다.
+        # MODIFIED [Case 02, Case 74, Case 76, Case 77, Case 80, Case 86, Case 87 & Case 88]:
+        보유 중인 본 그리드 지층(buckets · cycle_ratchet_max_lots 포함), Default-ON 3층 서브 그리드(sub_buckets · sub_ratchet_max_lots 포함) 및
+        독립 골든포켓(golden_pocket)과 기준 시드머니(initial_seed_usd), 계좌별 수수료율(us_commission_rate, round_trip_fee_rate_pct)은 100% 보존하고,
+        오직 누적/당일 세후 실현수익금 및 자투리 절약금·스텝업 해금·서브 그리드 통계·황금시간 통계·예비시드 통계만 0점으로 초기화한다.
         """
         mark_reserve_deposit_check_shield(
             self.context, TARGET_SYMBOL, clear_shield=True
         )
         st_cur = self.context.ledger.get_state(TARGET_SYMBOL)
         has_buckets = bool(st_cur.get("buckets"))
+        has_sub_buckets = bool(st_cur.get("sub_buckets"))
         gp_cur = st_cur.get("golden_pocket") or {}
         has_gp = bool(
             isinstance(gp_cur, dict) and safe_int(gp_cur.get("qty"), 0) > 0
@@ -1898,6 +1904,25 @@ class _AdaptiveTelegramBridge:
             "daily_seed_protect_pass_cnt": 0,
             "cond_unlock_buy_events": 0,
             "daily_unlock_buy_events": 0,
+            "sub_buy_events": 0,
+            "sub_buy_shares": 0,
+            "daily_sub_buy_cnt": 0,
+            "daily_sub_buy_events": 0,
+            "sub_sell_events": 0,
+            "sub_sold_shares": 0,
+            "daily_sub_sell_cnt": 0,
+            "daily_sub_sell_events": 0,
+            "sub_merge_events": 0,
+            "sub_merged_indiv_escape_cnt": 0,
+            "sub_unlock_events": 0,
+            "daily_sub_unlock_events": 0,
+            "sub_completed_cycles": 0,
+            "sub_realized_gross_usd": 0.0,
+            "sub_realized_fee_usd": 0.0,
+            "sub_realized_net_usd": 0.0,
+            "daily_sub_realized_net_usd": 0.0,
+            "daily_main_buy_cnt": 0,
+            "daily_main_sell_cnt": 0,
             "golden_allin_buy_events": 0,
             "daily_golden_allin_buy_events": 0,
             "golden_pocket_sell_cnt": 0,
@@ -1928,9 +1953,11 @@ class _AdaptiveTelegramBridge:
             "daily_reanchor_cnt": 0,
             "cumulative_reanchor_drop_usd": 0.0,
         }
-        if not has_buckets and not has_gp:
+        if not has_buckets and not has_sub_buckets and not has_gp:
             reset_kw["used_reserve_portions_cnt"] = 0
             reset_kw["injected_reserve_usd"] = 0.0
+            reset_kw["cycle_ratchet_max_lots"] = 0
+            reset_kw["sub_ratchet_max_lots"] = 0
 
         st_reset = await self.context.ledger.update_state(
             TARGET_SYMBOL, **reset_kw
@@ -1956,25 +1983,36 @@ class _AdaptiveTelegramBridge:
         )
         quota_badge_str = _format_case67_quota_badge(summary)
         held_sh = safe_int(summary.get("held_shares"), 0)
+        sub_sh = safe_int(summary.get("sub_held_shares"), 0)
+        sub_tiers = safe_int(summary.get("sub_held_tiers"), 0)
         gp_sh = safe_int(summary.get("golden_pocket_qty"), 0)
         held_tiers = safe_int(summary.get("held_tiers"), 0)
         held_lots = safe_int(summary.get("held_lots"), 0)
+        ratchet_lots = safe_int(
+            summary.get("cycle_ratchet_max_lots"), held_lots
+        )
+        sub_note = f"+서브 {sub_sh}주({sub_tiers}층)" if sub_sh > 0 else ""
         gp_note = f"+골든포켓 {gp_sh}주" if gp_sh > 0 else ""
+        lot_keep_str = (
+            f"보유 {held_lots}회차/단차잠금 {ratchet_lots}회차"
+            if ratchet_lots > held_lots
+            else f"{held_lots}회차"
+        )
 
         await self.send_message(
             chat_id=chat_id,
             text=(
                 "🧹 <b>[실현수익 0점 초기화 완료]</b>\n"
-                "🔸 누적 세후실현익: <b>$0.00</b> (자투리절약 <b>$0.00</b> · 🔓해금/🌟골든통계 <b>0회</b>)\n"
+                "🔸 누적 세후실현익: <b>$0.00</b> (자투리절약 <b>$0.00</b> · 🔓해금/🛡️서브/🌟골든통계 <b>0회</b>)\n"
                 f"🔸 복귀 기준시드: <b>${init_seed:,.2f}</b> (가용현금 <b>${free_cash:,.2f}</b>)\n"
                 f"🔸 차기 1회(8%) 정량: 예산 <b>${next_bud:,.2f}</b> ➔ {quota_badge_str}\n"
-                f"🔸 보유 지층 보존: <b>{held_sh}주</b> ({held_tiers}개층 · {held_lots}회차{gp_note} 유지)"
+                f"🔸 보유 지층 보존: 본 <b>{held_sh}주</b> ({held_tiers}개층 · {lot_keep_str}{sub_note}{gp_note} 유지)"
             ),
         )
 
     async def _execute_manual_update_command(self, chat_id: str) -> None:
         """
-        # MODIFIED [Case 62, Case 68, Case 75 & Case 81 : 13대 코어 모듈 프리플라이트 안내 동기화]:
+        # [Case 62, Case 68, Case 75 & Case 81 : 13대 코어 모듈 프리플라이트 안내 동기화]:
         """
         await self._ack_telegram_offset(self._last_update_id)
         await self.send_message(

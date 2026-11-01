@@ -1,22 +1,26 @@
 # -*- coding: utf-8 -*-
 """
 # MODIFIED: quant_engine_core.py
-인피니트 스노우볼 (Infinite Snowball) v3.0 — 퀀트 엔진 코어 Part 1 / 2 (Step 04 / 10)
+인피니트 스노우볼 (Infinite Snowball) v3.0 — 퀀트 엔진 코어 Part 1 / 2 (Step 04 / 13)
 역할:
-1) 전역 퀀트 상수 락온 (8% 황금비율 · 7-Layer 골디락스 그리드 · DEFAULT_GRID_MERGE_MODE = "L2_L7_MERGE_SORT" [Case 87] ·
+1) 전역 퀀트 상수 락온 (본 그리드 8% 황금비율 · 7-Layer 골디락스 그리드 · DEFAULT_GRID_MERGE_MODE = "L2_L7_MERGE_SORT" [Case 87] ·
+   🛡️ 스위치 없는 100% 기본 상시 적용[Default ON] 3-Layer 서브 그리드 4% 정량 · 0.5회분 보호예수 · 최대 4회분[16%] 상한 캡 · SUB_L1_L3_MERGE [Case 88] ·
    STEP2X_15PCT_C20 · GUARD30 예비수혈 · 황금시간 전액매수 기본값 NONE[OFF] · Case 84 15:30 0주 신규진입 및 1층 공석 돌파추격 차단)
 2) 계좌별 미국 주식 매매 수수료율(GET /api/v1/commissions : 편도 0.07% -> 왕복 0.14% / 편도 0.10% -> 왕복 0.20%) 런타임 동적 동기화 브릿지 탑재 (Case 86)
-3) 순수 실물 매수 원가(book_price == actual_avg_price) 구조체 (StratumBucket, GoldenAllInPocket) 및
-   상단 그리드(7층 초과 시 구 1층[새 2층 후보] 보존 + 구 2층 + 구 7층 가중평균 통합 후 평단 오름차순 중간층 재배치 L2_L7_MERGE_SORT · Case 87) 번호 정규화·합병기(relabel_upper_grid_tiers)
-4) 8%(12.5분할) 황금비율 정액 기반 정량 산출기(min(1회분 예산 상한 주수, 기준가 고정 정량) 이중 캡핑 Case 67) 및
+3) 순수 실물 매수 원가(book_price == actual_avg_price) 구조체 (StratumBucket, GoldenAllInPocket) ·
+   본 그리드 상단(7층 초과 시 구 1층[새 2층 후보] 보존 + 구 2층 + 구 7층 가중평균 통합 후 평단 오름차순 중간층 재배치 L2_L7_MERGE_SORT · Case 87) 번호 정규화·합병기(relabel_upper_grid_tiers) 및
+   서브 그리드 상단(3층 초과 시 서브 구 1층 + 구 3층 양끝 가중평균 통합 후 오름차순 재배치 SUB_L1_L3_MERGE · Case 88) 번호 정규화·합병기(relabel_sub_upper_grid_tiers)
+4) 본 그리드 8%(12.5분할) & 서브 그리드 4%(25분할) 황금비율 정액 기반 정량 산출기(min(1회분 예산 상한 주수, 기준가 고정 정량) 이중 캡핑 Case 67, Case 88) ·
+   본 그리드 0.5회분(4.0%) 보호예수금 차감 서브 가용 유휴 현금 산출기(compute_sub_grid_available_idle_cash · Case 88) 및
    황금시간대(07:00 ~ 07:50 EST & 1분봉 Wilder RSI(14) <= 19.0) 가용현금 100% 전액매수 판정기(Case 80)
 5) 30% 자투리 1주 승격 방지 가드(GUARD30) & 토스 실계좌 여유자금 감지 기반 최대 +6회분 온디맨드 예비시드 자동 수혈 판정기 및
    0주 전량 졸업 시 예비시드 원금 자동 상환 연산기(Case 77)
-6) 사이클 최고 도달 회차(eff_lots = max(held_lots, cycle_ratchet_max_lots)) 잠금 기반 4단 와이드 점진 활주로(1~4회 -1.0% / 5~8회 -2.0% / 9~10회 -3.5% / 11회+ -5.5% · Case 87) ·
+6) 사이클 최고 도달 회차(eff_lots = max(held_lots, cycle_ratchet_max_lots)) 잠금 기반 4단 와이드 점진 활주로(1~4회 -1.0% / 5~8회 -2.0% / 9~10회 -3.5% / 11회+ -5.5% · Case 87, Case 88) ·
    1층 공석 시 2층 단가 상한 역전 차단(HOLD_PREVENT_INVERSION · Case 73) 기반 눌림목(-1.00%)/상승돌파(+1.00%) 하이브리드 재장전 판정기
-   (MODIFIED Case 84 원복: 15:30 ~ 16:00 EST 구간에서는 1층 공석 +1.00% 상승돌파 추격을 HOLD_LATE_SESSION_BREAKOUT_CUTOFF 로 원천 차단하고 2층 단가 이하 -1.00% 눌림목만 허용!) ·
-   3중 안전문(보유 2층 이하 & 현금비중 20%+ & 저점대비 2.0배+ 반등) 통과 시 -15.0% 스텝업 저가 해금 판정기(Case 76)
-- 제1헌법 ~ 제6헌법 및 Case 01 ~ 87 완벽 준수
+   (Case 84: 15:30 ~ 16:00 EST 구간에서는 1층 공석 +1.00% 상승돌파 추격을 HOLD_LATE_SESSION_BREAKOUT_CUTOFF 로 원천 차단하고 2층 단가 이하 -1.00% 눌림목만 허용!) ·
+   본 그리드 3중 안전문(보유 2층 이하 & 현금비중 20%+ & 저점대비 2.0배+ 반등) 통과 시 -15.0% 스텝업 저가 해금 판정기(Case 76) 및
+   서브 그리드 최대 4회분(16%) 상한 캡 검문 & 10영업일 무매매·서브 1층 대비 -10.0% 저가 해금 판정기(evaluate_sub_grid_dip_signal · Case 88)
+- 제1헌법 ~ 제6헌법 및 Case 01 ~ 88 완벽 준수
 """
 
 from __future__ import annotations
@@ -55,16 +59,46 @@ MAX_GRID_TIERS: int = MAX_GRID_TIERS_7
 # 타 모듈 AST 심볼 임포트 호환을 위해 MAX_GRID_TIERS_12 별칭을 7 로 동시 유지
 MAX_GRID_TIERS_12: int = MAX_GRID_TIERS_7
 
-# NEW [Case 87 : 👑 06_L2L7_RATCHET_8PCT — 7층 초과(8층 발생) 시 구 1층 보존 + 구 2층 + 구 7층 통합 후 평단 오름차순 중간층 재배치 모드]
+# [Case 87 : 👑 06_L2L7_RATCHET_8PCT — 7층 초과(8층 발생) 시 구 1층 보존 + 구 2층 + 구 7층 통합 후 평단 오름차순 중간층 재배치 모드]
 DEFAULT_GRID_MERGE_MODE: str = str(
     getattr(toss_api, "DEFAULT_GRID_MERGE_MODE", "L2_L7_MERGE_SORT")
 )
 
-# 🎯 4 & Case 59, Case 71, Case 72, Case 73, Case 84: 상단 그리드(2~7층) 보유 중 1층 공석 시 60초 주기 눌림목/상승돌파 임계치(%)
+# NEW [Case 88 : 🛡️ 13_SUB_L1L3_RESV05_CAP4L — 스위치 없는 100% 기본 상시 적용(Default ON) 3층 서브 그리드 상수 락온]
+SUB_GRID_DEFAULT_ENABLED: bool = bool(
+    getattr(toss_api, "SUB_GRID_DEFAULT_ENABLED", True)
+)
+SUB_FROZEN_DAYS_TRIGGER: int = int(
+    getattr(toss_api, "SUB_FROZEN_DAYS_TRIGGER", 5)
+)
+SUB_PORTION_RATIO_4PCT: float = float(
+    getattr(toss_api, "SUB_PORTION_RATIO_4PCT", 0.04)
+)
+SUB_MAX_TIERS_3: int = int(getattr(toss_api, "SUB_MAX_TIERS_3", 3))
+SUB_MAX_TIERS: int = SUB_MAX_TIERS_3
+SUB_MAX_TOTAL_LOTS_4: int = int(
+    getattr(toss_api, "SUB_MAX_TOTAL_LOTS_4", 4)
+)
+SUB_MAX_TOTAL_LOTS: int = SUB_MAX_TOTAL_LOTS_4
+SUB_RESERVE_MAIN_PORTIONS: float = float(
+    getattr(toss_api, "SUB_RESERVE_MAIN_PORTIONS", 0.5)
+)
+SUB_MERGE_MODE_L1_L3: str = str(
+    getattr(toss_api, "SUB_MERGE_MODE_L1_L3", "SUB_L1_L3_MERGE")
+)
+DEFAULT_SUB_MERGE_MODE: str = SUB_MERGE_MODE_L1_L3
+SUB_UNLOCK_FROZEN_DAYS_10: int = int(
+    getattr(toss_api, "SUB_UNLOCK_FROZEN_DAYS_10", 10)
+)
+SUB_UNLOCK_DROP_FROM_L1_PCT: float = float(
+    getattr(toss_api, "SUB_UNLOCK_DROP_FROM_L1_PCT", 10.0)
+)
+
+# 🎯 4 & Case 59, Case 71, Case 72, Case 73, Case 84, Case 88: 상단 그리드 보유 중 1층 공석 시 60초 주기 눌림목/상승돌파 임계치(%)
 REENTRY_PULLBACK_DROP_PCT: float = -1.00
 REENTRY_BREAKOUT_RISE_PCT: float = 1.00
 
-# MODIFIED [Case 84 원복]: 정규장 마감 30분 전(15:30 ~ 16:00 EST) 0주 새 사이클 첫 1층 진입 및 1층 공석 +1.0% 돌파 추격 동시 차단 기준 시각(HHMM)
+# [Case 84 & Case 88]: 정규장 마감 30분 전(15:30 ~ 16:00 EST) 본·서브 0주 새 사이클 첫 1층 진입 및 1층 공석 +1.0% 돌파 추격 동시 차단 기준 시각(HHMM)
 NEW_CYCLE_BUY_CUTOFF_HM: int = int(
     getattr(toss_api, "NEW_CYCLE_BUY_CUTOFF_HM", 1530)
 )
@@ -203,13 +237,14 @@ def get_golden_allin_mode_label(mode: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# [핵심 1] StratumBucket & GoldenAllInPocket : 순수 실물 매수 원가(book_price == actual_avg_price) 구조체 (Case 46 ~ 87)
+# [핵심 1] StratumBucket & GoldenAllInPocket : 순수 실물 매수 원가(book_price == actual_avg_price) 구조체 (Case 46 ~ 88)
 # ---------------------------------------------------------------------------
 @dataclass
 class StratumBucket:
     """
-    🎯 3 & Case 46 ~ 87:
-    SOXL 1층 ~ 7층 골디락스 멀티 그리드(1층 공격수 L1 / 2층 ~ 7층 개별 완충층 및 구 2층+구 7층 중간합병 본대 GRID_L2 ~ GRID_L7) 데이터 구조체.
+    🎯 3 & Case 46 ~ 88:
+    SOXL 본 그리드(1층 ~ 7층 골디락스 멀티 그리드 : 1층 공격수 L1 / 2층 ~ 7층 개별 완충층 및 구 2층+구 7층 중간합병 본대 GRID_L2 ~ GRID_L7) 및
+    Default-ON 서브 그리드(1층 ~ 3층 멀티 그리드 : 서브 1층 공격수 SUB_L1 / 2층 ~ 3층 완충층 및 구 1층+구 3층 양끝합병 본대 GRID_L2 ~ GRID_L3) 공용 데이터 구조체.
     """
 
     qty: int
@@ -287,7 +322,7 @@ class StratumBucket:
 class GoldenAllInPocket:
     """
     # [Case 80 : 미동부 프리장 황금시간대(07:00 ~ 07:50 EST & RSI <= 19.0) 독립 골든포켓 분리회계 구조체]:
-    7층 그리드(buckets)의 층수·회차·기억저가를 전혀 오염시키지 않고 독립 관리되는
+    7층 본 그리드(buckets) 및 3층 서브 그리드(sub_buckets)의 층수·회차·기억저가를 전혀 오염시키지 않고 독립 관리되는
     가용시드 100% 전액매수 전용 포켓 (목표 익절률 +1.50% 고정).
     """
 
@@ -427,11 +462,11 @@ def buckets_to_dicts(
 
 
 # ---------------------------------------------------------------------------
-# [핵심 1-B · Case 69, Case 71, Case 72 & Case 87] 그리드 층 판별기 · 구 2층+구 7층 통합 중간배치기 & 진성 손익분기점 하한선 정규화기
+# [핵심 1-B · Case 69, Case 71, Case 72, Case 87 & Case 88] 그리드 층 판별기 · 본 그리드 구 2층+구 7층 통합 중간배치기 · 서브 그리드 구 1층+구 3층 양끝 합병기 & 진성 손익분기점 하한선 정규화기
 # ---------------------------------------------------------------------------
 def is_upper_grid_tier(bucket_or_lot_type: Any) -> bool:
     """
-    🚨 [Case 71 & Case 72 상단 그리드(2층 ~ 7층) 여부 결정론적 판별기]:
+    🚨 [Case 71, Case 72 & Case 88 상단 그리드(본 2층 ~ 7층 / 서브 2층 ~ 3층) 여부 결정론적 판별기]:
     """
     if isinstance(bucket_or_lot_type, StratumBucket):
         tag = str(bucket_or_lot_type.lot_type or "").upper().strip()
@@ -440,16 +475,18 @@ def is_upper_grid_tier(bucket_or_lot_type: Any) -> bool:
     else:
         tag = str(bucket_or_lot_type or "").upper().strip()
 
-    if tag == "MERGED_UPPER":
+    if tag in ("MERGED_UPPER", "SUB_MERGED"):
         return True
     if tag.startswith("GRID_L") and tag != "GRID_L1":
+        return True
+    if tag.startswith("SUB_L") and tag != "SUB_L1":
         return True
     return False
 
 
 def has_active_l1_bucket(buckets: Sequence[StratumBucket]) -> bool:
     """
-    🚨 [Case 71 & Case 72 활성 1층 공격수 보유 여부 판별기]:
+    🚨 [Case 71, Case 72 & Case 88 활성 1층 공격수 보유 여부 판별기 (본 그리드 및 서브 그리드 공용)]:
     """
     valid = [
         b
@@ -467,8 +504,8 @@ def relabel_upper_grid_tiers(
     merge_mode: str = DEFAULT_GRID_MERGE_MODE,
 ) -> List[StratumBucket]:
     """
-    # MODIFIED [Case 53, Case 71, Case 72 & Case 87 : 👑 06_L2L7_RATCHET_8PCT — 구 1층 보존 + 구 2층 + 구 7층 통합 후 평단 오름차순 중간층 재배치]:
-    상단 지층 배열(valid)의 개수가 max_upper_cnt (6개 : GRID_L2 ~ GRID_L7)를 초과할 때:
+    # [Case 53, Case 71, Case 72 & Case 87 : 👑 06_L2L7_RATCHET_8PCT — 구 1층 보존 + 구 2층 + 구 7층 통합 후 평단 오름차순 중간층 재배치]:
+    본 그리드 상단 지층 배열(valid)의 개수가 max_upper_cnt (6개 : GRID_L2 ~ GRID_L7)를 초과할 때:
     1) merge_mode == "L2_L7_MERGE_SORT" (기본 확정 챔피언) 이고 len(valid) >= 3 인 경우:
        - 가장 저렴한 최하단 상단층인 valid[0] (구 1층 -> 새 2층 후보)은 합병하지 않고 온전히 보존(kept_lowest_upper = [valid[0]])하여
          Case 73 (1층 > 2층 단가 역전 차단 상한 가드)을 촘촘하게 사수한다.
@@ -555,12 +592,118 @@ def relabel_upper_grid_tiers(
     return out
 
 
+def relabel_sub_upper_grid_tiers_with_flag(
+    sub_upper_buckets: Sequence[StratumBucket],
+    max_tiers: int = SUB_MAX_TIERS_3,
+    merge_mode: str = SUB_MERGE_MODE_L1_L3,
+) -> Tuple[List[StratumBucket], bool]:
+    """
+    # NEW [Case 88 : 🛡️ 13_SUB_L1L3_RESV05_CAP4L — 3층 서브 그리드 초과(4층 발생) 시 서브 구 1층 + 구 3층 양끝 합병(SUB_L1_L3_MERGE) 및 오름차순 재배치]:
+    서브 그리드 상단 지층 배열(valid)의 개수가 max_upper_cnt (2개 : GRID_L2 ~ GRID_L3)를 초과할 때:
+    1) merge_mode == "SUB_L1_L3_MERGE" 이고 len(valid) >= 3 인 경우:
+       - 최하단 상단층 후보인 low_b = valid[0] (서브 구 1층)과 최상단층 후보인 high_b = valid[-1] (서브 구 3층)의
+         수량·원금·회차를 가중평균 합산하고 Case 53 상한 하드 캡핑(min(raw_upper_p, overall_book_avg))을 적용하여
+         합병 본대(merged_bucket, lot_count = low_b.lot_count + high_b.lot_count)를 생성한다.
+       - 보존된 중간 구 2층(valid[1:-1])과 합병 본대를 합쳐 단가(book_price) 오름차순으로 정렬한다.
+    2) 서브 상단 지층들을 GRID_L2, GRID_L3 로 정규화하여 (relabeled_list, did_merge) 튜플로 반환한다.
+    """
+    valid = [
+        b
+        for b in (sub_upper_buckets or [])
+        if isinstance(b, StratumBucket) and b.qty > 0
+    ]
+    if not valid:
+        return [], False
+
+    max_upper_cnt = max(1, safe_int(max_tiers, SUB_MAX_TIERS_3) - 1)
+    m_mode = str(merge_mode or SUB_MERGE_MODE_L1_L3).upper().strip()
+    did_merge = False
+
+    while len(valid) > max_upper_cnt:
+        did_merge = True
+        if m_mode == "SUB_L1_L3_MERGE" and len(valid) >= 3:
+            low_b = valid[0]
+            high_b = valid[-1]
+            middle_rest = valid[1:-1]
+
+            m_qty = low_b.qty + high_b.qty
+            m_cost = round(low_b.actual_cost_usd + high_b.actual_cost_usd, 4)
+            m_lots = max(1, low_b.lot_count) + max(1, high_b.lot_count)
+            overall_book_avg = (
+                float(low_b.qty) * low_b.book_price
+                + float(high_b.qty) * high_b.book_price
+            ) / float(max(1, m_qty))
+            raw_upper_p = max(0.01, m_cost / float(max(1, m_qty)))
+            capped_avg_p = round(min(raw_upper_p, overall_book_avg), 4)
+            merged_bucket = StratumBucket(
+                qty=m_qty,
+                book_price=capped_avg_p,
+                book_invested_usd=m_cost,
+                actual_cost_usd=m_cost,
+                lot_count=m_lots,
+                lot_type="SUB_MERGED",
+            )
+            valid = middle_rest + [merged_bucket]
+            valid.sort(key=lambda b: round(b.book_price, 4))
+        else:
+            kept = valid[: max_upper_cnt - 1]
+            overflow = valid[max_upper_cnt - 1 :]
+            tot_q = sum(b.qty for b in overflow)
+            tot_cost = round(sum(b.actual_cost_usd for b in overflow), 4)
+            tot_lots = sum(max(1, b.lot_count) for b in overflow)
+            overall_book_avg = (
+                sum(float(b.qty) * b.book_price for b in overflow)
+                / float(max(1, tot_q))
+            )
+            raw_upper_p = max(0.01, tot_cost / float(max(1, tot_q)))
+            capped_avg_p = round(min(raw_upper_p, overall_book_avg), 4)
+            merged_top = StratumBucket(
+                qty=tot_q,
+                book_price=capped_avg_p,
+                book_invested_usd=tot_cost,
+                actual_cost_usd=tot_cost,
+                lot_count=tot_lots,
+                lot_type="SUB_MERGED",
+            )
+            valid = kept + [merged_top]
+
+    out: List[StratumBucket] = []
+    for idx, b in enumerate(valid):
+        tier_no = min(max_upper_cnt + 1, idx + 2)
+        pure_cost = round(max(0.01 * float(b.qty), b.actual_cost_usd), 4)
+        pure_p = round(max(0.01, pure_cost / float(b.qty)), 4)
+        out.append(
+            StratumBucket(
+                qty=b.qty,
+                book_price=pure_p,
+                book_invested_usd=pure_cost,
+                actual_cost_usd=pure_cost,
+                lot_count=max(1, b.lot_count),
+                lot_type=f"GRID_L{tier_no}",
+            )
+        )
+    return out, did_merge
+
+
+def relabel_sub_upper_grid_tiers(
+    sub_upper_buckets: Sequence[StratumBucket],
+    max_tiers: int = SUB_MAX_TIERS_3,
+    merge_mode: str = SUB_MERGE_MODE_L1_L3,
+) -> List[StratumBucket]:
+    relabeled, _ = relabel_sub_upper_grid_tiers_with_flag(
+        sub_upper_buckets=sub_upper_buckets,
+        max_tiers=max_tiers,
+        merge_mode=merge_mode,
+    )
+    return relabeled
+
+
 def enforce_true_breakeven_floor_on_buckets(
     buckets: Sequence[StratumBucket],
     max_allowed_discount_usd: Optional[float] = None,
 ) -> List[StratumBucket]:
     """
-    🚨 [Case 69, Case 71 & Case 72 진성 손익분기점(순수 매수 원가) 하한선 강제]:
+    🚨 [Case 69, Case 71, Case 72 & Case 88 진성 손익분기점(순수 매수 원가) 하한선 강제]:
     """
     valid = [
         b
@@ -588,7 +731,7 @@ def enforce_true_breakeven_floor_on_buckets(
 
 
 # ---------------------------------------------------------------------------
-# [핵심 2] 8%(12.5분할) 정량 주수 · 100% 전액매수 주수 · GUARD30 판정 · 온디맨드 수혈/상환기 (🎯 1 & Case 25 ~ 35, 67, 77, 80, 86)
+# [핵심 2] 본 그리드 8%(12.5분할) & 서브 그리드 4%(25분할) 정량 주수 · 유휴현금(0.5회분 보호예수) · 100% 전액매수 주수 · GUARD30 판정 · 온디맨드 수혈/상환기 (🎯 1 & Case 25 ~ 35, 67, 77, 80, 86, 88)
 # ---------------------------------------------------------------------------
 def compute_golden8_quota_qty(
     anchor_price: float,
@@ -596,12 +739,13 @@ def compute_golden8_quota_qty(
     initial_seed_usd: float = DEFAULT_INITIAL_SEED_USD,
     portion_mode: str = "COMP_08PCT",
     exec_price: Optional[float] = None,
+    portion_ratio: Optional[float] = None,
 ) -> Tuple[int, float]:
     """
-    🎯 1 & Case 25 ~ 35, Case 67 & Case 77:
-    직전 매매 기준가(anchor_price)를 기반으로 8%(12.5분할) 황금비율 1회분 예산(portion_budget)과
+    🎯 1 & Case 25 ~ 35, Case 67, Case 77 & Case 88:
+    직전 매매 기준가(anchor_price)를 기반으로 황금비율(본 그리드 8% / 서브 그리드 4%) 1회분 예산(portion_budget)과
     고정 목표 매수 주수(anchor_quota_qty)를 산출하되, 실제 매수 지정가(exec_price)가 제공된 경우
-    상승 돌파 등으로 인해 1회분(8%) 예산을 초과하지 않도록 min(budget_cap_qty, anchor_quota_qty)로 캡핑한다.
+    상승 돌파 등으로 인해 1회분 예산을 초과하지 않도록 min(budget_cap_qty, anchor_quota_qty)로 캡핑한다.
     반환값: (target_qty, portion_budget)
     """
     init_seed = max(
@@ -610,10 +754,17 @@ def compute_golden8_quota_qty(
     tot_eq = max(init_seed, safe_float(current_total_equity, init_seed))
     mode = str(portion_mode or "COMP_08PCT").upper().strip()
 
-    if mode == "FIXED_800":
-        portion_budget = round(init_seed * PORTION_RATIO_LOCKED, 4)
+    if portion_ratio is not None and safe_float(portion_ratio, 0.0) > 0.0:
+        eff_ratio = safe_float(portion_ratio, PORTION_RATIO_LOCKED)
+    elif mode in ("SUB_04PCT", "COMP_04PCT"):
+        eff_ratio = SUB_PORTION_RATIO_4PCT
     else:
-        portion_budget = round(tot_eq * PORTION_RATIO_LOCKED, 4)
+        eff_ratio = PORTION_RATIO_LOCKED
+
+    if mode == "FIXED_800":
+        portion_budget = round(init_seed * eff_ratio, 4)
+    else:
+        portion_budget = round(tot_eq * eff_ratio, 4)
 
     ref_p = max(0.01, safe_float(anchor_price, 0.01))
     anchor_quota_qty = max(1, int(math.floor((portion_budget + 1e-9) / ref_p)))
@@ -630,6 +781,73 @@ def compute_golden8_quota_qty(
     return target_qty, portion_budget
 
 
+def compute_sub4_quota_qty(
+    sub_anchor_price: float,
+    current_core_equity: float,
+    initial_seed_usd: float = DEFAULT_INITIAL_SEED_USD,
+    exec_price: Optional[float] = None,
+) -> Tuple[int, float]:
+    """
+    # NEW [Case 88 : 🛡️ 13_SUB_L1L3_RESV05_CAP4L — 3층 서브 그리드 전용 4.0%(25분할) 정량 주수 산출기]:
+    순수 코어 총자산(current_core_equity)의 4.0%를 서브 1회분 예산(sub_portion_budget)으로 산출하고
+    min(서브 1회분 예산 상한 주수, 서브 기준가 고정 정량) 이중 캡핑(Case 67)을 적용하여 반환한다.
+    """
+    return compute_golden8_quota_qty(
+        anchor_price=sub_anchor_price,
+        current_total_equity=current_core_equity,
+        initial_seed_usd=initial_seed_usd,
+        portion_mode="SUB_04PCT",
+        exec_price=exec_price,
+        portion_ratio=SUB_PORTION_RATIO_4PCT,
+    )
+
+
+def compute_sub_grid_available_idle_cash(
+    free_cash_usd: float,
+    core_equity_usd: float,
+    broker_buying_power_usd: Optional[float] = None,
+    reserve_main_portions: float = SUB_RESERVE_MAIN_PORTIONS,
+) -> Dict[str, Any]:
+    """
+    # NEW [Case 88 : 본 그리드 보호예수금 0.5회분(4.0%) 차감 후 서브 그리드 가용 유휴 현금(avail_idle_cash_usd) 산출기]:
+    본 그리드의 급락 추매 탄약을 침해하지 않도록 코어 총자산 기준 본 그리드 1회분(8.0%)의 0.5회분(4.0%)을
+    보호예수금(reserved_for_main_usd)으로 차감한 뒤 남은 순수 유휴 현금만 서브 그리드 가용 현금으로 반환한다.
+    """
+    f_cash = max(0.0, safe_float(free_cash_usd, 0.0))
+    c_eq = max(
+        DEFAULT_INITIAL_SEED_USD,
+        safe_float(core_equity_usd, DEFAULT_INITIAL_SEED_USD),
+    )
+    res_mult = max(
+        0.0, safe_float(reserve_main_portions, SUB_RESERVE_MAIN_PORTIONS)
+    )
+
+    main_portion_budget = round(c_eq * PORTION_RATIO_LOCKED, 4)
+    sub_portion_budget = round(c_eq * SUB_PORTION_RATIO_4PCT, 4)
+    reserved_for_main_usd = round(main_portion_budget * res_mult, 4)
+
+    eff_cash = f_cash
+    if broker_buying_power_usd is not None:
+        bp_val = safe_float(broker_buying_power_usd, -1.0)
+        if bp_val >= 0.0:
+            eff_cash = min(f_cash, bp_val)
+
+    avail_idle_cash_usd = round(max(0.0, eff_cash - reserved_for_main_usd), 4)
+    free_idle_cash_ledger_usd = round(
+        max(0.0, f_cash - reserved_for_main_usd), 4
+    )
+
+    return {
+        "free_cash_usd": round(f_cash, 4),
+        "eff_cash_usd": round(eff_cash, 4),
+        "reserved_for_main_usd": reserved_for_main_usd,
+        "avail_idle_cash_usd": avail_idle_cash_usd,
+        "free_idle_cash_ledger_usd": free_idle_cash_ledger_usd,
+        "main_portion_budget": main_portion_budget,
+        "sub_portion_budget": sub_portion_budget,
+    }
+
+
 def resolve_affordable_buy_qty(
     target_qty: int,
     price_t: float,
@@ -639,9 +857,9 @@ def resolve_affordable_buy_qty(
     round_trip_fee_rate_pct: Optional[float] = None,
 ) -> Tuple[int, float]:
     """
-    # [Case 25 ~ 35, Case 67 & Case 86 계좌별 동적 왕복 수수료율 연동]:
+    # [Case 25 ~ 35, Case 67, Case 86 & Case 88 계좌별 동적 왕복 수수료율 연동]:
     직전 기준가로 산출된 목표 정량(target_qty)을 실제 주문가(price_t)로 매수하기 직전:
-    1) max_portion_budget_usd(1회분 8% 예산) 상한 주수(budget_cap_qty)와 target_qty 중 작은 값으로 캡핑한다.
+    1) max_portion_budget_usd(본 그리드 8% / 서브 그리드 4% 예산) 상한 주수(budget_cap_qty)와 target_qty 중 작은 값으로 캡핑한다.
     2) 계좌의 왕복 수수료율(round_trip_fee_rate_pct, 미지정 시 런타임 락온 수수료율 0.14% 또는 0.20%) 버퍼를 감안한
        가용 현금(free_cash_usd) 및 토스 실계좌 매수가능금액 한도 내로 캡핑한다.
     반환값: (buy_qty, actual_spent_usd)
@@ -962,7 +1180,7 @@ def compute_reserve_repayment_on_zero(
     max_reserve_portions: int = MAX_RESERVE_PORTIONS,
 ) -> Dict[str, Any]:
     """
-    # [Case 77 : 0주 전량 졸업 시 온디맨드 예비시드 원금 자동 상환 및 6회분 한도 복구 연산기]:
+    # [Case 77 & Case 88 : 0주 전량 졸업 시 온디맨드 예비시드 원금 자동 상환 및 6회분 한도 복구 연산기]:
     """
     init_seed = max(
         100.0, safe_float(initial_seed_usd, DEFAULT_INITIAL_SEED_USD)
@@ -1012,7 +1230,7 @@ def compute_reserve_repayment_on_zero(
 
 
 # ---------------------------------------------------------------------------
-# [핵심 3] 사이클 최고 도달 회차 잠금 기반 4단 와이드 점진 단차(Case 87) · 하이브리드 1층 재장전(Case 84 돌파차단 원복) · STEP2X_15PCT_C20 스텝업 해금 판정기 (Case 36 ~ 87)
+# [핵심 3] 사이클 최고 도달 회차 잠금 기반 4단 와이드 점진 단차(Case 87, 88) · 하이브리드 1층 재장전(Case 84 돌파차단) · 본 그리드 STEP2X_15PCT_C20 스텝업 해금(Case 76) · 서브 그리드 최대 4회분 캡 및 10일/-10% 저가 해금 판정기 (Case 36 ~ 88)
 # ---------------------------------------------------------------------------
 def get_golden8_prog_thresholds(
     held_lots: int,
@@ -1020,9 +1238,9 @@ def get_golden8_prog_thresholds(
     cycle_ratchet_max_lots: int = 0,
 ) -> Tuple[float, float, float]:
     """
-    # MODIFIED [🎯 2 & Case 36 ~ 45, 60, 71, 72 & Case 87 : 사이클 최고 도달 회차(cycle_ratchet_max_lots) 잠금 기반 4단 와이드 점진 활주로]:
+    # [🎯 2 & Case 36 ~ 45, 60, 71, 72, Case 87 & Case 88 : 사이클 최고 도달 회차(cycle_ratchet_max_lots / sub_ratchet_max_lots) 잠금 기반 4단 와이드 점진 활주로]:
     중간 합병층이나 하단 완충층이 개별 익절로 먼저 빠져나가 현재 보유 회차(held_lots)가 줄어들더라도,
-    0주 졸업(또는 STEP2X 스텝업 해금) 전까지는 이번 사이클 최고 도달 회차(cycle_ratchet_max_lots)를 기준으로
+    0주 졸업(또는 STEP2X / SUB_UNLOCK 저가 해금) 전까지는 이번 사이클 최고 도달 회차(cycle_ratchet_max_lots)를 기준으로
     eff_lots = max(1, held_lots, cycle_ratchet_max_lots) 를 산출하여 4단 와이드 단차가 풀리는 현상을 원천 봉쇄한다!
     (get_golden8_prog_thresholds(held_lots, "WIDE_RUNWAY", cycle_ratchet_max_lots) 및
      get_golden8_prog_thresholds(held_lots, cycle_ratchet_max_lots) 양방향 호출 시그니처 100% 호환)
@@ -1063,14 +1281,14 @@ def evaluate_l2_only_hybrid_reentry_signal(
     is_late_cutoff: Optional[bool] = None,
 ) -> Dict[str, Any]:
     """
-    # MODIFIED [🎯 4 & Case 59, Case 67, Case 71, Case 72, Case 73 & Case 84 원복]:
-    상단 2층 ~ 7층(GRID_L2 ~ GRID_L7) 지층이 존재하는 상태에서 1층이 공석일 때:
+    # [🎯 4 & Case 59, Case 67, Case 71, Case 72, Case 73, Case 84 & Case 88]:
+    본 그리드 상단 2층 ~ 7층(GRID_L2 ~ GRID_L7) 또는 서브 그리드 상단 2층 ~ 3층(GRID_L2 ~ GRID_L3) 지층이 존재하는 상태에서 1층이 공석일 때:
     - 현재가 > 2층 단가(ceil_p) 시에는 1층 > 2층 단가 역전을 막기 위해 HOLD_PREVENT_INVERSION 으로 차단(Case 73)하고,
     - 현재가 <= 2층 단가 안전 영역 내에서는:
       1) 직전 익절가 대비 -1.00% 이하 눌림목(PULLBACK_RELOAD)은 04:07 ~ 16:00 EST 전 매수 구간에서 100% 정상 승인하고,
       2) 직전 익절가 대비 +1.00% 이상 상승돌파(BREAKOUT_RELOAD)는 04:07 ~ 15:29 EST 구간에서만 승인하되,
          정규장 마감 30분 전(15:30 ~ 16:00 EST, late_cutoff == True) 구간에서는 장 막판 데드캣 숏스퀴즈 고점 추격으로 인한
-         시드고갈을 막기 위해 HOLD_LATE_SESSION_BREAKOUT_CUTOFF 로 원천 차단한다! (Case 84 원복)
+         시드고갈을 막기 위해 HOLD_LATE_SESSION_BREAKOUT_CUTOFF 로 원천 차단한다! (Case 84)
     """
     lp = safe_float(live_price, 0.0)
     anc = safe_float(anchor_price, 0.0)
@@ -1142,7 +1360,7 @@ def evaluate_l2_only_hybrid_reentry_signal(
             "l2_ceiling_price": round(ceil_p, 4),
         }
 
-    # 조건 B : +1.00% 이상 상승돌파 재장전 (MODIFIED Case 84 원복 : 15:30 ~ 16:00 EST 구간에서는 돌파 추격 원천 차단!)
+    # 조건 B : +1.00% 이상 상승돌파 재장전 (Case 84 : 15:30 ~ 16:00 EST 구간에서는 돌파 추격 원천 차단!)
     if chg_from_exit_pct >= REENTRY_BREAKOUT_RISE_PCT:
         if late_cutoff:
             return {
@@ -1366,4 +1584,169 @@ def evaluate_step_up_2x_dip_signal(
         "rebound_mult": round(rebound_mult, 2),
         "cash_ratio_pct": round(cash_ratio * 100.0, 2),
         "next_cycle_min_price": round(eff_min_p, 4),
+    }
+
+
+def evaluate_sub_grid_dip_signal(
+    live_price: float,
+    sub_buckets: Sequence[StratumBucket],
+    sub_anchor_price: float,
+    sub_cycle_min_buy_price: float,
+    sub_drop_buy_pct: float,
+    sub_consec_frozen_days: int = 0,
+    sub_max_total_lots: int = SUB_MAX_TOTAL_LOTS_4,
+    unlock_frozen_days: int = SUB_UNLOCK_FROZEN_DAYS_10,
+    unlock_drop_pct: float = SUB_UNLOCK_DROP_FROM_L1_PCT,
+) -> Dict[str, Any]:
+    """
+    # NEW [Case 88 : 🛡️ 13_SUB_L1L3_RESV05_CAP4L — 3층 서브 그리드 10분 게이트 추매 & 최대 4회분(16%) 상한 캡 & 10영업일/-10% 저가 해금 판정기]:
+    1) 현재 서브 그리드의 총 누적 회차(sub_cur_total_lots = sum(sb.lot_count for sb in sub_buckets))가
+       최대 상한(sub_max_total_lots = 4회분, 코어시드의 16.0%) 이상이면 본 그리드 탄약 보전을 위해 즉시 매수를 차단(HOLD_SUB_CAP_4_LOTS_REACHED)한다!
+    2) 제1경로(SUB_STATIC_NEW_LOW) : 서브 정적 최저가(sub_ref_static_anchor) 대비 서브 최고도달회차 기반 4단 와이드 단차(sub_drop_buy_pct) 신저가 도달 시 승인.
+    3) 제2경로(SUB_UNLOCK_10D_D10) : 정적 신저가 미달 시에도 서브 연속 무매매일(sub_consec_frozen_days)이 10영업일 이상이고
+       현재가가 서브 활성 1층 단가 대비 -10.0% 이하(live_price <= round(sub_l1_p * 0.90, 4))로 조정받았을 때 저가 해금 승인!
+    """
+    valid = [
+        sb
+        for sb in (sub_buckets or [])
+        if isinstance(sb, StratumBucket) and sb.qty > 0
+    ]
+    lp = safe_float(live_price, 0.0)
+    anc = safe_float(sub_anchor_price, 0.0)
+    c_min = safe_float(sub_cycle_min_buy_price, 0.0)
+    req_drop = safe_float(sub_drop_buy_pct, -1.0)
+    frozen_d = max(0, safe_int(sub_consec_frozen_days, 0))
+    max_lots_cap = max(1, safe_int(sub_max_total_lots, SUB_MAX_TOTAL_LOTS_4))
+    req_frozen_d = max(
+        1, safe_int(unlock_frozen_days, SUB_UNLOCK_FROZEN_DAYS_10)
+    )
+    u_drop_pct = max(
+        1.0, safe_float(unlock_drop_pct, SUB_UNLOCK_DROP_FROM_L1_PCT)
+    )
+
+    sub_cur_total_lots = sum(max(1, sb.lot_count) for sb in valid)
+
+    if not valid or not has_active_l1_bucket(valid):
+        return {
+            "should_buy": False,
+            "is_sub_unlock": False,
+            "trigger_tag": "NO_ACTIVE_SUB_L1",
+            "quota_ref_price": round(c_min if c_min > 0.0 else lp, 4),
+            "ref_static_anchor": round(c_min if c_min > 0.0 else lp, 4),
+            "chg_static_pct": 0.0,
+            "sub_unlock_eligible": False,
+            "sub_stepped_min_price": 0.0,
+            "sub_stepped_trigger_price": 0.0,
+            "sub_cur_total_lots": sub_cur_total_lots,
+            "sub_max_total_lots": max_lots_cap,
+            "next_sub_cycle_min_price": round(c_min, 4),
+        }
+
+    sub_l1_p = valid[0].book_price
+    valid_refs = [p for p in (sub_l1_p, anc, c_min) if p > 0.0]
+    ref_static_anchor = min(valid_refs) if valid_refs else sub_l1_p
+    eff_min_p = c_min if c_min > 0.0 else ref_static_anchor
+
+    chg_static_pct = (
+        ((lp - ref_static_anchor) / ref_static_anchor) * 100.0
+        if (lp > 0.0 and ref_static_anchor > 0.0)
+        else 0.0
+    )
+
+    sub_unlock_eligible = bool(frozen_d >= req_frozen_d and sub_l1_p > 0.0)
+    sub_stepped_min_p = (
+        round(sub_l1_p * (1.0 - u_drop_pct / 100.0), 4)
+        if sub_l1_p > 0.0
+        else 0.0
+    )
+    sub_stepped_trig_p = (
+        round(math.floor((sub_stepped_min_p + 1e-9) * 100.0) / 100.0, 2)
+        if sub_stepped_min_p > 0.0
+        else 0.0
+    )
+
+    # 🛡️ 최대 누적 합병 회차 상한 캡(4회분 = 코어시드의 16%) 도달 시 서브 추매 원천 차단!
+    if sub_cur_total_lots >= max_lots_cap:
+        return {
+            "should_buy": False,
+            "is_sub_unlock": False,
+            "trigger_tag": "HOLD_SUB_CAP_4_LOTS_REACHED",
+            "quota_ref_price": round(ref_static_anchor, 4),
+            "ref_static_anchor": round(ref_static_anchor, 4),
+            "chg_static_pct": round(chg_static_pct, 2),
+            "sub_unlock_eligible": False,
+            "sub_stepped_min_price": sub_stepped_min_p,
+            "sub_stepped_trigger_price": sub_stepped_trig_p,
+            "sub_cur_total_lots": sub_cur_total_lots,
+            "sub_max_total_lots": max_lots_cap,
+            "next_sub_cycle_min_price": round(eff_min_p, 4),
+        }
+
+    if lp <= 0.0:
+        return {
+            "should_buy": False,
+            "is_sub_unlock": False,
+            "trigger_tag": "NO_LIVE_PRICE",
+            "quota_ref_price": round(ref_static_anchor, 4),
+            "ref_static_anchor": round(ref_static_anchor, 4),
+            "chg_static_pct": 0.0,
+            "sub_unlock_eligible": sub_unlock_eligible,
+            "sub_stepped_min_price": sub_stepped_min_p,
+            "sub_stepped_trigger_price": sub_stepped_trig_p,
+            "sub_cur_total_lots": sub_cur_total_lots,
+            "sub_max_total_lots": max_lots_cap,
+            "next_sub_cycle_min_price": round(eff_min_p, 4),
+        }
+
+    # 1) 제1경로 : 서브 정적 최저가 대비 4단 와이드 신저가 도달 시 승인
+    if chg_static_pct <= req_drop:
+        return {
+            "should_buy": True,
+            "is_sub_unlock": False,
+            "trigger_tag": "SUB_STATIC_NEW_LOW",
+            "quota_ref_price": round(ref_static_anchor, 4),
+            "ref_static_anchor": round(ref_static_anchor, 4),
+            "chg_static_pct": round(chg_static_pct, 2),
+            "sub_unlock_eligible": sub_unlock_eligible,
+            "sub_stepped_min_price": 0.0,
+            "sub_stepped_trigger_price": sub_stepped_trig_p,
+            "sub_cur_total_lots": sub_cur_total_lots,
+            "sub_max_total_lots": max_lots_cap,
+            "next_sub_cycle_min_price": round(min(eff_min_p, lp), 4),
+        }
+
+    # 2) 제2경로 : 서브 10영업일 이상 무매매 & 서브 1층 대비 -10.0% 이하 도달 시 저가 해금 승인
+    if (
+        sub_unlock_eligible
+        and sub_stepped_min_p > 0.0
+        and lp <= sub_stepped_min_p
+    ):
+        return {
+            "should_buy": True,
+            "is_sub_unlock": True,
+            "trigger_tag": "SUB_UNLOCK_10D_D10",
+            "quota_ref_price": sub_stepped_min_p,
+            "ref_static_anchor": round(ref_static_anchor, 4),
+            "chg_static_pct": round(chg_static_pct, 2),
+            "sub_unlock_eligible": True,
+            "sub_stepped_min_price": sub_stepped_min_p,
+            "sub_stepped_trigger_price": sub_stepped_trig_p,
+            "sub_cur_total_lots": sub_cur_total_lots,
+            "sub_max_total_lots": max_lots_cap,
+            "next_sub_cycle_min_price": round(min(sub_stepped_min_p, lp), 4),
+        }
+
+    return {
+        "should_buy": False,
+        "is_sub_unlock": False,
+        "trigger_tag": "HOLD_SUB_GATE",
+        "quota_ref_price": round(ref_static_anchor, 4),
+        "ref_static_anchor": round(ref_static_anchor, 4),
+        "chg_static_pct": round(chg_static_pct, 2),
+        "sub_unlock_eligible": sub_unlock_eligible,
+        "sub_stepped_min_price": sub_stepped_min_p,
+        "sub_stepped_trigger_price": sub_stepped_trig_p,
+        "sub_cur_total_lots": sub_cur_total_lots,
+        "sub_max_total_lots": max_lots_cap,
+        "next_sub_cycle_min_price": round(eff_min_p, 4),
     }

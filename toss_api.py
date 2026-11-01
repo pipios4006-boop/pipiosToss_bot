@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 """
 # MODIFIED: toss_api.py
-인피니트 스노우볼 (Infinite Snowball) v3.0 — 토스증권 Open API (v1.2.14) 방탄 통신 통제소 (Part 2 / 2 · Step 02 / 10)
+인피니트 스노우볼 (Infinite Snowball) v3.0 — 토스증권 Open API (v1.2.14) 방탄 통신 통제소 (Part 2 / 2 · Step 02 / 13)
 - 역할:
-  1) toss_api_core.py (Part 1 / 2) 의 모든 상수(DEFAULT_GRID_MERGE_MODE 포함)·유틸리티·폴더격리·디스크치유·
+  1) toss_api_core.py (Part 1 / 2) 의 모든 상수(DEFAULT_GRID_MERGE_MODE · Case 88 서브 그리드 상수 포함)·유틸리티·폴더격리·디스크치유·
      GlobalThrottle·SoxlStratumLedger 심볼을 명시적으로 재익스포트(Facade Re-export)하여 타 모듈 AST 심볼 임포트 무결성 100% 보장
   2) 제1헌법 ~ 제6헌법 및 API.txt (v1.2.14) 100% 준수 TossApiClient 구현:
      - OAuth2 토큰 자동 발급 및 만료 전 선제 갱신 (POST /oauth2/token)
@@ -11,7 +11,7 @@
      - 계좌별 미국 주식(US) 실제 매매 수수료율 조회·락온 및 일시 통신 실패 시 원장/런타임 수수료율 보존 폴백 (GET /api/v1/commissions · Case 86)
      - REAL_ALLOWED_SYMBOLS = ("SOXL",) 단일 롱 화이트리스트 물리적 강제 (인버스 숏 SOXS 원천 차단 · Case 09)
      - 1분봉 윗꼬리(Upper-Wick) 슈팅 포착용 최근 5.0초 내 유효 체결 최고가 추출기 (get_recent_wick_high_price · Case 82)
-     - 토스 CLOSED 주문 원장 역추적기 (probe_latest_manual_fill_price : 실측 수수료 commission + tax 추출 포함 · Case 19, Case 63, Case 86)
+     - 토스 CLOSED 주문 원장 역추적기 (probe_latest_manual_fill_price : 실측 수수료 commission + tax 추출 포함 · Case 19, Case 63, Case 86, Case 88)
      - 모든 파일/네트워크 I/O 의 asyncio.to_thread 비동기 격리 및 GlobalThrottle 중앙 통제
 """
 
@@ -36,6 +36,7 @@ from toss_api_core import (
     DEFAULT_GOLDEN_ALLIN_MODE,
     DEFAULT_GRID_MERGE_MODE,
     DEFAULT_INITIAL_SEED_USD,
+    DEFAULT_SUB_MERGE_MODE,
     DEFAULT_UNLOCK_MODE,
     DEFAULT_US_COMMISSION_RATE,
     EST_TZ,
@@ -66,6 +67,17 @@ from toss_api_core import (
     STEP_UP_2X_MAX_TIERS,
     STEP_UP_2X_MIN_CASH_RATIO,
     STEP_UP_2X_MIN_REBOUND_MULT,
+    SUB_FROZEN_DAYS_TRIGGER,
+    SUB_GRID_DEFAULT_ENABLED,
+    SUB_MAX_TIERS,
+    SUB_MAX_TIERS_3,
+    SUB_MAX_TOTAL_LOTS,
+    SUB_MAX_TOTAL_LOTS_4,
+    SUB_MERGE_MODE_L1_L3,
+    SUB_PORTION_RATIO_4PCT,
+    SUB_RESERVE_MAIN_PORTIONS,
+    SUB_UNLOCK_DROP_FROM_L1_PCT,
+    SUB_UNLOCK_FROZEN_DAYS_10,
     SoxlStratumLedger,
     StratumLedger,
     TARGET_SYMBOL,
@@ -1350,7 +1362,7 @@ class TossApiClient:
         symbol: str = TARGET_SYMBOL,
     ) -> Tuple[float, List[str]]:
         """
-        # [Case 19, Case 63 & Case 86 수동 매수·매도 실체결가 및 실측 수수료 역추적기]:
+        # [Case 19, Case 63, Case 86 & Case 88 수동 매수·매도 실체결가 및 실측 수수료 역추적기]:
         """
         target_side = str(side or "SELL").upper().strip()
         need_q = max(1, safe_int(target_qty, 1))

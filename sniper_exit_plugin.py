@@ -3,16 +3,16 @@
 # MODIFIED: sniper_exit_plugin.py
 순수 롱(SOXL) 전용 '매수 체결 후 최초 60초 강제 타임쉴드(POST_BUY_TO_SELL_SHIELD_SEC = 60.0) &
 매수 후 60초 경과 시점부터 프리마켓·정규장·애프터마켓(16:00 ~ 19:59 EST)·데이마켓(20:00 ~ 03:59 EST) 24시간 전 세션에서
-보유 중 60초 블라인드 대기 락 없이 매 1.5초 실시간 4중 다중 익절 타점 스나이퍼 매도 모니터(Case 70, Case 71, Case 72, Case 79, Case 80, Case 82, Case 83, Case 84, Case 87) ·
-🚨 [Case 83 방안 C 오버나이트 통합이평 사수 하이브리드] 애프터마켓·데이마켓(is_ext_sell_only == True) 구간에서 상단 2~7층 보유 시
-하단 개별 층(1층 및 2~7층 개별/중간합병층) 쪼개 팔기를 잠가 저가 물량 이탈로 인한 2~7층 통합 이동평균(wma_2_to_7) 도망을 100% 원천 봉쇄하고,
+보유 중 60초 블라인드 대기 락 없이 매 1.5초 실시간 다중 익절(7층 본 그리드 + Default-ON 3층 서브 그리드 + 독립 골든포켓) 타점 스나이퍼 매도 모니터(Case 70, Case 71, Case 72, Case 79, Case 80, Case 82, Case 83, Case 84, Case 87, Case 88) ·
+🚨 [Case 83 방안 C 오버나이트 통합이평 사수 하이브리드 & Case 88] 애프터마켓·데이마켓(is_ext_sell_only == True) 구간에서 상단 지층(본 2~7층 / 서브 2~3층) 보유 시
+하단 개별 층(1층 및 상단 개별/합병층) 쪼개 팔기를 잠가 저가 물량 이탈로 인한 통합 이동평균(wma_2_to_7 / sub_wma_2_to_3) 도망을 100% 원천 봉쇄하고,
 오버나이트 중에는 통합 이동평균(+1.00%) 일괄 졸업(또는 1층 단독 보유 +1.50% / 독립 골든포켓 +1.50%)만 허용한 뒤,
-04:07:00 EST 프리장 개장(is_ext_sell_only == False) 즉시 프리장 시초가로 4중 다중 익절을 전면 개방하여 시초가 갭상승 수익 극대화! ·
-🛡️ [Case 84 원복 : 정규장 마감 30분 전(15:30 ~ 16:00 EST) 0주 새 사이클 첫 1층 진입 및 1층 공석 +1.0% 돌파 추격 동시 차단 알림 연동]
+04:07:00 EST 프리장 개장(is_ext_sell_only == False) 즉시 프리장 시초가로 본·서브·골든포켓 다중 익절을 전면 개방하여 시초가 갭상승 수익 극대화! ·
+🛡️ [Case 84 : 정규장 마감 30분 전(15:30 ~ 16:00 EST) 0주 새 사이클 첫 1층 진입 및 1층 공석 +1.0% 돌파 추격 동시 차단 알림 연동]
 15:29:01 ~ 16:00:00 EST 구간에 0주 전량 졸업 달성 시 60초 타임쉴드 직후 15:30 EST 이상이 되어 새 사이클 1층 진입이 자동 차단되므로
-익일 04:07 EST 프리장 진입 대기 안내를 표출하고, 1층 익절 후 상단 2~7층 잔존(1층 공석) 시에는 +1.0% 돌파 차단 및 2층 상한 이하 -1.0% 눌림목 재장전 감시 안내를 표출! ·
-👑 [Case 87 : 06_L2L7_RATCHET_8PCT] 중간층으로 재배치된 구 2층 + 구 7층 합병 본대(또는 하단 개별층) 익절 체결 시
-잔여 지층이 존재하는 동안에는 사이클 최고 도달 회차(cycle_ratchet_max_lots) 잠금을 그대로 유지하고 0주 졸업 시에만 0으로 리셋! ·
+익일 04:07 EST 프리장 진입 대기 안내를 표출하고, 1층 익절 후 상단층 잔존(1층 공석) 시에는 +1.0% 돌파 차단 및 2층 상한 이하 -1.0% 눌림목 재장전 감시 안내를 표출! ·
+👑 [Case 87 : 06_L2L7_RATCHET_8PCT] & 🛡️ [Case 88 : 13_SUB_L1L3_RESV05_CAP4L] 본 그리드 중간 합병층 또는 서브 그리드 양끝 합병층 익절 체결 시
+잔여 지층이 존재하는 동안에는 사이클 최고 도달 회차(cycle_ratchet_max_lots / sub_ratchet_max_lots) 잠금을 그대로 유지하고 해당 그리드 0주 졸업 시에만 0으로 리셋! ·
 1.5초 실시간 감시 중 익절 조건 도래 및 최근접 유효 목표가 -2.50% 이내 근접 시 GET /api/v1/trades 최근 5.0초 체결틱 최고가(wick_high_p) 병행 감지로
 1분봉 윗꼬리(Upper-Wick) 슈팅을 100% 포착하되, 다중 지층 윗꼬리 스침 시 상위층 고가 목표가 결합으로 인한 하위층 미체결 역설을 분리 차단하고
 윗꼬리 타임스탬프(_LAST_CONSUMED_WICK_TRADE_TS)는 실주문 발주 성공 시에만 각인하며,
@@ -20,17 +20,17 @@
 목표 익절 하한가(min_floor_p, +0.50% 초과 대폭 갭상승 시 fresh_live_p * 0.997 마켓터블 지정가)로 직결 지정가(LIMIT) 매도 발주(Case 82) ·
 연타 익절 시 장외 sellableQuantity 정산 시차 대비 폴링 대기 2.0초 확장 및 일시 0주 반환 시 쿨다운 5.0초 단축(진성 422 거래제한 시 60초 묵음 쿨다운 유지 · Case 79, Case 82) ·
 매수 1호가(Bid 1) 하향 추격 정정 100% 영구 소각 및 미체결 단조시계(last_modify_mono) 역전 자가 치유 · 세션 경계 force_settle 강제 정산(Case 65, Case 66) ·
-리앵커링 원가 차감 영구 폐기 및 순수 실물 원가(book_price == actual_avg_price) 100% 보존(Case 69, Case 71, Case 72, Case 80) ·
+리앵커링 원가 차감 영구 폐기 및 순수 실물 원가(book_price == actual_avg_price) 100% 보존(Case 69, Case 71, Case 72, Case 80, Case 88) ·
 💰 [Case 86] 매도 FILLED 정산 시 토스 execution.commission / tax 실측 수수료 및 계좌별 고유 왕복 수수료율(0.14% / 0.20%) 자동 반영 ·
-독립 골든포켓(golden_pocket) 단독 익절 시 기존 1~7층 그리드의 단가·기억저가·최고회차·목표정량 100% 비오염 보존 및 원리금 복리 환원(Case 80, Case 87) ·
-1층 익절 후 상단 2~7층 잔존 시 1층 공석(GRID_L2 ~ GRID_L7) 보존 · 상단 익절 후 1층 단독 잔류 시 알림 정밀 표출 ·
-l1_target_quota_qty = 0 자동 클리어 및 1층 부분 익절 시 잔여 수량 동기화(허위 TOPUP_1FL 재매수 차단 · Case 78) · 싸이클 최저가(cycle_min_buy_price) 및 최고 도달 회차(cycle_ratchet_max_lots) 잠금 유지(Case 59, Case 60, Case 71, Case 72, Case 73, Case 87) ·
+독립 골든포켓(golden_pocket) 및 3층 서브 그리드(sub_buckets) 단독 익절 시 기존 본 그리드(buckets)의 단가·기억저가·최고회차·목표정량 100% 비오염 보존 및 원리금 복리 환원(Case 80, Case 87, Case 88) ·
+1층 익절 후 상단층 잔존 시 1층 공석 보존 · 상단 익절 후 1층 단독 잔류 시 알림 정밀 표출 ·
+l1_target_quota_qty / sub_l1_target_quota_qty = 0 자동 클리어 및 1층 부분 익절 시 잔여 수량 동기화(허위 TOPUP_1FL 재매수 차단 · Case 78) ·
 익절 매도로 가용현금 회복 시 시드고갈 입금 대기 및 단 1회 알림 래치(waiting_reserve_deposit_alert_sent) 자동 해제 &
-0주 전량 졸업 시 온디맨드 예비시드 원금 자동 상환 및 6/6회분 한도 원상 복구(compute_reserve_repayment_on_zero · Case 77) ·
-매도 체결(부분 익절 · 골든포켓 익절 및 0주 전량 졸업) 즉시 기정산 주문 ID(last_settled_order_ids) 등록 및
-60초 매도타임쉴드(last_sell_fill_ts / last_cycle_end_ts) & 1층 공석 재장전 타임쉴드 클리어(last_reentry_eval_ts = 0.0) &
-15초 잔고 인덱싱 그레이스 쉴드(last_auto_fill_ts) 동시 각인' 코어 플러그인 (Step 08 / 10)
-- 제1헌법 ~ 제6헌법 및 Case 01 ~ 87 완벽 준수
+본·서브·포켓 모두 0주 전량 졸업 시 온디맨드 예비시드 원금 자동 상환 및 6/6회분 한도 원상 복구(compute_reserve_repayment_on_zero · Case 77, Case 88) ·
+매도 체결 즉시 기정산 주문 ID(last_settled_order_ids) 등록 및
+60초 매도타임쉴드(last_sell_fill_ts / last_cycle_end_ts) & 1층 공석 재장전 타임쉴드 클리어(last_reentry_eval_ts / last_sub_reentry_eval_ts = 0.0) &
+15초 잔고 인덱싱 그레이스 쉴드(last_auto_fill_ts) 동시 각인' 코어 플러그인 (Step 08 / 13)
+- 제1헌법 ~ 제6헌법 및 Case 01 ~ 88 완벽 준수
 """
 
 from __future__ import annotations
@@ -50,11 +50,15 @@ from quant_engine import (
     MAX_GRID_TIERS_12,
     MAX_RESERVE_PORTIONS,
     REANCHOR_NET_BUFFER_MULT,
+    SUB_MAX_TIERS_3,
+    SUB_MAX_TOTAL_LOTS_4,
+    SUB_MERGE_MODE_L1_L3,
     StratumBucket,
     buckets_from_dicts,
     buckets_to_dicts,
     calc_sell_realized_pnl,
     compute_reserve_repayment_on_zero,
+    compute_sub_upper_2_to_3_moving_avg,
     compute_upper_2_to_7_moving_avg,
     compute_upper_2_to_12_moving_avg,
     evaluate_multi_grid_sell_targets,
@@ -63,6 +67,7 @@ from quant_engine import (
     has_active_l1_bucket,
     pocket_from_dict,
     pocket_to_dict,
+    relabel_sub_upper_grid_tiers,
     relabel_upper_grid_tiers,
     resolve_effective_round_trip_fee_rate_pct,
     vrev_reanchor_single_tier_quota,
@@ -225,11 +230,14 @@ def _compute_nearest_sell_target_price(
     rise_upper_pct: float = 1.00,
     rise_pocket_pct: float = GOLDEN_POCKET_RISE_PCT,
     is_overnight_session: bool = False,
+    sub_buckets: Optional[Sequence[StratumBucket]] = None,
 ) -> float:
     """
-    # [Case 82 & Case 83 (방안 C) : 보유 지층 및 골든포켓의 유효 최단 거리 익절 목표가(nearest_target_p) 산출기]:
+    # MODIFIED [Case 82, Case 83 (방안 C) & Case 88 : 본 그리드 + 3층 서브 그리드 + 골든포켓의 유효 최단 거리 익절 목표가(nearest_target_p) 산출기]:
     """
     candidates: List[float] = []
+    l1_mult = 1.0 + max(0.1, safe_float(rise_l1_pct, 1.50)) / 100.0
+    up_mult = 1.0 + max(0.1, safe_float(rise_upper_pct, 1.00)) / 100.0
 
     if (
         golden_pocket is not None
@@ -244,9 +252,6 @@ def _compute_nearest_sell_target_price(
 
     if buckets:
         active_l1 = has_active_l1_bucket(buckets)
-        l1_mult = 1.0 + max(0.1, safe_float(rise_l1_pct, 1.50)) / 100.0
-        up_mult = 1.0 + max(0.1, safe_float(rise_upper_pct, 1.00)) / 100.0
-
         wma_info = compute_upper_2_to_7_moving_avg(
             buckets, rise_upper_pct=rise_upper_pct
         )
@@ -274,6 +279,45 @@ def _compute_nearest_sell_target_price(
             wma_t = safe_float(wma_info.get("upper_wma_target_price"), 0.0)
             if wma_t > 0.0:
                 candidates.append(wma_t)
+
+    # NEW [Case 88 : 3층 서브 그리드 유효 익절 목표가 스캔]
+    valid_sub = [
+        sb
+        for sb in (sub_buckets or [])
+        if isinstance(sb, StratumBucket) and sb.qty > 0
+    ]
+    if valid_sub:
+        sub_active_l1 = has_active_l1_bucket(valid_sub)
+        sub_wma_info = compute_sub_upper_2_to_3_moving_avg(
+            valid_sub, rise_upper_pct=rise_upper_pct
+        )
+        sub_upper_cnt = safe_int(sub_wma_info.get("upper_tier_count"), 0)
+
+        if not (is_overnight_session and sub_upper_cnt > 0):
+            for s_idx, sb in enumerate(valid_sub):
+                if sb.qty <= 0:
+                    continue
+                pure_sbp = max(0.01, sb.actual_avg_price, sb.book_price)
+                if s_idx == 0 and sub_active_l1:
+                    st_p = max(
+                        0.01,
+                        math.ceil((pure_sbp * l1_mult - 1e-9) * 100.0)
+                        / 100.0,
+                    )
+                else:
+                    st_p = max(
+                        0.01,
+                        math.ceil((pure_sbp * up_mult - 1e-9) * 100.0)
+                        / 100.0,
+                    )
+                candidates.append(st_p)
+
+        if sub_upper_cnt > 0:
+            sub_wma_t = safe_float(
+                sub_wma_info.get("upper_wma_target_price"), 0.0
+            )
+            if sub_wma_t > 0.0:
+                candidates.append(sub_wma_t)
 
     return min(candidates) if candidates else 0.0
 
@@ -380,7 +424,7 @@ def _resolve_safe_l2_book_price(
     st: Optional[Dict[str, Any]] = None,
 ) -> float:
     """
-    🚨 [Case 69, Case 71 & Case 72 진성 손익분기점(순수 매수 원가) 하한선 가드]:
+    🚨 [Case 69, Case 71, Case 72 & Case 88 진성 손익분기점(순수 매수 원가) 하한선 가드]:
     """
     if bucket.qty <= 0:
         return max(0.01, bucket.book_price)
@@ -402,7 +446,10 @@ def is_within_post_buy_time_shield(
     if isinstance(guard_map, dict):
         info = guard_map.get(sym)
         if isinstance(info, dict):
-            last_buy_mono = safe_float(info.get("last_buy_fill_mono"), 0.0)
+            last_buy_mono = max(
+                safe_float(info.get("last_buy_fill_mono"), 0.0),
+                safe_float(info.get("last_sub_buy_fill_mono"), 0.0),
+            )
             if (
                 last_buy_mono <= 0.0
                 and str(info.get("lot_type") or "") != "SELL_FILL"
@@ -426,6 +473,7 @@ def is_within_post_buy_time_shield(
     )
     last_buy_epoch = max(
         safe_float(state_obj.get("last_buy_fill_ts"), 0.0),
+        safe_float(state_obj.get("last_sub_buy_fill_ts"), 0.0),
         safe_float(state_obj.get("entry_ts"), 0.0),
     )
     if last_buy_epoch > 0.0:
@@ -489,8 +537,8 @@ def mark_post_sell_time_shield(
     is_cycle_end: bool = False,
 ) -> None:
     """
-    🚨 Case 61, Case 65, Case 69, Case 70, Case 73, Case 77, Case 80 & Case 82:
-    매도 체결 및 0주 싸이클 종료 후 60.0초 매수 타임쉴드 & 1층 공석/입금대기 타임쉴드 클리어 & 15.0초 잔고 인덱싱 그레이스 쉴드 동시 각인.
+    🚨 Case 61, Case 65, Case 69, Case 70, Case 73, Case 77, Case 80, Case 82 & Case 88:
+    매도 체결 및 0주 싸이클 종료 후 60.0초 매수 타임쉴드 & 본/서브 1층 공석/입금대기 타임쉴드 클리어 & 15.0초 잔고 인덱싱 그레이스 쉴드 동시 각인.
     """
     global _LAST_CONSUMED_WICK_TRADE_TS
 
@@ -506,6 +554,8 @@ def mark_post_sell_time_shield(
         entry["last_sell_fill_ts"] = now_epoch
         entry["last_reentry_eval_mono"] = 0.0
         entry["last_reentry_eval_ts"] = 0.0
+        entry["last_sub_reentry_eval_mono"] = 0.0
+        entry["last_sub_reentry_eval_ts"] = 0.0
         entry["last_reserve_check_mono"] = 0.0
         entry["last_reserve_check_ts"] = 0.0
         entry["last_sell_gate_eval_mono"] = 0.0
@@ -536,6 +586,8 @@ def mark_post_sell_time_shield(
         g_entry["last_sell_fill_ts"] = now_epoch
         g_entry["last_reentry_eval_mono"] = 0.0
         g_entry["last_reentry_eval_ts"] = 0.0
+        g_entry["last_sub_reentry_eval_mono"] = 0.0
+        g_entry["last_sub_reentry_eval_ts"] = 0.0
         g_entry["last_reserve_check_mono"] = 0.0
         g_entry["last_reserve_check_ts"] = 0.0
         g_entry["last_sell_gate_eval_mono"] = 0.0
@@ -555,7 +607,7 @@ def is_within_post_sell_time_shield(
     symbol: str = TARGET_SYMBOL,
 ) -> Tuple[bool, float]:
     """
-    🚨 Case 65 [매도 체결 및 0주 싸이클 종료 후 60.0초 강제 타임쉴드 판별]:
+    🚨 Case 65 & Case 88 [매도 체결 및 0주 싸이클 종료 후 60.0초 강제 타임쉴드 판별]:
     """
     sym = str(symbol or TARGET_SYMBOL).upper().strip()
     now_mono = time.monotonic()
@@ -601,7 +653,9 @@ def is_within_post_sell_time_shield(
     )
     last_sell_epoch = max(
         safe_float(state_obj.get("last_sell_fill_ts"), 0.0),
+        safe_float(state_obj.get("last_sub_sell_fill_ts"), 0.0),
         safe_float(state_obj.get("last_cycle_end_ts"), 0.0),
+        safe_float(state_obj.get("last_sub_cycle_end_ts"), 0.0),
     )
     if last_sell_epoch > 0.0:
         elapsed_epoch = time.time() - last_sell_epoch
@@ -654,7 +708,7 @@ def update_exit_snapshot_on_hold(
 
 
 # ---------------------------------------------------------------------------
-# [핵심 1] Case 24, Case 65, Case 70, Case 71, Case 72, Case 79, Case 80, Case 82 & Case 83 : 목표 하한가 직결 지정가(LIMIT) 다중 그리드/골든포켓 스나이퍼 매도 발주
+# [핵심 1] Case 24, Case 65, Case 70, Case 71, Case 72, Case 79, Case 80, Case 82, Case 83 & Case 88 : 목표 하한가 직결 지정가(LIMIT) 다중 그리드(본+서브)/골든포켓 스나이퍼 매도 발주
 # ---------------------------------------------------------------------------
 async def execute_bulletproof_sell_sweep(
     context: Any,
@@ -665,10 +719,11 @@ async def execute_bulletproof_sell_sweep(
     reason_tag: str = "SELL_L1_ONLY",
     pending_sell_indices: Optional[Sequence[int]] = None,
     pending_sell_pocket_qty: int = 0,
+    pending_sub_sell_indices: Optional[Sequence[int]] = None,
 ) -> Dict[str, Any]:
     """
-    🚨 Case 24, Case 65, Case 70, Case 71, Case 72, Case 79, Case 80, Case 82 & Case 83:
-    1.5초 실시간 4중 다중 익절 스나이퍼 매도 발사 시 목표 익절 하한가(min_floor_price) 또는
+    🚨 Case 24, Case 65, Case 70, Case 71, Case 72, Case 79, Case 80, Case 82, Case 83 & Case 88:
+    1.5초 실시간 다중 익절(본 그리드 + 서브 그리드 + 골든포켓) 스나이퍼 매도 발사 시 목표 익절 하한가(min_floor_price) 또는
     대폭 갭상승 시 마켓터블 지정가(sweep_price)로 LIMIT 매도 주문을 즉시 발주한다.
     """
     sym = str(symbol or TARGET_SYMBOL).upper().strip()
@@ -686,6 +741,13 @@ async def execute_bulletproof_sell_sweep(
         {
             safe_int(x, -1)
             for x in (pending_sell_indices or [])
+            if safe_int(x, -1) >= 0
+        }
+    )
+    clean_sub_indices = sorted(
+        {
+            safe_int(x, -1)
+            for x in (pending_sub_sell_indices or [])
             if safe_int(x, -1) >= 0
         }
     )
@@ -784,16 +846,18 @@ async def execute_bulletproof_sell_sweep(
                 target_sell_price=sp,
                 pending_sell_mode=str(reason_tag or "SELL_L1_ONLY"),
                 pending_sell_indices=clean_indices,
+                pending_sub_sell_indices=clean_sub_indices,
                 pending_sell_pocket_qty=eff_pocket_q,
                 last_modify_mono=time.monotonic(),
                 last_sell_gate_eval_ts=0.0,
             )
             context.wakeup_event.set()
             logger.info(
-                "🔥 [%s] 1.5초 실시간 타점 4중 다중익절 스나이퍼 매도 발사(%s · indices=%s · pocket=%d주) 완료: %d주 @ 지정가 $%.2f (목표하한 $%.2f · orderId=%s)",
+                "🔥 [%s] 1.5초 실시간 타점 다중익절 스나이퍼 매도 발사(%s · main=%s · sub=%s · pocket=%d주) 완료: %d주 @ 지정가 $%.2f (목표하한 $%.2f · orderId=%s)",
                 sym,
                 reason_tag,
                 clean_indices,
+                clean_sub_indices,
                 eff_pocket_q,
                 final_qty,
                 sp,
@@ -808,6 +872,7 @@ async def execute_bulletproof_sell_sweep(
                 "qty": final_qty,
                 "reason": reason_tag,
                 "sold_indices": clean_indices,
+                "sub_sold_indices": clean_sub_indices,
                 "sell_pocket_qty": eff_pocket_q,
             }
         except _NonRetryableApiError as api_err:
@@ -878,10 +943,8 @@ async def execute_bulletproof_sell_sweep(
                 exc,
             )
             return {"status": "SWEEP_FAILED", "symbol": sym, "error": str(exc)}
-
-
 # ---------------------------------------------------------------------------
-# [핵심 2] 실물 매도 FILLED 정산 · 골든포켓/그리드 분리 정산(Case 80) · 최고도달회차 잠금 유지(Case 87) · 실측/동적 수수료 차감 세후 순익 복리 산입 · 0주 졸업 시 예비시드 자동 상환
+# [핵심 2] 실물 매도 FILLED 정산 · 골든포켓/서브그리드/본그리드 분리 정산(Case 80, 88) · 최고도달회차 잠금 유지(Case 87, 88) · 실측/동적 수수료 차감 세후 순익 복리 산입 · 0주 졸업 시 예비시드 자동 상환
 # ---------------------------------------------------------------------------
 async def _commit_filled_sell_and_reanchor_ledger(
     context: Any,
@@ -892,21 +955,22 @@ async def _commit_filled_sell_and_reanchor_ledger(
     actual_sell_fee_usd: Optional[float] = None,
 ) -> Dict[str, Any]:
     """
-    # MODIFIED [🎯 1 ~ 🎯 4 & Case 19, 59 ~ 87 & 최고 도달 회차(cycle_ratchet_max_lots) 잠금 유지 및 Case 84 원복 알림 연동]:
-    7층 골디락스 멀티 그리드 및 독립 골든포켓 스나이퍼 매도 주문이 체결(FILLED 또는 부분 체결 후 취소 종료)되었을 때:
-    1) pending_sell_pocket_qty 및 pending_sell_indices 에 해당하는 순수 매수 원금과 실제 매도 체결가(avg_fill_price)에 대해,
+    # MODIFIED [🎯 1 ~ 🎯 4 & Case 19, 59 ~ 88 & 본/서브 최고 도달 회차 잠금 유지 · Default-ON 3층 서브 그리드 분리 정산 · Case 84 알림 연동]:
+    7층 골디락스 본 그리드, Default-ON 3층 서브 그리드 및 독립 골든포켓 스나이퍼 매도 주문이 체결(FILLED 또는 부분 체결 후 취소 종료)되었을 때:
+    1) pending_sell_pocket_qty, pending_sub_sell_indices, pending_sell_indices 에 해당하는 순수 매수 원금과 실제 매도 체결가(avg_fill_price)에 대해,
        토스 execution.commission + tax 실측값(actual_sell_fee_usd) 및 계좌별 왕복 수수료율(eff_rt_pct : 0.14% 또는 0.20%)을 적용하여
        세후 실현 순수익금(net_pnl_usd)을 정밀 산출한다.
-    2) 🚨 [Case 80 골든포켓 단독 익절 시 7층 그리드 100% 비오염 보존]
-    3) 👑 [Case 87 : 부분 익절 시 잔여 지층이 존재하는 동안에는 cycle_ratchet_max_lots = max(rem_held_lots, prev_ratchet_lots) 로
-       최고 도달 회차 잠금을 그대로 유지하고, 오직 0주 졸업(is_grid_empty == True) 시에만 0으로 리셋!]
-    4) 🚨 [Case 78 : 1층 부분 익절 시 l1_target_quota_qty 잔여 수량 동기화로 허위 TOPUP_1FL 재매수 원천 차단]
-    5) 🚨 [Case 77 & Case 80 : 0주 전량 졸업 시 예비시드 자동 상환]
-    6) 🛡️ [Case 84 원복 : 15:29:01 ~ 16:00:00 EST 구간에 0주 전량 졸업 시 새 사이클 진입 차단 안내를 표출하고,
-       1층 익절 후 상단 2~7층 잔존(1층 공석) 시에는 +1.0% 돌파 차단 및 2층 상한 이하 -1.0% 눌림목 재장전 감시 안내를 표출!]
+    2) 🚨 [Case 80 & Case 88 : 골든포켓 또는 서브 그리드 단독 익절 시 7층 본 그리드 100% 비오염 보존]
+    3) 👑 [Case 87 & Case 88 : 부분 익절 시 잔여 지층이 존재하는 동안에는 cycle_ratchet_max_lots / sub_ratchet_max_lots 잠금을 그대로 유지하고,
+       해당 그리드가 0주 졸업했을 때만 0으로 리셋!]
+    4) 🚨 [Case 78 : 본·서브 1층 부분 익절 시 l1_target_quota_qty / sub_l1_target_quota_qty 잔여 수량 동기화로 허위 TOPUP_1FL 재매수 원천 차단]
+    5) 🚨 [Case 77, Case 80 & Case 88 : 본·서브·골든포켓 모두 0주 전량 졸업 시 예비시드 자동 상환]
+    6) 🛡️ [Case 84 : 15:29:01 ~ 16:00:00 EST 구간에 0주 전량 졸업 시 새 사이클 진입 차단 안내를 표출하고,
+       1층 익절 후 상단층 잔존(1층 공석) 시에는 +1.0% 돌파 차단 및 2층 상한 이하 -1.0% 눌림목 재장전 감시 안내를 표출!]
     """
     st = context.ledger.get_state(TARGET_SYMBOL)
     buckets = buckets_from_dicts(st.get("buckets", []))
+    sub_buckets = buckets_from_dicts(st.get("sub_buckets", []))
     gp = pocket_from_dict(st.get("golden_pocket"))
     fill_p = round(max(0.01, safe_float(avg_fill_price, 0.01)), 4)
     q_filled = max(1, safe_int(filled_qty, 1))
@@ -918,13 +982,16 @@ async def _commit_filled_sell_and_reanchor_ledger(
     eff_merge_mode = str(
         st.get("grid_merge_mode") or DEFAULT_GRID_MERGE_MODE
     ).upper()
+    eff_sub_merge_mode = str(
+        st.get("sub_merge_mode") or SUB_MERGE_MODE_L1_L3
+    ).upper()
 
     settled_oids: List[str] = list(st.get("last_settled_order_ids") or [])
     if eff_oid and eff_oid not in settled_oids:
         settled_oids.append(eff_oid)
     settled_oids = settled_oids[-50:]
 
-    if not buckets and not gp.is_active:
+    if not buckets and not sub_buckets and not gp.is_active:
         now_empty_epoch = time.time()
         mark_post_sell_time_shield(
             context=context,
@@ -936,11 +1003,16 @@ async def _commit_filled_sell_and_reanchor_ledger(
         await context.ledger.update_state(
             TARGET_SYMBOL,
             cycle_ratchet_max_lots=0,
+            sub_ratchet_max_lots=0,
             l1_target_quota_qty=0,
+            sub_l1_target_quota_qty=0,
             last_sell_fill_ts=now_empty_epoch,
             last_cycle_end_ts=now_empty_epoch,
+            last_sub_sell_fill_ts=now_empty_epoch,
+            last_sub_cycle_end_ts=now_empty_epoch,
             last_sell_gate_eval_ts=0.0,
             last_reentry_eval_ts=0.0,
+            last_sub_reentry_eval_ts=0.0,
             waiting_reserve_deposit=False,
             waiting_reserve_deposit_alert_sent=False,
             required_reserve_deposit_usd=0.0,
@@ -950,6 +1022,7 @@ async def _commit_filled_sell_and_reanchor_ledger(
             target_sell_price=0.0,
             pending_sell_mode="",
             pending_sell_indices=[],
+            pending_sub_sell_indices=[],
             pending_sell_pocket_qty=0,
             last_settled_order_ids=settled_oids,
         )
@@ -998,7 +1071,87 @@ async def _commit_filled_sell_and_reanchor_ledger(
             )
         rem_fill_to_alloc -= sold_pocket_q
 
-    # 2) 1층 ~ 7층 그리드(buckets) 매도 수량 배분 및 잔여 지층 산출
+    # 2) Default-ON 3층 서브 그리드(sub_buckets) 매도 수량 배분 및 잔여 서브 지층 산출 (Case 88)
+    was_sub_non_empty = bool(len(sub_buckets) > 0)
+    was_sub_active_l1 = has_active_l1_bucket(sub_buckets)
+    orig_sub_l1_qty = (
+        sub_buckets[0].qty if (was_sub_active_l1 and sub_buckets) else 0
+    )
+    raw_sub_p_indices = st.get("pending_sub_sell_indices")
+    sub_target_indices: List[int] = []
+    if isinstance(raw_sub_p_indices, list) and raw_sub_p_indices:
+        sub_target_indices = sorted(
+            {
+                safe_int(idx, -1)
+                for idx in raw_sub_p_indices
+                if 0 <= safe_int(idx, -1) < len(sub_buckets)
+            }
+        )
+
+    if not sub_target_indices and rem_fill_to_alloc > 0 and sub_buckets:
+        if mode == "SELL_SUB_ALL_GRAD" or (
+            mode.startswith("SELL_SUB_") and len(sub_buckets) == 1
+        ):
+            sub_target_indices = list(range(len(sub_buckets)))
+        elif mode == "SELL_SUB_WMA_UPPER" and len(sub_buckets) >= 2:
+            s_start_i = 1 if was_sub_active_l1 else 0
+            sub_target_indices = list(range(s_start_i, len(sub_buckets)))
+        elif mode in ("SELL_SUB_L1_ONLY", "SELL_SUB_L1_AND_GRID"):
+            sub_target_indices = [0]
+
+    sub_target_set: Set[int] = set(sub_target_indices)
+    sold_sub_l1_flag = bool(
+        was_sub_active_l1 and (0 in sub_target_set) and rem_fill_to_alloc > 0
+    )
+
+    sold_sub_buckets: List[StratumBucket] = []
+    rem_sub_buckets: List[StratumBucket] = []
+    sold_sub_merged_bucket_flag = False
+
+    for s_idx, sb in enumerate(sub_buckets):
+        if s_idx not in sub_target_set or rem_fill_to_alloc <= 0:
+            rem_sub_buckets.append(sb)
+            continue
+
+        if rem_fill_to_alloc >= sb.qty:
+            sold_sub_buckets.append(sb)
+            rem_fill_to_alloc -= sb.qty
+            if max(1, sb.lot_count) > 1:
+                sold_sub_merged_bucket_flag = True
+        else:
+            part_sq = rem_fill_to_alloc
+            rem_fill_to_alloc = 0
+            s_ratio = min(1.0, float(part_sq) / float(sb.qty))
+            sold_scost_part = round(sb.actual_cost_usd * s_ratio, 4)
+            rem_sq = sb.qty - part_sq
+            rem_scost_part = round(
+                max(0.01 * float(rem_sq), sb.actual_cost_usd - sold_scost_part),
+                4,
+            )
+            sold_sub_buckets.append(
+                StratumBucket(
+                    qty=part_sq,
+                    book_price=sb.book_price,
+                    book_invested_usd=sold_scost_part,
+                    actual_cost_usd=sold_scost_part,
+                    lot_count=1,
+                    lot_type=sb.lot_type,
+                )
+            )
+            rem_sub_buckets.append(
+                StratumBucket(
+                    qty=rem_sq,
+                    book_price=sb.book_price,
+                    book_invested_usd=rem_scost_part,
+                    actual_cost_usd=rem_scost_part,
+                    lot_count=max(1, sb.lot_count),
+                    lot_type=sb.lot_type,
+                )
+            )
+            if s_idx == 0 and was_sub_active_l1:
+                sold_sub_l1_flag = False
+
+    # 3) 1층 ~ 7층 본 그리드(buckets) 매도 수량 배분 및 잔여 지층 산출
     was_active_l1 = has_active_l1_bucket(buckets)
     orig_l1_qty = buckets[0].qty if (was_active_l1 and buckets) else 0
     raw_p_indices = st.get("pending_sell_indices")
@@ -1012,7 +1165,13 @@ async def _commit_filled_sell_and_reanchor_ledger(
             }
         )
 
-    if not target_indices and rem_fill_to_alloc > 0 and buckets:
+    if (
+        not target_indices
+        and not sub_target_indices
+        and rem_fill_to_alloc > 0
+        and buckets
+        and not mode.startswith("SELL_SUB_")
+    ):
         if mode in ("SELL_ALL_GRAD", "SELL_L2_GRAD") or len(buckets) == 1:
             target_indices = list(range(len(buckets)))
         elif mode == "SELL_WMA_UPPER" and len(buckets) >= 2:
@@ -1068,6 +1227,55 @@ async def _commit_filled_sell_and_reanchor_ledger(
             )
             if idx == 0 and was_active_l1:
                 sold_l1_flag = False
+
+    # 잔여 미배분 체결 수량이 남아 있을 경우 서브 -> 본 그리드 -> 포켓 순 폴백 배분
+    if rem_fill_to_alloc > 0 and rem_sub_buckets:
+        fb_rem_sub: List[StratumBucket] = []
+        for idx_sf, sbf in enumerate(rem_sub_buckets):
+            if rem_fill_to_alloc <= 0:
+                fb_rem_sub.append(sbf)
+                continue
+            if rem_fill_to_alloc >= sbf.qty:
+                sold_sub_buckets.append(sbf)
+                rem_fill_to_alloc -= sbf.qty
+                if idx_sf == 0 and was_sub_active_l1 and not sold_sub_l1_flag:
+                    sold_sub_l1_flag = True
+                if max(1, sbf.lot_count) > 1:
+                    sold_sub_merged_bucket_flag = True
+            else:
+                part_sq = rem_fill_to_alloc
+                rem_fill_to_alloc = 0
+                s_ratio = min(1.0, float(part_sq) / float(sbf.qty))
+                sold_scost_part = round(sbf.actual_cost_usd * s_ratio, 4)
+                rem_sq = sbf.qty - part_sq
+                rem_scost_part = round(
+                    max(
+                        0.01 * float(rem_sq),
+                        sbf.actual_cost_usd - sold_scost_part,
+                    ),
+                    4,
+                )
+                sold_sub_buckets.append(
+                    StratumBucket(
+                        qty=part_sq,
+                        book_price=sbf.book_price,
+                        book_invested_usd=sold_scost_part,
+                        actual_cost_usd=sold_scost_part,
+                        lot_count=1,
+                        lot_type=sbf.lot_type,
+                    )
+                )
+                fb_rem_sub.append(
+                    StratumBucket(
+                        qty=rem_sq,
+                        book_price=sbf.book_price,
+                        book_invested_usd=rem_scost_part,
+                        actual_cost_usd=rem_scost_part,
+                        lot_count=max(1, sbf.lot_count),
+                        lot_type=sbf.lot_type,
+                    )
+                )
+        rem_sub_buckets = fb_rem_sub
 
     if rem_fill_to_alloc > 0 and rem_buckets:
         fallback_rem: List[StratumBucket] = []
@@ -1145,6 +1353,8 @@ async def _commit_filled_sell_and_reanchor_ledger(
 
     sold_grid_q = sum(b.qty for b in sold_buckets)
     sold_grid_cost = round(sum(b.actual_cost_usd for b in sold_buckets), 4)
+    sold_sub_q = sum(sb.qty for sb in sold_sub_buckets)
+    sold_sub_cost = round(sum(sb.actual_cost_usd for sb in sold_sub_buckets), 4)
 
     if rem_buckets:
         if was_active_l1 and not sold_l1_flag:
@@ -1162,6 +1372,22 @@ async def _commit_filled_sell_and_reanchor_ledger(
                 merge_mode=eff_merge_mode,
             )
 
+    if rem_sub_buckets:
+        if was_sub_active_l1 and not sold_sub_l1_flag:
+            active_sb1 = rem_sub_buckets[0]
+            re_sub_uppers = relabel_sub_upper_grid_tiers(
+                rem_sub_buckets[1:],
+                max_tiers=SUB_MAX_TIERS_3,
+                merge_mode=eff_sub_merge_mode,
+            )
+            rem_sub_buckets = [active_sb1] + re_sub_uppers
+        else:
+            rem_sub_buckets = relabel_sub_upper_grid_tiers(
+                rem_sub_buckets,
+                max_tiers=SUB_MAX_TIERS_3,
+                merge_mode=eff_sub_merge_mode,
+            )
+
     rem_has_active_l1 = has_active_l1_bucket(rem_buckets)
     if not rem_buckets or not rem_has_active_l1 or sold_l1_flag:
         next_l1_target_q = 0
@@ -1171,8 +1397,21 @@ async def _commit_filled_sell_and_reanchor_ledger(
         prev_target_q = max(0, safe_int(st.get("l1_target_quota_qty"), 0))
         next_l1_target_q = max(rem_buckets[0].qty, prev_target_q)
 
-    sold_q = sold_grid_q + sold_pocket_q
-    sold_actual_cost = round(sold_grid_cost + sold_pocket_cost, 4)
+    rem_sub_has_active_l1 = has_active_l1_bucket(rem_sub_buckets)
+    if not rem_sub_buckets or not rem_sub_has_active_l1 or sold_sub_l1_flag:
+        next_sub_l1_target_q = 0
+    elif orig_sub_l1_qty > 0 and rem_sub_buckets[0].qty < orig_sub_l1_qty:
+        next_sub_l1_target_q = rem_sub_buckets[0].qty
+    else:
+        prev_sub_target_q = max(
+            0, safe_int(st.get("sub_l1_target_quota_qty"), 0)
+        )
+        next_sub_l1_target_q = max(rem_sub_buckets[0].qty, prev_sub_target_q)
+
+    sold_q = sold_grid_q + sold_sub_q + sold_pocket_q
+    sold_actual_cost = round(
+        sold_grid_cost + sold_sub_cost + sold_pocket_cost, 4
+    )
     pnl_info = calc_sell_realized_pnl(
         sold_qty=sold_q,
         sell_exec_price=fill_p,
@@ -1207,27 +1446,80 @@ async def _commit_filled_sell_and_reanchor_ledger(
         )
         pocket_net_pnl = p_pnl_info["net_pnl_usd"]
 
-    is_grid_empty = bool(len(rem_buckets) == 0)
-    is_graduated_zero = bool(is_grid_empty and not rem_gp.is_active)
-    is_pocket_only_sell = bool(sold_pocket_q > 0 and sold_grid_q == 0)
+    sub_gross_pnl = 0.0
+    sub_fee_usd = 0.0
+    sub_net_pnl = 0.0
+    if sold_sub_q > 0:
+        sub_sell_fee: Optional[float] = None
+        if (
+            actual_sell_fee_usd is not None
+            and safe_float(actual_sell_fee_usd, 0.0) > 0.0
+            and sold_q > 0
+        ):
+            sub_sell_fee = round(
+                safe_float(actual_sell_fee_usd, 0.0)
+                * (float(sold_sub_q) / float(sold_q)),
+                4,
+            )
+        s_pnl_info = calc_sell_realized_pnl(
+            sold_qty=sold_sub_q,
+            sell_exec_price=fill_p,
+            sold_actual_cost_usd=sold_sub_cost,
+            round_trip_fee_rate_pct=eff_rt_pct,
+            actual_sell_fee_usd=sub_sell_fee,
+        )
+        sub_gross_pnl = s_pnl_info["gross_pnl_usd"]
+        sub_fee_usd = s_pnl_info["fee_usd"]
+        sub_net_pnl = s_pnl_info["net_pnl_usd"]
 
-    # NEW [Case 87 : 부분 익절 시 사이클 최고 도달 회차(cycle_ratchet_max_lots) 잠금 유지 및 0주 졸업 시 리셋]
+    is_grid_empty = bool(len(rem_buckets) == 0)
+    is_sub_empty = bool(len(rem_sub_buckets) == 0)
+    is_graduated_zero = bool(
+        is_grid_empty and is_sub_empty and not rem_gp.is_active
+    )
+    is_pocket_only_sell = bool(
+        sold_pocket_q > 0 and sold_grid_q == 0 and sold_sub_q == 0
+    )
+    is_sub_only_sell = bool(
+        sold_sub_q > 0 and sold_grid_q == 0 and sold_pocket_q == 0
+    )
+
+    # [Case 87 & Case 88 : 부분 익절 시 본/서브 최고 도달 회차 잠금 유지 및 해당 그리드 0주 졸업 시 리셋]
     prev_ratchet_lots = max(0, safe_int(st.get("cycle_ratchet_max_lots"), 0))
     rem_held_lots = sum(max(1, b.lot_count) for b in rem_buckets)
     next_ratchet_max_lots = (
         0 if is_grid_empty else max(rem_held_lots, prev_ratchet_lots)
     )
 
+    prev_sub_ratchet_lots = max(0, safe_int(st.get("sub_ratchet_max_lots"), 0))
+    rem_sub_held_lots = sum(max(1, sb.lot_count) for sb in rem_sub_buckets)
+    next_sub_ratchet_max_lots = (
+        0 if is_sub_empty else max(rem_sub_held_lots, prev_sub_ratchet_lots)
+    )
+
     old_anchor_p = safe_float(st.get("anchor_price"), fill_p)
     old_cycle_min_p = safe_float(st.get("cycle_min_buy_price"), 0.0)
-    if is_pocket_only_sell and not is_grid_empty:
-        next_anchor_p = old_anchor_p if old_anchor_p > 0.0 else fill_p
-        next_cycle_min_p = round(old_cycle_min_p, 4)
-    else:
+    if sold_grid_q > 0 or is_grid_empty:
         next_anchor_p = fill_p
         next_cycle_min_p = (
             round(old_cycle_min_p, 4) if not is_grid_empty else 0.0
         )
+    else:
+        next_anchor_p = old_anchor_p if old_anchor_p > 0.0 else fill_p
+        next_cycle_min_p = round(old_cycle_min_p, 4)
+
+    old_sub_anchor_p = safe_float(st.get("sub_anchor_price"), fill_p)
+    old_sub_cycle_min_p = safe_float(st.get("sub_cycle_min_buy_price"), 0.0)
+    if sold_sub_q > 0 or is_sub_empty:
+        next_sub_anchor_p = fill_p
+        next_sub_cycle_min_p = (
+            round(old_sub_cycle_min_p, 4) if not is_sub_empty else 0.0
+        )
+    else:
+        next_sub_anchor_p = (
+            old_sub_anchor_p if old_sub_anchor_p > 0.0 else fill_p
+        )
+        next_sub_cycle_min_p = round(old_sub_cycle_min_p, 4)
 
     tot_sell_ev = safe_int(st.get("total_sell_events"), 0) + 1
     tot_sold_sh = safe_int(st.get("total_sold_shares"), 0) + sold_q
@@ -1235,6 +1527,52 @@ async def _commit_filled_sell_and_reanchor_ledger(
         1 if net_pnl > 0.0 else 0
     )
     day_sell_ev = safe_int(st.get("daily_sell_events"), 0) + 1
+    day_main_sell_cnt = safe_int(st.get("daily_main_sell_cnt"), 0) + (
+        1 if sold_grid_q > 0 else 0
+    )
+    next_main_frozen_d = (
+        0
+        if (sold_grid_q > 0 or is_grid_empty)
+        else max(0, safe_int(st.get("main_consec_frozen_days"), 0))
+    )
+
+    # 서브 그리드 통계 및 동결일 갱신 (Case 88)
+    sub_sell_inc = 1 if sold_sub_q > 0 else 0
+    sub_sell_ev = safe_int(st.get("sub_sell_events"), 0) + sub_sell_inc
+    sub_sold_sh = safe_int(st.get("sub_sold_shares"), 0) + sold_sub_q
+    day_sub_sell_cnt = (
+        safe_int(st.get("daily_sub_sell_cnt"), 0) + sub_sell_inc
+    )
+    day_sub_sell_ev = (
+        safe_int(st.get("daily_sub_sell_events"), 0) + sub_sell_inc
+    )
+    sub_comp_inc = 1 if (was_sub_non_empty and is_sub_empty) else 0
+    sub_comp_cycles = (
+        safe_int(st.get("sub_completed_cycles"), 0) + sub_comp_inc
+    )
+    sub_m_esc_inc = (
+        1 if (sold_sub_merged_bucket_flag and not is_sub_empty) else 0
+    )
+    sub_m_esc_cnt = (
+        safe_int(st.get("sub_merged_indiv_escape_cnt"), 0) + sub_m_esc_inc
+    )
+    sub_gross_cum = round(
+        safe_float(st.get("sub_realized_gross_usd"), 0.0) + sub_gross_pnl, 4
+    )
+    sub_fee_cum = round(
+        safe_float(st.get("sub_realized_fee_usd"), 0.0) + sub_fee_usd, 4
+    )
+    sub_net_cum = round(
+        safe_float(st.get("sub_realized_net_usd"), 0.0) + sub_net_pnl, 4
+    )
+    sub_net_day = round(
+        safe_float(st.get("daily_sub_realized_net_usd"), 0.0) + sub_net_pnl, 4
+    )
+    next_sub_frozen_d = (
+        0
+        if (sold_sub_q > 0 or is_sub_empty)
+        else max(0, safe_int(st.get("sub_consec_frozen_days"), 0))
+    )
 
     rem_upper_cnt = (
         max(0, len(rem_buckets) - (1 if rem_has_active_l1 else 0))
@@ -1347,6 +1685,7 @@ async def _commit_filled_sell_and_reanchor_ledger(
 
     update_kwargs: Dict[str, Any] = {
         "buckets": buckets_to_dicts(rem_buckets),
+        "sub_buckets": buckets_to_dicts(rem_sub_buckets),
         "golden_pocket": rem_gp.to_dict(),
         "anchor_price": next_anchor_p,
         "cycle_min_buy_price": next_cycle_min_p,
@@ -1354,6 +1693,23 @@ async def _commit_filled_sell_and_reanchor_ledger(
         "ratchet_anchor_price": next_anchor_p,
         "cycle_reanchor_credit_usd": 0.0,
         "l1_target_quota_qty": next_l1_target_q,
+        "sub_anchor_price": next_sub_anchor_p,
+        "sub_cycle_min_buy_price": next_sub_cycle_min_p,
+        "sub_ratchet_max_lots": next_sub_ratchet_max_lots,
+        "sub_l1_target_quota_qty": next_sub_l1_target_q,
+        "main_consec_frozen_days": next_main_frozen_d,
+        "sub_consec_frozen_days": next_sub_frozen_d,
+        "daily_main_sell_cnt": day_main_sell_cnt,
+        "sub_sell_events": sub_sell_ev,
+        "sub_sold_shares": sub_sold_sh,
+        "daily_sub_sell_cnt": day_sub_sell_cnt,
+        "daily_sub_sell_events": day_sub_sell_ev,
+        "sub_completed_cycles": sub_comp_cycles,
+        "sub_merged_indiv_escape_cnt": sub_m_esc_cnt,
+        "sub_realized_gross_usd": sub_gross_cum,
+        "sub_realized_fee_usd": sub_fee_cum,
+        "sub_realized_net_usd": sub_net_cum,
+        "daily_sub_realized_net_usd": sub_net_day,
         "used_reserve_portions_cnt": next_used_res_cnt,
         "injected_reserve_usd": next_inj_res_usd,
         "cumulative_reserve_repaid_usd": cum_repaid_usd,
@@ -1364,11 +1720,13 @@ async def _commit_filled_sell_and_reanchor_ledger(
         "last_sell_fill_ts": now_sell_epoch,
         "last_sell_gate_eval_ts": 0.0,
         "last_reentry_eval_ts": 0.0,
+        "last_sub_reentry_eval_ts": 0.0,
         "sell_order_id": "",
         "ordered_qty": 0,
         "target_sell_price": 0.0,
         "pending_sell_mode": "",
         "pending_sell_indices": [],
+        "pending_sub_sell_indices": [],
         "pending_sell_pocket_qty": 0,
         "last_settled_order_ids": settled_oids,
         "total_sell_events": tot_sell_ev,
@@ -1388,6 +1746,10 @@ async def _commit_filled_sell_and_reanchor_ledger(
         "cumulative_realized_net_usd": cum_net,
         "daily_realized_net_usd": day_net,
     }
+    if sold_sub_q > 0:
+        update_kwargs["last_sub_sell_fill_ts"] = now_sell_epoch
+    if was_sub_non_empty and is_sub_empty:
+        update_kwargs["last_sub_cycle_end_ts"] = now_sell_epoch
     if is_graduated_zero:
         update_kwargs["last_cycle_end_ts"] = now_sell_epoch
 
@@ -1424,13 +1786,35 @@ async def _commit_filled_sell_and_reanchor_ledger(
         sess_tag = " · 🌃장외익절" if is_ext_sell else ""
         if is_pocket_only_sell:
             grid_sh = sum(b.qty for b in rem_buckets)
+            sub_sh = sum(sb.qty for sb in rem_sub_buckets)
+            sub_p_note = f"+서브 {sub_sh}주" if sub_sh > 0 else ""
             title_msg = (
                 f"🌟 [SOXL 독립 골든포켓 +1.5% 익절 체결{sess_tag}] "
                 f"{sold_q}주 @ ${fill_p:.2f} ({r_sign}{net_rate:.2f}%)"
             )
             body_msg = (
                 f"세후순익 {sign}${abs(net_pnl):,.2f} 시드 복리산입 및 원리금 금고 환원 완료! · "
-                f"기존 7층그리드({len(rem_buckets)}개층·{grid_sh}주 · 기억저가 ${next_cycle_min_p:.2f}{ratchet_lock_note}) 무결성 유지 · "
+                f"기존 본그리드({len(rem_buckets)}개층·{grid_sh}주{sub_p_note} · 기억저가 ${next_cycle_min_p:.2f}{ratchet_lock_note}) 무결성 유지 · "
+                f"가용현금 ${free_cash_now:,.2f}"
+            )
+        elif is_sub_only_sell:
+            grid_sh = sum(b.qty for b in rem_buckets)
+            sub_sh = sum(sb.qty for sb in rem_sub_buckets)
+            if is_sub_empty:
+                sub_state_note = (
+                    f"🎓 서브그리드 전량 졸업 완료(누적 {sub_comp_cycles}회 졸업 · 서브누적순익 +${sub_net_cum:,.2f})"
+                )
+            else:
+                sub_state_note = (
+                    f"📦 잔여 서브그리드 {len(rem_sub_buckets)}개층({sub_sh}주 · {rem_sub_held_lots}/{SUB_MAX_TOTAL_LOTS_4}회분) 감시 지속"
+                )
+            title_msg = (
+                f"🛡️ [SOXL 3층 서브그리드 지정가 익절 체결 ({mode}{sess_tag})] "
+                f"{sold_q}주 @ ${fill_p:.2f} ({r_sign}{net_rate:.2f}%)"
+            )
+            body_msg = (
+                f"세후순익 {sign}${abs(net_pnl):,.2f} 시드 복리산입! · "
+                f"{sub_state_note} · 본그리드({len(rem_buckets)}개층·{grid_sh}주) 무결성 유지 · "
                 f"가용현금 ${free_cash_now:,.2f}"
             )
         else:
@@ -1457,9 +1841,10 @@ async def _commit_filled_sell_and_reanchor_ledger(
                     f"🎓 전 지층 흑자 졸업 완료(0주 싸이클 종료{repay_note} "
                     f"➔ {next_entry_guide})"
                 )
-            elif is_grid_empty and rem_gp.is_active:
+            elif is_grid_empty and (rem_gp.is_active or not is_sub_empty):
+                rem_sub_sh = sum(sb.qty for sb in rem_sub_buckets)
                 note_str = (
-                    f"🌟 그리드 전량 졸업 완료 · 잔여 골든포켓 {rem_gp.qty}주(@${rem_gp.book_price:.2f}) 익절 감시 지속"
+                    f"🌟 본그리드 전량 졸업 완료 · 잔여 서브({rem_sub_sh}주)/골든포켓({rem_gp.qty}주) 익절 감시 지속"
                 )
             else:
                 wma_info = compute_upper_2_to_7_moving_avg(rem_buckets)
@@ -1474,7 +1859,6 @@ async def _commit_filled_sell_and_reanchor_ledger(
                         wma_info.get("min_indiv_upper_price"),
                         rem_buckets[0].book_price,
                     )
-                    # MODIFIED [Case 84 원복]: 15:29:01 ~ 16:00:00 EST 구간에 1층 익절 후 상단 2~7층 잔존(1층 공석) 시 돌파 차단 및 눌림목 감시 안내 표출!
                     if is_ext_sell:
                         reload_guide = (
                             f"🔒장외 매수·개별층잠금(04:07 EST 이후 2층상한 ${l2_cap_p:.2f} 이하 1층재장전 · 기억저가 ${next_cycle_min_p:.2f}{ratchet_lock_note} 잠금)"
@@ -1521,14 +1905,18 @@ async def _commit_filled_sell_and_reanchor_ledger(
         "status": "SELL_FILLED_AND_SETTLED",
         "did_sell_or_ratchet": True,
         "sold_qty": sold_q,
+        "sold_sub_qty": sold_sub_q,
         "sold_pocket_qty": sold_pocket_q,
         "fill_price": fill_p,
         "net_pnl_usd": net_pnl,
+        "sub_net_pnl_usd": sub_net_pnl,
         "repaid_reserve_usd": repaid_this_time,
         "reanchor_drop_usd": 0.0,
         "remaining_tiers": len(rem_buckets),
+        "remaining_sub_tiers": len(rem_sub_buckets),
         "remaining_pocket_qty": rem_gp.qty,
         "cycle_ratchet_max_lots": next_ratchet_max_lots,
+        "sub_ratchet_max_lots": next_sub_ratchet_max_lots,
         "free_cash_usd": free_cash_now,
     }
 
@@ -1552,7 +1940,7 @@ async def sync_pending_sell_order_plugin(
     force_settle: bool = False,
 ) -> Dict[str, Any]:
     """
-    # [🚨 Case 19, Case 24, Case 65, Case 66, Case 70, Case 71, Case 72, Case 78, Case 79, Case 80, Case 82 & Case 86 실측 수수료 연동]:
+    # [🚨 Case 19, Case 24, Case 65, Case 66, Case 70, Case 71, Case 72, Case 78, Case 79, Case 80, Case 82, Case 86 & Case 88 실측 수수료 및 서브 그리드 연동]:
     장부에 대기 중인 미체결 매도 주문(sell_order_id)이 존재할 때:
     1) GET /api/v1/orders/{orderId} 로 FILLED 여부를 조회하여 체결 완료 시
        execution.commission + tax 실측값과 함께 _commit_filled_sell_and_reanchor_ledger() 로 복리 정산을 수행한다.
@@ -1667,6 +2055,7 @@ async def sync_pending_sell_order_plugin(
                 target_sell_price=0.0,
                 pending_sell_mode="",
                 pending_sell_indices=[],
+                pending_sub_sell_indices=[],
                 pending_sell_pocket_qty=0,
                 last_sell_gate_eval_ts=0.0,
             )
@@ -1709,6 +2098,7 @@ async def sync_pending_sell_order_plugin(
             target_sell_price=0.0,
             pending_sell_mode="",
             pending_sell_indices=[],
+            pending_sub_sell_indices=[],
             pending_sell_pocket_qty=0,
             last_sell_gate_eval_ts=0.0,
         )
@@ -1729,7 +2119,7 @@ async def sync_pending_sell_order_plugin(
 
 
 # ---------------------------------------------------------------------------
-# [핵심 3] 24시간 전 세션(프리·정규·애프터·데이마켓) 매수 후 최초 60초 타임쉴드 & 이후 보유 중 매 1.5초 실시간 4중 다중 익절 + 방안 C 오버나이트 통합이평 사수 + 윗꼬리 즉시 체결 모니터 (Case 69 ~ 87)
+# [핵심 3] 24시간 전 세션(프리·정규·애프터·데이마켓) 매수 후 최초 60초 타임쉴드 & 이후 보유 중 매 1.5초 실시간 다중 익절(본+서브+포켓) + 방안 C 오버나이트 통합이평 사수 + 윗꼬리 즉시 체결 모니터 (Case 69 ~ 88)
 # ---------------------------------------------------------------------------
 async def execute_1m_sniper_sell_and_reanchor_plugin(
     context: Any,
@@ -1738,7 +2128,7 @@ async def execute_1m_sniper_sell_and_reanchor_plugin(
     now_est: Optional[datetime] = None,
 ) -> Dict[str, Any]:
     """
-    # [🎯 2 Step 2 & Case 24, 44, 46 ~ 87 (방안 C 오버나이트 통합이평 사수 하이브리드 & 윗꼬리 다중 층 역설 차단)]:
+    # [🎯 2 Step 2 & Case 24, 44, 46 ~ 88 (방안 C 오버나이트 통합이평 사수 하이브리드 & 본+서브+포켓 다중 익절 & 윗꼬리 다중 층 역설 차단)]:
     """
     global _LAST_CONSUMED_WICK_TRADE_TS
 
@@ -1772,8 +2162,9 @@ async def execute_1m_sniper_sell_and_reanchor_plugin(
         }
 
     buckets = buckets_from_dicts(st.get("buckets", []))
+    sub_buckets = buckets_from_dicts(st.get("sub_buckets", []))
     gp = pocket_from_dict(st.get("golden_pocket"))
-    if not buckets and not gp.is_active:
+    if not buckets and not sub_buckets and not gp.is_active:
         return {"status": "NO_BUCKETS_HELD", "did_sell_or_ratchet": False}
 
     in_ext_cd, rem_ext_cd = is_within_extended_sell_restriction_cooldown(
@@ -1819,14 +2210,20 @@ async def execute_1m_sniper_sell_and_reanchor_plugin(
         }
 
     h_info = (holdings or {}).get(TARGET_SYMBOL, {})
-    ledger_total_qty = sum(b.qty for b in buckets) + (
-        gp.qty if gp.is_active else 0
+    ledger_total_qty = (
+        sum(b.qty for b in buckets)
+        + sum(sb.qty for sb in sub_buckets)
+        + (gp.qty if gp.is_active else 0)
     )
     h_qty = safe_int(h_info.get("qty"), ledger_total_qty)
     default_avg_p = (
         buckets[0].actual_avg_price
         if buckets
-        else (gp.actual_avg_price if gp.is_active else live_p)
+        else (
+            sub_buckets[0].actual_avg_price
+            if sub_buckets
+            else (gp.actual_avg_price if gp.is_active else live_p)
+        )
     )
     avg_p = safe_float(h_info.get("avg_price"), default_avg_p)
     update_exit_snapshot_on_hold(
@@ -1852,6 +2249,7 @@ async def execute_1m_sniper_sell_and_reanchor_plugin(
         golden_pocket=gp,
         rise_pocket_pct=GOLDEN_POCKET_RISE_PCT,
         is_overnight_session=is_ext_sell_only,
+        sub_buckets=sub_buckets,
     )
 
     wick_high_p: float = 0.0
@@ -1867,13 +2265,16 @@ async def execute_1m_sniper_sell_and_reanchor_plugin(
             rise_upper_pct=rise_sell_upper_pct,
             rise_pocket_pct=GOLDEN_POCKET_RISE_PCT,
             is_overnight_session=is_ext_sell_only,
+            sub_buckets=sub_buckets,
         )
         if nearest_target_p > 0.0 and live_p >= (
             nearest_target_p * WICK_PROXIMITY_TRIGGER_RATIO
         ):
             min_trade_after_ts = max(
                 safe_float(st.get("last_buy_fill_ts"), 0.0),
+                safe_float(st.get("last_sub_buy_fill_ts"), 0.0),
                 safe_float(st.get("last_sell_fill_ts"), 0.0),
+                safe_float(st.get("last_sub_sell_fill_ts"), 0.0),
                 safe_float(st.get("entry_ts"), 0.0),
                 safe_float((gp.entry_ts if gp.is_active else 0.0), 0.0),
                 _LAST_CONSUMED_WICK_TRADE_TS,
@@ -1895,6 +2296,7 @@ async def execute_1m_sniper_sell_and_reanchor_plugin(
                     golden_pocket=gp,
                     rise_pocket_pct=GOLDEN_POCKET_RISE_PCT,
                     is_overnight_session=is_ext_sell_only,
+                    sub_buckets=sub_buckets,
                 )
                 if not bool(wick_eval.get("should_sell")):
                     wick_eval = evaluate_multi_grid_sell_targets(
@@ -1905,6 +2307,7 @@ async def execute_1m_sniper_sell_and_reanchor_plugin(
                         golden_pocket=gp,
                         rise_pocket_pct=GOLDEN_POCKET_RISE_PCT,
                         is_overnight_session=is_ext_sell_only,
+                        sub_buckets=sub_buckets,
                     )
                 if bool(wick_eval.get("should_sell")):
                     sell_eval = wick_eval
@@ -1934,12 +2337,14 @@ async def execute_1m_sniper_sell_and_reanchor_plugin(
             golden_pocket=gp,
             rise_pocket_pct=GOLDEN_POCKET_RISE_PCT,
             is_overnight_session=is_ext_sell_only,
+            sub_buckets=sub_buckets,
         )
         if bool(fresh_only_eval.get("should_sell")):
             sell_eval = fresh_only_eval
             triggered_by_wick_only = False
 
         sold_indices = list(sell_eval.get("sold_indices") or [])
+        sub_sold_indices = list(sell_eval.get("sub_sold_indices") or [])
         sell_pocket_qty = max(
             0, safe_int(sell_eval.get("sell_pocket_qty"), 0)
         )
@@ -1974,6 +2379,7 @@ async def execute_1m_sniper_sell_and_reanchor_plugin(
             reason_tag=reason_tag,
             pending_sell_indices=sold_indices,
             pending_sell_pocket_qty=sell_pocket_qty,
+            pending_sub_sell_indices=sub_sold_indices,
         )
         did_order = str(sweep_res.get("status") or "") in (
             "NEW_SELL_SWEEP_OK",
@@ -1993,6 +2399,7 @@ async def execute_1m_sniper_sell_and_reanchor_plugin(
             "did_sell_or_ratchet": did_order,
             "sell_mode": reason_tag,
             "sold_indices": sold_indices,
+            "sub_sold_indices": sub_sold_indices,
             "sell_pocket_qty": sell_pocket_qty,
             "qty": sell_qty,
             "sweep_price": order_limit_p,
@@ -2004,7 +2411,11 @@ async def execute_1m_sniper_sell_and_reanchor_plugin(
     ref_b0_p = (
         buckets[0].book_price
         if buckets
-        else (gp.book_price if gp.is_active else live_p)
+        else (
+            sub_buckets[0].book_price
+            if sub_buckets
+            else (gp.book_price if gp.is_active else live_p)
+        )
     )
     chg_now_pct = (
         ((live_p - ref_b0_p) / ref_b0_p) * 100.0 if ref_b0_p > 0.0 else 0.0
@@ -2024,5 +2435,6 @@ async def execute_1m_sniper_sell_and_reanchor_plugin(
 
 
 # 하위 호환 별칭 (타 모듈에서 호출 시 안전 직결)
+execute_sniper_exit_plugin = execute_1m_sniper_sell_and_reanchor_plugin
 manage_mechanical_profit_trap_plugin = execute_1m_sniper_sell_and_reanchor_plugin
 reconcile_zero_holdings_exit_plugin = sync_pending_sell_order_plugin
