@@ -2,11 +2,12 @@
 # -*- coding: utf-8 -*-
 """
 # MODIFIED: /home/pipiosToss/mergy.py
-인피니트 스노우볼 (Infinite Snowball) v3.0 — 12대 코어 파이썬 모듈 단일 파일 병합기
-- quant_engine 2분할(quant_engine_core.py + quant_engine.py),
+인피니트 스노우볼 (Infinite Snowball) v3.0 — 13대 코어 파이썬 모듈 단일 파일 병합기
+- toss_api 2분할(toss_api_core.py + toss_api.py),
+  quant_engine 2분할(quant_engine_core.py + quant_engine.py),
   sniper_plugin 2분할(sniper_plugin_core.py + sniper_plugin.py),
-  main 2분할(main_runtime.py + main.py)이 반영된 12대 코어 *.py 파일을
-  어디에서 실행하더라도 /home/pipiosToss 에서 아키텍처 순서대로 병합하여
+  main 2분할(main_runtime.py + main.py)이 반영된 13대 코어 *.py 파일을
+  어디에서 실행하더라도 /home/pipiosToss 에서 아키텍처 순서대로 인메모리 문법 검증 후 병합하여
   /home/pipios4006/code.txt 파일로 원자적(Atomic) 저장합니다.
 """
 
@@ -22,8 +23,9 @@ OUTPUT_DIR: str = "/home/pipios4006"
 OUTPUT_FILE: str = os.path.join(OUTPUT_DIR, "code.txt")
 SELF_FILENAME: str = "mergy.py"
 
-# MODIFIED: sniper_plugin_core.py 를 [FILE 05 / 12] 위치에 정식 등록하여 12대 코어 모듈 순서 100% 동기화
+# MODIFIED: toss_api_core.py 를 [FILE 01 / 13] 위치에 정식 등록하여 13대 코어 모듈 순서 100% 동기화
 CORE_MODULE_ORDER: Tuple[str, ...] = (
+    "toss_api_core.py",
     "toss_api.py",
     "quant_indicators_plugin.py",
     "quant_engine_core.py",
@@ -93,6 +95,7 @@ def merge_python_files() -> int:
     total_files = len(target_files)
     total_lines = 0
     total_bytes = 0
+    syntax_errors: List[str] = []
 
     merged_chunks: List[str] = [
         "=" * 100,
@@ -109,6 +112,14 @@ def merge_python_files() -> int:
         fpath = os.path.join(SOURCE_DIR, fname)
         with open(fpath, "r", encoding="utf-8", errors="replace") as rf:
             content = rf.read()
+
+        # NEW [Case 75 & Case 85]: 디스크 쓰기 0 Byte 인메모리 컴파일로 문법 및 f-string 중괄호 무결성 즉시 검증
+        try:
+            compile(content, fpath, "exec", dont_inherit=True)
+        except SyntaxError as syn_err:
+            syntax_errors.append(
+                f"{fname} (line {syn_err.lineno}): {syn_err.msg}"
+            )
 
         line_cnt = len(content.splitlines())
         byte_cnt = len(content.encode("utf-8"))
@@ -153,6 +164,16 @@ def merge_python_files() -> int:
     )
     for idx, fname in enumerate(target_files, start=1):
         print(f"  {idx:02d}. {fname}")
+
+    if syntax_errors:
+        print(
+            "\n⚠️ [문법 검증 경고] 아래 파일에서 문법 오류가 감지되었습니다:",
+            file=sys.stderr,
+        )
+        for err in syntax_errors:
+            print(f"  - {err}", file=sys.stderr)
+        return 1
+
     return 0
 
 
