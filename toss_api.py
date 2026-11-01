@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 """
 # MODIFIED: toss_api.py
-인피니트 스노우볼 (Infinite Snowball) v3.0 — 토스증권 Open API (v1.2.14) 방탄 통신 통제소 (Part 2 / 2 · Step 02 / 11)
+인피니트 스노우볼 (Infinite Snowball) v3.0 — 토스증권 Open API (v1.2.14) 방탄 통신 통제소 (Part 2 / 2 · Step 02 / 10)
 - 역할:
-  1) toss_api_core.py (Part 1 / 2) 의 모든 상수·유틸리티·폴더격리·디스크치유·GlobalThrottle·SoxlStratumLedger 심볼을
-     명시적으로 재익스포트(Facade Re-export)하여 타 모듈 AST 심볼 임포트 무결성 100% 보장
+  1) toss_api_core.py (Part 1 / 2) 의 모든 상수(DEFAULT_GRID_MERGE_MODE 포함)·유틸리티·폴더격리·디스크치유·
+     GlobalThrottle·SoxlStratumLedger 심볼을 명시적으로 재익스포트(Facade Re-export)하여 타 모듈 AST 심볼 임포트 무결성 100% 보장
   2) 제1헌법 ~ 제6헌법 및 API.txt (v1.2.14) 100% 준수 TossApiClient 구현:
      - OAuth2 토큰 자동 발급 및 만료 전 선제 갱신 (POST /oauth2/token)
      - 종합매매 계좌(BROKERAGE) accountSeq 자동 락온 및 X-Tossinvest-Account 헤더 원자적 주입 (GET /api/v1/accounts)
@@ -34,6 +34,7 @@ from toss_api_core import (
     AssassinLedger,
     BASE_MAX_LOTS_8PCT,
     DEFAULT_GOLDEN_ALLIN_MODE,
+    DEFAULT_GRID_MERGE_MODE,
     DEFAULT_INITIAL_SEED_USD,
     DEFAULT_UNLOCK_MODE,
     DEFAULT_US_COMMISSION_RATE,
@@ -145,7 +146,7 @@ class TossApiClient:
         self.account_seq: Optional[int] = None
         self._account_lock: asyncio.Lock = asyncio.Lock()
 
-        # MODIFIED [Case 86]: 하드코딩 0.0007/0.14 대신 원장 또는 .env 로부터 런타임에 동기화된 수수료율로 초기화
+        # [Case 86]: 하드코딩 0.0007/0.14 대신 원장 또는 .env 로부터 런타임에 동기화된 수수료율로 초기화
         self.us_commission_rate: float = get_runtime_us_commission_rate()
         self.round_trip_fee_rate_pct: float = (
             get_runtime_round_trip_fee_rate_pct()
@@ -351,7 +352,7 @@ class TossApiClient:
         self, force_refresh: bool = False
     ) -> Tuple[float, float]:
         """
-        # MODIFIED [Case 86 : 계좌별 미국 주식 실제 수수료율 자동 락온 및 일시 조회 실패 시 원장/런타임 수수료율 보존]:
+        # [Case 86 : 계좌별 미국 주식 실제 수수료율 자동 락온 및 일시 조회 실패 시 원장/런타임 수수료율 보존]:
         GET /api/v1/commissions 를 호출하여 "marketCountry": "US" 항목의 "commissionRate" (소수 비율)를 추출한다.
         - 예: pipiosToss 계좌("0.0007") -> 편도 0.0007 (0.07%) / 왕복 0.14% 자동 락온
         - 예: wonToss 계좌("0.001")     -> 편도 0.0010 (0.10%) / 왕복 0.20% 자동 락온

@@ -1,16 +1,18 @@
 # -*- coding: utf-8 -*-
 """
-# NEW: toss_api_core.py
+# MODIFIED: toss_api_core.py
 인피니트 스노우볼 (Infinite Snowball) v3.0 — 토스증권 코어 상수 · 폴더 격리 · 디스크 자가 치유 ·
-GlobalThrottle 동시성 통제 및 SOXL 7-Tier 골디락스 멀티 그리드 / 독립 골든포켓 3중 원장(SoxlStratumLedger) 코어 모듈 (Part 1 / 2 · Step 01 / 11)
+GlobalThrottle 동시성 통제 및 SOXL 7-Tier 골디락스 멀티 그리드(구 2층 + 구 7층 통합 중간층 재배치 & 최고 도달 회차 단차 잠금 · Case 87) /
+독립 골든포켓 3중 원장(SoxlStratumLedger) 코어 모듈 (Part 1 / 2 · Step 01 / 10)
 - 역할:
-  1) 제4헌법 EST 단일 타임존 및 최종 확정 챔피언(Case 01 ~ Case 86) 전역 상수 락온
+  1) 제4헌법 EST 단일 타임존 및 최종 확정 챔피언(Case 01 ~ Case 87 · 👑 06_L2L7_RATCHET_8PCT) 전역 상수 락온
   2) 안전한 수치 형변환(safe_float, safe_int), 36자 멱등성 키 생성기(generate_client_order_id),
      4xx 비재시도 예외(_NonRetryableApiError) 및 계좌별 미국 주식 수수료율 런타임 캐시 동기화기(Case 86)
   3) 폴더 위치(base_dir) 기반 자동 식별기(get_bot_base_dir, get_folder_slug, resolve_folder_isolated_ledger_paths),
      격리 환경변수 로더(_load_env_files_into_environ) 및 클라우드 VM 디스크 고갈(Errno 28) 자가 치유기(emergency_free_disk_space_sync · Case 68, Case 75, Case 85)
   4) 제1헌법 동기/비동기 양방향 호환 _HybridFileLock 및 GlobalThrottle 중앙 통제소(Case 06, Case 20)
-  5) SOXL 단일 롱 7-Tier 순수 멀티 그리드 및 독립 골든포켓(GoldenAllInPocket) 폴더별 3중 안전 지층 원장(SoxlStratumLedger · Case 58 ~ Case 86)
+  5) SOXL 단일 롱 7-Tier 순수 멀티 그리드(L2_L7_MERGE_SORT & cycle_ratchet_max_lots 단차 잠금 · Case 87) 및
+     독립 골든포켓(GoldenAllInPocket) 폴더별 3중 안전 지층 원장(SoxlStratumLedger · Case 58 ~ Case 87)
 """
 
 from __future__ import annotations
@@ -34,7 +36,7 @@ from zoneinfo import ZoneInfo
 logger = logging.getLogger("toss_sniper.toss_api_core")
 
 # ---------------------------------------------------------------------------
-# [핵심 상수] 제4헌법 EST 단일 타임존 & 최종 확정 진화 챔피언 (Case 72 ~ 86) 전역 상수
+# [핵심 상수] 제4헌법 EST 단일 타임존 & 최종 확정 진화 챔피언 (Case 72 ~ 87) 전역 상수
 # ---------------------------------------------------------------------------
 EST_TZ = ZoneInfo("America/New_York")
 KST_TZ = ZoneInfo("Asia/Seoul")
@@ -47,11 +49,14 @@ DEFAULT_INITIAL_SEED_USD: float = 10000.0
 PORTION_RATIO_LOCKED: float = 0.08
 BASE_MAX_LOTS_8PCT: int = 12
 
-# Case 72: 골디락스 7-Layer (1층 공격수 + 2 ~ 6층 개별 완충층 + 통합 7층 본대) 상수 락온
+# Case 72 & Case 87: 골디락스 7-Layer (1층 공격수 + 2 ~ 7층 완충/중간합병 그리드) 상수 락온
 # (타 모듈 AST 임포트 무결성 100% 호환을 위해 MAX_GRID_TIERS_12 도 7 로 동시 매핑)
 MAX_GRID_TIERS_7: int = 7
 MAX_GRID_TIERS: int = 7
 MAX_GRID_TIERS_12: int = 7
+
+# NEW [Case 87 : 👑 06_L2L7_RATCHET_8PCT — 7층 만석 초과(8층 발생) 시 구 1층 보존 + 구 2층 + 구 7층 통합 후 평단 오름차순 중간층 재배치 모드]
+DEFAULT_GRID_MERGE_MODE: str = "L2_L7_MERGE_SORT"
 
 # Case 76: 🔓 06_STEP2X_15PCT_C20 3중 안전문 기반 조건부 스텝업 저가 해금 전역 상수 락온
 DEFAULT_UNLOCK_MODE: str = "STEP2X_15PCT_C20"
@@ -79,7 +84,7 @@ GOLDEN_WINDOW_END_HM: int = 750
 GOLDEN_RSI_MAX_THRESHOLD: float = 19.0
 GOLDEN_POCKET_RISE_PCT: float = 1.50
 
-# MODIFIED [Case 84 : 정규장 마감 30분 전(15:30 ~ 16:00 EST) 오직 0주 새 사이클 첫 1층 진입만 차단하는 기준 시각(HHMM)]
+# MODIFIED [Case 84 원복 : 정규장 마감 30분 전(15:30 ~ 16:00 EST) 0주 새 사이클 첫 1층 진입 및 상단 2~7층 보유 중 1층 공석 +1.0% 돌파 추격 동시 차단 기준 시각(HHMM)]
 NEW_CYCLE_BUY_CUTOFF_HM: int = 1530
 
 LOCKED_BUY_INTERVAL_MIN: int = 10
@@ -137,7 +142,7 @@ def safe_int(val: Any, default: int = 0) -> int:
 
 def _read_env_us_commission_rates() -> Tuple[float, float]:
     """
-    # NEW [Case 86 : 환경변수(.env) 기반 미국 주식 수수료율 폴백 로더]:
+    # [Case 86 : 환경변수(.env) 기반 미국 주식 수수료율 폴백 로더]:
     US_COMMISSION_RATE (소수 비율, 예: 0.0007 또는 0.001) 또는
     ROUND_TRIP_FEE_RATE_PCT (%, 예: 0.14 또는 0.20)가 .env 에 설정된 경우 이를 우선 폴백값으로 반환한다.
     """
@@ -511,16 +516,18 @@ class GlobalThrottle:
 
 
 # ---------------------------------------------------------------------------
-# [핵심 2] SOXL 단일 롱 7-Tier 순수 멀티 그리드 및 골든포켓 폴더별 3중 안전 지층 원장 (SoxlStratumLedger — Case 68 ~ 86)
+# [핵심 2] SOXL 단일 롱 7-Tier 순수 멀티 그리드(L2_L7_MERGE_SORT & 최고 도달 회차 단차 잠금) 및 골든포켓 폴더별 3중 안전 지층 원장 (SoxlStratumLedger — Case 68 ~ 87)
 # ---------------------------------------------------------------------------
 class SoxlStratumLedger:
     """
-    🎯 1 ~ 🎯 5 & Case 02, 05, 06, 58 ~ 86:
+    🎯 1 ~ 🎯 5 & Case 02, 05, 06, 58 ~ 87:
     현재 봇이 위치한 폴더(`base_dir`)를 기준으로:
     ① 폴더 고유 원장(`soxl_stratum_ledger_<folder_slug>.json` — Git 덮어쓰기 100% 면역)
     ② 표준 호환 원장(`soxl_stratum_ledger.json` — 기존 코드 및 외부 도구 호환 미러)
     ③ 실시간 백업 금고(`ledger_backups/soxl_stratum_ledger_<folder_slug>.bak.json`)
-    3곳에 SOXL 1 ~ 7층 순수 멀티 그리드 지층, 황금시간대 선택 모드(`golden_allin_mode`, 기본값 `"NONE"` [OFF]) 및
+    3곳에 SOXL 1 ~ 7층 순수 멀티 그리드 지층(`grid_merge_mode = "L2_L7_MERGE_SORT"`),
+    사이클 최고 도달 회차 잠금(`cycle_ratchet_max_lots` · Case 87),
+    황금시간대 선택 모드(`golden_allin_mode`, 기본값 `"NONE"` [OFF]) 및
     독립 골든포켓(`golden_pocket`), 가용 현금 시드(`free_cash_usd`), 계좌별 미국 주식 수수료율(`us_commission_rate`, `round_trip_fee_rate_pct`),
     정적 잠금/조건부 스텝업 사이클 최저 매수가(`cycle_min_buy_price`), STEP2X_15PCT_C20 스텝업 해금 대기 가격 및 해금 횟수,
     💉 05_RESV_6P_GUARD30 예비시드 수혈 잔액 · 사용 회분 · 시드고갈 입금 대기 플래그 · 단 1회 입금 알림 영구 래치,
@@ -647,12 +654,14 @@ class SoxlStratumLedger:
             "initial_seed_usd": clean_seed,
             "seed_explicitly_set_100": False,
             "free_cash_usd": clean_seed,
-            # MODIFIED [Case 86]: 계좌별 미국 주식 편도 수수료율(소수) 및 왕복 수수료율(%) 영속화 필드 (.env 폴백 지원)
+            # [Case 86]: 계좌별 미국 주식 편도 수수료율(소수) 및 왕복 수수료율(%) 영속화 필드 (.env 폴백 지원)
             "us_commission_rate": env_one_rate,
             "round_trip_fee_rate_pct": env_rt_pct,
             "portion_mode": "COMP_08PCT",
             "threshold_mode": "WIDE_RUNWAY",
             "reentry_mode": "HYBRID_PULL_OR_BRK",
+            # NEW [Case 87 : 👑 06_L2L7_RATCHET_8PCT — 구 2층 + 구 7층 통합 후 평단 오름차순 중간층 재배치 모드 락온]
+            "grid_merge_mode": DEFAULT_GRID_MERGE_MODE,
             # Case 76: 🔓 06_STEP2X_15PCT_C20 조건부 스텝업 저가 해금 모드 락온
             "unlock_mode": DEFAULT_UNLOCK_MODE,
             # [Case 80]: 황금시간대(07:00 ~ 07:50 EST & RSI <= 19.0) 전액매수 모드 (기본값 "NONE" [OFF])
@@ -661,11 +670,13 @@ class SoxlStratumLedger:
             "last_golden_allin_date": "",
             "buy_interval_min": LOCKED_BUY_INTERVAL_MIN,
             "sell_interval_min": LOCKED_SELL_INTERVAL_MIN,
-            # Case 72: 7-Layer (1층 공격수 + 2 ~ 6층 개별 완충층 + 통합 7층 본대) 기본값 락온
+            # Case 72: 7-Layer 골디락스 멀티 그리드 기본값 락온
             "max_grid_tiers": MAX_GRID_TIERS_7,
             "buckets": [],
             "anchor_price": 0.0,
             "cycle_min_buy_price": 0.0,
+            # NEW [Case 87 : 사이클 최고 도달 회차 기반 4단 와이드 단차 풀림 잠금 필드]
+            "cycle_ratchet_max_lots": 0,
             "ratchet_anchor_price": 0.0,
             "cycle_reanchor_credit_usd": 0.0,
             # [Case 78 : 현재 1층의 목표 정량 주수 (부분 체결 시 미체결 잔량 계산 및 1.5초 모니터 재대기용)]
@@ -758,13 +769,18 @@ class SoxlStratumLedger:
 
     @classmethod
     def _enforce_7tier_cap_on_dict_buckets(
-        cls, clean_buckets: List[Dict[str, Any]]
+        cls,
+        clean_buckets: List[Dict[str, Any]],
+        merge_mode: str = DEFAULT_GRID_MERGE_MODE,
     ) -> List[Dict[str, Any]]:
         """
-        # [Case 72]:
-        구 12-Layer 등에서 이관된 원장에 7개 층 초과 버킷이 존재할 경우,
-        활성 1층과 2 ~ 6층(5개 개별 완충층)은 그대로 보존하고 7층 이상 초과분만
-        '통합 7층 본대(GRID_L7)'로 무손실 가중평균 병합하여 7-Layer 규격을 100% 보장한다.
+        # MODIFIED [Case 72 & Case 87 : 👑 06_L2L7_RATCHET_8PCT — 구 1층 보존 + 구 2층 + 구 7층 통합 후 평단 오름차순 중간층 재배치]:
+        원장에 7개 층 초과(상단 6개 초과) 버킷이 존재할 경우:
+        1) merge_mode == "L2_L7_MERGE_SORT" (기본 챔피언) 이고 상단 지층 후보가 3개 이상일 때:
+           - 최하단 상단층인 uppers[0] (구 1층 -> 새 2층 후보)은 합병하지 않고 그대로 보존하여 Case 73 역전 차단 상한 가드를 사수한다.
+           - 두 번째 상단층인 low_b = uppers[1] (구 2층)과 최상단층인 high_b = uppers[-1] (구 7층)을 가중평균 통합(Case 53 상한 하드 캡핑 적용)한 뒤,
+             전체 상단 6개 지층 후보를 단가(book_price) 오름차순으로 정렬하여 중간층에 재배치한다!
+        2) 상단 지층들을 GRID_L2 ~ GRID_L7 로 정규화하여 7-Layer 규격을 100% 보장한다.
         """
         if not clean_buckets:
             return []
@@ -780,25 +796,73 @@ class SoxlStratumLedger:
             uppers = list(clean_buckets[:])
 
         max_upper_cnt = MAX_GRID_TIERS_7 - 1  # 6개 (GRID_L2 ~ GRID_L7)
-        if len(uppers) > max_upper_cnt:
-            kept = uppers[: max_upper_cnt - 1]
-            overflow = uppers[max_upper_cnt - 1 :]
-            tot_q = sum(safe_int(b.get("qty"), 0) for b in overflow)
-            tot_ac = round(
-                sum(safe_float(b.get("actual_cost_usd"), 0.0) for b in overflow),
-                4,
-            )
-            tot_lc = sum(max(1, safe_int(b.get("lot_count"), 1)) for b in overflow)
-            pure_p = round(max(0.01, tot_ac / float(max(1, tot_q))), 4)
-            merged_top = {
-                "qty": max(1, tot_q),
-                "book_price": pure_p,
-                "book_invested_usd": tot_ac,
-                "actual_cost_usd": tot_ac,
-                "lot_count": max(1, tot_lc),
-                "lot_type": f"GRID_L{MAX_GRID_TIERS_7}",
-            }
-            uppers = kept + [merged_top]
+        m_mode = str(merge_mode or DEFAULT_GRID_MERGE_MODE).upper().strip()
+
+        while len(uppers) > max_upper_cnt:
+            if m_mode == "L2_L7_MERGE_SORT" and len(uppers) >= 3:
+                kept_lowest_upper = [uppers[0]]
+                low_b = uppers[1]
+                high_b = uppers[-1]
+                middle_rest = uppers[2:-1]
+
+                q_low = max(1, safe_int(low_b.get("qty"), 1))
+                q_high = max(1, safe_int(high_b.get("qty"), 1))
+                tot_q = q_low + q_high
+                tot_ac = round(
+                    safe_float(low_b.get("actual_cost_usd"), 0.0)
+                    + safe_float(high_b.get("actual_cost_usd"), 0.0),
+                    4,
+                )
+                tot_lc = max(1, safe_int(low_b.get("lot_count"), 1)) + max(
+                    1, safe_int(high_b.get("lot_count"), 1)
+                )
+                overall_book_avg = (
+                    float(q_low) * safe_float(low_b.get("book_price"), 0.0)
+                    + float(q_high) * safe_float(high_b.get("book_price"), 0.0)
+                ) / float(max(1, tot_q))
+                raw_p = max(0.01, tot_ac / float(max(1, tot_q)))
+                pure_p = round(
+                    min(raw_p, overall_book_avg)
+                    if overall_book_avg > 0.0
+                    else raw_p,
+                    4,
+                )
+                merged_b = {
+                    "qty": max(1, tot_q),
+                    "book_price": pure_p,
+                    "book_invested_usd": tot_ac,
+                    "actual_cost_usd": tot_ac,
+                    "lot_count": max(1, tot_lc),
+                    "lot_type": f"GRID_L{MAX_GRID_TIERS_7}",
+                }
+                uppers = kept_lowest_upper + middle_rest + [merged_b]
+                uppers.sort(
+                    key=lambda b: round(safe_float(b.get("book_price"), 0.0), 4)
+                )
+            else:
+                kept = uppers[: max_upper_cnt - 1]
+                overflow = uppers[max_upper_cnt - 1 :]
+                tot_q = sum(safe_int(b.get("qty"), 0) for b in overflow)
+                tot_ac = round(
+                    sum(
+                        safe_float(b.get("actual_cost_usd"), 0.0)
+                        for b in overflow
+                    ),
+                    4,
+                )
+                tot_lc = sum(
+                    max(1, safe_int(b.get("lot_count"), 1)) for b in overflow
+                )
+                pure_p = round(max(0.01, tot_ac / float(max(1, tot_q))), 4)
+                merged_top = {
+                    "qty": max(1, tot_q),
+                    "book_price": pure_p,
+                    "book_invested_usd": tot_ac,
+                    "actual_cost_usd": tot_ac,
+                    "lot_count": max(1, tot_lc),
+                    "lot_type": f"GRID_L{MAX_GRID_TIERS_7}",
+                }
+                uppers = kept + [merged_top]
 
         relabeled_uppers: List[Dict[str, Any]] = []
         for idx, b in enumerate(uppers):
@@ -852,14 +916,15 @@ class SoxlStratumLedger:
         self, raw_st: Dict[str, Any]
     ) -> Dict[str, Any]:
         """
-        🚨 Case 63, Case 64, Case 67, Case 68, Case 69, Case 70, Case 71, Case 72, Case 73, Case 74, Case 76, Case 77, Case 78, Case 80 & Case 86:
+        🚨 Case 63, Case 64, Case 67, Case 68, Case 69, Case 70, Case 71, Case 72, Case 73, Case 74, Case 76, Case 77, Case 78, Case 80, Case 86 & Case 87:
         1) buy_interval_min = 10, sell_interval_min = 1, max_grid_tiers = 7 (MAX_GRID_TIERS_7),
-           portion_mode = "COMP_08PCT", threshold_mode = "WIDE_RUNWAY", unlock_mode = "STEP2X_15PCT_C20" 를 강제 동기화하고,
+           portion_mode = "COMP_08PCT", threshold_mode = "WIDE_RUNWAY",
+           grid_merge_mode = "L2_L7_MERGE_SORT", unlock_mode = "STEP2X_15PCT_C20" 를 강제 동기화하고,
            golden_allin_mode 는 GOLDEN_ALLIN_MODES ("NONE", "POCKET_ALLIN", "GRID_L1_ALLIN") 중 하나로 검증한다(기본값 "NONE").
         2) 계좌별 미국 주식 수수료율(us_commission_rate, round_trip_fee_rate_pct)을 유효 범위(왕복 0.01% ~ 2.00%)로 정규화하고
            런타임 메모리 캐시에 동기화한다.
         3) 시드머니 결측 또는 0.0 유입 시 $100.0 으로 변조되지 않도록 _resolve_safe_initial_seed() 를 적용한다.
-        4) 🛡️ [Case 69, Case 71, Case 72 & Case 80 순수 실물 원가 100% 보존 강제 (리앵커링 원가 차감 영구 폐기)]
+        4) 🛡️ [Case 69, Case 71, Case 72, Case 80 & Case 87 순수 실물 원가 100% 보존 및 사이클 최고 도달 회차(cycle_ratchet_max_lots) 잠금 강제]
         5) 💉 [Case 77 & Case 80 온디맨드 예비시드 수혈 잔액(injected_reserve_usd) · 골든포켓 투입원금 통합 회계 항등식]
         """
         st = self._default_symbol_state(
@@ -877,6 +942,7 @@ class SoxlStratumLedger:
         st["portion_mode"] = "COMP_08PCT"
         st["threshold_mode"] = "WIDE_RUNWAY"
         st["reentry_mode"] = "HYBRID_PULL_OR_BRK"
+        st["grid_merge_mode"] = DEFAULT_GRID_MERGE_MODE
         st["unlock_mode"] = DEFAULT_UNLOCK_MODE
         st["cond_unlock_buy_events"] = max(
             0, safe_int(st.get("cond_unlock_buy_events"), 0)
@@ -885,7 +951,7 @@ class SoxlStratumLedger:
             0, safe_int(st.get("daily_unlock_buy_events"), 0)
         )
 
-        # MODIFIED [Case 86]: 계좌별 미국 주식 수수료율 정규화 및 런타임 캐시 동기화
+        # [Case 86]: 계좌별 미국 주식 수수료율 정규화 및 런타임 캐시 동기화
         env_one_fb, env_rt_fb = _read_env_us_commission_rates()
         raw_us_comm = safe_float(st.get("us_commission_rate"), env_one_fb)
         if raw_us_comm <= 0.0 or raw_us_comm > 0.01:
@@ -1040,9 +1106,19 @@ class SoxlStratumLedger:
                         }
                     )
 
-        clean_buckets = self._enforce_7tier_cap_on_dict_buckets(clean_buckets)
+        clean_buckets = self._enforce_7tier_cap_on_dict_buckets(
+            clean_buckets, merge_mode=st["grid_merge_mode"]
+        )
         st["buckets"] = clean_buckets
         st["cycle_reanchor_credit_usd"] = 0.0
+
+        # NEW [Case 87 : 사이클 최고 도달 회차(cycle_ratchet_max_lots) 잠금 정합성 강제]
+        held_lots_now = sum(
+            max(1, safe_int(b.get("lot_count"), 1)) for b in clean_buckets
+        )
+        raw_ratchet_lots = max(
+            0, safe_int(st.get("cycle_ratchet_max_lots"), 0)
+        )
 
         raw_settled_ids = st.get("last_settled_order_ids")
         if isinstance(raw_settled_ids, list):
@@ -1074,6 +1150,7 @@ class SoxlStratumLedger:
             st["pending_sell_pocket_qty"] = 0
 
         if not clean_buckets:
+            st["cycle_ratchet_max_lots"] = 0
             st["last_sell_gate_eval_ts"] = 0.0
             st["last_reentry_eval_ts"] = 0.0
             st["pending_sell_indices"] = []
@@ -1084,6 +1161,7 @@ class SoxlStratumLedger:
                 else 0
             )
         else:
+            st["cycle_ratchet_max_lots"] = max(held_lots_now, raw_ratchet_lots)
             st["last_sell_gate_eval_ts"] = round(
                 max(0.0, safe_float(st.get("last_sell_gate_eval_ts"), 0.0)), 4
             )
@@ -1252,7 +1330,7 @@ class SoxlStratumLedger:
 
     def _load_sync(self) -> None:
         """
-        🚨 Case 68, Case 75, Case 80, Case 85 & Case 86 [기존 soxl_stratum_ledger.json 100% 무손실 자동 이관 & 3중 금고 Dirty-Check 자가 치유]:
+        🚨 Case 68, Case 75, Case 80, Case 85, Case 86 & Case 87 [기존 soxl_stratum_ledger.json 100% 무손실 자동 이관 & 3중 금고 Dirty-Check 자가 치유]:
         """
         with GlobalThrottle.get_file_lock(self.primary_filepath):
             with GlobalThrottle.get_file_lock(self.legacy_filepath):
@@ -1299,11 +1377,18 @@ class SoxlStratumLedger:
                         safe_int(b.get("qty"), 0)
                         for b in sanitized.get("buckets", [])
                     )
+                    held_l = sum(
+                        max(1, safe_int(b.get("lot_count"), 1))
+                        for b in sanitized.get("buckets", [])
+                    )
+                    ratchet_l = safe_int(
+                        sanitized.get("cycle_ratchet_max_lots"), 0
+                    )
                     gp_q = safe_int(
                         (sanitized.get("golden_pocket") or {}).get("qty"), 0
                     )
                     logger.info(
-                        "📂 [Case 68~86 폴더별 3중 7층 골디락스 그리드 원장 락온 완료] 폴더=[%s] · 채택소스=%s · 시드=$%.2f · 왕복수수료=%.2f%% · 그리드=%d주(%d개층) · 골든포켓=%d주(모드=%s) · 예비수혈=%d/%d회분($%.2f) · 고유원장=%s",
+                        "📂 [Case 68~87 폴더별 3중 7층 골디락스(L2+L7 중간합병·단차잠금) 원장 락온 완료] 폴더=[%s] · 채택소스=%s · 시드=$%.2f · 왕복수수료=%.2f%% · 그리드=%d주(%d개층·보유%d/잠금%d회차) · 골든포켓=%d주(모드=%s) · 예비수혈=%d/%d회분($%.2f) · 고유원장=%s",
                         self.folder_slug,
                         best_label,
                         safe_float(sanitized.get("initial_seed_usd"), 10000.0),
@@ -1313,6 +1398,8 @@ class SoxlStratumLedger:
                         ),
                         held_q,
                         len(sanitized.get("buckets", [])),
+                        held_l,
+                        ratchet_l,
                         gp_q,
                         str(
                             sanitized.get("golden_allin_mode")
@@ -1617,6 +1704,7 @@ class SoxlStratumLedger:
             golden_pocket=self._empty_golden_pocket_dict(),
             anchor_price=0.0,
             cycle_min_buy_price=0.0,
+            cycle_ratchet_max_lots=0,
             ratchet_anchor_price=0.0,
             cycle_reanchor_credit_usd=0.0,
             l1_target_quota_qty=0,

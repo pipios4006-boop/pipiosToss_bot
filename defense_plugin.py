@@ -1,10 +1,11 @@
 # -*- coding: utf-8 -*-
 """
 # MODIFIED: defense_plugin.py
-순수 롱(SOXL) 매수 04:07 ~ 16:00 EST 제한(정규장 마감 30분 전 15:30 ~ 16:00 EST 0주 새 사이클 1층 진입 및 1층 공석 +1.0% 돌파 추격 차단 · Case 84) &
+순수 롱(SOXL) 매수 04:07 ~ 16:00 EST 제한(정규장 마감 30분 전 15:30 ~ 16:00 EST 0주 새 사이클 1층 진입 및 1층 공석 +1.0% 돌파 추격 차단 · Case 84 원복) &
 익절 매도 24시간 전 세션(프리마켓 + 정규장 + 애프터마켓 + 데이마켓 · 방안 C 오버나이트 통합이평 사수 · Case 83) 확장
-오버나이트 7층 골디락스 멀티 그리드(1층 공격수 + 2 ~ 6층 개별 완충층 + 통합 7층 본대) 및
-황금시간대(07:00 ~ 07:50 EST & RSI <= 19.0) 독립 골든포켓(GoldenAllInPocket) 지층관리 스나이퍼 전용 (Step 07 / 11):
+오버나이트 7층 골디락스 멀티 그리드(1층 공격수 + 2 ~ 7층 상단 완충/합병 그리드 · 7층 초과 시 구 1층 보존 + 구 2층 + 구 7층 통합 중간배치 L2_L7_MERGE_SORT &
+사이클 최고 도달 회차 cycle_ratchet_max_lots 단차 잠금 · Case 87) 및
+황금시간대(07:00 ~ 07:50 EST & RSI <= 19.0) 독립 골든포켓(GoldenAllInPocket) 지층관리 스나이퍼 전용 (Step 09 / 10):
 1) 🚨 [Case 66, Case 78, Case 79 & Case 80 봇 주문 진행 중 가로채기 차단 및 04:00 / 16:01 세션 경계 force_settle 선취소-후정산(Cancel-then-Sync) 가드]
    - 평시 원장에 미결 매수(buy_order_id) 또는 미결 매도(sell_order_id)가 존재할 때 reconcile 모듈이 호출되면
      즉시 sync_pending_buy_order_plugin() / sync_pending_sell_order_plugin() 을 선행 호출하여 가로채기를 차단한다.
@@ -14,7 +15,7 @@
      비례 자투리 절약금 · 골든포켓 분리 기록 · 세후 실현익 복리 산입 · 텔레그램 체결 알림 · 양방향 60초 타임쉴드 각인이 단 1주도 유실되지 않도록 100% 보장!
    - 특히 16:00:00 ~ 16:00:59 EST (hm == 1600) 동안에는 15:59:xx EST 발주 미결 주문 및 16:00 EST 마감봉(72번 버킷) 타격 기회를 보호한 뒤
      16:01 EST 부터(또는 16:00 에 미결 주문이 없고 72번 버킷 평가가 완료된 직후) 마감 결산을 집행한다.
-2) 🛡️ [Case 61, Case 65, Case 69, Case 80 & Case 84 양방향 15초 인덱싱 그레이스 쉴드 전 구간(h_qty != ledger_qty) 최우선 적용]
+2) 🛡️ [Case 61, Case 65, Case 69, Case 80, Case 84 & Case 87 양방향 15초 인덱싱 그레이스 쉴드 전 구간(h_qty != ledger_qty) 최우선 적용]
    - 원장 총 보유 수량을 ledger_qty = sum(b.qty for b in buckets) + golden_pocket.qty 로 통합 산출하여
      골든포켓 보유 중에도 유령 추매/매도 오판을 원천 차단!
    - 매수 체결뿐만 아니라 매도 체결(개별 층 익절 · 골든포켓 익절 및 0주 졸업) 직후 15.0초 동안은 모든 수량 불일치(h_qty != ledger_qty)에서
@@ -22,16 +23,17 @@
      유령 추매(h_qty > ledger_qty) ➔ 유령 부분매도(h_qty < ledger_qty) 핑퐁 오염 및 0주 졸업 직후 과거 백업 덮어쓰기를 원천 봉쇄!
    - 수동 전량 청산(CLEARED_TO_ZERO_HOLDINGS)으로 0주 싸이클이 끝나는 순간에도 토스 CLOSED 체결원장에서 실제 매도 체결가와 실측 수수료(commission + tax)를 역추적하여
      보유 지층 및 골든포켓의 순수 매수 원금 대비 세후 실현수익(net_pnl_usd, 계좌 고유 수수료율 0.14% / 0.20% 반영)을 원장에 즉시 복리 산입하고,
-     l1_target_quota_qty = 0 클리어(Case 78) 및 compute_reserve_repayment_on_zero() 로 온디맨드 예비시드 원금을 자동 상환(Case 77)하며,
+     cycle_ratchet_max_lots = 0 및 l1_target_quota_qty = 0 클리어(Case 78, Case 87) · compute_reserve_repayment_on_zero() 로 온디맨드 예비시드 원금을 자동 상환(Case 77)하며,
      mark_post_sell_time_shield(is_cycle_end=True) 와 last_sell_fill_ts / last_cycle_end_ts / last_reentry_eval_ts=0.0 을 각인하여 60.0초 타임쉴드를 강제하고
      15:29:01 ~ 16:00:00 EST 구간에는 Case 84 새 사이클 진입 차단 안내를 표출!
-3) 🛡️ [Case 63, Case 69, Case 71 ~ Case 80 : 수동 매수·매도 CLOSED 체결가 및 실측 수수료 역추적 · 단가 비교 층간 편입 · 수동 매수 실시간 텔레그램 알림 타전 · 층별/포켓별 순수 원가 1:1 매칭 복리 정산 및 수동 부분매도 시 1층 목표정량 동기화]
+3) 🛡️ [Case 63, Case 69, Case 71 ~ Case 87 : 수동 매수·매도 CLOSED 체결가 및 실측 수수료 역추적 · L2+L7 중간합병 및 단가 비교 층간 편입 ·
+   수동 부분매도 시 cycle_ratchet_max_lots 잠금 보존 · 수동 매수 실시간 텔레그램 알림 타전 · 층별/포켓별 순수 원가 1:1 매칭 복리 정산]
 4) 🔗 [tg_ui_plugin.py 심볼 완벽 호환] 전술 제어반(/settlement)에서 봇 작동 OFF ➔ ON 재개 시 호출되는
    relock_stratum_on_bot_resume() 함수를 정식 제공하여 AST 심볼 임포트 무결성 100% 충족!
 5) 04:00 ~ 04:06 EST 프리장 개장 초기 호가 안정화 · 계좌별 미국 주식 수수료율(GET /api/v1/commissions) 일일 갱신 및 당일 시드보호 패스(Case 74) · 당일 스텝업 해금(Case 76) ·
    당일 황금시간 전액매수/포켓익절(Case 80) · 당일 예비수혈/자투리차단(Case 77) 0회 리셋(단 1회 입금 알림 래치 보존) ·
    16:00 EST 일일 결산 후 애프터·데이마켓 익절 감시 무중단 직결(Case 79, Case 83) · 17:00 EST 일일 GC 및 3중 금고 스냅샷 백업(Case 68)
-- 제1헌법 ~ 제6헌법 및 Case 01 ~ 85 완벽 준수
+- 제1헌법 ~ 제6헌법 및 Case 01 ~ 87 완벽 준수
 """
 
 from __future__ import annotations
@@ -45,6 +47,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 from quant_engine import (
+    DEFAULT_GRID_MERGE_MODE,
     GoldenAllInPocket,
     MAX_GRID_TIERS_7,
     MAX_GRID_TIERS_12,
@@ -169,7 +172,7 @@ def _get_last_probed_manual_fee(context: Any) -> Optional[float]:
 
 
 # ---------------------------------------------------------------------------
-# [핵심 1] 로컬 7층 골디락스 그리드 + 독립 골든포켓 원장 ↔ 토스 실보유 잔고(/api/v1/holdings) 무결성 화해 (Case 58 ~ 85)
+# [핵심 1] 로컬 7층 골디락스 그리드(L2_L7_MERGE_SORT & 최고회차 잠금) + 독립 골든포켓 원장 ↔ 토스 실보유 잔고(/api/v1/holdings) 무결성 화해 (Case 58 ~ 87)
 # ---------------------------------------------------------------------------
 async def reconcile_stratum_with_broker_holdings_plugin(
     context: Any,
@@ -179,7 +182,7 @@ async def reconcile_stratum_with_broker_holdings_plugin(
     force_sync: bool = False,
 ) -> Dict[str, Any]:
     """
-    🚨 Case 58, Case 60, Case 61, Case 63, Case 65, Case 66, Case 68, Case 69, Case 71 ~ Case 85:
+    🚨 Case 58, Case 60, Case 61, Case 63, Case 65, Case 66, Case 68, Case 69, Case 71 ~ Case 87:
     프로세스 재기동 시, 04:00 EST 오프닝 동기화 시, 또는 장중/애프터장/데이장 사용자가 토스 앱에서 수동 매매했을 때
     로컬 7층 그리드 원장(buckets)과 독립 골든포켓(golden_pocket)의 합산 보유 주수(ledger_qty = grid_qty + gp_qty)를
     토스 실계좌 보유 주수(h_qty)와 대조하여 화해한다.
@@ -229,6 +232,9 @@ async def reconcile_stratum_with_broker_holdings_plugin(
     gp_qty = gp.qty if gp.is_active else 0
     ledger_qty = grid_qty + gp_qty
     eff_rt_pct = resolve_effective_round_trip_fee_rate_pct(state_dict=st)
+    eff_merge_mode = str(
+        st.get("grid_merge_mode") or DEFAULT_GRID_MERGE_MODE
+    ).upper()
 
     h_info = holdings.get(TARGET_SYMBOL, {})
     h_qty = max(0, safe_int(h_info.get("qty"), 0))
@@ -315,6 +321,7 @@ async def reconcile_stratum_with_broker_holdings_plugin(
             golden_pocket=gp,
             round_trip_fee_rate_pct=eff_rt_pct,
             actual_sell_fee_usd=probed_fee,
+            merge_mode=eff_merge_mode,
         )
         pnl_info = match_res["pnl_info"]
         gross_pnl = safe_float(pnl_info.get("gross_pnl_usd"), 0.0)
@@ -439,6 +446,7 @@ async def reconcile_stratum_with_broker_holdings_plugin(
             golden_pocket=GoldenAllInPocket().to_dict(),
             anchor_price=manual_sell_p,
             cycle_min_buy_price=0.0,
+            cycle_ratchet_max_lots=0,
             ratchet_anchor_price=manual_sell_p,
             cycle_reanchor_credit_usd=0.0,
             l1_target_quota_qty=0,
@@ -531,7 +539,7 @@ async def reconcile_stratum_with_broker_holdings_plugin(
             "free_cash_usd": free_cash_now,
         }
 
-    # [케이스 3] 토스 실보유 수량(h_qty > 0)이 존재하는데 로컬 원장이 비어 있는 경우 (Case 68 & Case 80 백업 금고 우선 복원)
+    # [케이스 3] 토스 실보유 수량(h_qty > 0)이 존재하는데 로컬 원장이 비어 있는 경우 (Case 68, Case 80 & Case 87 백업 금고 우선 복원)
     if h_qty > 0 and ledger_qty == 0:
         in_sell_sh, rem_sell_s = is_within_post_sell_time_shield(
             context, st, TARGET_SYMBOL
@@ -570,10 +578,20 @@ async def reconcile_stratum_with_broker_holdings_plugin(
             if vault_qty == h_qty and (
                 len(vault_buckets) > 0 or vault_gp.is_active
             ):
+                vault_lots = sum(max(1, b.lot_count) for b in vault_buckets)
+                vault_ratchet_lots = (
+                    max(
+                        vault_lots,
+                        safe_int(vault_st.get("cycle_ratchet_max_lots"), 0),
+                    )
+                    if vault_buckets
+                    else 0
+                )
                 restored_kw: Dict[str, Any] = dict(vault_st)
                 restored_kw["buckets"] = buckets_to_dicts(vault_buckets)
                 restored_kw["golden_pocket"] = vault_gp.to_dict()
                 restored_kw["initial_seed_usd"] = vault_seed
+                restored_kw["cycle_ratchet_max_lots"] = vault_ratchet_lots
                 restored_kw["cycle_reanchor_credit_usd"] = 0.0
                 restored_kw["buy_order_id"] = ""
                 restored_kw["sell_order_id"] = ""
@@ -591,9 +609,11 @@ async def reconcile_stratum_with_broker_holdings_plugin(
                     restored_kw["l1_target_quota_qty"] = 0
                 await context.ledger.update_state(TARGET_SYMBOL, **restored_kw)
                 logger.info(
-                    "🛡️ [Case 68/72/76/77/80 백업 금고 7층 그리드/골든포켓 100%% 원형 복원 완료] 총 %d주 (그리드 %d개층 + 골든포켓 %d주 · 시드 $%.2f · 기억저가 $%.2f)",
+                    "🛡️ [Case 68/72/76/77/80/87 백업 금고 7층 그리드/골든포켓 100%% 원형 복원 완료] 총 %d주 (그리드 %d개층·보유%d/잠금%d회차 + 골든포켓 %d주 · 시드 $%.2f · 기억저가 $%.2f)",
                     h_qty,
                     len(vault_buckets),
+                    vault_lots,
+                    vault_ratchet_lots,
                     vault_gp.qty,
                     vault_seed,
                     safe_float(vault_st.get("cycle_min_buy_price"), 0.0),
@@ -602,6 +622,7 @@ async def reconcile_stratum_with_broker_holdings_plugin(
                     "status": "RESTORED_FROM_BACKUP_VAULT",
                     "held_shares": h_qty,
                     "tiers": len(vault_buckets),
+                    "cycle_ratchet_max_lots": vault_ratchet_lots,
                     "pocket_shares": vault_gp.qty,
                 }
 
@@ -662,6 +683,7 @@ async def reconcile_stratum_with_broker_holdings_plugin(
             "golden_pocket": GoldenAllInPocket().to_dict(),
             "anchor_price": pure_ref_p,
             "cycle_min_buy_price": pure_ref_p,
+            "cycle_ratchet_max_lots": est_lots,
             "ratchet_anchor_price": pure_ref_p,
             "cycle_reanchor_credit_usd": 0.0,
             "l1_target_quota_qty": h_qty,
@@ -786,6 +808,7 @@ async def reconcile_stratum_with_broker_holdings_plugin(
             actual_spent_usd=added_spent_usd,
             lot_type="MANUAL_SYNC_L1",
             max_tiers=MAX_GRID_TIERS_7,
+            merge_mode=eff_merge_mode,
         )
 
         is_mid_tier_inserted = bool(
@@ -804,6 +827,11 @@ async def reconcile_stratum_with_broker_holdings_plugin(
                 next_l1_target_q_manual = merged_buckets[0].qty
         else:
             next_l1_target_q_manual = 0
+
+        new_held_lots = sum(max(1, b.lot_count) for b in merged_buckets)
+        new_ratchet_lots = max(
+            new_held_lots, safe_int(st.get("cycle_ratchet_max_lots"), 0)
+        )
 
         old_min_p = safe_float(st.get("cycle_min_buy_price"), 0.0)
         new_min_p = (
@@ -833,6 +861,7 @@ async def reconcile_stratum_with_broker_holdings_plugin(
             buckets=buckets_to_dicts(merged_buckets),
             anchor_price=est_buy_p,
             cycle_min_buy_price=round(new_min_p, 4),
+            cycle_ratchet_max_lots=new_ratchet_lots,
             ratchet_anchor_price=est_buy_p,
             cycle_reanchor_credit_usd=0.0,
             l1_target_quota_qty=next_l1_target_q_manual,
@@ -857,11 +886,13 @@ async def reconcile_stratum_with_broker_holdings_plugin(
         free_cash_add = safe_float(summary_add.get("free_cash_usd"), 0.0)
 
         logger.info(
-            "➕ [SOXL 수동 추가매수 7층 그리드 단가비교 편입 완료] +%d주 @ $%.2f 반영 -> 총 %d주(%d개층 + 골든포켓 %d주 · 1층목표 %d주 · 기억저가 $%.2f)",
+            "➕ [SOXL 수동 추가매수 7층 그리드 단가비교 편입 완료] +%d주 @ $%.2f 반영 -> 총 %d주(%d개층·보유%d/잠금%d회차 + 골든포켓 %d주 · 1층목표 %d주 · 기억저가 $%.2f)",
             delta_q,
             est_buy_p,
             h_qty,
             len(merged_buckets),
+            new_held_lots,
+            new_ratchet_lots,
             gp_qty,
             next_l1_target_q_manual,
             new_min_p,
@@ -872,7 +903,7 @@ async def reconcile_stratum_with_broker_holdings_plugin(
             elif is_mid_tier_inserted:
                 pos_desc = f"상단 2~{len(merged_buckets)}층 단가비교 중간편입"
             else:
-                pos_desc = "새 1층 배치(기존층 상단승격)"
+                pos_desc = "새 1층 배치(기존층 상단승격/L2+L7중간합병)"
 
             upper_add_note = (
                 f" · 2~{len(merged_buckets)}층({u_cnt_add}개층·{u_qty_add}주) 이평 ${u_wma_p_add:.2f}(목표 ${u_wma_t_add:.2f})"
@@ -880,6 +911,11 @@ async def reconcile_stratum_with_broker_holdings_plugin(
                 else ""
             )
             gp_add_note = f"+골든포켓 {gp_qty}주" if gp_qty > 0 else ""
+            ratchet_add_note = (
+                f"(단차잠금 {new_ratchet_lots}회차)"
+                if new_ratchet_lots > new_held_lots
+                else ""
+            )
             await context.send_slim_alert(
                 title=(
                     f"➕ [SOXL 수동 추가매수 그리드 편입] "
@@ -888,7 +924,7 @@ async def reconcile_stratum_with_broker_holdings_plugin(
                 body=(
                     f"편입위치: {pos_desc} (추가원금 ${added_spent_usd:,.2f}) · "
                     f"🛡️60초 타임쉴드 후 1층목표 ${l1_target_add:.2f}(+1.5%) 감시{upper_add_note} · "
-                    f"기억저가 ${new_min_p:.2f} 잠금 · 가용현금 ${free_cash_add:,.2f}"
+                    f"기억저가 ${new_min_p:.2f}{ratchet_add_note} 잠금 · 가용현금 ${free_cash_add:,.2f}"
                 ),
             )
         return {
@@ -897,6 +933,7 @@ async def reconcile_stratum_with_broker_holdings_plugin(
             "buy_price": est_buy_p,
             "held_shares": h_qty,
             "tiers": len(merged_buckets),
+            "cycle_ratchet_max_lots": new_ratchet_lots,
             "l1_target_quota_qty": next_l1_target_q_manual,
         }
 
@@ -930,6 +967,7 @@ async def reconcile_stratum_with_broker_holdings_plugin(
         golden_pocket=gp,
         round_trip_fee_rate_pct=eff_rt_pct,
         actual_sell_fee_usd=probed_part_fee,
+        merge_mode=eff_merge_mode,
     )
     rem_buckets: List[StratumBucket] = match_res["rem_buckets"]
     rem_gp_dict: Dict[str, Any] = match_res.get(
@@ -981,6 +1019,13 @@ async def reconcile_stratum_with_broker_holdings_plugin(
         next_l1_target_q = max(
             rem_buckets[0].qty, safe_int(st.get("l1_target_quota_qty"), 0)
         )
+
+    # NEW [Case 87 : 수동 부분매도 시 잔여 그리드가 존재하면 cycle_ratchet_max_lots 잠금 유지]
+    prev_ratchet_lots = max(0, safe_int(st.get("cycle_ratchet_max_lots"), 0))
+    rem_held_lots = sum(max(1, b.lot_count) for b in rem_buckets)
+    next_ratchet_lots = (
+        max(rem_held_lots, prev_ratchet_lots) if rem_buckets else 0
+    )
 
     tot_sell_ev = safe_int(st.get("total_sell_events"), 0) + 1
     tot_sold_sh = safe_int(st.get("total_sold_shares"), 0) + delta_remove
@@ -1057,6 +1102,7 @@ async def reconcile_stratum_with_broker_holdings_plugin(
         buckets=buckets_to_dicts(rem_buckets),
         golden_pocket=rem_gp_obj.to_dict(),
         anchor_price=next_anchor_p,
+        cycle_ratchet_max_lots=next_ratchet_lots,
         ratchet_anchor_price=next_anchor_p,
         cycle_reanchor_credit_usd=0.0,
         l1_target_quota_qty=next_l1_target_q,
@@ -1086,10 +1132,12 @@ async def reconcile_stratum_with_broker_holdings_plugin(
     )
     free_cash_now = safe_float(updated_st.get("free_cash_usd"), 0.0)
     logger.info(
-        "➖ [Case 69/72/78/80 SOXL 수동 부분매도 순수원가 정산 완료] %d주 -> %d주(%d개층+포켓 %d주) 조정 (매칭층: %s @ 체결가 $%.2f · 세후손익 %+.2f$ 복리산입 · 1층목표 %d주 · 잔여순수평단 $%.2f 보존)",
+        "➖ [Case 69/72/78/80/87 SOXL 수동 부분매도 순수원가 정산 완료] %d주 -> %d주(%d개층·보유%d/잠금%d회차+포켓 %d주) 조정 (매칭층: %s @ 체결가 $%.2f · 세후손익 %+.2f$ 복리산입 · 1층목표 %d주 · 잔여순수평단 $%.2f 보존)",
         ledger_qty,
         h_qty,
         len(rem_buckets),
+        rem_held_lots,
+        next_ratchet_lots,
         rem_gp_obj.qty,
         match_res.get("sold_tier_desc"),
         manual_sell_p,
@@ -1103,12 +1151,17 @@ async def reconcile_stratum_with_broker_holdings_plugin(
         gp_rem_note = (
             f"+골든포켓 {rem_gp_obj.qty}주" if rem_gp_obj.is_active else ""
         )
+        ratchet_rem_note = (
+            f" · 단차잠금 {next_ratchet_lots}회차"
+            if next_ratchet_lots > rem_held_lots
+            else ""
+        )
         await context.send_slim_alert(
             title=f"➖ [SOXL 수동 부분매도 정산] {delta_remove}주 @ ${manual_sell_p:.2f} ({r_sign}{net_rate:.2f}%)",
             body=(
                 f"매칭층: {match_res.get('sold_tier_desc')} · "
                 f"세후순익 {s_sign}${abs(net_pnl):,.2f} 시드 복리산입 · "
-                f"잔여 {h_qty}주({len(rem_buckets)}개층{gp_rem_note} · 순수평단 ${pure_overall_avg:.2f}) 보존 · 가용현금 ${free_cash_now:,.2f}"
+                f"잔여 {h_qty}주({len(rem_buckets)}개층{gp_rem_note}{ratchet_rem_note} · 순수평단 ${pure_overall_avg:.2f}) 보존 · 가용현금 ${free_cash_now:,.2f}"
             ),
         )
     return {
@@ -1118,6 +1171,7 @@ async def reconcile_stratum_with_broker_holdings_plugin(
         "manual_sell_price": manual_sell_p,
         "net_pnl_usd": net_pnl,
         "tiers": len(rem_buckets),
+        "cycle_ratchet_max_lots": next_ratchet_lots,
         "pocket_shares": rem_gp_obj.qty,
         "l1_target_quota_qty": next_l1_target_q,
         "actual_avg_price": pure_overall_avg,
@@ -1176,7 +1230,7 @@ async def relock_stratum_on_bot_resume(
 
 
 # ---------------------------------------------------------------------------
-# [핵심 2] 04:00 ~ 04:06 EST 프리장 개장 초기 호가 안정화 · force_settle 선취소-후정산(Cancel-then-Sync) · 계좌 수수료율 갱신 · 일일 카운터 롤오버 (Case 66, 74, 76, 77, 78, 79, 80)
+# [핵심 2] 04:00 ~ 04:06 EST 프리장 개장 초기 호가 안정화 · force_settle 선취소-후정산(Cancel-then-Sync) · 계좌 수수료율 갱신 · 일일 카운터 롤오버 (Case 66, 74, 76, 77, 78, 79, 80, 86)
 # ---------------------------------------------------------------------------
 async def execute_0400_premarket_stabilization_plugin(
     context: Any,
@@ -1185,7 +1239,7 @@ async def execute_0400_premarket_stabilization_plugin(
     now_est: Optional[datetime] = None,
 ) -> Dict[str, Any]:
     """
-    # MODIFIED [Case 66, Case 73, Case 74, Case 76, Case 77, Case 78, Case 79, Case 80 & 계좌별 수수료율 일일 갱신]:
+    # [Case 66, Case 73, Case 74, Case 76, Case 77, Case 78, Case 79, Case 80 & Case 86 계좌별 수수료율 일일 갱신]:
     🔹 04:00 ~ 04:06 EST:
     1) 데이마켓 잔류 미체결 주문을 먼저 취소(cancel_all_open_orders)하여 주문 상태를 최종 확정한 직후,
        force_settle=True 로 부분/전량 체결분을 100% 정식 커밋 정산한다.
@@ -1267,7 +1321,7 @@ async def execute_0400_premarket_stabilization_plugin(
         except Exception:
             pass
 
-    # NEW: 04:00 EST 오프닝 시 계좌의 미국 주식 수수료율(GET /api/v1/commissions) 최신화
+    # 04:00 EST 오프닝 시 계좌의 미국 주식 수수료율(GET /api/v1/commissions) 최신화
     us_comm_r = safe_float(
         st_after_cancel.get("us_commission_rate"), 0.0007
     )
@@ -1348,7 +1402,7 @@ async def execute_0400_premarket_stabilization_plugin(
 
 
 # ---------------------------------------------------------------------------
-# [핵심 3] 16:00 ~ 16:59 EST 정규장 마감 일일 결산 보고 & force_settle 선취소-후정산 · 애프터마켓 익절 감시 무중단 직결 (Case 66 ~ 85)
+# [핵심 3] 16:00 ~ 16:59 EST 정규장 마감 일일 결산 보고 & force_settle 선취소-후정산 · 애프터마켓 익절 감시 무중단 직결 (Case 66 ~ 87)
 # ---------------------------------------------------------------------------
 async def execute_1600_daily_closing_settlement_plugin(
     context: Any,
@@ -1357,7 +1411,7 @@ async def execute_1600_daily_closing_settlement_plugin(
     now_est: Optional[datetime] = None,
 ) -> Dict[str, Any]:
     """
-    # [Case 01, Case 65, Case 66, Case 68, Case 72, Case 74, Case 76, Case 77, Case 78, Case 79, Case 80, Case 83 & Case 84]:
+    # [Case 01, Case 65, Case 66, Case 68, Case 72, Case 74, Case 76, Case 77, Case 78, Case 79, Case 80, Case 83, Case 84 & Case 87]:
     🔹 16:00 ~ 16:59 EST:
     1) 16:00:xx EST 에 아직 60.0초 대기 중인 미결 주문이 있으면 대기를 보호하고,
     2) 마감 결산 시 미체결 잔량 취소 및 force_settle=True 정산 후 오버나이트 이월 보고를 단 1회 발송한다.
@@ -1481,6 +1535,7 @@ async def execute_1600_daily_closing_settlement_plugin(
     gp_sh = safe_int(summary.get("golden_pocket_qty"), 0)
     held_tiers = safe_int(summary.get("held_tiers"), 0)
     held_lots = safe_int(summary.get("held_lots"), 0)
+    ratchet_lots = safe_int(summary.get("cycle_ratchet_max_lots"), held_lots)
     day_buy_ev = safe_int(updated_st.get("daily_buy_events"), 0)
     day_unlock_ev = safe_int(updated_st.get("daily_unlock_buy_events"), 0)
     cum_unlock_ev = safe_int(updated_st.get("cond_unlock_buy_events"), 0)
@@ -1509,6 +1564,11 @@ async def execute_1600_daily_closing_settlement_plugin(
             else ""
         )
         gp_carry_note = f"+골든포켓 {gp_sh}주" if gp_sh > 0 else ""
+        lot_carry_str = (
+            f"{held_lots}회차[단차잠금 {ratchet_lots}회차]"
+            if ratchet_lots > held_lots
+            else f"{held_lots}회차"
+        )
         res_note = (
             f" · 💉예비수혈: 당일 +{day_res_inj}회분(사용 {used_res_cnt}/{MAX_RESERVE_PORTIONS}회분·${inj_res_usd:,.2f})"
             if (day_res_inj > 0 or used_res_cnt > 0)
@@ -1522,13 +1582,13 @@ async def execute_1600_daily_closing_settlement_plugin(
                 f"· 당일 매수 {day_buy_ev}회{unlock_note} / 익절 {day_sell_ev}회(2~7층이평졸업 {day_wma_grad}회·개별층 {day_indiv_sell}회)"
                 f"{golden_note}{res_note} "
                 f"· 🛡️시드패스 {day_pass:,}회 / 자투리절약 +${day_saved:,.2f} "
-                f"· 오버나이트 이월: {held_sh}주({held_tiers}개층·{held_lots}회차{gp_carry_note}) · 가용현금 ${free_cash:,.2f} "
+                f"· 오버나이트 이월: {held_sh}주({held_tiers}개층·{lot_carry_str}{gp_carry_note}) · 가용현금 ${free_cash:,.2f} "
                 f"(🌇애프터·🌃데이장 ⚡1.5s 방안 C 통합졸업감시 연속가동 · 개별층/매수잠금)"
             ),
         )
 
     logger.info(
-        "🌙 [16:00 EST 일일 결산 완료 · %s] 당일실현=$%.2f · 누적실현=$%.2f · 예비수혈=%d/%d회분 · 오버나이트보유=%d주(%d개층·포켓 %d주) -> 애프터/데이장 익절감시 직결",
+        "🌙 [16:00 EST 일일 결산 완료 · %s] 당일실현=$%.2f · 누적실현=$%.2f · 예비수혈=%d/%d회분 · 오버나이트보유=%d주(%d개층·보유%d/잠금%d회차·포켓 %d주) -> 애프터/데이장 익절감시 직결",
         folder_slug,
         day_net,
         cum_net,
@@ -1536,6 +1596,8 @@ async def execute_1600_daily_closing_settlement_plugin(
         MAX_RESERVE_PORTIONS,
         held_sh,
         held_tiers,
+        held_lots,
+        ratchet_lots,
         gp_sh,
     )
     return {
@@ -1546,6 +1608,7 @@ async def execute_1600_daily_closing_settlement_plugin(
         "held_shares": held_sh,
         "pocket_shares": gp_sh,
         "held_tiers": held_tiers,
+        "cycle_ratchet_max_lots": ratchet_lots,
     }
 
 

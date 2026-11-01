@@ -2,9 +2,11 @@
 """
 # MODIFIED: tg_ui_plugin.py
 인피니트 스노우볼 (Infinite Snowball) v3.0 — 순수 롱(🐂 SOXL 단독) 매수 04:07 ~ 16:00 EST 제한
-(정규장 마감 30분 전 15:30 ~ 16:00 EST 오직 0주 새 사이클 첫 1층 진입만 차단 · 상단 2~7층 보유 중 1층 공석 눌림/돌파 재장전 100% 허용 · Case 84 개정) &
-익절 매도 24시간 전 세션(프리마켓 + 정규장 + 애프터마켓 + 데이마켓) 확장 오버나이트 7층 골디락스 멀티 그리드 지층관리 스나이퍼
-텔레그램 관제탑 사용자 중심 초슬림 UI 렌더러 · 계좌별 수수료율(편도/왕복) 실시간 표출 · 불사조 롱폴링(Immortal Telegram Polling) 및 명령어·콜백 비동기 컨트롤러 코어 모듈 (Step 09 / 11)
+(정규장 마감 30분 전 15:30 ~ 16:00 EST 0주 새 사이클 첫 1층 진입 및 상단 2~7층 보유 중 1층 공석 +1.0% 돌파 추격 동시 차단 ·
+2층 단가 이하 -1.0% 눌림목 재장전 및 10분 게이트 추매/잔량보충 100% 허용 · Case 84 원복) &
+익절 매도 24시간 전 세션(프리마켓 + 정규장 + 애프터마켓 + 데이마켓) 확장 오버나이트 7층 골디락스 멀티 그리드
+(👑 06_L2L7_RATCHET_8PCT : 구 1층 보존 + 구 2층 + 구 7층 통합 후 평단 오름차순 중간층 재배치 & 사이클 최고 도달 회차 단차 잠금 · Case 87) 지층관리 스나이퍼
+텔레그램 관제탑 사용자 중심 초슬림 UI 렌더러 · 계좌별 수수료율(편도/왕복) 실시간 표출 · 불사조 롱폴링(Immortal Telegram Polling) 및 명령어·콜백 비동기 컨트롤러 코어 모듈 (Step 10 / 10)
 - 제1헌법: 모든 파일 I/O 및 동기 HTTP 폴백 호출을 asyncio.to_thread 로 비동기 격리 및 타임아웃 적용
 - 제4헌법: 모든 논리 시계열은 미국 동부 시간(EST/EDT) 100% 락온
 - Case 11 & Case 62:
@@ -21,9 +23,9 @@
      ① [작동 ON/OFF 버튼], ② [황금시간(07:00~07:50·RSI≤19) 전액매수 모드 선택 버튼(기본값 OFF : NONE ↔ POCKET_ALLIN ↔ GRID_L1_ALLIN)],
      ③ [시드머니 설정 버튼] 3대 핵심 조작 옵션 제공!
   2) 보유 지층(buckets 및 golden_pocket)을 날려버리는 /reset 기능을 사용자 메뉴 및 명령어에서 전면 차단하고,
-     보유 주식 지층(1~7층 단가·수량·정적 기억저가 및 독립 골든포켓)과 기준 시드머니는 100% 보존한 채 누적 실현수익만 0점으로 초기화하여
+     보유 주식 지층(1~7층 단가·수량·정적 기억저가·최고회차 잠금 및 독립 골든포켓)과 기준 시드머니는 100% 보존한 채 누적 실현수익만 0점으로 초기화하여
      설정된 기준 시드머니(예: $10,000 또는 $19,000)의 8% 정량 투입으로 복귀시키는 `/reset_profit` 전용 기능으로 대체!
-- Case 70, Case 73, Case 74, Case 75, Case 76, Case 77, Case 78, Case 79, Case 80, Case 81, Case 83, Case 84, Case 85 & Case 86:
+- Case 70, Case 73, Case 74, Case 75, Case 76, Case 77, Case 78, Case 79, Case 80, Case 81, Case 83, Case 84, Case 85, Case 86 & Case 87:
   1) 매수 직후 최초 60.0초 타임쉴드 유지 & 보유 중 60초 블라인드 대기 락 전면 해제 -> `/avwap` 레이더 상단 `⚡1.5s 실시간타점` 및 실시간 `RSI(14)` 표출
      (/avwap 호출 시 1분봉 기저값 미확보 상태면 즉시 온디맨드 1분봉 프리워밍 수행으로 RSI 50.0 박제 현상 원천 차단!)
   2) 0주 상태 / 상단 2층 ~ 7층 보유 중 1층 공석 / 활성 1층 보유 중 3대 매수 모니터 상태 및
@@ -32,10 +34,11 @@
   4) 🎯 [Case 78] 활성 1층 지정가 부분 체결로 미체결 잔량(l1_rem_quota_qty > 0) 대기 중일 때 실시간 잔량 감시 표출!
   5) 🌇🌃 [Case 79 & Case 83 방안 C] 애프터마켓(16:00 ~ 19:59 EST) 및 데이마켓(20:00 ~ 03:59 EST) 구간에서 상단 2~7층 보유 시
      개별 층 쪼개 팔기 잠금(`🔒장외잠금(04:07해금)`) 및 `2~7층 통합이평(+1.0%) 일괄졸업 ⚡1.5s 감시` 상태를 명확히 분리 표출!
-  6) 🛡️ [Case 84 개정] 정규장 마감 30분 전(15:30 ~ 16:00 EST) 구간에서 오직 0주 보유(사이클 종료) 시에만 새 사이클 1층 진입 차단 배지를 표출하고,
-     상단 2~7층 보유 · 1층 공석 시에는 2층 상한 이하 눌림(-1.0%)/돌파(+1.0%) 재장전 감시 상태를 정상 표출!
+  6) 🛡️ [Case 84 원복] 정규장 마감 30분 전(15:30 ~ 16:00 EST) 구간에서 0주 보유(사이클 종료) 시 새 사이클 1층 진입 차단 배지를 표출하고,
+     상단 2~7층 보유 · 1층 공석 시에는 +1.0% 돌파 추격 차단 및 2층 상한 이하 눌림목(-1.0%) 재장전 감시 상태를 명확히 표출!
   7) 💰 [Case 86] 지시서(/sync) 및 전술 제어반(/settlement)에 계좌별 적용 미국 주식 수수료율(예: 편도 0.07% / 왕복 0.14% 또는 편도 0.1% / 왕복 0.20%) 실시간 표출!
-  8) 🛡️ [Case 75, Case 81 & Case 85] httpx/httpcore 단순 조회 INFO 로그 WARNING 묵음화 · 텔레그램 전용 독립 httpx.AsyncClient 분리 운용 ·
+  8) 👑 [Case 87] 중간층으로 재배치된 구 2층 + 구 7층 합병 본대(`👑합병 N회분`) 및 사이클 최고 도달 회차(`보유 N회차 / 단차잠금 M회차`) 실시간 표출!
+  9) 🛡️ [Case 75, Case 81 & Case 85] httpx/httpcore 단순 조회 INFO 로그 WARNING 묵음화 · 텔레그램 전용 독립 httpx.AsyncClient 분리 운용 ·
      HTTP 409 Conflict 또는 연속 3회 오류 시 클라이언트 자동 재생성 · 종료/재기동 시 롱폴링 소켓 즉시 반납(aclose) ·
      불사조 감독 루프(Immortal Supervisor Wrapper) 및 전 라인 f-string 중괄호({}) 짝 무결성 100% 보장!
 """
@@ -294,10 +297,10 @@ def build_start_schedule_message(
     context: Optional[Any] = None,
 ) -> str:
     """
-    # MODIFIED [Case 02, Case 79, Case 80, Case 83 & Case 84 개정]:
+    # MODIFIED [Case 02, Case 79, Case 80, Case 83, Case 84 원복 & Case 87]:
     - /reset 을 메뉴에서 완전 삭제하고 그 자리에 /reset_profit 만 배치
     - 황금시간대(07:00 ~ 07:50 EST & RSI <= 19.0) 선택 옵션,
-      정규장 마감 30분 전(15:30 ~ 16:00 EST) 오직 0주 새 사이클 첫 1층 진입만 차단(Case 84 개정),
+      정규장 마감 30분 전(15:30 ~ 16:00 EST) 0주 새 사이클 첫 1층 진입 및 1층 공석 +1.0% 돌파 추격 동시 차단(Case 84 원복),
       애프터/데이마켓 방안 C (2~7층 통합이평 일괄졸업 감시 · 개별층 쪼개팔기 및 매수 잠금) 스케줄 명시
     """
     dt_now = now_est.astimezone(EST_TZ) if now_est else datetime.now(EST_TZ)
@@ -310,7 +313,7 @@ def build_start_schedule_message(
         "🔹 04:07 ~ 09:29: 🔫 프리장 (4중익절·매수 전면가동)",
         "       (🌟 07:00~07:50·RSI≤19 전액매수 선택 지원)",
         "🔹 09:30 ~ 16:00: 🔥 정규장 (4중익절·매수 전면가동)",
-        "       (🛡️ 15:30~16:00: 0주 새사이클 첫1층 진입차단)",
+        "       (🛡️ 15:30~16:00: 0주신규·1층돌파 추격차단)",
         "🔹 16:00 ~ 19:59: 🌇 애프터장 (통합졸업·개별/매수잠금)",
         "🔹 20:00 ~ 03:59: 🌃 데이장 (통합졸업·개별/매수잠금)",
         "──────────────",
@@ -333,12 +336,13 @@ def _format_multi_grid_stratum_lines(
     is_late_cutoff: bool = False,
 ) -> List[str]:
     """
-    # MODIFIED [Case 71, Case 72, Case 73, Case 78, Case 79, Case 80, Case 83 & Case 84 개정]:
+    # MODIFIED [Case 71, Case 72, Case 73, Case 78, Case 79, Case 80, Case 83, Case 84 원복 & Case 87]:
     독립 골든포켓(golden_pocket · 보유 시 최상단 표출) 및
     1층(활성 공격수 · 부분체결 시 미체결 잔량 및 1.5s 감시 표시 / 또는 60초 주기 공석 감시 & 2층 단가 상한) 및
-    상단 2층 ~ 6층 개별 완충층 · 통합 7층 본대와 2~7층 통합 이동평균 목표가를 모바일 화면에 최적화된 형태로 전수 렌더링한다.
-    (Case 84 개정: 15:30 ~ 16:00 EST 구간에서 오직 0주 상태일 때만 신규 진입 차단을 표출하고,
-     상단 2~7층 보유 중 1층 공석일 때는 2층 상한 이하 눌림/돌파 감시를 정상 표출한다.)
+    상단 2층 ~ 7층 개별 완충층 · 중간층으로 재배치된 구 2층 + 구 7층 합병 본대(👑합병 N회분)와
+    2~7층 통합 이동평균 목표가를 모바일 화면에 최적화된 형태로 전수 렌더링한다.
+    (Case 84 원복: 15:30 ~ 16:00 EST 구간에서 0주 상태일 때는 신규 진입 차단을 표출하고,
+     상단 2~7층 보유 중 1층 공석일 때는 +1.0% 돌파 차단 및 2층 상한 이하 -1.0% 눌림목만 감시 중임을 명확히 표출한다.)
     """
     held_sh = safe_int(summary.get("held_shares"), 0)
     gp_qty = safe_int(summary.get("golden_pocket_qty"), 0)
@@ -414,6 +418,10 @@ def _format_multi_grid_stratum_lines(
             lines.append(
                 f"⚡ <b>[1층: 공석 · 🔒장외 매수잠금(04:07 EST 이후 재장전{cap_note})]</b>"
             )
+        elif is_late_cutoff:
+            lines.append(
+                f"⚡ <b>[1층: 공석 · 🛡️장마감30분전 +1.0% 돌파차단 · 눌림(-1.0%)만 60초주기 감시{cap_note}]</b>"
+            )
         else:
             lines.append(
                 f"⚡ <b>[1층: 공석 · 60초(1분) 주기 눌림(-1.0%)/돌파(+1.0%) 감시{cap_note}]</b>"
@@ -458,12 +466,13 @@ def _format_multi_grid_stratum_lines(
                 else 0.0
             )
             bg_s = "+" if bu_g >= 0.0 else ""
-            if t_no >= 7 and bu.lot_count > 1:
-                tier_tag = f"통합{t_no}층"
-                lot_note = f"({bu.lot_count}회합병)"
+            # MODIFIED [Case 87 : L2_L7_MERGE_SORT 로 중간층에 재배치된 합병 본대(lot_count > 1) 표시]:
+            if bu.lot_count > 1:
+                tier_tag = f"{t_no}층(👑합병)"
+                lot_note = f"({bu.lot_count}회분)"
             else:
                 tier_tag = f"{t_no}층"
-                lot_note = f"({bu.lot_count}회)" if bu.lot_count > 1 else ""
+                lot_note = ""
             lines.append(
                 f"  ▫️ <b>{tier_tag}</b>: {bu.qty}주{lot_note} @ ${bu.book_price:.2f} "
                 f"➔ 개별익절 <b>${bu_t:.2f}</b>(+1.0%) [{bg_s}{bu_g:.2f}%{indiv_ov_lock_note}]"
@@ -480,10 +489,11 @@ def build_avwap_radar_message(
     now_est: Optional[datetime] = None,
 ) -> str:
     """
-    # MODIFIED [Case 65, Case 70 ~ 86]:
+    # MODIFIED [Case 65, Case 70 ~ 87]:
     📡 /avwap 사용자 중심 초슬림 레이더 메시지 생성
-    (Case 84 개정: 15:30 ~ 16:00 EST 구간에서 오직 0주 보유 시에만 새 사이클 진입 차단을 표시하고,
-     상단 2~7층 보유 중 1층 공석 시에는 2층 단가 상한 이하 눌림/돌파 감시를 정상 표시한다.)
+    (Case 84 원복: 15:30 ~ 16:00 EST 구간에서 0주 보유 시 새 사이클 진입 차단을 표시하고,
+     상단 2~7층 보유 중 1층 공석 시에는 +1.0% 돌파 차단 및 2층 상한 이하 눌림목 감시를 명확히 표시한다.
+     Case 87: 구 2층+구 7층 중간합병 본대 및 사이클 최고 도달 회차 단차 잠금을 표시한다.)
     """
     dt_now = now_est.astimezone(EST_TZ) if now_est else datetime.now(EST_TZ)
     hm_now = dt_now.hour * 100 + dt_now.minute
@@ -521,6 +531,12 @@ def build_avwap_radar_message(
         summary.get("total_held_shares"), held_sh + gp_qty
     )
     held_lots = safe_int(summary.get("held_lots"), 0)
+    ratchet_lots = safe_int(
+        summary.get("cycle_ratchet_max_lots"), held_lots
+    )
+    eff_lots = safe_int(
+        summary.get("eff_lots"), max(1, held_lots, ratchet_lots)
+    )
     held_tiers = safe_int(summary.get("held_tiers"), 0)
     upper_tier_cnt = safe_int(summary.get("upper_tier_count"), 0)
     upper_wma_t = safe_float(summary.get("upper_wma_target_price"), 0.0)
@@ -598,6 +614,14 @@ def build_avwap_radar_message(
             "🛡️ <b>[장마감 30분전(15:30~16:00) 0주 새 사이클 진입 차단]</b> "
             "고점 오버나이트 방어 · 익일 04:07 EST 프리장 첫 1층 진입 대기"
         )
+    elif is_l2_only and is_late_cutoff:
+        rem_re_note = (
+            f" · 차기검문 {rem_re_sec:.1f}초" if in_re_shield else ""
+        )
+        shield_line = (
+            f"🛡️ <b>[장마감 30분전(15:30~16:00) 1층 공석 +1.0% 돌파차단{rem_re_note}]</b> "
+            "데드캣 고점 추격 방어 · 2층 단가 이하 -1.0% 눌림목만 60초 주기 감시 중"
+        )
     elif in_golden_win and g_mode != "NONE":
         shield_line = (
             f"🌟 <b>[황금시간(07:00~07:50 EST) 전액매수 감시 중 · {escape_html(g_mode_lbl)}]</b> "
@@ -671,6 +695,8 @@ def build_avwap_radar_message(
         )
         if is_ext_sell_only:
             re_wait_label = "🔒장외 매수잠금 · 04:07 EST 재개"
+        elif is_late_cutoff:
+            re_wait_label = "🔒15:30~16:00 돌파차단 · 눌림목만 60초감시"
         elif in_re_shield:
             re_wait_label = f"60초 주기 · 잔여 {rem_re_sec:.1f}초"
         else:
@@ -687,9 +713,19 @@ def build_avwap_radar_message(
         else:
             cap_status_str = ""
 
+        brk_cond_str = (
+            f"🚫<b>돌파차단(15:30~16:00 · ${brk_p:.2f})</b>"
+            if is_late_cutoff
+            else f"돌파 <b>${brk_p:.2f}</b> 이상"
+        )
+        ratchet_lock_str = (
+            f" · 단차잠금 {ratchet_lots}회차"
+            if ratchet_lots > held_lots
+            else ""
+        )
         gate_cond_line = (
             f"▫️ 직전익절 ${ref_anchor:.2f} 대비 {c_sign}{chg_anchor:.2f}% "
-            f"(눌림목 <b>${pull_p:.2f}</b> 이하 OR 돌파 <b>${brk_p:.2f}</b> 이상{cap_status_str} · 기억저가 ${locked_min_p:.2f} 잠금)"
+            f"(눌림목 <b>${pull_p:.2f}</b> 이하 OR {brk_cond_str}{cap_status_str} · 기억저가 ${locked_min_p:.2f}{ratchet_lock_str} 잠금)"
         )
     else:
         drop_req = safe_float(summary.get("drop_buy_pct"), -1.0)
@@ -698,7 +734,7 @@ def build_avwap_radar_message(
         step_trig_p = safe_float(summary.get("stepped_trigger_price"), 0.0)
         reb_mult = safe_float(summary.get("rebound_mult"), 1.0)
         gate_header_line = (
-            f"🛡️ <b>[10분 고정 와이드 &amp; 스텝업 시드보호 게이트]</b> (차기검문: {escape_html(next_gate_str)})"
+            f"🛡️ <b>[10분 고정 와이드(최고회차 잠금) &amp; 스텝업 시드보호 게이트]</b> (차기검문: {escape_html(next_gate_str)})"
         )
         step_note = (
             f" · 🔓<b>스텝업해금(-15%): ${step_trig_p:.2f} 이하</b>[반등 {reb_mult:.2f}x]"
@@ -710,9 +746,12 @@ def build_avwap_radar_message(
             if l1_rem_q > 0
             else ""
         )
+        eff_lot_tag = (
+            f"[잠금{eff_lots}회]" if ratchet_lots > held_lots else ""
+        )
         gate_cond_line = (
             f"▫️ 정적기억저가 ${ref_anchor:.2f} 대비 현재 {c_sign}{chg_anchor:.2f}% "
-            f"(와이드단차 {drop_req:.2f}% · 신저가 <b>${trig_p:.2f}</b> 이하{step_note}{topup_cond_note})"
+            f"(와이드단차 {drop_req:.2f}%{eff_lot_tag} · 신저가 <b>${trig_p:.2f}</b> 이하{step_note}{topup_cond_note})"
         )
 
     pass_cnt = safe_int(summary.get("seed_protect_pass_cnt"), 0)
@@ -733,6 +772,11 @@ def build_avwap_radar_message(
         f" (30%자투리차단 {dust_blk_cnt}회)" if dust_blk_cnt > 0 else ""
     )
     gp_header_note = f"+골든포켓 {gp_qty}주" if gp_qty > 0 else ""
+    lot_header_str = (
+        f"보유{held_lots}/잠금{ratchet_lots}회차"
+        if ratchet_lots > held_lots
+        else f"{held_lots}회차"
+    )
     res_status_line = (
         f"💉 예비시드 탄창: 사용 <b>{used_res_cnt}/{max_res_cnt}회분</b> "
         f"(수혈잔액 ${inj_res_usd:,.2f} · 0주졸업 자동상환)"
@@ -748,7 +792,7 @@ def build_avwap_radar_message(
     lines.extend(
         [
             "──────────────",
-            f"🏛️ <b>[1~6층 개별 &amp; 통합 7층 본대 · 2~7층 통합이평]</b> (총 {total_held_sh}주 · {held_tiers}개층 · {held_lots}회차{gp_header_note})",
+            f"🏛️ <b>[1~7층 골디락스(L2+L7중간합병) · 2~7층 통합이평]</b> (총 {total_held_sh}주 · {held_tiers}개층 · {lot_header_str}{gp_header_note})",
             *stratum_lines,
             "──────────────",
             gate_header_line,
@@ -777,8 +821,9 @@ def build_sync_instruction_message(
     context: Optional[Any] = None,
 ) -> str:
     """
-    # MODIFIED: 📜 /sync 사용자 중심 초슬림 지층 지시서 메시지 생성
-    (7칸 공백 들여쓰기 · 계좌별 미국 주식 수수료율 표출 · Case 77 예비시드 / Case 78 잔량 / Case 80 골든포켓 상태 적용)
+    # MODIFIED [Case 77, Case 78, Case 80, Case 86 & Case 87]:
+    📜 /sync 사용자 중심 초슬림 지층 지시서 메시지 생성
+    (7칸 공백 들여쓰기 · 계좌별 미국 주식 수수료율 표출 · Case 77 예비시드 / Case 78 잔량 / Case 80 골든포켓 / Case 87 단차잠금 회차 상태 적용)
     """
     dt_now = now_est.astimezone(EST_TZ) if now_est else datetime.now(EST_TZ)
     h_info = (holdings or {}).get(TARGET_SYMBOL, {})
@@ -805,6 +850,9 @@ def build_sync_instruction_message(
     )
     held_tiers = safe_int(summary.get("held_tiers"), 0)
     held_lots = safe_int(summary.get("held_lots"), 0)
+    ratchet_lots = safe_int(
+        summary.get("cycle_ratchet_max_lots"), held_lots
+    )
     l1_rem_q = safe_int(summary.get("l1_rem_quota_qty"), 0)
     l1_target_q = safe_int(summary.get("l1_target_quota_qty"), 0)
     actual_avg = safe_float(summary.get("actual_avg_price"), 0.0)
@@ -831,6 +879,11 @@ def build_sync_instruction_message(
         if gp_qty > 0
         else ""
     )
+    lot_sync_str = (
+        f"보유 {held_lots}회차/단차잠금 {ratchet_lots}회차"
+        if ratchet_lots > held_lots
+        else f"{held_lots}회차"
+    )
 
     lines = [
         "📜 <b>[스나이퍼 지시서]</b>",
@@ -839,7 +892,7 @@ def build_sync_instruction_message(
         f"       토스 실주문가능: ${broker_bp_usd:,.2f} (입금여력 +${unalloc_dep_usd:,.2f})",
         f"💉 예비시드 탄창: 사용 <b>{used_res_cnt}/{max_res_cnt}회분</b> (수혈잔액 ${inj_res_usd:,.2f} · 누적상환 ${cum_repaid_usd:,.2f})",
         f"🌟 황금시간 전액모드: <b>{escape_html(g_mode_lbl)}</b>",
-        f"📦 보유 합계: <b>{total_held_sh}주</b> (그리드 {held_sh}주[{held_tiers}개층·{held_lots}회차]{gp_sync_note} · 총원금 ${actual_inv:,.2f}{rem_note})",
+        f"📦 보유 합계: <b>{total_held_sh}주</b> (그리드 {held_sh}주[{held_tiers}개층·{lot_sync_str}]{gp_sync_note} · 총원금 ${actual_inv:,.2f}{rem_note})",
         f"📐 전체 순수평단: <b>${actual_avg:.2f}</b> · 2~7층 통합이평: <b>${upper_wma:.2f}</b> (기억저가 ${locked_min_p:.2f})",
         "──────────────",
         f"🕒 동기화 시각: {dt_now.strftime('%Y-%m-%d %H:%M:%S EST')}",
@@ -854,7 +907,7 @@ def build_settlement_control_message(
     context: Optional[Any] = None,
 ) -> str:
     """
-    # MODIFIED [Case 64, Case 80 & Case 86 계좌별 수수료율 표시]:
+    # MODIFIED [Case 64, Case 80, Case 86 & Case 87]:
     ⚙️ /settlement 사용자 중심 초슬림 전술 제어반 메시지 생성
     """
     dt_now = now_est.astimezone(EST_TZ) if now_est else datetime.now(EST_TZ)
@@ -877,6 +930,9 @@ def build_settlement_control_message(
     gp_price = safe_float(summary.get("golden_pocket_price"), 0.0)
     held_tiers = safe_int(summary.get("held_tiers"), 0)
     held_lots = safe_int(summary.get("held_lots"), 0)
+    ratchet_lots = safe_int(
+        summary.get("cycle_ratchet_max_lots"), held_lots
+    )
     l1_rem_q = safe_int(summary.get("l1_rem_quota_qty"), 0)
     l1_target_q = safe_int(summary.get("l1_target_quota_qty"), 0)
     used_res_cnt = safe_int(summary.get("used_reserve_portions_cnt"), 0)
@@ -905,13 +961,18 @@ def build_settlement_control_message(
         if (g_buy_cnt > 0 or g_sell_cnt > 0)
         else ""
     )
+    lot_ctrl_str = (
+        f"보유 {held_lots}회차 / 단차잠금 {ratchet_lots}회차"
+        if ratchet_lots > held_lots
+        else f"{held_lots}회차"
+    )
 
     lines = [
         "⚙️ <b>[전술 제어반]</b>",
         f"0️⃣ 마스터 전원: <b>{power_str}</b> (수수료: 편도 {us_comm_pct:.3g}% / 왕복 <b>{rt_fee_pct:.2f}%</b>)",
         f"1️⃣ 기준 시드머니: <b>${init_seed:,.2f}</b> (실현기준 총자산 ${real_eq:,.2f})",
         f"2️⃣ 차기 1회(8%) 정량: 예산 <b>${next_bud:,.2f}</b> ➔ {quota_badge_str} (가용현금 ${free_cash:,.2f})",
-        f"3️⃣ 현재 보유 지층: <b>{held_sh}주</b> ({held_tiers}개층 · {held_lots}회차{gp_note}{rem_note})",
+        f"3️⃣ 현재 보유 지층: <b>{held_sh}주</b> ({held_tiers}개층 · {lot_ctrl_str}{gp_note}{rem_note})",
         f"4️⃣ 예비시드 탄창: 사용 <b>{used_res_cnt}/{max_res_cnt}회분</b> (수혈잔액 ${inj_res_usd:,.2f} · 잔여한도 {avail_res_cnt}회분)",
         f"5️⃣ 황금시간(07:00~07:50·RSI≤19) 전액매수: <b>{escape_html(g_mode_lbl)}</b>{g_stat_note}",
         "──────────────",
@@ -926,7 +987,7 @@ def build_settlement_control_message(
 # ---------------------------------------------------------------------------
 class TelegramCommandController:
     """
-    🚨 제1헌법 & Case 02, 15, 16, 62, 64, 65, 66, 67, 68, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 83, 84, 85, 86:
+    🚨 제1헌법 & Case 02, 15, 16, 62, 64, 65, 66, 67, 68, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 83, 84, 85, 86, 87:
     main.py 의 SniperAppContext 와 정식 결속되는 텔레그램 봇 컨트롤러.
     """
 
@@ -1469,9 +1530,9 @@ class TelegramCommandController:
 
     async def _reset_realized_profit_only(self, chat_id: str) -> None:
         """
-        # [Case 02, Case 74, Case 76, Case 77, Case 80 & Case 86]:
-        보유 중인 주식 지층(buckets) 및 독립 골든포켓(golden_pocket)과 설정된 기준 시드머니(initial_seed_usd),
-        계좌별 수수료율(us_commission_rate, round_trip_fee_rate_pct)은 100% 보존하고,
+        # [Case 02, Case 74, Case 76, Case 77, Case 80, Case 86 & Case 87]:
+        보유 중인 주식 지층(buckets · cycle_ratchet_max_lots 포함) 및 독립 골든포켓(golden_pocket)과
+        설정된 기준 시드머니(initial_seed_usd), 계좌별 수수료율(us_commission_rate, round_trip_fee_rate_pct)은 100% 보존하고,
         오직 누적/당일 세후 실현수익금 및 자투리 절약금·스텝업 해금 횟수·황금시간 매매 통계·예비시드 통계·입금 알림 래치만
         0점으로 초기화하여 설정된 기준 시드머니의 8% 정량 투입으로 복귀시킨다.
         """
@@ -1528,6 +1589,7 @@ class TelegramCommandController:
         if not has_buckets and not has_gp:
             reset_kw["used_reserve_portions_cnt"] = 0
             reset_kw["injected_reserve_usd"] = 0.0
+            reset_kw["cycle_ratchet_max_lots"] = 0
 
         st_reset = await self.context.ledger.update_state(
             TARGET_SYMBOL, **reset_kw
@@ -1554,7 +1616,15 @@ class TelegramCommandController:
         gp_sh = safe_int(summary.get("golden_pocket_qty"), 0)
         held_tiers = safe_int(summary.get("held_tiers"), 0)
         held_lots = safe_int(summary.get("held_lots"), 0)
+        ratchet_lots = safe_int(
+            summary.get("cycle_ratchet_max_lots"), held_lots
+        )
         gp_note = f"+골든포켓 {gp_sh}주" if gp_sh > 0 else ""
+        lot_keep_str = (
+            f"보유 {held_lots}회차/단차잠금 {ratchet_lots}회차"
+            if ratchet_lots > held_lots
+            else f"{held_lots}회차"
+        )
 
         await self.send_message(
             chat_id=chat_id,
@@ -1563,7 +1633,7 @@ class TelegramCommandController:
                 "🔸 누적 세후실현익: <b>$0.00</b> (자투리절약 <b>$0.00</b> · 🔓해금/🌟골든통계 <b>0회</b>)\n"
                 f"🔸 복귀 기준시드: <b>${init_seed:,.2f}</b> (가용현금 <b>${free_cash:,.2f}</b>)\n"
                 f"🔸 차기 1회(8%) 정량: 예산 <b>${next_bud:,.2f}</b> ➔ {quota_badge_str}\n"
-                f"🔸 보유 지층 보존: <b>{held_sh}주</b> ({held_tiers}개층 · {held_lots}회차{gp_note} 유지)"
+                f"🔸 보유 지층 보존: <b>{held_sh}주</b> ({held_tiers}개층 · {lot_keep_str}{gp_note} 유지)"
             ),
         )
 

@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
 """
 # MODIFIED: sniper_plugin_core.py
-인피니트 스노우볼 (Infinite Snowball) v3.0 — 스나이퍼 매수 코어 Part 1 / 2 (Step 06 / 11)
+인피니트 스노우볼 (Infinite Snowball) v3.0 — 스나이퍼 매수 코어 Part 1 / 2 (Step 06 / 10)
 역할:
-1) 스나이퍼 매수 전역 상수 락온 (STEP2X_15PCT_C20 · BUY_ORDER_MAX_WAIT_SEC = 60.0 · AUTO_FILL_GRACE_SHIELD_SEC = 15.0 ·
+1) 스나이퍼 매수 전역 상수 락온 (DEFAULT_GRID_MERGE_MODE = "L2_L7_MERGE_SORT" [Case 87] · STEP2X_15PCT_C20 ·
+   BUY_ORDER_MAX_WAIT_SEC = 60.0 · AUTO_FILL_GRACE_SHIELD_SEC = 15.0 ·
    REENTRY_MONITOR_TIME_SHIELD_SEC = 60.0 · RESERVE_DEPOSIT_CHECK_INTERVAL_SEC = 60.0)
 2) 매수·매도 체결 직후 토스 잔고 API 인덱싱 시차(0.1 ~ 0.4초) 보호 양방향 15.0초 그레이스 쉴드 및
    매수 체결 후 60.0초 타임쉴드 각인기 (mark_auto_fill_grace_shield, is_within_auto_fill_grace_shield · Case 61, 65, 69)
@@ -19,9 +20,11 @@
    (_check_and_execute_guard30_or_reserve_injection · Case 75, 77, 80, 86)
 7) 매수 체결(FILLED / 부분 체결 후 60초 취소 종료 / 세션 경계 force_settle 강제 정산) 원장 커밋 ·
    독립 골든포켓(GOLDEN_POCKET) 분리 정산(Case 80) · 부분 체결 수량 비례 자투리 정산 및 1층 목표 정량(l1_target_quota_qty) 보존(Case 78) ·
-   STEP2X_15PCT_C20 스텝업 잠금 저가 갱신(Case 76) · 15:30 EST 경계 미체결 취소 시 오직 0주 신규 진입(is_zero_grid_reentry)만 안전 취소(Case 84 개정) 및
-   미체결 매수 주문 60.0초 동기화/안전 취소기 (_commit_filled_buy_to_stratum_ledger, sync_pending_buy_order_plugin · Case 19, 24, 59 ~ 86)
-- 제1헌법 ~ 제6헌법 및 Case 01 ~ 86 완벽 준수
+   7층 초과 시 구 1층 보존 + 구 2층 + 구 7층 통합 중간층 재배치(L2_L7_MERGE_SORT) 및 사이클 최고 도달 회차(cycle_ratchet_max_lots) 단차 잠금 갱신(Case 87) ·
+   STEP2X_15PCT_C20 스텝업 잠금 저가/회차 갱신(Case 76, 87) ·
+   15:30 EST 경계 미체결 취소 시 0주 신규 진입(is_zero_grid_reentry) 및 1층 공석 +1.0% 돌파 추격(is_vacant_l1_breakout_reentry) 동시 안전 취소(Case 84 원복) 및
+   미체결 매수 주문 60.0초 동기화/안전 취소기 (_commit_filled_buy_to_stratum_ledger, sync_pending_buy_order_plugin · Case 19, 24, 59 ~ 87)
+- 제1헌법 ~ 제6헌법 및 Case 01 ~ 87 완벽 준수
 """
 
 from __future__ import annotations
@@ -34,12 +37,14 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from quant_engine import (
     BASE_MAX_LOTS_8PCT,
+    DEFAULT_GRID_MERGE_MODE,
     GOLDEN_POCKET_RISE_PCT,
     GoldenAllInPocket,
     MAX_GRID_TIERS_7,
     MAX_RESERVE_PORTIONS,
     MIN_DIP_BUDGET_RATIO,
     MIN_DIP_VS_L1_RATIO,
+    REENTRY_BREAKOUT_RISE_PCT,
     ROUND_TRIP_FEE_RATE_PCT,
     buckets_from_dicts,
     buckets_to_dicts,
@@ -484,7 +489,7 @@ async def _check_and_execute_guard30_or_reserve_injection(
     trigger_desc: str,
 ) -> Tuple[bool, float, float, Dict[str, Any]]:
     """
-    # MODIFIED [Case 75, Case 77, Case 80 & Case 86 계좌별 동적 왕복 수수료율 연동]:
+    # [Case 75, Case 77, Case 80 & Case 86 계좌별 동적 왕복 수수료율 연동]:
     매수 주문 발주 직전(뮤텍스 내부)에 호출되어:
     0) [Case 80 골든포켓 일시 가동 중 오발동 방어 및 60초 인메모리 쉴드]
     1) 토스 실계좌 주문가능 달러(`raw_bp_usd = await context.api.get_buying_power_usd(safety_buffer_pct=0.0)`)를 조회하되,
@@ -736,7 +741,7 @@ async def _check_and_execute_guard30_or_reserve_injection(
 
 
 # ---------------------------------------------------------------------------
-# [핵심 1] 매수 체결(FILLED) 커밋 · 비례 자투리 정산(Case 78) · 독립 골든포켓/1~7층 순수 그리드 배치(Case 80) · 매수 후 60초 타임쉴드 각인
+# [핵심 1] 매수 체결(FILLED) 커밋 · 비례 자투리 정산(Case 78) · 독립 골든포켓/1~7층 L2+L7 중간합병 배치 및 최고도달회차 잠금(Case 80, 87) · 매수 후 60초 타임쉴드 각인
 # ---------------------------------------------------------------------------
 async def _commit_filled_buy_to_stratum_ledger(
     context: Any,
@@ -748,11 +753,13 @@ async def _commit_filled_buy_to_stratum_ledger(
     ordered_qty: Optional[int] = None,
 ) -> Dict[str, Any]:
     """
-    🎯 1, 🎯 3, 🎯 4 & Case 25, 46, 53, 59, 60, 61, 65, 67, 69, 71, 72, 73, 74, 76, 77, 78, 80:
+    # MODIFIED [🎯 1, 🎯 3, 🎯 4 & Case 25, 46, 53, 59, 60, 61, 65, 67, 69, 71, 72, 73, 74, 76, 77, 78, 80 & Case 87]:
     매수 주문 체결(FILLED 또는 부분 체결 후 60초 타임아웃/세션 경계 취소 종료)이 확인된 즉시:
     0) 🚨 [Case 80 : POCKET_ALLIN 모드 독립 골든포켓(lot_type == "GOLDEN_POCKET") 체결 분리 정산]
     1) 🚨 [Case 78 부분 체결 시 체결 수량 비례 예산 자투리 정산 (GOLDEN_L1 전액매수는 자투리 0.0 처리)]
-    2) vrev_add_quota_lot_and_merge_2tier() 를 호출하여 1~7층 그리드 배치/승격/합산을 수행한다.
+    2) vrev_add_quota_lot_and_merge_2tier(..., merge_mode="L2_L7_MERGE_SORT") 를 호출하여
+       1~7층 그리드 배치/승격/구 2층+구 7층 통합 중간배치를 수행한다.
+    3) 👑 [Case 87 사이클 최고 도달 회차(cycle_ratchet_max_lots) 갱신 및 STEP2X 스텝업 해금 시 동기화]
     """
     st = context.ledger.get_state(TARGET_SYMBOL)
     old_buckets = buckets_from_dicts(st.get("buckets", []))
@@ -772,6 +779,8 @@ async def _commit_filled_buy_to_stratum_ledger(
     fill_p = round(max(0.01, safe_float(avg_fill_price, 0.01)), 4)
     actual_spent = round(float(q_int) * fill_p, 4)
     tag = str(lot_type or "QUOTA_L1").upper().strip()
+    if tag in ("REENTRY_1FL_BREAKOUT", "REENTRY_1FL_PULLBACK"):
+        tag = "REENTRY_1FL"
     eff_oid = str(settled_order_id or st.get("buy_order_id") or "").strip()
 
     settled_oids: List[str] = list(st.get("last_settled_order_ids") or [])
@@ -908,6 +917,9 @@ async def _commit_filled_buy_to_stratum_ledger(
         else 0.0
     )
 
+    eff_merge_mode = str(
+        st.get("grid_merge_mode") or DEFAULT_GRID_MERGE_MODE
+    ).upper()
     new_buckets = vrev_add_quota_lot_and_merge_2tier(
         queue=old_buckets,
         buy_qty=q_int,
@@ -915,6 +927,7 @@ async def _commit_filled_buy_to_stratum_ledger(
         actual_spent_usd=actual_spent,
         lot_type=tag,
         max_tiers=MAX_GRID_TIERS_7,
+        merge_mode=eff_merge_mode,
     )
 
     raw_target_q = max(0, safe_int(st.get("l1_target_quota_qty"), 0))
@@ -946,6 +959,13 @@ async def _commit_filled_buy_to_stratum_ledger(
     new_held_lots = sum(b.lot_count for b in new_buckets)
     new_held_shares = sum(b.qty for b in new_buckets)
     new_held_tiers = len(new_buckets)
+
+    # NEW [Case 87 : 사이클 최고 도달 회차(cycle_ratchet_max_lots) 잠금 갱신 및 STEP2X 스텝업 해금 시 동기화]
+    prev_ratchet_lots = max(0, safe_int(st.get("cycle_ratchet_max_lots"), 0))
+    if was_empty or is_step_up_unlock_fill:
+        new_ratchet_max_lots = new_held_lots
+    else:
+        new_ratchet_max_lots = max(prev_ratchet_lots, new_held_lots)
 
     tot_buy_ev = safe_int(st.get("total_buy_events"), 0) + 1
     tot_buy_sh = safe_int(st.get("total_buy_shares"), 0) + q_int
@@ -1001,6 +1021,7 @@ async def _commit_filled_buy_to_stratum_ledger(
         buckets=buckets_to_dicts(new_buckets),
         anchor_price=new_buckets[0].book_price if new_buckets else fill_p,
         cycle_min_buy_price=round(new_cycle_min_p, 4),
+        cycle_ratchet_max_lots=new_ratchet_max_lots,
         ratchet_anchor_price=new_buckets[0].book_price if new_buckets else fill_p,
         cycle_reanchor_credit_usd=0.0,
         l1_target_quota_qty=next_l1_target_q,
@@ -1042,6 +1063,11 @@ async def _commit_filled_buy_to_stratum_ledger(
     trig_buy_p = safe_float(summary.get("trigger_buy_price"), 0.0)
     drop_req_p = safe_float(summary.get("drop_buy_pct"), -1.0)
     l1_book_now = new_buckets[0].book_price if new_buckets else fill_p
+    ratchet_note = (
+        f"(단차잠금 {new_ratchet_max_lots}회차)"
+        if new_ratchet_max_lots > new_held_lots
+        else ""
+    )
 
     if hasattr(context, "send_slim_alert"):
         rem_quota_note = (
@@ -1063,7 +1089,7 @@ async def _commit_filled_buy_to_stratum_ledger(
             body_str = (
                 f"실사용 ${actual_spent:,.2f} · "
                 f"🛡️60초 타임쉴드 후 1층목표 ${l1_target:.2f}(+1.5%) 감시{upper_note} · "
-                f"기억저가 ${new_cycle_min_p:.2f} · 가용현금 ${free_cash_now:,.2f} (총 {new_held_shares}주)"
+                f"기억저가 ${new_cycle_min_p:.2f}{ratchet_note} · 가용현금 ${free_cash_now:,.2f} (총 {new_held_shares}주)"
             )
         elif tag == "TOPUP_1FL":
             done_badge = (
@@ -1088,7 +1114,7 @@ async def _commit_filled_buy_to_stratum_ledger(
                 f"실사용 ${actual_spent:,.2f} (자투리 +${saved_from_portion:.2f} 시드보존) · "
                 f"🛡️60초 타임쉴드 후 1층목표 ${l1_target:.2f}(+1.5%) 감시{rem_quota_note} · "
                 f"2~{new_held_tiers}층({u_qty}주) 이평 ${u_wma_p:.2f}(목표 ${u_wma_t:.2f}) 유지 · "
-                f"기억저가 ${new_cycle_min_p:.2f}(와이드 {drop_req_p:.1f}% 추매가 ${trig_buy_p:.2f}) · "
+                f"기억저가 ${new_cycle_min_p:.2f}{ratchet_note}(와이드 {drop_req_p:.1f}% 추매가 ${trig_buy_p:.2f}) · "
                 f"가용현금 ${free_cash_now:,.2f}"
             )
         elif is_step_up_unlock_fill:
@@ -1101,7 +1127,7 @@ async def _commit_filled_buy_to_stratum_ledger(
                 f"🔓 [SOXL 스텝업 저가 해금 추매 체결 ({new_held_lots}회차/{new_held_tiers}개층)] {q_int}주 @ ${fill_p:.2f}"
             )
             body_str = (
-                f"구저가 ${old_min_p:.2f}(반등 {reb_m:.2f}x) ➔ 스텝업 잠금저가 ${new_cycle_min_p:.2f} 갱신! · "
+                f"구저가 ${old_min_p:.2f}(반등 {reb_m:.2f}x) ➔ 스텝업 잠금저가 ${new_cycle_min_p:.2f}(잠금 {new_ratchet_max_lots}회차) 갱신! · "
                 f"실사용 ${actual_spent:,.2f} (자투리 +${saved_from_portion:.2f} 시드보존) · "
                 f"🛡️60초 타임쉴드 후 1층목표 ${l1_target:.2f} & 2~{new_held_tiers}층({u_qty}주) 이평 ${u_wma_p:.2f}(목표 ${u_wma_t:.2f}) 감시{rem_quota_note} · "
                 f"차기단차 {drop_req_p:.1f}%(${trig_buy_p:.2f}) · 가용현금 ${free_cash_now:,.2f}"
@@ -1113,7 +1139,7 @@ async def _commit_filled_buy_to_stratum_ledger(
                     f" · 2~{new_held_tiers}층({u_cnt}개층·{u_qty}주) 순수이평 ${u_wma_p:.2f}(목표 ${u_wma_t:.2f})"
                 )
             title_str = (
-                f"🔵 [SOXL {new_held_lots}회차({new_held_tiers}개층) 현재가 지정가 매수 체결] {q_int}주 @ ${fill_p:.2f}"
+                f"🔵 [SOXL {new_held_lots}회차{ratchet_note}({new_held_tiers}개층) 현재가 지정가 매수 체결] {q_int}주 @ ${fill_p:.2f}"
             )
             body_str = (
                 f"실사용 ${actual_spent:,.2f} (자투리 +${saved_from_portion:.2f} 시드보존) "
@@ -1135,6 +1161,7 @@ async def _commit_filled_buy_to_stratum_ledger(
         "actual_spent_usd": actual_spent,
         "saved_from_portion_usd": saved_from_portion,
         "cycle_min_buy_price": round(new_cycle_min_p, 4),
+        "cycle_ratchet_max_lots": new_ratchet_max_lots,
         "held_lots": new_held_lots,
         "held_tiers": new_held_tiers,
         "held_shares": new_held_shares,
@@ -1150,11 +1177,12 @@ async def sync_pending_buy_order_plugin(
     force_settle: bool = False,
 ) -> Dict[str, Any]:
     """
-    # MODIFIED [🎯 1 & 🎯 5 & Case 19, 24, 59, 60, 61, 65, 66, 71, 72, 73, 76, 77, 78, 80 & Case 84 개정]:
+    # MODIFIED [🎯 1 & 🎯 5 & Case 19, 24, 59, 60, 61, 65, 66, 71, 72, 73, 76, 77, 78, 80, Case 84 원복 & Case 87]:
     장부에 대기 중인 미체결 매수 주문(buy_order_id)이 존재할 때 체결/부분체결/취소를 동기화한다.
-    - 15:30 EST 경계 도래 시 미체결 안전 취소(should_abort_late_cutoff)는 오직 0주 새 사이클 첫 1층 진입 주문
-      (is_zero_grid_reentry: len(buckets_now) == 0 and lot_type == "REENTRY_1FL")에만 적용하며,
-      상단 2~7층 보유 중 1층 공석 상태에서 발주된 재장전 주문은 취소하지 않고 정상 체결을 대기한다!
+    - 15:30 EST 경계 도래 시 미체결 안전 취소(should_abort_late_cutoff)는:
+      ① 0주 새 사이클 첫 1층 진입 주문(is_zero_grid_reentry: len(buckets_now) == 0 and lot_type == "REENTRY_1FL") 및
+      ② 상단 2~7층 보유 · 1층 공석 상태에서 직전 익절가 대비 +1.00% 이상 상승돌파로 발주된 주문(is_vacant_l1_breakout_reentry)에 동시 적용하며,
+      1층 공석 눌림목(-1.00%) 주문, 10분 게이트 신저가 추매(DIP_1FL), 1층 잔량 보충(TOPUP_1FL) 주문은 취소하지 않고 정상 체결을 대기한다!
     """
     st = context.ledger.get_state(TARGET_SYMBOL)
     buy_oid = str(st.get("buy_order_id") or "").strip()
@@ -1172,7 +1200,14 @@ async def sync_pending_buy_order_plugin(
     portion_budget = safe_float(
         st.get("pending_portion_budget"), float(ordered_qty) * ord_price
     )
-    lot_type = str(st.get("pending_lot_type") or "QUOTA_L1").upper().strip()
+    raw_lot_type = (
+        str(st.get("pending_lot_type") or "QUOTA_L1").upper().strip()
+    )
+    lot_type = (
+        "REENTRY_1FL"
+        if raw_lot_type in ("REENTRY_1FL_BREAKOUT", "REENTRY_1FL_PULLBACK")
+        else raw_lot_type
+    )
     buckets_now = buckets_from_dicts(st.get("buckets", []))
     has_active_l1_now = has_active_l1_bucket(buckets_now)
     is_vacant_l1_now = bool(len(buckets_now) > 0 and not has_active_l1_now)
@@ -1184,12 +1219,27 @@ async def sync_pending_buy_order_plugin(
     )
     is_golden_lot = lot_type in ("GOLDEN_POCKET", "GOLDEN_L1")
 
-    # MODIFIED [Case 84 개정]: 오직 0주 상태(len(buckets_now) == 0)에서의 새 사이클 첫 1층 진입 주문만 15:30 EST 도래 시 취소!
+    # MODIFIED [Case 84 원복]: 15:30 EST 도래 시 미체결 0주 신규 진입 주문 및 1층 공석 +1.0% 돌파 추격 주문을 즉시 안전 취소!
     is_zero_grid_reentry = bool(
         len(buckets_now) == 0 and lot_type == "REENTRY_1FL"
     )
+    anchor_p_now = safe_float(st.get("anchor_price"), 0.0)
+    is_vacant_l1_breakout_reentry = bool(
+        is_vacant_l1_now
+        and lot_type == "REENTRY_1FL"
+        and (
+            raw_lot_type == "REENTRY_1FL_BREAKOUT"
+            or (
+                anchor_p_now > 0.0
+                and ord_price
+                >= anchor_p_now
+                * (1.0 + REENTRY_BREAKOUT_RISE_PCT / 100.0 - 1e-4)
+            )
+        )
+    )
     should_abort_late_cutoff = bool(
-        is_late_cutoff_now and is_zero_grid_reentry
+        is_late_cutoff_now
+        and (is_zero_grid_reentry or is_vacant_l1_breakout_reentry)
     )
 
     now_mono = time.monotonic()
@@ -1349,12 +1399,21 @@ async def sync_pending_buy_order_plugin(
             timeout_kw["last_golden_allin_date"] = ""
         await context.ledger.update_state(TARGET_SYMBOL, **timeout_kw)
         if should_abort_late_cutoff:
+            abort_desc = (
+                "0주 신규 진입"
+                if is_zero_grid_reentry
+                else "1층 공석 돌파 추격"
+            )
             logger.info(
-                "🛡️ [Case 84 장마감 30분전(15:30 EST) 도래 -> 미체결 0주 신규 진입(%s) 즉시 안전 취소] 지정가 $%.2f 취소 ➔ 컷오프 방어 전환",
-                lot_type,
+                "🛡️ [Case 84 장마감 30분전(15:30 EST) 도래 -> 미체결 %s(%s) 즉시 안전 취소] 지정가 $%.2f 취소 ➔ 컷오프 방어 전환",
+                abort_desc,
+                raw_lot_type,
                 ord_price,
             )
-            return {"status": "BUY_ORDER_LATE_CUTOFF_CANCELED_SAFE"}
+            return {
+                "status": "BUY_ORDER_LATE_CUTOFF_CANCELED_SAFE",
+                "abort_type": abort_desc,
+            }
         logger.info(
             "⏳ [SOXL 현재가 지정가 매수(%s) 60초 미체결 안전 취소] 지정가 $%.2f 유지 종료 ➔ 관망 복귀",
             lot_type,

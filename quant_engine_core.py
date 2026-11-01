@@ -1,21 +1,22 @@
 # -*- coding: utf-8 -*-
 """
 # MODIFIED: quant_engine_core.py
-인피니트 스노우볼 (Infinite Snowball) v3.0 — 퀀트 엔진 코어 Part 1 / 2 (Step 04 / 11)
+인피니트 스노우볼 (Infinite Snowball) v3.0 — 퀀트 엔진 코어 Part 1 / 2 (Step 04 / 10)
 역할:
-1) 전역 퀀트 상수 락온 (8% 황금비율 · 7-Layer 골디락스 그리드 · STEP2X_15PCT_C20 · GUARD30 예비수혈 · 황금시간 전액매수 기본값 NONE[OFF] · Case 84 15:30 0주 신규진입 컷오프)
+1) 전역 퀀트 상수 락온 (8% 황금비율 · 7-Layer 골디락스 그리드 · DEFAULT_GRID_MERGE_MODE = "L2_L7_MERGE_SORT" [Case 87] ·
+   STEP2X_15PCT_C20 · GUARD30 예비수혈 · 황금시간 전액매수 기본값 NONE[OFF] · Case 84 15:30 0주 신규진입 및 1층 공석 돌파추격 차단)
 2) 계좌별 미국 주식 매매 수수료율(GET /api/v1/commissions : 편도 0.07% -> 왕복 0.14% / 편도 0.10% -> 왕복 0.20%) 런타임 동적 동기화 브릿지 탑재 (Case 86)
 3) 순수 실물 매수 원가(book_price == actual_avg_price) 구조체 (StratumBucket, GoldenAllInPocket) 및
-   상단 그리드(2층 ~ 6층 개별 완충층 + 통합 7층 본대 GRID_L7) 번호 정규화·합병기(relabel_upper_grid_tiers)
+   상단 그리드(7층 초과 시 구 1층[새 2층 후보] 보존 + 구 2층 + 구 7층 가중평균 통합 후 평단 오름차순 중간층 재배치 L2_L7_MERGE_SORT · Case 87) 번호 정규화·합병기(relabel_upper_grid_tiers)
 4) 8%(12.5분할) 황금비율 정액 기반 정량 산출기(min(1회분 예산 상한 주수, 기준가 고정 정량) 이중 캡핑 Case 67) 및
    황금시간대(07:00 ~ 07:50 EST & 1분봉 Wilder RSI(14) <= 19.0) 가용현금 100% 전액매수 판정기(Case 80)
 5) 30% 자투리 1주 승격 방지 가드(GUARD30) & 토스 실계좌 여유자금 감지 기반 최대 +6회분 온디맨드 예비시드 자동 수혈 판정기 및
    0주 전량 졸업 시 예비시드 원금 자동 상환 연산기(Case 77)
-6) 보유 회차별 4단 와이드 점진 활주로(1~4회 -1.0% / 5~8회 -2.0% / 9~10회 -3.5% / 11회+ -5.5%) ·
+6) 사이클 최고 도달 회차(eff_lots = max(held_lots, cycle_ratchet_max_lots)) 잠금 기반 4단 와이드 점진 활주로(1~4회 -1.0% / 5~8회 -2.0% / 9~10회 -3.5% / 11회+ -5.5% · Case 87) ·
    1층 공석 시 2층 단가 상한 역전 차단(HOLD_PREVENT_INVERSION · Case 73) 기반 눌림목(-1.00%)/상승돌파(+1.00%) 하이브리드 재장전 판정기
-   (MODIFIED Case 84: 15:30 ~ 16:00 EST 구간에서도 상단 2~7층 보유 중 1층 공석 돌파 매수는 차단 없이 100% 허용 · 오직 0주 새 사이클 첫 1층 진입만 차단!) ·
+   (MODIFIED Case 84 원복: 15:30 ~ 16:00 EST 구간에서는 1층 공석 +1.00% 상승돌파 추격을 HOLD_LATE_SESSION_BREAKOUT_CUTOFF 로 원천 차단하고 2층 단가 이하 -1.00% 눌림목만 허용!) ·
    3중 안전문(보유 2층 이하 & 현금비중 20%+ & 저점대비 2.0배+ 반등) 통과 시 -15.0% 스텝업 저가 해금 판정기(Case 76)
-- 제1헌법 ~ 제6헌법 및 Case 01 ~ 86 완벽 준수
+- 제1헌법 ~ 제6헌법 및 Case 01 ~ 87 완벽 준수
 """
 
 from __future__ import annotations
@@ -47,18 +48,23 @@ ROUND_TRIP_FEE_RATE_PCT: float = float(
     getattr(toss_api, "ROUND_TRIP_FEE_RATE_PCT", 0.14)
 )
 
-# 8%(12.5분할) 황금비율 기준 기본 분할 회차 및 1~7층 골디락스 멀티 그리드 최대 층수 상수 (Case 72)
+# 8%(12.5분할) 황금비율 기준 기본 분할 회차 및 1~7층 골디락스 멀티 그리드 최대 층수 상수 (Case 72 & Case 87)
 BASE_MAX_LOTS_8PCT: int = 12
 MAX_GRID_TIERS_7: int = int(getattr(toss_api, "MAX_GRID_TIERS_7", 7))
 MAX_GRID_TIERS: int = MAX_GRID_TIERS_7
 # 타 모듈 AST 심볼 임포트 호환을 위해 MAX_GRID_TIERS_12 별칭을 7 로 동시 유지
 MAX_GRID_TIERS_12: int = MAX_GRID_TIERS_7
 
+# NEW [Case 87 : 👑 06_L2L7_RATCHET_8PCT — 7층 초과(8층 발생) 시 구 1층 보존 + 구 2층 + 구 7층 통합 후 평단 오름차순 중간층 재배치 모드]
+DEFAULT_GRID_MERGE_MODE: str = str(
+    getattr(toss_api, "DEFAULT_GRID_MERGE_MODE", "L2_L7_MERGE_SORT")
+)
+
 # 🎯 4 & Case 59, Case 71, Case 72, Case 73, Case 84: 상단 그리드(2~7층) 보유 중 1층 공석 시 60초 주기 눌림목/상승돌파 임계치(%)
 REENTRY_PULLBACK_DROP_PCT: float = -1.00
 REENTRY_BREAKOUT_RISE_PCT: float = 1.00
 
-# MODIFIED [Case 84]: 정규장 마감 30분 전(15:30 ~ 16:00 EST) 오직 0주 새 사이클 첫 1층 진입만 차단하는 기준 시각(HHMM)
+# MODIFIED [Case 84 원복]: 정규장 마감 30분 전(15:30 ~ 16:00 EST) 0주 새 사이클 첫 1층 진입 및 1층 공석 +1.0% 돌파 추격 동시 차단 기준 시각(HHMM)
 NEW_CYCLE_BUY_CUTOFF_HM: int = int(
     getattr(toss_api, "NEW_CYCLE_BUY_CUTOFF_HM", 1530)
 )
@@ -197,13 +203,13 @@ def get_golden_allin_mode_label(mode: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# [핵심 1] StratumBucket & GoldenAllInPocket : 순수 실물 매수 원가(book_price == actual_avg_price) 구조체 (Case 46 ~ 86)
+# [핵심 1] StratumBucket & GoldenAllInPocket : 순수 실물 매수 원가(book_price == actual_avg_price) 구조체 (Case 46 ~ 87)
 # ---------------------------------------------------------------------------
 @dataclass
 class StratumBucket:
     """
-    🎯 3 & Case 46 ~ 86:
-    SOXL 1층 ~ 7층 골디락스 멀티 그리드(1층 공격수 L1 / 2층 ~ 6층 개별 완충층 GRID_L2 ~ GRID_L6 / 통합 7층 본대 GRID_L7) 데이터 구조체.
+    🎯 3 & Case 46 ~ 87:
+    SOXL 1층 ~ 7층 골디락스 멀티 그리드(1층 공격수 L1 / 2층 ~ 7층 개별 완충층 및 구 2층+구 7층 중간합병 본대 GRID_L2 ~ GRID_L7) 데이터 구조체.
     """
 
     qty: int
@@ -421,7 +427,7 @@ def buckets_to_dicts(
 
 
 # ---------------------------------------------------------------------------
-# [핵심 1-B · Case 69, Case 71 & Case 72] 그리드 층 판별기 & 진성 손익분기점(순수 원가) 하한선 정규화기
+# [핵심 1-B · Case 69, Case 71, Case 72 & Case 87] 그리드 층 판별기 · 구 2층+구 7층 통합 중간배치기 & 진성 손익분기점 하한선 정규화기
 # ---------------------------------------------------------------------------
 def is_upper_grid_tier(bucket_or_lot_type: Any) -> bool:
     """
@@ -458,9 +464,19 @@ def has_active_l1_bucket(buckets: Sequence[StratumBucket]) -> bool:
 def relabel_upper_grid_tiers(
     upper_buckets: Sequence[StratumBucket],
     max_tiers: int = MAX_GRID_TIERS_7,
+    merge_mode: str = DEFAULT_GRID_MERGE_MODE,
 ) -> List[StratumBucket]:
     """
-    🚨 [Case 71 & Case 72 상단 그리드(2층 ~ 6층 개별 완충층 + 통합 7층 본대) 번호 정규화 및 합병기]:
+    # MODIFIED [Case 53, Case 71, Case 72 & Case 87 : 👑 06_L2L7_RATCHET_8PCT — 구 1층 보존 + 구 2층 + 구 7층 통합 후 평단 오름차순 중간층 재배치]:
+    상단 지층 배열(valid)의 개수가 max_upper_cnt (6개 : GRID_L2 ~ GRID_L7)를 초과할 때:
+    1) merge_mode == "L2_L7_MERGE_SORT" (기본 확정 챔피언) 이고 len(valid) >= 3 인 경우:
+       - 가장 저렴한 최하단 상단층인 valid[0] (구 1층 -> 새 2층 후보)은 합병하지 않고 온전히 보존(kept_lowest_upper = [valid[0]])하여
+         Case 73 (1층 > 2층 단가 역전 차단 상한 가드)을 촘촘하게 사수한다.
+       - 이미 상단으로 한 칸 올라간 low_b = valid[1] (구 2층)과 최상단 high_b = valid[-1] (구 7층)의 수량·원금·회차를 가중평균 합산하고
+         Case 53 상한 하드 캡핑(min(raw_upper_p, overall_book_avg))을 적용하여 합병 본대(merged_bucket)를 생성한다.
+       - kept_lowest_upper + valid[2:-1] + [merged_bucket] 총 6개 상단 지층 후보를 단가(book_price) 오름차순으로 정렬하여
+         고점 물량이 중간층(3층 ~ 6층)으로 내려와 중간 반등(+1.00%)에서 개별 익절로 조기 탈출하도록 가속한다!
+    2) 모든 상단 지층을 GRID_L2 ~ GRID_L7 로 정규화하여 반환한다.
     """
     valid = [
         b
@@ -471,26 +487,55 @@ def relabel_upper_grid_tiers(
         return []
 
     max_upper_cnt = max(1, safe_int(max_tiers, MAX_GRID_TIERS_7) - 1)
-    if len(valid) > max_upper_cnt:
-        kept = valid[: max_upper_cnt - 1]
-        overflow = valid[max_upper_cnt - 1 :]
-        tot_q = sum(b.qty for b in overflow)
-        tot_cost = round(sum(b.actual_cost_usd for b in overflow), 4)
-        tot_lots = sum(max(1, b.lot_count) for b in overflow)
-        overall_book_avg = (
-            sum(float(b.qty) * b.book_price for b in overflow) / float(tot_q)
-        )
-        raw_upper_p = max(0.01, tot_cost / float(tot_q))
-        capped_avg_p = round(min(raw_upper_p, overall_book_avg), 4)
-        merged_top = StratumBucket(
-            qty=tot_q,
-            book_price=capped_avg_p,
-            book_invested_usd=tot_cost,
-            actual_cost_usd=tot_cost,
-            lot_count=tot_lots,
-            lot_type=f"GRID_L{max_upper_cnt + 1}",
-        )
-        valid = kept + [merged_top]
+    m_mode = str(merge_mode or DEFAULT_GRID_MERGE_MODE).upper().strip()
+
+    while len(valid) > max_upper_cnt:
+        if m_mode == "L2_L7_MERGE_SORT" and len(valid) >= 3:
+            kept_lowest_upper = [valid[0]]
+            low_b = valid[1]
+            high_b = valid[-1]
+            middle_rest = valid[2:-1]
+
+            m_qty = low_b.qty + high_b.qty
+            m_cost = round(low_b.actual_cost_usd + high_b.actual_cost_usd, 4)
+            m_lots = max(1, low_b.lot_count) + max(1, high_b.lot_count)
+            overall_book_avg = (
+                float(low_b.qty) * low_b.book_price
+                + float(high_b.qty) * high_b.book_price
+            ) / float(max(1, m_qty))
+            raw_upper_p = max(0.01, m_cost / float(max(1, m_qty)))
+            capped_avg_p = round(min(raw_upper_p, overall_book_avg), 4)
+            merged_bucket = StratumBucket(
+                qty=m_qty,
+                book_price=capped_avg_p,
+                book_invested_usd=m_cost,
+                actual_cost_usd=m_cost,
+                lot_count=m_lots,
+                lot_type=f"GRID_L{max_upper_cnt + 1}",
+            )
+            valid = kept_lowest_upper + middle_rest + [merged_bucket]
+            valid.sort(key=lambda b: round(b.book_price, 4))
+        else:
+            kept = valid[: max_upper_cnt - 1]
+            overflow = valid[max_upper_cnt - 1 :]
+            tot_q = sum(b.qty for b in overflow)
+            tot_cost = round(sum(b.actual_cost_usd for b in overflow), 4)
+            tot_lots = sum(max(1, b.lot_count) for b in overflow)
+            overall_book_avg = (
+                sum(float(b.qty) * b.book_price for b in overflow)
+                / float(max(1, tot_q))
+            )
+            raw_upper_p = max(0.01, tot_cost / float(max(1, tot_q)))
+            capped_avg_p = round(min(raw_upper_p, overall_book_avg), 4)
+            merged_top = StratumBucket(
+                qty=tot_q,
+                book_price=capped_avg_p,
+                book_invested_usd=tot_cost,
+                actual_cost_usd=tot_cost,
+                lot_count=tot_lots,
+                lot_type=f"GRID_L{max_upper_cnt + 1}",
+            )
+            valid = kept + [merged_top]
 
     out: List[StratumBucket] = []
     for idx, b in enumerate(valid):
@@ -594,7 +639,7 @@ def resolve_affordable_buy_qty(
     round_trip_fee_rate_pct: Optional[float] = None,
 ) -> Tuple[int, float]:
     """
-    # MODIFIED [Case 25 ~ 35, Case 67 & Case 86 계좌별 동적 왕복 수수료율 연동]:
+    # [Case 25 ~ 35, Case 67 & Case 86 계좌별 동적 왕복 수수료율 연동]:
     직전 기준가로 산출된 목표 정량(target_qty)을 실제 주문가(price_t)로 매수하기 직전:
     1) max_portion_budget_usd(1회분 8% 예산) 상한 주수(budget_cap_qty)와 target_qty 중 작은 값으로 캡핑한다.
     2) 계좌의 왕복 수수료율(round_trip_fee_rate_pct, 미지정 시 런타임 락온 수수료율 0.14% 또는 0.20%) 버퍼를 감안한
@@ -643,7 +688,7 @@ def resolve_allin_affordable_buy_qty(
     round_trip_fee_rate_pct: Optional[float] = None,
 ) -> Tuple[int, float]:
     """
-    # MODIFIED [Case 80 & Case 86 : 황금시간대(07:00 ~ 07:50 EST & RSI <= 19.0) 가용 현금 시드 100% 전액 매수 주수 산출기]:
+    # [Case 80 & Case 86 : 황금시간대(07:00 ~ 07:50 EST & RSI <= 19.0) 가용 현금 시드 100% 전액 매수 주수 산출기]:
     계좌의 왕복 수수료 버퍼(0.14% 또는 0.20%)를 감안하여 현재 가용 현금(free_cash_usd)과
     토스 실계좌 주문가능 달러(broker_buying_power_usd) 중 작은 금액의 100% 전액으로 매수할 수 있는
     최대 정수 주식 수(allin_qty)와 실투입 원금(actual_spent_usd)을 반환한다.
@@ -794,7 +839,7 @@ def evaluate_guard30_and_reserve_injection(
     round_trip_fee_rate_pct: Optional[float] = None,
 ) -> Dict[str, Any]:
     """
-    # MODIFIED [Case 77 & Case 86 : 💉 05_RESV_6P_GUARD30 — 30% 자투리 1주 승격 방지 가드 & 온디맨드 예비시드 자동 수혈 판정기 (계좌별 동적 수수료율 반영)]:
+    # [Case 77 & Case 86 : 💉 05_RESV_6P_GUARD30 — 30% 자투리 1주 승격 방지 가드 & 온디맨드 예비시드 자동 수혈 판정기 (계좌별 동적 수수료율 반영)]:
     """
     f_cash = max(0.0, safe_float(free_cash_usd, 0.0))
     ex_p = max(0.01, safe_float(exec_price, 0.01))
@@ -967,16 +1012,33 @@ def compute_reserve_repayment_on_zero(
 
 
 # ---------------------------------------------------------------------------
-# [핵심 3] 보유 회차별 4단 와이드 점진 단차 · 하이브리드 1층 재장전(Case 84 돌파허용 반영) · STEP2X_15PCT_C20 스텝업 해금 판정기 (Case 36 ~ 86)
+# [핵심 3] 사이클 최고 도달 회차 잠금 기반 4단 와이드 점진 단차(Case 87) · 하이브리드 1층 재장전(Case 84 돌파차단 원복) · STEP2X_15PCT_C20 스텝업 해금 판정기 (Case 36 ~ 87)
 # ---------------------------------------------------------------------------
 def get_golden8_prog_thresholds(
     held_lots: int,
-    threshold_mode: str = "WIDE_RUNWAY",
+    threshold_mode: Any = "WIDE_RUNWAY",
+    cycle_ratchet_max_lots: int = 0,
 ) -> Tuple[float, float, float]:
     """
-    🎯 2 & Case 36 ~ 45, 60, 71, 72 : 4단 와이드 점진 활주로
+    # MODIFIED [🎯 2 & Case 36 ~ 45, 60, 71, 72 & Case 87 : 사이클 최고 도달 회차(cycle_ratchet_max_lots) 잠금 기반 4단 와이드 점진 활주로]:
+    중간 합병층이나 하단 완충층이 개별 익절로 먼저 빠져나가 현재 보유 회차(held_lots)가 줄어들더라도,
+    0주 졸업(또는 STEP2X 스텝업 해금) 전까지는 이번 사이클 최고 도달 회차(cycle_ratchet_max_lots)를 기준으로
+    eff_lots = max(1, held_lots, cycle_ratchet_max_lots) 를 산출하여 4단 와이드 단차가 풀리는 현상을 원천 봉쇄한다!
+    (get_golden8_prog_thresholds(held_lots, "WIDE_RUNWAY", cycle_ratchet_max_lots) 및
+     get_golden8_prog_thresholds(held_lots, cycle_ratchet_max_lots) 양방향 호출 시그니처 100% 호환)
     """
-    lots = max(1, safe_int(held_lots, 1))
+    if isinstance(threshold_mode, (int, float)) and not isinstance(
+        threshold_mode, bool
+    ):
+        eff_ratchet = max(
+            safe_int(threshold_mode, 0), safe_int(cycle_ratchet_max_lots, 0)
+        )
+        mode = "WIDE_RUNWAY"
+    else:
+        eff_ratchet = safe_int(cycle_ratchet_max_lots, 0)
+        mode = str(threshold_mode or "WIDE_RUNWAY").upper().strip()
+
+    lots = max(1, safe_int(held_lots, 1), max(0, eff_ratchet))
     if lots <= 4:
         drop_buy_pct = -1.00
     elif lots <= 8:
@@ -986,7 +1048,6 @@ def get_golden8_prog_thresholds(
     else:
         drop_buy_pct = -5.50
 
-    mode = str(threshold_mode or "WIDE_RUNWAY").upper().strip()
     if mode == "01_PROG_LOT":
         prog_rise = 1.00 if lots <= 6 else (1.50 if lots <= 11 else 2.00)
         return drop_buy_pct, prog_rise, prog_rise
@@ -999,14 +1060,17 @@ def evaluate_l2_only_hybrid_reentry_signal(
     l2_book_price: float = 0.0,
     min_upper_tier_price: float = 0.0,
     is_late_new_cycle_cutoff: bool = False,
+    is_late_cutoff: Optional[bool] = None,
 ) -> Dict[str, Any]:
     """
-    # MODIFIED [🎯 4 & Case 59, Case 67, Case 71, Case 72, Case 73 & Case 84 개정]:
+    # MODIFIED [🎯 4 & Case 59, Case 67, Case 71, Case 72, Case 73 & Case 84 원복]:
     상단 2층 ~ 7층(GRID_L2 ~ GRID_L7) 지층이 존재하는 상태에서 1층이 공석일 때:
     - 현재가 > 2층 단가(ceil_p) 시에는 1층 > 2층 단가 역전을 막기 위해 HOLD_PREVENT_INVERSION 으로 차단(Case 73)하고,
-    - 현재가 <= 2층 단가 안전 영역 내에서는 정규장 마감 30분 전(15:30 ~ 16:00 EST) 여부를 불문하고
-      직전 익절가 대비 -1.00% 이하 눌림목(PULLBACK_RELOAD) 및 +1.00% 이상 상승돌파(BREAKOUT_RELOAD) 재장전을
-      100% 정상 승인한다! (장마감 30분전 1층 공석 돌파 매수 금지 룰 영구 폐기 · 오직 0주 새 사이클 진입만 차단)
+    - 현재가 <= 2층 단가 안전 영역 내에서는:
+      1) 직전 익절가 대비 -1.00% 이하 눌림목(PULLBACK_RELOAD)은 04:07 ~ 16:00 EST 전 매수 구간에서 100% 정상 승인하고,
+      2) 직전 익절가 대비 +1.00% 이상 상승돌파(BREAKOUT_RELOAD)는 04:07 ~ 15:29 EST 구간에서만 승인하되,
+         정규장 마감 30분 전(15:30 ~ 16:00 EST, late_cutoff == True) 구간에서는 장 막판 데드캣 숏스퀴즈 고점 추격으로 인한
+         시드고갈을 막기 위해 HOLD_LATE_SESSION_BREAKOUT_CUTOFF 로 원천 차단한다! (Case 84 원복)
     """
     lp = safe_float(live_price, 0.0)
     anc = safe_float(anchor_price, 0.0)
@@ -1014,6 +1078,12 @@ def evaluate_l2_only_hybrid_reentry_signal(
     ceil_p = safe_float(min_upper_tier_price, 0.0)
     if ceil_p <= 0.0 and b2_p > 0.0:
         ceil_p = b2_p
+
+    late_cutoff = bool(
+        is_late_cutoff
+        if is_late_cutoff is not None
+        else is_late_new_cycle_cutoff
+    )
 
     ref_anchor = (
         anc
@@ -1059,7 +1129,7 @@ def evaluate_l2_only_hybrid_reentry_signal(
             "l2_ceiling_price": round(ceil_p, 4),
         }
 
-    # 조건 A : -1.00% 이하 눌림목 재장전 (전 매수 구간 100% 정상 허용)
+    # 조건 A : -1.00% 이하 눌림목 재장전 (04:07 ~ 16:00 EST 전 매수 구간 100% 정상 허용)
     if chg_from_exit_pct <= REENTRY_PULLBACK_DROP_PCT:
         return {
             "should_buy": True,
@@ -1072,8 +1142,19 @@ def evaluate_l2_only_hybrid_reentry_signal(
             "l2_ceiling_price": round(ceil_p, 4),
         }
 
-    # 조건 B : +1.00% 이상 상승돌파 재장전 (MODIFIED Case 84 : 15:30 ~ 16:00 EST 구간 포함 전 매수 구간 100% 정상 허용!)
+    # 조건 B : +1.00% 이상 상승돌파 재장전 (MODIFIED Case 84 원복 : 15:30 ~ 16:00 EST 구간에서는 돌파 추격 원천 차단!)
     if chg_from_exit_pct >= REENTRY_BREAKOUT_RISE_PCT:
+        if late_cutoff:
+            return {
+                "should_buy": False,
+                "signal_type": "HOLD_LATE_SESSION_BREAKOUT_CUTOFF",
+                "ref_anchor": round(ref_anchor, 4),
+                "quota_ref_price": round(ref_anchor, 4),
+                "chg_from_exit_pct": round(chg_from_exit_pct, 2),
+                "pullback_target_price": pullback_target_p,
+                "breakout_target_price": breakout_target_p,
+                "l2_ceiling_price": round(ceil_p, 4),
+            }
         return {
             "should_buy": True,
             "signal_type": "BREAKOUT_RELOAD",
@@ -1111,7 +1192,7 @@ def evaluate_step_up_2x_dip_signal(
     max_tiers_for_unlock: int = STEP_UP_2X_MAX_TIERS,
 ) -> Dict[str, Any]:
     """
-    # [🎯 2 Step 1 & Case 60, Case 72, Case 76 : 🔓 06_STEP2X_15PCT_C20 3중 안전문 기반 조건부 스텝업 저가 해금 판정기]:
+    # [🎯 2 Step 1 & Case 60, Case 72, Case 76, Case 87 : 🔓 06_STEP2X_15PCT_C20 3중 안전문 기반 조건부 스텝업 저가 해금 판정기]:
     """
     valid = [
         b
@@ -1197,7 +1278,7 @@ def evaluate_step_up_2x_dip_signal(
             "next_cycle_min_price": round(eff_min_p, 4),
         }
 
-    # 1) 제1경로 : 기본 정적 최저가 대비 4단 와이드 신저가 도달 시 최우선 승인
+    # 1) 제1경로 : 기본 정적 최저가 대비 4단 와이드(최고도달회차 잠금 반영) 신저가 도달 시 최우선 승인
     if chg_static_pct <= req_drop:
         return {
             "should_buy": True,

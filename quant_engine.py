@@ -1,25 +1,26 @@
 # -*- coding: utf-8 -*-
 """
 # MODIFIED: quant_engine.py
-인피니트 스노우볼 (Infinite Snowball) v3.0 — 퀀트 엔진 코어 Part 2 / 2 (Step 05 / 11)
+인피니트 스노우볼 (Infinite Snowball) v3.0 — 퀀트 엔진 코어 Part 2 / 2 (Step 05 / 10)
 역할:
-1) quant_engine_core.py (Part 1 / 2) 의 모든 상수·구조체·정량/수혈/스텝업/컷오프/동적수수료 판정 심볼 명시적 재익스포트(Facade Re-export)로
-   타 모듈 AST 임포트 호환성 100% 보장
+1) quant_engine_core.py (Part 1 / 2) 의 모든 상수(DEFAULT_GRID_MERGE_MODE 포함)·구조체·정량/수혈/스텝업/컷오프/동적수수료 판정 심볼
+   명시적 재익스포트(Facade Re-export)로 타 모듈 AST 임포트 호환성 100% 보장
 2) 1층 ~ 7층 골디락스 순수 멀티 그리드 배치 및 병합기(vrev_add_quota_lot_and_merge_2tier :
    REENTRY_1FL 독립 1층 배치 / TOPUP_1FL 기존 1층 무승격 원자적 합산[Case 78] /
-   DIP_1FL·GOLDEN_L1 2~6층 개별 승격 및 7층 초과분 최상단 통합 7층 본대[GRID_L7] 가중평균 병합[Case 53, 72] /
+   DIP_1FL·GOLDEN_L1 7층 이하 개별 승격 및 7층 초과[8층 발생] 시 구 1층[새 2층 후보] 보존 + 구 2층 + 구 7층 통합 후 평단 오름차순 중간층 재배치[L2_L7_MERGE_SORT · Case 53, 72, 87] /
    수동 추가매수 시 단가 비교 오름차순 층간 스마트 중간 편입[Case 63])
-3) 수동 매도 시 독립 골든포켓 및 1~7층 순수 원가 1:1 매칭 정산기(match_and_remove_sold_buckets_7tier · Case 63, 69, 80) 및
+3) 수동 매도 시 독립 골든포켓 및 1~7층 순수 원가 1:1 매칭 정산기(match_and_remove_sold_buckets_7tier · Case 63, 69, 80, 87) 및
    계좌별 동적 왕복 수수료율(0.14% / 0.20%) · 실측 매도 수수료(execution.commission + tax) 반영 세후 실현손익 산출기(calc_sell_realized_pnl · Case 86)
 4) 상단 2층 ~ 7층 통합 이동평균(compute_upper_2_to_7_moving_avg) 산출 및
    🚨 [Case 83 방안 C] 오버나이트(애프터·데이마켓, is_overnight_session=True) 중 상단 2~7층 보유 시
-   개별 층(1층 및 2~6층 개별) 쪼개 팔기를 잠가 통합 이동평균(wma_2_to_7) 도망을 원천 봉쇄하고,
+   개별 층(1층 및 2~7층 개별/합병층) 쪼개 팔기를 잠가 통합 이동평균(wma_2_to_7) 도망을 원천 봉쇄하고,
    장외에서는 통합 이동평균(+1.00%) 일괄 졸업(1층 본전 이상 시 SELL_ALL_GRAD 전량 졸업 / 1층 본전 미달 시 SELL_WMA_UPPER 상단 일괄 졸업,
    또는 1층 단독 보유 +1.50% / 독립 골든포켓 +1.50%)만 허용한 뒤
    04:07 EST 프리장 개장(is_overnight_session=False) 즉시 4중 다중 익절을 전면 개방하는 하이브리드 매도 판정기(evaluate_multi_grid_sell_targets)
-5) 포트폴리오 통합 요약기(summarize_stratum_portfolio · Case 84 개정 15:30~16:00 0주 신규 진입만 차단 / 1층 공석 돌파 허용 및 Case 86 계좌별 수수료율 동기화) 및
-   기동 전 TDD 사전 무결성 검증 슈트(run_quant_engine_tdd · Case 25 ~ 86 전수 검증)
-- 제1헌법 ~ 제6헌법 및 Case 01 ~ 86 완벽 준수
+5) 포트폴리오 통합 요약기(summarize_stratum_portfolio · Case 84 원복 15:30~16:00 0주 신규 진입 및 1층 공석 돌파 추격 차단 ·
+   Case 86 계좌별 수수료율 동기화 · Case 87 cycle_ratchet_max_lots / eff_lots 와이드 단차 잠금 통합) 및
+   기동 전 TDD 사전 무결성 검증 슈트(run_quant_engine_tdd · Case 25 ~ 87 전수 검증)
+- 제1헌법 ~ 제6헌법 및 Case 01 ~ 87 완벽 준수
 """
 
 from __future__ import annotations
@@ -32,6 +33,7 @@ from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 from quant_engine_core import (
     BASE_MAX_LOTS_8PCT,
     DEFAULT_GOLDEN_ALLIN_MODE,
+    DEFAULT_GRID_MERGE_MODE,
     DEFAULT_INITIAL_SEED_USD,
     DEFAULT_UNLOCK_MODE,
     DEFAULT_US_COMMISSION_RATE,
@@ -89,7 +91,7 @@ logger = logging.getLogger("toss_sniper.quant_engine")
 
 
 # ---------------------------------------------------------------------------
-# [핵심 4 · Case 63, Case 71 ~ 86] 1층 ~ 7층 골디락스 순수 멀티 그리드 배치 & 매도 층/포켓 원가 매칭 정산기
+# [핵심 4 · Case 63, Case 71 ~ 87] 1층 ~ 7층 골디락스 순수 멀티 그리드(L2_L7_MERGE_SORT) 배치 & 매도 층/포켓 원가 매칭 정산기
 # ---------------------------------------------------------------------------
 def vrev_add_quota_lot_and_merge_2tier(
     queue: Sequence[StratumBucket],
@@ -98,11 +100,12 @@ def vrev_add_quota_lot_and_merge_2tier(
     actual_spent_usd: Optional[float] = None,
     lot_type: str = "QUOTA_L1",
     max_tiers: int = MAX_GRID_TIERS_7,
+    merge_mode: str = DEFAULT_GRID_MERGE_MODE,
 ) -> List[StratumBucket]:
     """
-    🎯 3 & 🎯 4 & Case 46 ~ 86 (함수명은 타 모듈 AST 호환을 위해 유지하되 내부는 1~7층 골디락스 멀티 그리드로 작동):
+    🎯 3 & 🎯 4 & Case 46 ~ 87 (함수명은 타 모듈 AST 호환을 위해 유지하되 내부는 1~7층 골디락스 L2_L7_MERGE_SORT 멀티 그리드로 작동):
     신규 정량 매수(또는 GRID_L1_ALLIN 모드 1층 전액편입 GOLDEN_L1) 체결 시
-    최대 7개 지층(1층 공격수 + 2~6층 개별 완충층[5개] + 통합 7층 본대[GRID_L7])을 관리한다.
+    최대 7개 지층(1층 공격수 + 2~7층 상단 완충/합병 그리드 · 8층 발생 시 구 1층 보존 + 구 2층 + 구 7층 통합 후 평단 오름차순 중간층 재배치)을 관리한다.
     """
     q_int = max(1, safe_int(buy_qty, 1))
     p_val = round(max(0.0001, safe_float(buy_price, 0.01)), 4)
@@ -136,6 +139,9 @@ def vrev_add_quota_lot_and_merge_2tier(
         return [new_l1]
 
     eff_max_tiers = max(2, safe_int(max_tiers, MAX_GRID_TIERS_7))
+    eff_merge_mode = (
+        str(merge_mode or DEFAULT_GRID_MERGE_MODE).upper().strip()
+    )
 
     # 🚨 Case 59, Case 71, Case 72, Case 73 & Case 80: 상단 그리드(2층 ~ 7층)만 보유 중(1층 공석) REENTRY_1FL / GOLDEN_L1 유입 시 상단 비병합 독립 1층 배치!
     if not has_active_l1_bucket(existing) and tag in (
@@ -144,7 +150,7 @@ def vrev_add_quota_lot_and_merge_2tier(
         "GOLDEN_L1",
     ):
         preserved_uppers = relabel_upper_grid_tiers(
-            existing, max_tiers=eff_max_tiers
+            existing, max_tiers=eff_max_tiers, merge_mode=eff_merge_mode
         )
         return [new_l1] + preserved_uppers
 
@@ -169,7 +175,7 @@ def vrev_add_quota_lot_and_merge_2tier(
             lot_type=keep_tag,
         )
         preserved_uppers = relabel_upper_grid_tiers(
-            existing[1:], max_tiers=eff_max_tiers
+            existing[1:], max_tiers=eff_max_tiers, merge_mode=eff_merge_mode
         )
         return [merged_l1] + preserved_uppers
 
@@ -193,7 +199,7 @@ def vrev_add_quota_lot_and_merge_2tier(
         )
         return [new_l1, merged_l2]
 
-    # 🚨 [Case 63 & Case 72 : 단가 비교 오름차순(저가 1층 ➔ 고가 7층) 층간 중간 편입]
+    # 🚨 [Case 63, Case 72 & Case 87 : 단가 비교 오름차순(저가 1층 ➔ 고가 7층) 층간 중간 편입]
     if tag != "GOLDEN_L1" and pure_p > existing[0].book_price + 1e-6:
         combined = list(existing) + [new_l1]
         combined.sort(key=lambda b: round(b.book_price, 4))
@@ -208,12 +214,12 @@ def vrev_add_quota_lot_and_merge_2tier(
                 lot_type=tag,
             )
         sorted_uppers = relabel_upper_grid_tiers(
-            combined[1:], max_tiers=eff_max_tiers
+            combined[1:], max_tiers=eff_max_tiers, merge_mode=eff_merge_mode
         )
         return [lowest_b] + sorted_uppers
 
     shifted_uppers = relabel_upper_grid_tiers(
-        existing, max_tiers=eff_max_tiers
+        existing, max_tiers=eff_max_tiers, merge_mode=eff_merge_mode
     )
     return [new_l1] + shifted_uppers
 
@@ -226,9 +232,10 @@ def match_and_remove_sold_buckets_7tier(
     golden_pocket: Optional[Any] = None,
     round_trip_fee_rate_pct: Optional[float] = None,
     actual_sell_fee_usd: Optional[float] = None,
+    merge_mode: str = DEFAULT_GRID_MERGE_MODE,
 ) -> Dict[str, Any]:
     """
-    # MODIFIED [Case 63, Case 69, Case 71, Case 72, Case 80 & Case 86 계좌별 동적/실측 수수료 연동]:
+    # [Case 63, Case 69, Case 71, Case 72, Case 80, Case 86 & Case 87 계좌별 동적/실측 수수료 연동]:
     수동 매도(전량 또는 부분 매도)로 보유 수량이 delta_remove_qty 만큼 줄었을 때:
     1) 독립 골든포켓(golden_pocket)이 존재하고 수량이 일치하거나 단가가 하단 층 이하일 때 골든포켓부터(또는 하단 층부터)
        순차 차감하여 골든포켓과 1층 ~ 7층 각 레이어의 고유 순수 원가를 100% 보존한다.
@@ -382,16 +389,23 @@ def match_and_remove_sold_buckets_7tier(
         rem_to_cut -= cut_done
 
     eff_max_t = max(2, safe_int(max_tiers, MAX_GRID_TIERS_7))
+    eff_merge_mode = (
+        str(merge_mode or DEFAULT_GRID_MERGE_MODE).upper().strip()
+    )
     if rem_buckets:
         if was_active_l1 and not removed_first_tier_completely:
             active_b1 = rem_buckets[0]
             re_uppers = relabel_upper_grid_tiers(
-                rem_buckets[1:], max_tiers=eff_max_t
+                rem_buckets[1:],
+                max_tiers=eff_max_t,
+                merge_mode=eff_merge_mode,
             )
             rem_buckets = [active_b1] + re_uppers
         else:
             rem_buckets = relabel_upper_grid_tiers(
-                rem_buckets, max_tiers=eff_max_t
+                rem_buckets,
+                max_tiers=eff_max_t,
+                merge_mode=eff_merge_mode,
             )
 
     sold_qty_total = sum(b.qty for b in sold_buckets) + sold_pocket_qty
@@ -510,7 +524,7 @@ def evaluate_multi_grid_sell_targets(
     is_overnight_session: bool = False,
 ) -> Dict[str, Any]:
     """
-    🚨 [Case 69, Case 70, Case 71, Case 72, Case 80 & Case 83 (방안 C 오버나이트 통합이평 사수 하이브리드)]:
+    🚨 [Case 69, Case 70, Case 71, Case 72, Case 80, Case 83 & Case 87 (방안 C 오버나이트 통합이평 사수 하이브리드)]:
     """
     valid = [
         b
@@ -573,7 +587,7 @@ def evaluate_multi_grid_sell_targets(
                 floor_candidates.append(min_l1_target_p)
                 hit_l1 = True
 
-    # ③ & ④ 상단 2층 ~ 7층 통합 이동평균(+1.00%) 및 개별 그리드(+1.00%) 판정
+    # ③ & ④ 상단 2층 ~ 7층 통합 이동평균(+1.00%) 및 개별/중간합병 그리드(+1.00%) 판정
     if has_upper_tiers:
         wma_info = compute_upper_2_to_12_moving_avg(
             valid, rise_upper_pct=rise_upper_pct
@@ -606,7 +620,7 @@ def evaluate_multi_grid_sell_targets(
                 sold_idx_set.add(0)
                 floor_candidates.append(b1_breakeven_p)
         else:
-            # ④ 상단 2~7층 개별 층(+1.00%) 판정
+            # ④ 상단 2~7층 개별 층 및 중간층으로 재배치된 합병 본대(+1.00%) 판정
             for k in range(upper_start_idx, len(valid)):
                 bk = valid[k]
                 bk_target_p = (
@@ -749,7 +763,7 @@ def calc_sell_realized_pnl(
     actual_sell_fee_usd: Optional[float] = None,
 ) -> Dict[str, float]:
     """
-    # MODIFIED [Case 86 : 계좌별 동적 왕복 수수료율(0.14% / 0.20%) 및 토스 실측 매도 수수료(execution.commission + tax) 연동 정산]:
+    # [Case 86 : 계좌별 동적 왕복 수수료율(0.14% / 0.20%) 및 토스 실측 매도 수수료(execution.commission + tax) 연동 정산]:
     매도 체결 수량(sold_qty), 실제 체결 단가(sell_exec_price), 매도 지층/포켓들의 실제 매수 원금 합계(sold_actual_cost_usd)를
     기반으로 왕복 수수료 차감 후 세후 실현 손익을 정밀 산출한다.
     - actual_sell_fee_usd (토스 GET /api/v1/orders/{orderId} 의 execution.commission + execution.tax 실측값)가
@@ -805,7 +819,7 @@ def calc_sell_realized_pnl(
 
 
 # ---------------------------------------------------------------------------
-# [핵심 5] 포트폴리오 · 1~7층 골디락스 멀티 그리드 · 독립 골든포켓 · 2~7층 이동평균 · STEP2X_15PCT_C20 · GUARD30 · Case 84 통합 요약기 (Case 59 ~ 86)
+# [핵심 5] 포트폴리오 · 1~7층 골디락스 멀티 그리드(L2_L7_MERGE_SORT & 최고도달회차 잠금) · 독립 골든포켓 · 2~7층 이동평균 · STEP2X_15PCT_C20 · GUARD30 · Case 84 통합 요약기 (Case 59 ~ 87)
 # ---------------------------------------------------------------------------
 def summarize_stratum_portfolio(
     state_dict: Dict[str, Any],
@@ -813,7 +827,7 @@ def summarize_stratum_portfolio(
     now_est: Optional[datetime] = None,
 ) -> Dict[str, Any]:
     """
-    # MODIFIED [🎯 1 ~ 🎯 5 & Case 59 ~ 86 & 계좌별 수수료율 요약 통합]:
+    # MODIFIED [🎯 1 ~ 🎯 5 & Case 59 ~ 87 & 최고 도달 회차(cycle_ratchet_max_lots) 단차 잠금 및 Case 84 원복 요약 통합]:
     """
     st = state_dict if isinstance(state_dict, dict) else {}
     dt_now = now_est.astimezone(EST_TZ) if now_est else datetime.now(EST_TZ)
@@ -883,6 +897,16 @@ def summarize_stratum_portfolio(
     total_held_shares = held_shares + gp_qty
     held_lots = sum(max(1, b.lot_count) for b in buckets)
     held_tiers = len(buckets)
+
+    # NEW [Case 87 : 사이클 최고 도달 회차(cycle_ratchet_max_lots) 및 유효 회차(eff_lots) 산출]
+    raw_ratchet_lots = max(0, safe_int(st.get("cycle_ratchet_max_lots"), 0))
+    if held_tiers > 0:
+        cycle_ratchet_max_lots = max(held_lots, raw_ratchet_lots)
+        eff_lots = max(1, held_lots, cycle_ratchet_max_lots)
+    else:
+        cycle_ratchet_max_lots = 0
+        eff_lots = 1
+
     lp = safe_float(live_price, 0.0)
     if lp <= 0.0:
         if buckets:
@@ -908,6 +932,9 @@ def summarize_stratum_portfolio(
 
     threshold_mode = str(st.get("threshold_mode") or "WIDE_RUNWAY").upper()
     portion_mode = str(st.get("portion_mode") or "COMP_08PCT").upper()
+    grid_merge_mode = str(
+        st.get("grid_merge_mode") or DEFAULT_GRID_MERGE_MODE
+    ).upper()
     unlock_mode = str(
         st.get("unlock_mode") or DEFAULT_UNLOCK_MODE
     ).upper()
@@ -920,7 +947,9 @@ def summarize_stratum_portfolio(
         golden_allin_mode = DEFAULT_GOLDEN_ALLIN_MODE
 
     drop_buy_pct, rise_l1_pct, rise_l2_pct = get_golden8_prog_thresholds(
-        held_lots=max(1, held_lots), threshold_mode=threshold_mode
+        held_lots=max(1, held_lots),
+        threshold_mode=threshold_mode,
+        cycle_ratchet_max_lots=cycle_ratchet_max_lots,
     )
 
     gp_target_price = gp.target_sell_price(rise_pct=GOLDEN_POCKET_RISE_PCT)
@@ -932,6 +961,11 @@ def summarize_stratum_portfolio(
 
     active_l1 = has_active_l1_bucket(buckets)
     is_l2_only = bool(len(buckets) > 0 and not active_l1)
+
+    upper_slice = buckets[1:] if active_l1 else buckets[:]
+    merged_upper_tiers_cnt = sum(
+        1 for b in upper_slice if max(1, b.lot_count) > 1
+    )
 
     raw_l1_target_q = max(0, safe_int(st.get("l1_target_quota_qty"), 0))
     pending_lot_tag = str(st.get("pending_lot_type") or "").upper().strip()
@@ -1012,6 +1046,7 @@ def summarize_stratum_portfolio(
         ),
         min_upper_tier_price=min_indiv_upper_price,
         is_late_new_cycle_cutoff=is_late_cutoff,
+        is_late_cutoff=is_late_cutoff,
     )
     reentry_ref_anchor = safe_float(reentry_sig.get("ref_anchor"), anchor_p)
     reentry_pullback_price = safe_float(
@@ -1221,6 +1256,7 @@ def summarize_stratum_portfolio(
 
     return {
         "buckets": buckets,
+        "grid_merge_mode": grid_merge_mode,
         "us_commission_rate": us_comm_rate,
         "round_trip_fee_rate_pct": eff_rt_fee_pct,
         "golden_allin_mode": golden_allin_mode,
@@ -1248,7 +1284,10 @@ def summarize_stratum_portfolio(
         "held_shares": held_shares,
         "total_held_shares": total_held_shares,
         "held_lots": held_lots,
+        "cycle_ratchet_max_lots": cycle_ratchet_max_lots,
+        "eff_lots": eff_lots,
         "held_tiers": held_tiers,
+        "merged_upper_tiers_cnt": merged_upper_tiers_cnt,
         "upper_tier_count": upper_tier_count,
         "upper_qty": upper_qty,
         "upper_lots": upper_lots,
@@ -1339,19 +1378,19 @@ def summarize_stratum_portfolio(
 
 
 # ---------------------------------------------------------------------------
-# [핵심 6] TDD 사전 무결성 자동 검증 슈트 (Case 25 ~ 86 전수 검증)
+# [핵심 6] TDD 사전 무결성 자동 검증 슈트 (Case 25 ~ 87 전수 검증)
 # ---------------------------------------------------------------------------
 def run_quant_engine_tdd() -> bool:
     """
     기동 직전 8% 황금정량 산출, Case 67 min(1회분 예산 상한 주수, 기준가 고정 정량) 이중 캡핑,
-    4단 와이드 활주로(-1.0% / -2.0% / -3.5% / -5.5%),
-    1층 ~ 6층 개별 완충층 보존 및 8회차 최상단(6층+7층 ➔ 통합 7층 GRID_L7) 병합(Case 72),
-    골든포켓(+1.50%) / 1층(+1.50%) / 2~7층 개별(+1.00%) / 2~7층 통합 이동평균(+1.00%) 4중 다중 익절 판정(Case 71, 72, 80),
+    4단 와이드 활주로(-1.0% / -2.0% / -3.5% / -5.5%) 및 사이클 최고 도달 회차(cycle_ratchet_max_lots) 단차 잠금(Case 87),
+    👑 Case 87: 7층 초과(8회차 유입) 시 구 1층(새 2층 후보) 보존 + 구 2층 + 구 7층 가중평균 통합 후 평단 오름차순 중간층 재배치(L2_L7_MERGE_SORT),
+    골든포켓(+1.50%) / 1층(+1.50%) / 2~7층 개별 및 중간 합병층(+1.00%) / 2~7층 통합 이동평균(+1.00%) 4중 다중 익절 판정(Case 71, 72, 80, 87),
     🚨 Case 83 (방안 C) 오버나이트(is_overnight_session=True) 중 상단 2~7층 보유 시 개별층 매도 잠금 및 통합이평 일괄 졸업 허용,
     상단 그리드 단독 보유(1층 공석) 시 2층 단가 상한 역전 차단(HOLD_PREVENT_INVERSION · Case 73) 및
     눌림/돌파 독립 1층 재장전(Case 59, 73),
-    🛡️ Case 84 개정: 정규장 마감 30분 전(is_late_new_cycle_cutoff=True, 15:30 ~ 16:00 EST) 구간에서도 상단 지층 보유 중 1층 공석 시
-    2층 단가 이하 +1.0% 상승돌파(BREAKOUT_RELOAD) 및 -1.0% 눌림목(PULLBACK_RELOAD) 모두 정상 승인,
+    🛡️ Case 84 원복: 정규장 마감 30분 전(is_late_new_cycle_cutoff=True, 15:30 ~ 16:00 EST) 구간에서 상단 지층 보유 중 1층 공석 시
+    +1.0% 상승돌파(BREAKOUT_RELOAD)를 HOLD_LATE_SESSION_BREAKOUT_CUTOFF 로 원천 차단하고 2층 단가 이하 -1.0% 눌림목(PULLBACK_RELOAD)만 정상 승인,
     정적 기억저가 잠금 및 🔓 06_STEP2X_15PCT_C20 3중 안전문 스텝업 저가 해금(Case 60, 72, 76),
     💉 05_RESV_6P_GUARD30 30% 자투리 승격 방지 가드 · 토스 계좌 여유자금 감지 자동 수혈 · 0주 졸업 자동 상환(Case 77),
     🎯 Case 78 지정가 부분 체결 후 미체결 잔량(TOPUP_1FL) 기존 1층 무승격 원자적 합산,
@@ -1365,6 +1404,9 @@ def run_quant_engine_tdd() -> bool:
     try:
         assert DEFAULT_GOLDEN_ALLIN_MODE == "NONE", (
             f"TDD 실패(Case 80 기본값 OFF 위반): {DEFAULT_GOLDEN_ALLIN_MODE}"
+        )
+        assert DEFAULT_GRID_MERGE_MODE == "L2_L7_MERGE_SORT", (
+            f"TDD 실패(Case 87 기본 합병모드 위반): {DEFAULT_GRID_MERGE_MODE}"
         )
 
         # 1) 8% 황금정량 및 Case 67 min(budget_cap_qty, anchor_quota_qty) 캡핑 검증
@@ -1393,23 +1435,28 @@ def run_quant_engine_tdd() -> bool:
             and zero_sum["budget_cap_qty"] == 10
             and zero_sum["next_target_qty"] == q_zero_order == 9
             and zero_sum["golden_allin_mode"] == "NONE"
-        ), f"TDD 실패(Case 67/80 0주 정량/기본모드 일치): {zero_sum}"
+            and zero_sum["cycle_ratchet_max_lots"] == 0
+        ), f"TDD 실패(Case 67/80/87 0주 정량/기본모드 일치): {zero_sum}"
 
-        # 2) 4단 와이드 활주로 단차 검증
-        d1, s1, s2 = get_golden8_prog_thresholds(1, "WIDE_RUNWAY")
-        d5, _, _ = get_golden8_prog_thresholds(5, "WIDE_RUNWAY")
-        d9, _, _ = get_golden8_prog_thresholds(9, "WIDE_RUNWAY")
-        d11, _, _ = get_golden8_prog_thresholds(11, "WIDE_RUNWAY")
+        # 2) 4단 와이드 활주로 단차 및 Case 87 최고 도달 회차(cycle_ratchet_max_lots) 잠금 검증
+        d1, s1, s2 = get_golden8_prog_thresholds(1, "WIDE_RUNWAY", 0)
+        d5, _, _ = get_golden8_prog_thresholds(5, "WIDE_RUNWAY", 0)
+        d9, _, _ = get_golden8_prog_thresholds(9, "WIDE_RUNWAY", 0)
+        d11, _, _ = get_golden8_prog_thresholds(11, "WIDE_RUNWAY", 0)
+        d_ratchet_9, _, _ = get_golden8_prog_thresholds(3, "WIDE_RUNWAY", 9)
+        d_ratchet_11, _, _ = get_golden8_prog_thresholds(2, 11)
         assert (
             d1 == -1.00
             and d5 == -2.00
             and d9 == -3.50
             and d11 == -5.50
+            and d_ratchet_9 == -3.50
+            and d_ratchet_11 == -5.50
             and s1 == 1.50
             and s2 == 1.00
-        ), "TDD 실패: 4단 와이드 단차 불일치"
+        ), "TDD 실패(Case 87): 4단 와이드 단차 및 최고 도달 회차 잠금 불일치"
 
-        # 3) 🚨 Case 72: 1층 ~ 6층 개별 완충층 적재 및 8회차 유입 시 최상단(6층+7층 ➔ 통합 7층 GRID_L7) 병합 검증
+        # 3) 👑 Case 72 & Case 87: 8회차 유입 시 구 1층($94.0) 보존 + 구 2층($95.0) + 구 7층($100.0) 통합 후 중간층(5층 $97.50) 재배치 검증
         grid_q: List[StratumBucket] = []
         for step in range(8):
             p_step = round(100.0 - float(step), 2)
@@ -1418,17 +1465,22 @@ def run_quant_engine_tdd() -> bool:
                 grid_q, 10, p_step, round(10.0 * p_step, 4), tag_step
             )
             assert len(grid_q) == min(MAX_GRID_TIERS_7, step + 1), (
-                f"TDD 실패(Case 72 그리드 층수): step={step}, len={len(grid_q)}"
+                f"TDD 실패(Case 72/87 그리드 층수): step={step}, len={len(grid_q)}"
             )
 
         assert (
             len(grid_q) == 7
             and has_active_l1_bucket(grid_q)
             and grid_q[0].book_price == 93.0
+            and grid_q[1].book_price == 94.0
+            and grid_q[1].lot_count == 1
+            and grid_q[4].lot_type == "GRID_L5"
+            and grid_q[4].lot_count == 2
+            and grid_q[4].qty == 20
+            and abs(grid_q[4].book_price - 97.50) < 1e-4
             and grid_q[-1].lot_type == "GRID_L7"
-            and grid_q[-1].lot_count == 2
-            and abs(grid_q[-1].book_price - 99.50) < 1e-4
-        ), f"TDD 실패(Case 72): 8회차 시 최상단 통합 7층 병합 불일치 {grid_q[-1]}"
+            and abs(grid_q[-1].book_price - 99.00) < 1e-4
+        ), f"TDD 실패(Case 87 L2+L7 중간층 재배치 불일치): {[b.to_dict() for b in grid_q]}"
 
         # 4) 🚨 Case 71, Case 72, Case 80 & Case 83(방안 C): 4중 다중 익절 및 오버나이트 개별층 잠금 검증
         test_grid = [
@@ -1524,7 +1576,7 @@ def run_quant_engine_tdd() -> bool:
             "TDD 실패(Case 71/72): 1층 익절 후 1층 공석(상단 그리드만 보유) 상태 판별 오류"
         )
 
-        # 5) 🚨 Case 73 & Case 84 개정: 1층 공석 상태에서 현재가 > 2층 단가($85.00) 역전 차단 및 15:30~16:00 2층 이하 돌파 정상 승인 검증
+        # 5) 🚨 Case 73 & Case 84 원복: 1층 공석 상태에서 현재가 > 2층 단가($85.00) 역전 차단 및 15:30~16:00 돌파 차단 / 눌림목 승인 검증
         sig_inv = evaluate_l2_only_hybrid_reentry_signal(
             live_price=85.50,
             anchor_price=83.41,
@@ -1547,9 +1599,9 @@ def run_quant_engine_tdd() -> bool:
         assert (
             sig_brk_ok["should_buy"] is True
             and sig_brk_ok["signal_type"] == "BREAKOUT_RELOAD"
-        ), f"TDD 실패(Case 73 2층 이하 안전 돌파 승인): {sig_brk_ok}"
+        ), f"TDD 실패(Case 73 04:07~15:29 2층 이하 안전 돌파 승인): {sig_brk_ok}"
 
-        sig_brk_late_allowed = evaluate_l2_only_hybrid_reentry_signal(
+        sig_brk_late_blocked = evaluate_l2_only_hybrid_reentry_signal(
             live_price=84.30,
             anchor_price=83.41,
             l2_book_price=85.00,
@@ -1557,9 +1609,10 @@ def run_quant_engine_tdd() -> bool:
             is_late_new_cycle_cutoff=True,
         )
         assert (
-            sig_brk_late_allowed["should_buy"] is True
-            and sig_brk_late_allowed["signal_type"] == "BREAKOUT_RELOAD"
-        ), f"TDD 실패(Case 84 개정 장마감 30분전 1층공석 2층 이하 돌파 승인 미작동): {sig_brk_late_allowed}"
+            sig_brk_late_blocked["should_buy"] is False
+            and sig_brk_late_blocked["signal_type"]
+            == "HOLD_LATE_SESSION_BREAKOUT_CUTOFF"
+        ), f"TDD 실패(Case 84 원복 장마감 30분전 1층공석 돌파 차단 미작동): {sig_brk_late_blocked}"
 
         sig_pull_ok = evaluate_l2_only_hybrid_reentry_signal(
             live_price=82.50,
@@ -1594,12 +1647,13 @@ def run_quant_engine_tdd() -> bool:
             and res_grad["hit_wma_grad"]
         ), f"TDD 실패(Case 71/72 2~7층 이동평균 일괄졸업): {res_grad}"
 
-        # 6) Case 60 & Case 72 정적 기억 최저가($80.00) 잠금 및 Case 74 당일 시드보호 패스 바인딩 검증
+        # 6) Case 60, Case 72, Case 74 & Case 87: 정적 기억 최저가($80.00) 잠금 및 최고 도달 회차(cycle_ratchet_max_lots=9) 단차 잠금 요약 검증
         mock_st = {
             "buckets": buckets_to_dicts(reloaded_grid),
             "initial_seed_usd": 10000.0,
             "anchor_price": 80.50,
             "cycle_min_buy_price": 80.00,
+            "cycle_ratchet_max_lots": 9,
             "cumulative_realized_net_usd": 25.0,
             "seed_protect_pass_cnt": 120,
             "daily_seed_protect_pass_cnt": 7,
@@ -1610,11 +1664,15 @@ def run_quant_engine_tdd() -> bool:
         )
         assert (
             sum_info["held_tiers"] == 3
+            and sum_info["held_lots"] == 3
+            and sum_info["cycle_ratchet_max_lots"] == 9
+            and sum_info["eff_lots"] == 9
+            and abs(sum_info["drop_buy_pct"] - (-3.50)) < 1e-4
             and sum_info["upper_tier_count"] == 2
             and abs(sum_info["upper_wma_price"] - 87.50) < 1e-4
             and abs(sum_info["l2_ceiling_price"] - 85.00) < 1e-4
             and sum_info["seed_protect_pass_cnt"] == 7
-        ), "TDD 실패(Case 72/73/74): 상단 2~7층 이동평균 또는 당일 시드패스 요약 오류"
+        ), f"TDD 실패(Case 72/73/74/87): 상단 이동평균 또는 최고도달회차 단차 잠금 요약 오류 {sum_info}"
 
         # 7) [Case 76 : 🔓 06_STEP2X_15PCT_C20 3중 안전문 스텝업 저가 해금 검증]
         mock_2022_deadcat = [
@@ -1827,6 +1885,6 @@ def run_quant_engine_tdd() -> bool:
         set_runtime_round_trip_fee_rate_pct(prev_rt, us_commission_rate=prev_one)
 
     logger.info(
-        "✅ [QuantEngine TDD 사전 무결성 검증 통과] 챔피언 🌟 POCKET_ALLIN / 🔥 GRID_L1_ALLIN × 💉 05_RESV_6P_GUARD30 × 🔓 06_STEP2X_15PCT_C20 & 방안 C · Case 84(0주신규만 차단) · Case 86 동적수수료 검증 완료"
+        "✅ [QuantEngine TDD 사전 무결성 검증 통과] 챔피언 👑 06_L2L7_RATCHET_8PCT × 🌟 POCKET_ALLIN / 🔥 GRID_L1_ALLIN × 💉 05_RESV_6P_GUARD30 × 🔓 06_STEP2X_15PCT_C20 & 방안 C · Case 84(0주신규/돌파차단) · Case 86/87 전수 검증 완료"
     )
     return True
