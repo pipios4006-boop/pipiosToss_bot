@@ -1,15 +1,15 @@
 # -*- coding: utf-8 -*-
 """
 # MODIFIED: main_runtime.py
-인피니트 스노우볼 (Infinite Snowball) v3.0 — 메인 런타임 서포트 브릿지 (메인 코드 2분할 리팩토링 Part 1 / 2 · Step 02 / 02)
+인피니트 스노우볼 (Infinite Snowball) v3.0 — 메인 런타임 서포트 브릿지 (메인 코드 2분할 리팩토링 Part 1 / 2 · Step 11 / 11)
 - 역할:
   1) 적응형 비동기 플러그인 호출기(_call_plugin_adaptive) 및 동적 심볼 리졸버(_resolve_module_attr) (Case 13)
-  2) TossApiClient 런타임 메서드 호환성 폴리필 어댑터(_install_toss_api_compatibility_patches · get_commissions / ensure_us_commission_rate 포함 · Case 86)
+  2) TossApiClient 런타임 메서드 호환성 폴리필 어댑터(_install_toss_api_compatibility_patches · get_commissions / ensure_us_commission_rate 런타임 수수료 폴백 보존 포함 · Case 86)
   3) 폴더별 3중 원장 인스턴스 팩토리(_instantiate_stratum_ledger · Case 68) 및 주말 휴장 판별(_check_weekend_nyse_closed_dynamic · Case 01, 79, 83)
   4) 100% 벡터화 1분봉/일봉 지표 및 실시간 틱 Wilder's RSI(14) 무손실 직결(_compute_candle_metrics_dynamic · Case 80 RSI 50.0 고정 버그 영구 소각)
   5) 폴더 위치(base_dir) 전용 텔레그램 토큰·채팅방 ID 자동 탐색기(_discover_telegram_credentials · Case 68)
   6) 내장형 사용자 중심 초슬림 텔레그램 불사조 롱폴링/관제탑 브릿지(_AdaptiveTelegramBridge · tg_ui_plugin 단일 렌더러 직결 ·
-     12대 코어 모듈 프리플라이트 안내 동기화 · /avwap 조회 시 1분봉 미확보 상태면 즉시 온디맨드 프리워밍 수행 ·
+     13대 코어 모듈 프리플라이트 안내 동기화 · /avwap 조회 시 1분봉 미확보 상태면 즉시 온디맨드 프리워밍 수행 ·
      /sync 조회 시 계좌별 미국 주식 수수료율 자동 확인[Case 86] · 전술 제어반 황금시간[07:00~07:50 EST & RSI <= 19.0] 전액매수 모드 선택기 완벽 지원 ·
      Case 75 httpx/httpcore INFO 로그 묵음화 & Case 81 전용 httpx.AsyncClient 자동 재생성 불사조 폴링 · 오프셋 파일 선행 영속화 · os.execv 인플레이스 자가 교체 · Case 84/85/86 완벽 준수)
 - 제1헌법 ~ 제6헌법 및 Case 01 ~ 86 전수 락온
@@ -60,6 +60,8 @@ from plugin_updater import (
 from quant_engine import (
     DEFAULT_GOLDEN_ALLIN_MODE,
     GOLDEN_ALLIN_MODES,
+    get_runtime_round_trip_fee_rate_pct,
+    get_runtime_us_commission_rate,
     set_runtime_round_trip_fee_rate_pct,
     summarize_stratum_portfolio,
 )
@@ -419,7 +421,6 @@ def _extract_candles_list(
     """
     # MODIFIED [Case 80]:
     result.candles 표준 스키마뿐만 아니라 result 직접 리스트, items, data 키 응답을 모두 파싱한다.
-    (중첩 삼항식 내부의 비괄호 walrus 연산자를 제거하고 명시적 if/elif/else 분기로 교체하여 SyntaxError 원천 소각)
     """
     if isinstance(raw_res, list):
         return [c for c in raw_res if isinstance(c, dict)], None
@@ -474,11 +475,14 @@ def _install_toss_api_compatibility_patches() -> None:
         async def _poly_ensure_us_commission_rate(
             self: Any, force_refresh: bool = False
         ) -> Tuple[float, float]:
+            # MODIFIED [Case 86]: API 일시 조회 실패 시에도 런타임(원장/.env)에 보존된 수수료율 유지
+            fb_one = get_runtime_us_commission_rate()
+            fb_rt = get_runtime_round_trip_fee_rate_pct()
             cur_one = safe_float(
-                getattr(self, "us_commission_rate", 0.0007), 0.0007
+                getattr(self, "us_commission_rate", fb_one), fb_one
             )
             cur_rt = safe_float(
-                getattr(self, "round_trip_fee_rate_pct", 0.14), 0.14
+                getattr(self, "round_trip_fee_rate_pct", fb_rt), fb_rt
             )
             if not force_refresh and getattr(
                 self, "_commission_locked", False
@@ -499,9 +503,14 @@ def _install_toss_api_compatibility_patches() -> None:
                             set_runtime_round_trip_fee_rate_pct(
                                 cur_rt, us_commission_rate=cur_one
                             )
-                            break
+                            return cur_one, cur_rt
             except Exception:
                 pass
+            if 0.0 < fb_one <= 0.01 and 0.0 < fb_rt <= 2.0:
+                cur_one = fb_one
+                cur_rt = fb_rt
+                setattr(self, "us_commission_rate", cur_one)
+                setattr(self, "round_trip_fee_rate_pct", cur_rt)
             return cur_one, cur_rt
 
         setattr(
@@ -1330,7 +1339,7 @@ class _AdaptiveTelegramBridge:
       HTTP 409 Conflict / 연속 3회 오류 시 세션 자동 재생성 불사조 롱폴링(Immortal Supervisor Wrapper)
     - [Case 81] 폴더별 오프셋 파일(.tg_update_offset_<folder_slug>.dat) + 3중 원장 + 서버 3중 선행 영속화
     - [Case 81] /update 완료 후 구버전 os._exit(0) 대신 3.5초 하드 워치독 및 perform_self_restart_execv(os.execv)로
-      100% 무중단 자가 교체 수행 (12대 코어 모듈 프리플라이트 안내 동기화 포함)!
+      100% 무중단 자가 교체 수행 (13대 코어 모듈 프리플라이트 안내 동기화 포함)!
     """
 
     def __init__(self, context: Any) -> None:
@@ -1714,7 +1723,7 @@ class _AdaptiveTelegramBridge:
         now_est = datetime.now(EST_TZ)
         live_p, _ = await self._refresh_live_price_and_metrics()
 
-        # NEW [Case 86]: /sync 호출 시 계좌별 미국 주식 수수료율(GET /api/v1/commissions) 동기화 확인
+        # [Case 86]: /sync 호출 시 계좌별 미국 주식 수수료율(GET /api/v1/commissions) 동기화 확인
         ensure_comm_fn = getattr(
             self.context.api, "ensure_us_commission_rate", None
         )
@@ -1965,14 +1974,14 @@ class _AdaptiveTelegramBridge:
 
     async def _execute_manual_update_command(self, chat_id: str) -> None:
         """
-        # [Case 62, Case 68, Case 75 & Case 81]:
+        # MODIFIED [Case 62, Case 68, Case 75 & Case 81 : 13대 코어 모듈 프리플라이트 안내 동기화]:
         """
         await self._ack_telegram_offset(self._last_update_id)
         await self.send_message(
             chat_id=chat_id,
             text=(
                 "⏳ <b>[시스템 업데이트 개시]</b>\n"
-                "🔸 GitHub 최신 코드 동기화 및 12대 코어 모듈 프리플라이트 검증 중..."
+                "🔸 GitHub 최신 코드 동기화 및 13대 코어 모듈 프리플라이트 검증 중..."
             ),
         )
         fn_upd = getattr(
@@ -1995,11 +2004,11 @@ class _AdaptiveTelegramBridge:
                 msg = (
                     " · ".join(str_parts)
                     if str_parts
-                    else "✅ 12대 코어 모듈 인메모리 컴파일 및 AST 심볼 정합성 100% 통과 · 원장 보존"
+                    else "✅ 13대 코어 모듈 인메모리 컴파일 및 AST 심볼 정합성 100% 통과 · 원장 보존"
                 )
             else:
                 ok = bool(upd_res)
-                msg = "✅ 12대 코어 모듈 인메모리 컴파일 및 AST 심볼 정합성 100% 통과 · 원장 보존"
+                msg = "✅ 13대 코어 모듈 인메모리 컴파일 및 AST 심볼 정합성 100% 통과 · 원장 보존"
         else:
             ok, msg = verify_all_modules_compile(self.base_dir)
 

@@ -2,10 +2,10 @@
 """
 # MODIFIED: quant_indicators_plugin.py
 인피니트 스노우볼 (Infinite Snowball) v3.0 — 순수 롱(SOXL) 매수 04:07 ~ 16:00 EST 제한
-(정규장 마감 30분 전 15:30 ~ 16:00 EST 0주 새 사이클 1층 진입 및 1층 공석 +1.0% 돌파 추격 차단 · Case 84) &
+(정규장 마감 30분 전 15:30 ~ 16:00 EST 오직 0주 새 사이클 첫 1층 진입만 차단 · 상단 2~7층 보유 중 1층 공석 눌림/돌파 재장전 100% 허용 · Case 84) &
 익절 매도 24시간 전 세션(프리마켓 + 정규장 + 애프터마켓 + 데이마켓 · 방안 C 오버나이트 통합이평 사수) 확장 오버나이트 지층관리 스나이퍼
 시계열 100% 벡터화 지표 엔진 · 실시간 틱 인메모리 1분봉 자체 합성기(_LIVE_1M_BAR_STORE) ·
-10분 고정 매수 게이트 버킷 산출 및 황금시간대(07:00 ~ 07:50 EST & RSI(14) <= 19.0) 실시간 판정 코어 모듈 (Step 01 / 04)
+10분 고정 매수 게이트 버킷 산출 및 황금시간대(07:00 ~ 07:50 EST & RSI(14) <= 19.0) 실시간 판정 코어 모듈 (Step 03 / 11)
 - 제4헌법 & Case 01, Case 79, Case 80, Case 83 & Case 84:
   1) 모든 시계열 및 세션 경계 연산은 미국 동부 시간(EST_TZ = ZoneInfo('America/New_York')) 단일 소스 락온
   2) 매수 허용 시간창(is_active_buy_window : 평일 04:07 ~ 16:00 EST)과
@@ -18,10 +18,10 @@
      하이브리드 무손실 벡터화 병합(_sync_api_candles_into_memory_store 경합 방어) ·
      Wilder's RSI(14) O(1) 상수 시간 무부하 합성 탑재!
      (refresh_metrics_with_live_tick 내 dt_now.minute 변수명 정합성 교정으로 NameError 원천 소각 · 최소 14개 분봉 확보 시에만 rsi_ready = True 활성화)
-  5) 🛡️ [Case 84] 정규장 마감 30분 전(is_late_regular_new_cycle_cutoff_window : 평일 15:30 ~ 16:00 EST) 판별기 탑재
+  5) 🛡️ [Case 84 개정] 정규장 마감 30분 전(is_late_regular_new_cycle_cutoff_window : 평일 15:30 ~ 16:00 EST) 판별기 탑재
      - 기보유 지층(1층 이상)의 10분 게이트 신저가/스텝업 추매(DIP_1FL), 1층 미체결 잔량 보충(TOPUP_1FL),
-       상단 2 ~ 7층 보유 중 1층 공석 시 2층 단가 이하 눌림목(-1.00%, PULLBACK_RELOAD) 재장전은 100% 허용하되,
-       0주 상태에서 새 사이클 첫 1층(REENTRY_1FL) 고점 진입과 1층 공석 +1.00% 상승돌파(BREAKOUT_RELOAD) 추격만 원천 차단!
+       상단 2 ~ 7층 보유 중 1층 공석 시 2층 단가 이하 눌림목(-1.00%, PULLBACK_RELOAD) 및 상승돌파(+1.00%, BREAKOUT_RELOAD) 재장전은 100% 허용하되,
+       오직 0주 상태(사이클 종료 상태)에서 새 사이클 첫 1층(REENTRY_1FL)으로 고점 진입하는 것만 원천 차단!
 - Case 36 & Case 64: 04:07 ~ 16:00 EST 구간 10분 고정 매수 게이트(LOCKED_BUY_INTERVAL_MIN = 10) 버킷 산출 및
   동일 버킷 내 중복 평가 원천 차단(evaluate_buy_gate_bucket_status)
 - 벡터화 강제: Pandas DataFrame / NumPy 배열 연산 시 for 루프를 100% 배제하고 벡터화 수식으로만
@@ -58,7 +58,7 @@ GATE_START_MIN_OF_DAY: int = 4 * 60 + 7   # 247 (04:07 EST)
 GATE_END_MIN_OF_DAY: int = 16 * 60        # 960 (16:00 EST)
 REGULAR_START_MIN_OF_DAY: int = 9 * 60 + 30  # 570 (09:30 EST)
 
-# NEW [Case 84]: 정규장 마감 30분 전(15:30 ~ 16:00 EST) 0주 새 사이클 1층 진입 및 1층 공석 +1.0% 돌파 추격 차단 기준 시각(HHMM)
+# MODIFIED [Case 84]: 정규장 마감 30분 전(15:30 ~ 16:00 EST) 오직 0주 새 사이클 첫 1층 진입만 차단하는 기준 시각(HHMM)
 NEW_CYCLE_BUY_CUTOFF_HM: int = 1530
 
 # NEW [Case 80]: 브로커 1분봉 차트 API 지연/결측 시에도 실시간 1.5초 현재가 틱으로 1분봉을 자체 축적하는 인메모리 링버퍼
@@ -251,7 +251,7 @@ def _parse_timestamp_series_to_est(ts_series: pd.Series) -> pd.Series:
 
 
 # ---------------------------------------------------------------------------
-# [핵심 1] 매수 시간창(04:07 ~ 16:00 EST) · 장마감 30분전 새 사이클/돌파 차단창(15:30 ~ 16:00 EST) · 황금시간창(07:00 ~ 07:50 EST) vs 익절 매도 시간창(24시간 전 세션) 판별기 (Case 01, 79, 80, 84)
+# [핵심 1] 매수 시간창(04:07 ~ 16:00 EST) · 장마감 30분전 0주 새 사이클 차단창(15:30 ~ 16:00 EST) · 황금시간창(07:00 ~ 07:50 EST) vs 익절 매도 시간창(24시간 전 세션) 판별기 (Case 01, 79, 80, 84)
 # ---------------------------------------------------------------------------
 def is_weekend_nyse_closed(now_est: Optional[datetime] = None) -> bool:
     """
@@ -306,13 +306,12 @@ def is_late_regular_new_cycle_cutoff_window(
     hm: Optional[int] = None, now_est: Optional[datetime] = None
 ) -> bool:
     """
-    # NEW [Case 84 : 정규장 마감 30분 전(평일 15:30:00 ~ 16:00:59 EST) 0주 새 사이클 1층 진입 및 1층 공석 +1.0% 돌파 추격 차단 판별기]:
+    # MODIFIED [Case 84 개정 : 정규장 마감 30분 전(평일 15:30:00 ~ 16:00:59 EST) 오직 0주 새 사이클 첫 1층 진입만 차단하는 판별기]:
     - 평일(월~금) 정규장 마감 30분 전 구간(1530 <= hm <= 1600)일 때 True 를 반환한다.
     - 이 구간에서는 기보유 지층(1층 이상 적재)의 10분 게이트 신저가/스텝업 추매(DIP_1FL),
       1층 미체결 잔량 보충(TOPUP_1FL), 그리고 상단 2 ~ 7층 보유 중 1층 공석 시 2층 단가 이하
-      -1.00% 눌림목 재장전(PULLBACK_RELOAD)은 100% 정상 허용하되,
-      ① 0주 상태(len(buckets) == 0)에서 새 사이클 첫 1층(REENTRY_1FL)으로 고점 진입하는 것과
-      ② 상단 2 ~ 7층 보유 · 1층 공석 상태에서 +1.00% 상승돌파(BREAKOUT_RELOAD) 추격 재장전하는 것만 원천 차단한다!
+      -1.00% 눌림목 재장전(PULLBACK_RELOAD) 및 +1.00% 상승돌파 재장전(BREAKOUT_RELOAD)을 100% 정상 허용하되,
+      오직 0주 상태(사이클 종료 상태, len(buckets) == 0)에서 새 사이클 첫 1층(REENTRY_1FL)으로 고점 진입하는 것만 원천 차단한다!
     """
     dt = now_est.astimezone(EST_TZ) if now_est else datetime.now(EST_TZ)
     if is_weekend_nyse_closed(dt) or dt.weekday() >= 5:
@@ -378,8 +377,8 @@ def is_extended_sell_only_window(
 
 def get_market_session_label(now_est: Optional[datetime] = None) -> str:
     """
-    # MODIFIED [Case 79, Case 80, Case 83 & Case 84]:
-    현재 EST 시각에 따른 세션 상태 라벨(황금시간대 · 정규장 마감30분전 0주신규/돌파차단 · 애프터장 · 데이장 익절감시 및 매수잠금 상태 명시)을 반환한다.
+    # MODIFIED [Case 79, Case 80, Case 83 & Case 84 개정]:
+    현재 EST 시각에 따른 세션 상태 라벨(황금시간대 · 정규장 마감30분전 0주신규차단 · 애프터장 · 데이장 익절감시 및 매수잠금 상태 명시)을 반환한다.
     """
     dt = now_est.astimezone(EST_TZ) if now_est else datetime.now(EST_TZ)
     if is_weekend_nyse_closed(dt):
@@ -392,7 +391,7 @@ def get_market_session_label(now_est: Optional[datetime] = None) -> str:
     if 407 <= hm <= 929 and dt.weekday() < 5:
         return "🔫 프리장 스나이퍼 가동(04:07~09:29)"
     if 1530 <= hm <= 1600 and dt.weekday() < 5:
-        return "🔥 정규장 마감30분전 가동(15:30~16:00·0주신규/돌파차단)"
+        return "🔥 정규장 마감30분전 가동(15:30~16:00·0주신규차단)"
     if 930 <= hm <= 1529 and dt.weekday() < 5:
         return "🔥 정규장 스나이퍼 가동(09:30~16:00)"
     if 1601 <= hm <= 1959 and dt.weekday() < 5:
@@ -762,7 +761,7 @@ def compute_soxl_quant_metrics_1m(
     1) 당일 프리장(04:00 ~ 09:29 EST) VWAP · 고/저가 진폭 · 예상 변동 밴드
     2) 당일 정규장(09:30 ~ 16:00 EST) VWAP · 고/저가 진폭 · 예상 변동 밴드
     3) 최근 5영업일 평균 진폭(5MA) 및 실시간 하이킨 아시 추세 배지(🕯️HA양봉 / 🌑HA음봉) · Wilder's RSI(14)
-    4) 04:07 ~ 16:00 EST 10분 고정 매수 게이트 버킷 · 황금시간대(07:00 ~ 07:50 EST) · 장마감 30분전 컷오프(15:30 ~ 16:00 EST) 정보
+    4) 04:07 ~ 16:00 EST 10분 고정 매수 게이트 버킷 · 황금시간대(07:00 ~ 07:50 EST) · 장마감 30분전 0주 신규 진입 컷오프(15:30 ~ 16:00 EST) 정보
     를 100% 벡터화 연산으로 산출하여 반환한다.
     (Case 79: 데이마켓/애프터마켓에서 브로커가 시세·캔들을 제공하지 않는 경우에도 경고 로그나 알림 없이 조용히 묵음 반환)
     """
@@ -886,9 +885,6 @@ def compute_soxl_quant_metrics_1m(
             return default_out
 
         # MODIFIED [Case 80 : 동일 분(dt_min) 내 인메모리 틱 고/저가 극단값 및 거래소 공식 거래량(V)·시가(O) 벡터화 병합]:
-        # _merge_api_and_memory_candles 에서 mem_bars(선행) + api_candles(후행) 순으로 결합되었으므로,
-        # groupby transform 으로 분 단위 최고가(H), 최저가(L), 최대 거래량(V)을 먼저 보존한 뒤
-        # keep="last" 로 중복을 제거하면 거래소 API의 공식 시가(O)·종가(C)·거래량(V)과 실시간 고/저가(H/L)가 100% 결합된다!
         if df.duplicated(subset=["dt_min"]).any():
             grp_min = df.groupby("dt_min", sort=False)
             df["H"] = grp_min["H"].transform("max")
@@ -991,7 +987,7 @@ def refresh_metrics_with_live_tick(
     now_est: Optional[datetime] = None,
 ) -> Dict[str, Any]:
     """
-    # MODIFIED [Case 80 & Case 84 : RSI(14) 50.0 박제(고정) 데드락 완전 해제 · 실시간 틱 O(1) 합성 · dt_now.minute 변수명 정합성 락온 · 장마감 30분전 컷오프 상태 동기화]:
+    # MODIFIED [Case 80 & Case 84 : RSI(14) 50.0 박제(고정) 데드락 완전 해제 · 실시간 틱 O(1) 합성 · dt_now.minute 변수명 정합성 락온 · 장마감 30분전 0주 컷오프 상태 동기화]:
     1) 실시간 현재가(live_price)를 인메모리 1분봉 저장소(_LIVE_1M_BAR_STORE)에 즉시 반영한다.
     2) 만약 새로운 분(minute)으로 넘어갔거나 기존 base_metrics 의 prev_bar_close 가 0.0 인 경우,
        인메모리 1분봉 저장소에서 직전 완성봉 기저값(prev_bar_close, prev_avg_gain, prev_avg_loss)을 즉시 복원한다.

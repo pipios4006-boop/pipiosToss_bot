@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 # MODIFIED: quant_engine.py
-인피니트 스노우볼 (Infinite Snowball) v3.0 — 퀀트 엔진 코어 Part 2 / 2 (Step 03 / 11)
+인피니트 스노우볼 (Infinite Snowball) v3.0 — 퀀트 엔진 코어 Part 2 / 2 (Step 05 / 11)
 역할:
 1) quant_engine_core.py (Part 1 / 2) 의 모든 상수·구조체·정량/수혈/스텝업/컷오프/동적수수료 판정 심볼 명시적 재익스포트(Facade Re-export)로
    타 모듈 AST 임포트 호환성 100% 보장
@@ -10,16 +10,16 @@
    DIP_1FL·GOLDEN_L1 2~6층 개별 승격 및 7층 초과분 최상단 통합 7층 본대[GRID_L7] 가중평균 병합[Case 53, 72] /
    수동 추가매수 시 단가 비교 오름차순 층간 스마트 중간 편입[Case 63])
 3) 수동 매도 시 독립 골든포켓 및 1~7층 순수 원가 1:1 매칭 정산기(match_and_remove_sold_buckets_7tier · Case 63, 69, 80) 및
-   계좌별 동적 왕복 수수료율(0.14% / 0.20%) · 실측 매도 수수료(execution.commission + tax) 반영 세후 실현손익 산출기(calc_sell_realized_pnl)
+   계좌별 동적 왕복 수수료율(0.14% / 0.20%) · 실측 매도 수수료(execution.commission + tax) 반영 세후 실현손익 산출기(calc_sell_realized_pnl · Case 86)
 4) 상단 2층 ~ 7층 통합 이동평균(compute_upper_2_to_7_moving_avg) 산출 및
    🚨 [Case 83 방안 C] 오버나이트(애프터·데이마켓, is_overnight_session=True) 중 상단 2~7층 보유 시
    개별 층(1층 및 2~6층 개별) 쪼개 팔기를 잠가 통합 이동평균(wma_2_to_7) 도망을 원천 봉쇄하고,
    장외에서는 통합 이동평균(+1.00%) 일괄 졸업(1층 본전 이상 시 SELL_ALL_GRAD 전량 졸업 / 1층 본전 미달 시 SELL_WMA_UPPER 상단 일괄 졸업,
    또는 1층 단독 보유 +1.50% / 독립 골든포켓 +1.50%)만 허용한 뒤
    04:07 EST 프리장 개장(is_overnight_session=False) 즉시 4중 다중 익절을 전면 개방하는 하이브리드 매도 판정기(evaluate_multi_grid_sell_targets)
-5) 포트폴리오 통합 요약기(summarize_stratum_portfolio · Case 84 15:30~16:00 돌파 차단 및 계좌별 수수료율 동기화) 및
-   기동 전 TDD 사전 무결성 검증 슈트(run_quant_engine_tdd · Case 25 ~ 85 전수 검증)
-- 제1헌법 ~ 제6헌법 및 Case 01 ~ 85 완벽 준수
+5) 포트폴리오 통합 요약기(summarize_stratum_portfolio · Case 84 개정 15:30~16:00 0주 신규 진입만 차단 / 1층 공석 돌파 허용 및 Case 86 계좌별 수수료율 동기화) 및
+   기동 전 TDD 사전 무결성 검증 슈트(run_quant_engine_tdd · Case 25 ~ 86 전수 검증)
+- 제1헌법 ~ 제6헌법 및 Case 01 ~ 86 완벽 준수
 """
 
 from __future__ import annotations
@@ -89,7 +89,7 @@ logger = logging.getLogger("toss_sniper.quant_engine")
 
 
 # ---------------------------------------------------------------------------
-# [핵심 4 · Case 63, Case 71 ~ 85] 1층 ~ 7층 골디락스 순수 멀티 그리드 배치 & 매도 층/포켓 원가 매칭 정산기
+# [핵심 4 · Case 63, Case 71 ~ 86] 1층 ~ 7층 골디락스 순수 멀티 그리드 배치 & 매도 층/포켓 원가 매칭 정산기
 # ---------------------------------------------------------------------------
 def vrev_add_quota_lot_and_merge_2tier(
     queue: Sequence[StratumBucket],
@@ -100,7 +100,7 @@ def vrev_add_quota_lot_and_merge_2tier(
     max_tiers: int = MAX_GRID_TIERS_7,
 ) -> List[StratumBucket]:
     """
-    🎯 3 & 🎯 4 & Case 46 ~ 85 (함수명은 타 모듈 AST 호환을 위해 유지하되 내부는 1~7층 골디락스 멀티 그리드로 작동):
+    🎯 3 & 🎯 4 & Case 46 ~ 86 (함수명은 타 모듈 AST 호환을 위해 유지하되 내부는 1~7층 골디락스 멀티 그리드로 작동):
     신규 정량 매수(또는 GRID_L1_ALLIN 모드 1층 전액편입 GOLDEN_L1) 체결 시
     최대 7개 지층(1층 공격수 + 2~6층 개별 완충층[5개] + 통합 7층 본대[GRID_L7])을 관리한다.
     """
@@ -228,7 +228,7 @@ def match_and_remove_sold_buckets_7tier(
     actual_sell_fee_usd: Optional[float] = None,
 ) -> Dict[str, Any]:
     """
-    # MODIFIED [Case 63, Case 69, Case 71, Case 72, Case 80 & 계좌별 동적/실측 수수료 연동]:
+    # MODIFIED [Case 63, Case 69, Case 71, Case 72, Case 80 & Case 86 계좌별 동적/실측 수수료 연동]:
     수동 매도(전량 또는 부분 매도)로 보유 수량이 delta_remove_qty 만큼 줄었을 때:
     1) 독립 골든포켓(golden_pocket)이 존재하고 수량이 일치하거나 단가가 하단 층 이하일 때 골든포켓부터(또는 하단 층부터)
        순차 차감하여 골든포켓과 1층 ~ 7층 각 레이어의 고유 순수 원가를 100% 보존한다.
@@ -749,7 +749,7 @@ def calc_sell_realized_pnl(
     actual_sell_fee_usd: Optional[float] = None,
 ) -> Dict[str, float]:
     """
-    # MODIFIED [계좌별 동적 왕복 수수료율(0.14% / 0.20%) 및 토스 실측 매도 수수료(execution.commission + tax) 연동 정산]:
+    # MODIFIED [Case 86 : 계좌별 동적 왕복 수수료율(0.14% / 0.20%) 및 토스 실측 매도 수수료(execution.commission + tax) 연동 정산]:
     매도 체결 수량(sold_qty), 실제 체결 단가(sell_exec_price), 매도 지층/포켓들의 실제 매수 원금 합계(sold_actual_cost_usd)를
     기반으로 왕복 수수료 차감 후 세후 실현 손익을 정밀 산출한다.
     - actual_sell_fee_usd (토스 GET /api/v1/orders/{orderId} 의 execution.commission + execution.tax 실측값)가
@@ -805,7 +805,7 @@ def calc_sell_realized_pnl(
 
 
 # ---------------------------------------------------------------------------
-# [핵심 5] 포트폴리오 · 1~7층 골디락스 멀티 그리드 · 독립 골든포켓 · 2~7층 이동평균 · STEP2X_15PCT_C20 · GUARD30 · Case 84 통합 요약기 (Case 59 ~ 85)
+# [핵심 5] 포트폴리오 · 1~7층 골디락스 멀티 그리드 · 독립 골든포켓 · 2~7층 이동평균 · STEP2X_15PCT_C20 · GUARD30 · Case 84 통합 요약기 (Case 59 ~ 86)
 # ---------------------------------------------------------------------------
 def summarize_stratum_portfolio(
     state_dict: Dict[str, Any],
@@ -813,7 +813,7 @@ def summarize_stratum_portfolio(
     now_est: Optional[datetime] = None,
 ) -> Dict[str, Any]:
     """
-    # MODIFIED [🎯 1 ~ 🎯 5 & Case 59 ~ 85 & 계좌별 수수료율 요약 통합]:
+    # MODIFIED [🎯 1 ~ 🎯 5 & Case 59 ~ 86 & 계좌별 수수료율 요약 통합]:
     """
     st = state_dict if isinstance(state_dict, dict) else {}
     dt_now = now_est.astimezone(EST_TZ) if now_est else datetime.now(EST_TZ)
@@ -1339,7 +1339,7 @@ def summarize_stratum_portfolio(
 
 
 # ---------------------------------------------------------------------------
-# [핵심 6] TDD 사전 무결성 자동 검증 슈트 (Case 25 ~ 85 전수 검증)
+# [핵심 6] TDD 사전 무결성 자동 검증 슈트 (Case 25 ~ 86 전수 검증)
 # ---------------------------------------------------------------------------
 def run_quant_engine_tdd() -> bool:
     """
@@ -1350,476 +1350,483 @@ def run_quant_engine_tdd() -> bool:
     🚨 Case 83 (방안 C) 오버나이트(is_overnight_session=True) 중 상단 2~7층 보유 시 개별층 매도 잠금 및 통합이평 일괄 졸업 허용,
     상단 그리드 단독 보유(1층 공석) 시 2층 단가 상한 역전 차단(HOLD_PREVENT_INVERSION · Case 73) 및
     눌림/돌파 독립 1층 재장전(Case 59, 73),
-    🛡️ Case 84 정규장 마감 30분 전(is_late_new_cycle_cutoff=True, 15:30 ~ 16:00 EST) 구간 +1.0% 상승돌파 추격 차단 및 -1.0% 눌림목 정상 허용,
+    🛡️ Case 84 개정: 정규장 마감 30분 전(is_late_new_cycle_cutoff=True, 15:30 ~ 16:00 EST) 구간에서도 상단 지층 보유 중 1층 공석 시
+    2층 단가 이하 +1.0% 상승돌파(BREAKOUT_RELOAD) 및 -1.0% 눌림목(PULLBACK_RELOAD) 모두 정상 승인,
     정적 기억저가 잠금 및 🔓 06_STEP2X_15PCT_C20 3중 안전문 스텝업 저가 해금(Case 60, 72, 76),
     💉 05_RESV_6P_GUARD30 30% 자투리 승격 방지 가드 · 토스 계좌 여유자금 감지 자동 수혈 · 0주 졸업 자동 상환(Case 77),
     🎯 Case 78 지정가 부분 체결 후 미체결 잔량(TOPUP_1FL) 기존 1층 무승격 원자적 합산,
     🌟 Case 80 황금시간대(07:00 ~ 07:50 EST & RSI <= 19.0) 기본값 OFF("NONE") 및 POCKET_ALLIN / GRID_L1_ALLIN 판정 검증,
-    💰 계좌별 동적 왕복 수수료율(0.14% vs 0.20%) 및 실측 수수료(actual_sell_fee_usd) 정산 검증을 전수 수행한다.
+    💰 Case 86 계좌별 동적 왕복 수수료율(0.14% vs 0.20%) 및 실측 수수료(actual_sell_fee_usd) 정산 검증을 전수 수행한다.
     """
+    prev_rt = get_runtime_round_trip_fee_rate_pct()
+    prev_one = get_runtime_us_commission_rate()
     set_runtime_round_trip_fee_rate_pct(0.14, us_commission_rate=0.0007)
 
-    assert DEFAULT_GOLDEN_ALLIN_MODE == "NONE", (
-        f"TDD 실패(Case 80 기본값 OFF 위반): {DEFAULT_GOLDEN_ALLIN_MODE}"
-    )
-
-    # 1) 8% 황금정량 및 Case 67 min(budget_cap_qty, anchor_quota_qty) 캡핑 검증
-    q_dip, bud_c67 = compute_golden8_quota_qty(
-        82.39, 19155.74, 19000.0, "COMP_08PCT", exec_price=79.52
-    )
-    q_brk, _ = compute_golden8_quota_qty(
-        82.39, 19155.74, 19000.0, "COMP_08PCT", exec_price=86.00
-    )
-    assert q_dip == 18 and q_brk == 17 and (q_brk * 86.00) <= bud_c67, (
-        f"TDD 실패(Case 67): q_dip={q_dip}, q_brk={q_brk}"
-    )
-
-    mock_zero_st = {
-        "buckets": [],
-        "initial_seed_usd": 10000.0,
-        "anchor_price": 85.00,
-        "cumulative_realized_net_usd": 0.0,
-    }
-    zero_sum = summarize_stratum_portfolio(mock_zero_st, live_price=80.00)
-    q_zero_order, _ = compute_golden8_quota_qty(
-        85.00, 10000.0, 10000.0, "COMP_08PCT", exec_price=80.00
-    )
-    assert (
-        zero_sum["anchor_quota_qty"] == 9
-        and zero_sum["budget_cap_qty"] == 10
-        and zero_sum["next_target_qty"] == q_zero_order == 9
-        and zero_sum["golden_allin_mode"] == "NONE"
-    ), f"TDD 실패(Case 67/80 0주 정량/기본모드 일치): {zero_sum}"
-
-    # 2) 4단 와이드 활주로 단차 검증
-    d1, s1, s2 = get_golden8_prog_thresholds(1, "WIDE_RUNWAY")
-    d5, _, _ = get_golden8_prog_thresholds(5, "WIDE_RUNWAY")
-    d9, _, _ = get_golden8_prog_thresholds(9, "WIDE_RUNWAY")
-    d11, _, _ = get_golden8_prog_thresholds(11, "WIDE_RUNWAY")
-    assert (
-        d1 == -1.00
-        and d5 == -2.00
-        and d9 == -3.50
-        and d11 == -5.50
-        and s1 == 1.50
-        and s2 == 1.00
-    ), "TDD 실패: 4단 와이드 단차 불일치"
-
-    # 3) 🚨 Case 72: 1층 ~ 6층 개별 완충층 적재 및 8회차 유입 시 최상단(6층+7층 ➔ 통합 7층 GRID_L7) 병합 검증
-    grid_q: List[StratumBucket] = []
-    for step in range(8):
-        p_step = round(100.0 - float(step), 2)
-        tag_step = "REENTRY_1FL" if step == 0 else "DIP_1FL"
-        grid_q = vrev_add_quota_lot_and_merge_2tier(
-            grid_q, 10, p_step, round(10.0 * p_step, 4), tag_step
-        )
-        assert len(grid_q) == min(MAX_GRID_TIERS_7, step + 1), (
-            f"TDD 실패(Case 72 그리드 층수): step={step}, len={len(grid_q)}"
+    try:
+        assert DEFAULT_GOLDEN_ALLIN_MODE == "NONE", (
+            f"TDD 실패(Case 80 기본값 OFF 위반): {DEFAULT_GOLDEN_ALLIN_MODE}"
         )
 
-    assert (
-        len(grid_q) == 7
-        and has_active_l1_bucket(grid_q)
-        and grid_q[0].book_price == 93.0
-        and grid_q[-1].lot_type == "GRID_L7"
-        and grid_q[-1].lot_count == 2
-        and abs(grid_q[-1].book_price - 99.50) < 1e-4
-    ), f"TDD 실패(Case 72): 8회차 시 최상단 통합 7층 병합 불일치 {grid_q[-1]}"
+        # 1) 8% 황금정량 및 Case 67 min(budget_cap_qty, anchor_quota_qty) 캡핑 검증
+        q_dip, bud_c67 = compute_golden8_quota_qty(
+            82.39, 19155.74, 19000.0, "COMP_08PCT", exec_price=79.52
+        )
+        q_brk, _ = compute_golden8_quota_qty(
+            82.39, 19155.74, 19000.0, "COMP_08PCT", exec_price=86.00
+        )
+        assert q_dip == 18 and q_brk == 17 and (q_brk * 86.00) <= bud_c67, (
+            f"TDD 실패(Case 67): q_dip={q_dip}, q_brk={q_brk}"
+        )
 
-    # 4) 🚨 Case 71, Case 72, Case 80 & Case 83(방안 C): 4중 다중 익절 및 오버나이트 개별층 잠금 검증
-    test_grid = [
-        StratumBucket(10, 80.0, 800.0, 800.0, 1, "DIP_1FL"),
-        StratumBucket(10, 81.0, 810.0, 810.0, 1, "GRID_L2"),
-        StratumBucket(10, 85.0, 850.0, 850.0, 1, "GRID_L3"),
-        StratumBucket(10, 90.0, 900.0, 900.0, 1, "GRID_L4"),
-    ]
-    res_part = evaluate_multi_grid_sell_targets(
-        test_grid, live_price=81.90, is_overnight_session=False
-    )
-    assert (
-        res_part["should_sell"]
-        and res_part["sold_indices"] == [0, 1]
-        and res_part["sell_qty"] == 20
-        and res_part["hit_l1"]
-        and res_part["hit_indiv_grid"]
-    ), f"TDD 실패(Case 71/72 프리·정규 부분 다중익절): {res_part}"
+        mock_zero_st = {
+            "buckets": [],
+            "initial_seed_usd": 10000.0,
+            "anchor_price": 85.00,
+            "cumulative_realized_net_usd": 0.0,
+        }
+        zero_sum = summarize_stratum_portfolio(mock_zero_st, live_price=80.00)
+        q_zero_order, _ = compute_golden8_quota_qty(
+            85.00, 10000.0, 10000.0, "COMP_08PCT", exec_price=80.00
+        )
+        assert (
+            zero_sum["anchor_quota_qty"] == 9
+            and zero_sum["budget_cap_qty"] == 10
+            and zero_sum["next_target_qty"] == q_zero_order == 9
+            and zero_sum["golden_allin_mode"] == "NONE"
+        ), f"TDD 실패(Case 67/80 0주 정량/기본모드 일치): {zero_sum}"
 
-    res_ov_lock = evaluate_multi_grid_sell_targets(
-        test_grid, live_price=81.90, is_overnight_session=True
-    )
-    assert (
-        res_ov_lock["should_sell"] is False
-        and res_ov_lock["overnight_indiv_locked"] is True
-        and res_ov_lock["reason_tag"] == "HOLD_OVERNIGHT_WMA_LOCK"
-    ), f"TDD 실패(Case 83 방안 C 오버나이트 개별층 잠금 미작동): {res_ov_lock}"
+        # 2) 4단 와이드 활주로 단차 검증
+        d1, s1, s2 = get_golden8_prog_thresholds(1, "WIDE_RUNWAY")
+        d5, _, _ = get_golden8_prog_thresholds(5, "WIDE_RUNWAY")
+        d9, _, _ = get_golden8_prog_thresholds(9, "WIDE_RUNWAY")
+        d11, _, _ = get_golden8_prog_thresholds(11, "WIDE_RUNWAY")
+        assert (
+            d1 == -1.00
+            and d5 == -2.00
+            and d9 == -3.50
+            and d11 == -5.50
+            and s1 == 1.50
+            and s2 == 1.00
+        ), "TDD 실패: 4단 와이드 단차 불일치"
 
-    res_ov_grad = evaluate_multi_grid_sell_targets(
-        test_grid, live_price=86.25, is_overnight_session=True
-    )
-    assert (
-        res_ov_grad["should_sell"] is True
-        and res_ov_grad["sold_indices"] == [0, 1, 2, 3]
-        and res_ov_grad["sell_qty"] == 40
-        and res_ov_grad["hit_wma_grad"] is True
-        and res_ov_grad["reason_tag"] == "SELL_ALL_GRAD"
-    ), f"TDD 실패(Case 83 방안 C 오버나이트 통합이평 전량 졸업 미작동): {res_ov_grad}"
+        # 3) 🚨 Case 72: 1층 ~ 6층 개별 완충층 적재 및 8회차 유입 시 최상단(6층+7층 ➔ 통합 7층 GRID_L7) 병합 검증
+        grid_q: List[StratumBucket] = []
+        for step in range(8):
+            p_step = round(100.0 - float(step), 2)
+            tag_step = "REENTRY_1FL" if step == 0 else "DIP_1FL"
+            grid_q = vrev_add_quota_lot_and_merge_2tier(
+                grid_q, 10, p_step, round(10.0 * p_step, 4), tag_step
+            )
+            assert len(grid_q) == min(MAX_GRID_TIERS_7, step + 1), (
+                f"TDD 실패(Case 72 그리드 층수): step={step}, len={len(grid_q)}"
+            )
 
-    res_ov_l1_single = evaluate_multi_grid_sell_targets(
-        [StratumBucket(10, 80.0, 800.0, 800.0, 1, "REENTRY_1FL")],
-        live_price=81.25,
-        is_overnight_session=True,
-    )
-    assert (
-        res_ov_l1_single["should_sell"] is True
-        and res_ov_l1_single["sold_indices"] == [0]
-        and res_ov_l1_single["sell_qty"] == 10
-        and res_ov_l1_single["reason_tag"] == "SELL_L1_ONLY"
-    ), f"TDD 실패(Case 83 1층 단독 오버나이트 익절 미작동): {res_ov_l1_single}"
+        assert (
+            len(grid_q) == 7
+            and has_active_l1_bucket(grid_q)
+            and grid_q[0].book_price == 93.0
+            and grid_q[-1].lot_type == "GRID_L7"
+            and grid_q[-1].lot_count == 2
+            and abs(grid_q[-1].book_price - 99.50) < 1e-4
+        ), f"TDD 실패(Case 72): 8회차 시 최상단 통합 7층 병합 불일치 {grid_q[-1]}"
 
-    res_ov_wma_upper = evaluate_multi_grid_sell_targets(
-        [
-            StratumBucket(20, 88.0, 1760.0, 1760.0, 1, "GOLDEN_L1"),
+        # 4) 🚨 Case 71, Case 72, Case 80 & Case 83(방안 C): 4중 다중 익절 및 오버나이트 개별층 잠금 검증
+        test_grid = [
+            StratumBucket(10, 80.0, 800.0, 800.0, 1, "DIP_1FL"),
             StratumBucket(10, 81.0, 810.0, 810.0, 1, "GRID_L2"),
             StratumBucket(10, 85.0, 850.0, 850.0, 1, "GRID_L3"),
-        ],
-        live_price=84.00,
-        is_overnight_session=True,
-    )
-    assert (
-        res_ov_wma_upper["should_sell"] is True
-        and res_ov_wma_upper["sold_indices"] == [1, 2]
-        and res_ov_wma_upper["sell_qty"] == 20
-        and res_ov_wma_upper["reason_tag"] == "SELL_WMA_UPPER"
-    ), f"TDD 실패(Case 83 1층 고단가 시 상단 일괄졸업 SELL_WMA_UPPER 미작동): {res_ov_wma_upper}"
+            StratumBucket(10, 90.0, 900.0, 900.0, 1, "GRID_L4"),
+        ]
+        res_part = evaluate_multi_grid_sell_targets(
+            test_grid, live_price=81.90, is_overnight_session=False
+        )
+        assert (
+            res_part["should_sell"]
+            and res_part["sold_indices"] == [0, 1]
+            and res_part["sell_qty"] == 20
+            and res_part["hit_l1"]
+            and res_part["hit_indiv_grid"]
+        ), f"TDD 실패(Case 71/72 프리·정규 부분 다중익절): {res_part}"
 
-    mock_gp = GoldenAllInPocket(
-        qty=50,
-        book_price=70.00,
-        book_invested_usd=3500.0,
-        actual_cost_usd=3500.0,
-        entry_ts=1000.0,
-        order_date="2026-03-10",
-    )
-    res_gp_only = evaluate_multi_grid_sell_targets(
-        test_grid,
-        live_price=71.05,
-        golden_pocket=mock_gp,
-        is_overnight_session=True,
-    )
-    assert (
-        res_gp_only["should_sell"] is True
-        and res_gp_only["hit_golden_pocket"] is True
-        and res_gp_only["sell_pocket_qty"] == 50
-        and res_gp_only["grid_sell_qty"] == 0
-        and res_gp_only["sell_qty"] == 50
-        and res_gp_only["reason_tag"] == "SELL_GOLDEN_POCKET"
-    ), f"TDD 실패(Case 80 골든포켓 단독 익절): {res_gp_only}"
+        res_ov_lock = evaluate_multi_grid_sell_targets(
+            test_grid, live_price=81.90, is_overnight_session=True
+        )
+        assert (
+            res_ov_lock["should_sell"] is False
+            and res_ov_lock["overnight_indiv_locked"] is True
+            and res_ov_lock["reason_tag"] == "HOLD_OVERNIGHT_WMA_LOCK"
+        ), f"TDD 실패(Case 83 방안 C 오버나이트 개별층 잠금 미작동): {res_ov_lock}"
 
-    rem_uppers = relabel_upper_grid_tiers(test_grid[2:])
-    assert len(rem_uppers) == 2 and not has_active_l1_bucket(rem_uppers), (
-        "TDD 실패(Case 71/72): 1층 익절 후 1층 공석(상단 그리드만 보유) 상태 판별 오류"
-    )
+        res_ov_grad = evaluate_multi_grid_sell_targets(
+            test_grid, live_price=86.25, is_overnight_session=True
+        )
+        assert (
+            res_ov_grad["should_sell"] is True
+            and res_ov_grad["sold_indices"] == [0, 1, 2, 3]
+            and res_ov_grad["sell_qty"] == 40
+            and res_ov_grad["hit_wma_grad"] is True
+            and res_ov_grad["reason_tag"] == "SELL_ALL_GRAD"
+        ), f"TDD 실패(Case 83 방안 C 오버나이트 통합이평 전량 졸업 미작동): {res_ov_grad}"
 
-    # 5) 🚨 Case 73 & Case 84: 1층 공석 상태에서 현재가 > 2층 단가($85.00) 역전 차단 및 15:30~16:00 돌파 차단 검증
-    sig_inv = evaluate_l2_only_hybrid_reentry_signal(
-        live_price=85.50,
-        anchor_price=83.41,
-        l2_book_price=85.00,
-        min_upper_tier_price=85.00,
-    )
-    assert (
-        sig_inv["should_buy"] is False
-        and sig_inv["signal_type"] == "HOLD_PREVENT_INVERSION"
-        and abs(sig_inv["l2_ceiling_price"] - 85.00) < 1e-4
-    ), f"TDD 실패(Case 73 단가 역전 차단): {sig_inv}"
+        res_ov_l1_single = evaluate_multi_grid_sell_targets(
+            [StratumBucket(10, 80.0, 800.0, 800.0, 1, "REENTRY_1FL")],
+            live_price=81.25,
+            is_overnight_session=True,
+        )
+        assert (
+            res_ov_l1_single["should_sell"] is True
+            and res_ov_l1_single["sold_indices"] == [0]
+            and res_ov_l1_single["sell_qty"] == 10
+            and res_ov_l1_single["reason_tag"] == "SELL_L1_ONLY"
+        ), f"TDD 실패(Case 83 1층 단독 오버나이트 익절 미작동): {res_ov_l1_single}"
 
-    sig_brk_ok = evaluate_l2_only_hybrid_reentry_signal(
-        live_price=84.30,
-        anchor_price=83.41,
-        l2_book_price=85.00,
-        min_upper_tier_price=85.00,
-        is_late_new_cycle_cutoff=False,
-    )
-    assert (
-        sig_brk_ok["should_buy"] is True
-        and sig_brk_ok["signal_type"] == "BREAKOUT_RELOAD"
-    ), f"TDD 실패(Case 73 2층 이하 안전 돌파 승인): {sig_brk_ok}"
+        res_ov_wma_upper = evaluate_multi_grid_sell_targets(
+            [
+                StratumBucket(20, 88.0, 1760.0, 1760.0, 1, "GOLDEN_L1"),
+                StratumBucket(10, 81.0, 810.0, 810.0, 1, "GRID_L2"),
+                StratumBucket(10, 85.0, 850.0, 850.0, 1, "GRID_L3"),
+            ],
+            live_price=84.00,
+            is_overnight_session=True,
+        )
+        assert (
+            res_ov_wma_upper["should_sell"] is True
+            and res_ov_wma_upper["sold_indices"] == [1, 2]
+            and res_ov_wma_upper["sell_qty"] == 20
+            and res_ov_wma_upper["reason_tag"] == "SELL_WMA_UPPER"
+        ), f"TDD 실패(Case 83 1층 고단가 시 상단 일괄졸업 SELL_WMA_UPPER 미작동): {res_ov_wma_upper}"
 
-    sig_brk_late_blocked = evaluate_l2_only_hybrid_reentry_signal(
-        live_price=84.30,
-        anchor_price=83.41,
-        l2_book_price=85.00,
-        min_upper_tier_price=85.00,
-        is_late_new_cycle_cutoff=True,
-    )
-    assert (
-        sig_brk_late_blocked["should_buy"] is False
-        and sig_brk_late_blocked["signal_type"]
-        == "HOLD_LATE_SESSION_BREAKOUT_CUTOFF"
-    ), f"TDD 실패(Case 84 장마감 30분전 1층공석 돌파차단 미작동): {sig_brk_late_blocked}"
+        mock_gp = GoldenAllInPocket(
+            qty=50,
+            book_price=70.00,
+            book_invested_usd=3500.0,
+            actual_cost_usd=3500.0,
+            entry_ts=1000.0,
+            order_date="2026-03-10",
+        )
+        res_gp_only = evaluate_multi_grid_sell_targets(
+            test_grid,
+            live_price=71.05,
+            golden_pocket=mock_gp,
+            is_overnight_session=True,
+        )
+        assert (
+            res_gp_only["should_sell"] is True
+            and res_gp_only["hit_golden_pocket"] is True
+            and res_gp_only["sell_pocket_qty"] == 50
+            and res_gp_only["grid_sell_qty"] == 0
+            and res_gp_only["sell_qty"] == 50
+            and res_gp_only["reason_tag"] == "SELL_GOLDEN_POCKET"
+        ), f"TDD 실패(Case 80 골든포켓 단독 익절): {res_gp_only}"
 
-    sig_pull_ok = evaluate_l2_only_hybrid_reentry_signal(
-        live_price=82.50,
-        anchor_price=83.41,
-        l2_book_price=85.00,
-        min_upper_tier_price=85.00,
-        is_late_new_cycle_cutoff=True,
-    )
-    assert (
-        sig_pull_ok["should_buy"] is True
-        and sig_pull_ok["signal_type"] == "PULLBACK_RELOAD"
-    ), f"TDD 실패(Case 73/84 눌림목 재장전 승인): {sig_pull_ok}"
+        rem_uppers = relabel_upper_grid_tiers(test_grid[2:])
+        assert len(rem_uppers) == 2 and not has_active_l1_bucket(rem_uppers), (
+            "TDD 실패(Case 71/72): 1층 익절 후 1층 공석(상단 그리드만 보유) 상태 판별 오류"
+        )
 
-    reloaded_grid = vrev_add_quota_lot_and_merge_2tier(
-        rem_uppers, 10, 80.50, 805.0, "REENTRY_1FL"
-    )
-    assert (
-        len(reloaded_grid) == 3
-        and has_active_l1_bucket(reloaded_grid)
-        and reloaded_grid[0].book_price == 80.50
-        and reloaded_grid[1].book_price == 85.00
-        and reloaded_grid[2].book_price == 90.00
-    ), "TDD 실패(Case 59/72): 1층 공석 재장전 시 상단 그리드 비병합 배치 오류"
+        # 5) 🚨 Case 73 & Case 84 개정: 1층 공석 상태에서 현재가 > 2층 단가($85.00) 역전 차단 및 15:30~16:00 2층 이하 돌파 정상 승인 검증
+        sig_inv = evaluate_l2_only_hybrid_reentry_signal(
+            live_price=85.50,
+            anchor_price=83.41,
+            l2_book_price=85.00,
+            min_upper_tier_price=85.00,
+        )
+        assert (
+            sig_inv["should_buy"] is False
+            and sig_inv["signal_type"] == "HOLD_PREVENT_INVERSION"
+            and abs(sig_inv["l2_ceiling_price"] - 85.00) < 1e-4
+        ), f"TDD 실패(Case 73 단가 역전 차단): {sig_inv}"
 
-    res_grad = evaluate_multi_grid_sell_targets(reloaded_grid, live_price=88.50)
-    assert (
-        res_grad["should_sell"]
-        and res_grad["sold_indices"] == [0, 1, 2]
-        and res_grad["sell_qty"] == 30
-        and res_grad["hit_wma_grad"]
-    ), f"TDD 실패(Case 71/72 2~7층 이동평균 일괄졸업): {res_grad}"
+        sig_brk_ok = evaluate_l2_only_hybrid_reentry_signal(
+            live_price=84.30,
+            anchor_price=83.41,
+            l2_book_price=85.00,
+            min_upper_tier_price=85.00,
+            is_late_new_cycle_cutoff=False,
+        )
+        assert (
+            sig_brk_ok["should_buy"] is True
+            and sig_brk_ok["signal_type"] == "BREAKOUT_RELOAD"
+        ), f"TDD 실패(Case 73 2층 이하 안전 돌파 승인): {sig_brk_ok}"
 
-    # 6) Case 60 & Case 72 정적 기억 최저가($80.00) 잠금 및 Case 74 당일 시드보호 패스 바인딩 검증
-    mock_st = {
-        "buckets": buckets_to_dicts(reloaded_grid),
-        "initial_seed_usd": 10000.0,
-        "anchor_price": 80.50,
-        "cycle_min_buy_price": 80.00,
-        "cumulative_realized_net_usd": 25.0,
-        "seed_protect_pass_cnt": 120,
-        "daily_seed_protect_pass_cnt": 7,
-    }
-    sum_info = summarize_stratum_portfolio(mock_st, live_price=81.00)
-    assert abs(sum_info["active_buy_anchor"] - 80.00) < 1e-4, (
-        "TDD 실패(Case 60/72): 정적 기억 최저가 잠금 풀림"
-    )
-    assert (
-        sum_info["held_tiers"] == 3
-        and sum_info["upper_tier_count"] == 2
-        and abs(sum_info["upper_wma_price"] - 87.50) < 1e-4
-        and abs(sum_info["l2_ceiling_price"] - 85.00) < 1e-4
-        and sum_info["seed_protect_pass_cnt"] == 7
-    ), "TDD 실패(Case 72/73/74): 상단 2~7층 이동평균 또는 당일 시드패스 요약 오류"
+        sig_brk_late_allowed = evaluate_l2_only_hybrid_reentry_signal(
+            live_price=84.30,
+            anchor_price=83.41,
+            l2_book_price=85.00,
+            min_upper_tier_price=85.00,
+            is_late_new_cycle_cutoff=True,
+        )
+        assert (
+            sig_brk_late_allowed["should_buy"] is True
+            and sig_brk_late_allowed["signal_type"] == "BREAKOUT_RELOAD"
+        ), f"TDD 실패(Case 84 개정 장마감 30분전 1층공석 2층 이하 돌파 승인 미작동): {sig_brk_late_allowed}"
 
-    # 7) [Case 76 : 🔓 06_STEP2X_15PCT_C20 3중 안전문 스텝업 저가 해금 검증]
-    mock_2022_deadcat = [
-        StratumBucket(75, 14.43, 1082.25, 1082.25, 1, "REENTRY_1FL"),
-        StratumBucket(189, 47.82, 9037.98, 9037.98, 11, "GRID_L2"),
-    ]
-    res_deadcat = evaluate_step_up_2x_dip_signal(
-        live_price=11.50,
-        buckets=mock_2022_deadcat,
-        anchor_price=14.43,
-        cycle_min_buy_price=8.56,
-        drop_buy_pct=-5.50,
-        free_cash_usd=4500.0,
-        realized_equity_usd=13913.0,
-    )
-    assert (
-        res_deadcat["should_buy"] is False
-        and res_deadcat["step_up_eligible"] is False
-    ), f"TDD 실패(Case 76 2022 데드캣 오발동): {res_deadcat}"
+        sig_pull_ok = evaluate_l2_only_hybrid_reentry_signal(
+            live_price=82.50,
+            anchor_price=83.41,
+            l2_book_price=85.00,
+            min_upper_tier_price=85.00,
+            is_late_new_cycle_cutoff=True,
+        )
+        assert (
+            sig_pull_ok["should_buy"] is True
+            and sig_pull_ok["signal_type"] == "PULLBACK_RELOAD"
+        ), f"TDD 실패(Case 73/84 눌림목 재장전 승인): {sig_pull_ok}"
 
-    mock_2025_nov = [
-        StratumBucket(41, 50.10, 2054.10, 2054.10, 1, "REENTRY_1FL"),
-        StratumBucket(308, 60.64, 18677.12, 18677.12, 10, "GRID_L2"),
-    ]
-    res_step_ok = evaluate_step_up_2x_dip_signal(
-        live_price=42.44,
-        buckets=mock_2025_nov,
-        anchor_price=50.10,
-        cycle_min_buy_price=12.09,
-        drop_buy_pct=-5.50,
-        free_cash_usd=5699.55,
-        realized_equity_usd=26431.99,
-    )
-    assert (
-        res_step_ok["should_buy"] is True
-        and res_step_ok["is_step_up_unlock"] is True
-        and res_step_ok["trigger_tag"] == "UNLOCK_STEP2X_15P_C20"
-        and abs(res_step_ok["quota_ref_price"] - 42.585) < 1e-4
-        and abs(res_step_ok["next_cycle_min_price"] - 42.44) < 1e-4
-    ), f"TDD 실패(Case 76 2025-11-05 스텝업 해금 미작동): {res_step_ok}"
+        reloaded_grid = vrev_add_quota_lot_and_merge_2tier(
+            rem_uppers, 10, 80.50, 805.0, "REENTRY_1FL"
+        )
+        assert (
+            len(reloaded_grid) == 3
+            and has_active_l1_bucket(reloaded_grid)
+            and reloaded_grid[0].book_price == 80.50
+            and reloaded_grid[1].book_price == 85.00
+            and reloaded_grid[2].book_price == 90.00
+        ), "TDD 실패(Case 59/72): 1층 공석 재장전 시 상단 그리드 비병합 배치 오류"
 
-    # 8) 단가 비교 층간 스마트 중간 편입 & 매도 층 원가 매칭 정산 검증
-    mid_inserted = vrev_add_quota_lot_and_merge_2tier(
-        reloaded_grid, 10, 84.50, 845.0, "MANUAL_SYNC_L1"
-    )
-    assert (
-        len(mid_inserted) == 4
-        and mid_inserted[0].book_price == 80.50
-        and mid_inserted[1].book_price == 84.50
-        and mid_inserted[1].lot_type == "GRID_L2"
-        and mid_inserted[2].book_price == 85.00
-        and mid_inserted[2].lot_type == "GRID_L3"
-    ), f"TDD 실패(단가 비교 층간 편입): {mid_inserted}"
+        res_grad = evaluate_multi_grid_sell_targets(
+            reloaded_grid, live_price=88.50
+        )
+        assert (
+            res_grad["should_sell"]
+            and res_grad["sold_indices"] == [0, 1, 2]
+            and res_grad["sell_qty"] == 30
+            and res_grad["hit_wma_grad"]
+        ), f"TDD 실패(Case 71/72 2~7층 이동평균 일괄졸업): {res_grad}"
 
-    match_res = match_and_remove_sold_buckets_7tier(
-        mid_inserted, delta_remove_qty=10, sell_exec_price=82.50
-    )
-    assert (
-        match_res["sold_qty"] == 10
-        and abs(match_res["sold_actual_cost_usd"] - 805.0) < 1e-4
-        and match_res["sold_l1_completely"] is True
-        and len(match_res["rem_buckets"]) == 3
-        and not has_active_l1_bucket(match_res["rem_buckets"])
-        and match_res["pnl_info"]["net_pnl_usd"] > 0.0
-    ), f"TDD 실패(수동 매도 층별 원가 매칭 정산): {match_res}"
+        # 6) Case 60 & Case 72 정적 기억 최저가($80.00) 잠금 및 Case 74 당일 시드보호 패스 바인딩 검증
+        mock_st = {
+            "buckets": buckets_to_dicts(reloaded_grid),
+            "initial_seed_usd": 10000.0,
+            "anchor_price": 80.50,
+            "cycle_min_buy_price": 80.00,
+            "cumulative_realized_net_usd": 25.0,
+            "seed_protect_pass_cnt": 120,
+            "daily_seed_protect_pass_cnt": 7,
+        }
+        sum_info = summarize_stratum_portfolio(mock_st, live_price=81.00)
+        assert abs(sum_info["active_buy_anchor"] - 80.00) < 1e-4, (
+            "TDD 실패(Case 60/72): 정적 기억 최저가 잠금 풀림"
+        )
+        assert (
+            sum_info["held_tiers"] == 3
+            and sum_info["upper_tier_count"] == 2
+            and abs(sum_info["upper_wma_price"] - 87.50) < 1e-4
+            and abs(sum_info["l2_ceiling_price"] - 85.00) < 1e-4
+            and sum_info["seed_protect_pass_cnt"] == 7
+        ), "TDD 실패(Case 72/73/74): 상단 2~7층 이동평균 또는 당일 시드패스 요약 오류"
 
-    # 9) [Case 77 : 💉 05_RESV_6P_GUARD30 검증]
-    g30_block = evaluate_guard30_and_reserve_injection(
-        free_cash_usd=180.0,
-        broker_bp_usd=180.0,
-        exec_price=29.0,
-        portion_budget=1440.0,
-        l1_actual_cost_usd=1426.0,
-        is_dip_promotion=True,
-        used_reserve_portions_cnt=0,
-    )
-    assert (
-        g30_block["action"] == "BLOCK_AND_ALERT_DEPOSIT"
-        and g30_block["should_proceed"] is False
-        and g30_block["is_dust_blocked"] is True
-        and abs(g30_block["min_req_cash"] - 432.0) < 1e-4
-        and abs(g30_block["recommended_deposit_usd"] - 1440.0) < 1e-4
-    ), f"TDD 실패(Case 77 미입금 시 자투리 차단 오류): {g30_block}"
+        # 7) [Case 76 : 🔓 06_STEP2X_15PCT_C20 3중 안전문 스텝업 저가 해금 검증]
+        mock_2022_deadcat = [
+            StratumBucket(75, 14.43, 1082.25, 1082.25, 1, "REENTRY_1FL"),
+            StratumBucket(189, 47.82, 9037.98, 9037.98, 11, "GRID_L2"),
+        ]
+        res_deadcat = evaluate_step_up_2x_dip_signal(
+            live_price=11.50,
+            buckets=mock_2022_deadcat,
+            anchor_price=14.43,
+            cycle_min_buy_price=8.56,
+            drop_buy_pct=-5.50,
+            free_cash_usd=4500.0,
+            realized_equity_usd=13913.0,
+        )
+        assert (
+            res_deadcat["should_buy"] is False
+            and res_deadcat["step_up_eligible"] is False
+        ), f"TDD 실패(Case 76 2022 데드캣 오발동): {res_deadcat}"
 
-    g30_inj = evaluate_guard30_and_reserve_injection(
-        free_cash_usd=180.0,
-        broker_bp_usd=1680.0,
-        exec_price=29.0,
-        portion_budget=1440.0,
-        l1_actual_cost_usd=1426.0,
-        is_dip_promotion=True,
-        used_reserve_portions_cnt=0,
-    )
-    assert (
-        g30_inj["action"] == "INJECT_AND_PROCEED"
-        and g30_inj["should_proceed"] is True
-        and g30_inj["inject_portions"] == 1
-        and abs(g30_inj["inject_usd"] - 1440.0) < 1e-4
-        and g30_inj["rem_portions_after"] == 5
-    ), f"TDD 실패(Case 77 입금 감지 자동 수혈 오류): {g30_inj}"
+        mock_2025_nov = [
+            StratumBucket(41, 50.10, 2054.10, 2054.10, 1, "REENTRY_1FL"),
+            StratumBucket(308, 60.64, 18677.12, 18677.12, 10, "GRID_L2"),
+        ]
+        res_step_ok = evaluate_step_up_2x_dip_signal(
+            live_price=42.44,
+            buckets=mock_2025_nov,
+            anchor_price=50.10,
+            cycle_min_buy_price=12.09,
+            drop_buy_pct=-5.50,
+            free_cash_usd=5699.55,
+            realized_equity_usd=26431.99,
+        )
+        assert (
+            res_step_ok["should_buy"] is True
+            and res_step_ok["is_step_up_unlock"] is True
+            and res_step_ok["trigger_tag"] == "UNLOCK_STEP2X_15P_C20"
+            and abs(res_step_ok["quota_ref_price"] - 42.585) < 1e-4
+            and abs(res_step_ok["next_cycle_min_price"] - 42.44) < 1e-4
+        ), f"TDD 실패(Case 76 2025-11-05 스텝업 해금 미작동): {res_step_ok}"
 
-    repay_res = compute_reserve_repayment_on_zero(
-        initial_seed_usd=10000.0,
-        cumulative_realized_net_usd=11418.55,
-        injected_reserve_usd=13242.27,
-        used_reserve_portions_cnt=6,
-    )
-    assert (
-        repay_res["did_repay"] is True
-        and abs(repay_res["repaid_usd"] - 13242.27) < 1e-4
-        and repay_res["rem_injected_reserve_usd"] == 0.0
-        and repay_res["rem_used_reserve_portions_cnt"] == 0
-        and repay_res["avail_reserve_portions"] == 6
-        and abs(repay_res["free_cash_after_repay_usd"] - 21418.55) < 1e-4
-    ), f"TDD 실패(Case 77 0주 졸업 예비시드 상환 오류): {repay_res}"
+        # 8) 단가 비교 층간 스마트 중간 편입 & 매도 층 원가 매칭 정산 검증
+        mid_inserted = vrev_add_quota_lot_and_merge_2tier(
+            reloaded_grid, 10, 84.50, 845.0, "MANUAL_SYNC_L1"
+        )
+        assert (
+            len(mid_inserted) == 4
+            and mid_inserted[0].book_price == 80.50
+            and mid_inserted[1].book_price == 84.50
+            and mid_inserted[1].lot_type == "GRID_L2"
+            and mid_inserted[2].book_price == 85.00
+            and mid_inserted[2].lot_type == "GRID_L3"
+        ), f"TDD 실패(단가 비교 층간 편입): {mid_inserted}"
 
-    # 10) [Case 78 : 지정가 부분 체결 후 잔량(TOPUP_1FL) 체결 시 무승격 단일 1층 합산 검증]
-    partial_q = vrev_add_quota_lot_and_merge_2tier(
-        [], 2, 90.71, round(2.0 * 90.71, 4), "REENTRY_1FL"
-    )
-    mock_part_st = {
-        "buckets": buckets_to_dicts(partial_q),
-        "initial_seed_usd": 19000.0,
-        "anchor_price": 90.71,
-        "cycle_min_buy_price": 90.71,
-        "l1_target_quota_qty": 17,
-    }
-    part_sum = summarize_stratum_portfolio(mock_part_st, live_price=90.75)
-    assert (
-        part_sum["l1_cur_qty"] == 2
-        and part_sum["l1_target_quota_qty"] == 17
-        and part_sum["l1_rem_quota_qty"] == 15
-    ), f"TDD 실패(Case 78 부분체결 잔량 요약 불일치): {part_sum}"
+        match_res = match_and_remove_sold_buckets_7tier(
+            mid_inserted, delta_remove_qty=10, sell_exec_price=82.50
+        )
+        assert (
+            match_res["sold_qty"] == 10
+            and abs(match_res["sold_actual_cost_usd"] - 805.0) < 1e-4
+            and match_res["sold_l1_completely"] is True
+            and len(match_res["rem_buckets"]) == 3
+            and not has_active_l1_bucket(match_res["rem_buckets"])
+            and match_res["pnl_info"]["net_pnl_usd"] > 0.0
+        ), f"TDD 실패(수동 매도 층별 원가 매칭 정산): {match_res}"
 
-    completed_q = vrev_add_quota_lot_and_merge_2tier(
-        partial_q, 15, 90.71, round(15.0 * 90.71, 4), "TOPUP_1FL"
-    )
-    assert (
-        len(completed_q) == 1
-        and completed_q[0].qty == 17
-        and completed_q[0].lot_count == 1
-        and abs(completed_q[0].book_price - 90.71) < 1e-4
-        and abs(completed_q[0].actual_cost_usd - 1542.07) < 1e-4
-    ), f"TDD 실패(Case 78 TOPUP_1FL 무승격 1층 합산 불일치): {completed_q}"
+        # 9) [Case 77 : 💉 05_RESV_6P_GUARD30 검증]
+        g30_block = evaluate_guard30_and_reserve_injection(
+            free_cash_usd=180.0,
+            broker_bp_usd=180.0,
+            exec_price=29.0,
+            portion_budget=1440.0,
+            l1_actual_cost_usd=1426.0,
+            is_dip_promotion=True,
+            used_reserve_portions_cnt=0,
+        )
+        assert (
+            g30_block["action"] == "BLOCK_AND_ALERT_DEPOSIT"
+            and g30_block["should_proceed"] is False
+            and g30_block["is_dust_blocked"] is True
+            and abs(g30_block["min_req_cash"] - 432.0) < 1e-4
+            and abs(g30_block["recommended_deposit_usd"] - 1440.0) < 1e-4
+        ), f"TDD 실패(Case 77 미입금 시 자투리 차단 오류): {g30_block}"
 
-    # 11) [Case 80 : 황금시간대(07:00 ~ 07:50 EST & RSI <= 19.0) 전액매수 판정 검증]
-    g_off = evaluate_golden_allin_signal(
-        hm=715,
-        rsi_14=17.5,
-        live_price=40.0,
-        golden_allin_mode="NONE",
-        today_str="2026-03-10",
-    )
-    assert g_off["should_buy"] is False and g_off["reason"] == "MODE_OFF", (
-        f"TDD 실패(Case 80 OFF 모드 차단 오류): {g_off}"
-    )
+        g30_inj = evaluate_guard30_and_reserve_injection(
+            free_cash_usd=180.0,
+            broker_bp_usd=1680.0,
+            exec_price=29.0,
+            portion_budget=1440.0,
+            l1_actual_cost_usd=1426.0,
+            is_dip_promotion=True,
+            used_reserve_portions_cnt=0,
+        )
+        assert (
+            g30_inj["action"] == "INJECT_AND_PROCEED"
+            and g30_inj["should_proceed"] is True
+            and g30_inj["inject_portions"] == 1
+            and abs(g30_inj["inject_usd"] - 1440.0) < 1e-4
+            and g30_inj["rem_portions_after"] == 5
+        ), f"TDD 실패(Case 77 입금 감지 자동 수혈 오류): {g30_inj}"
 
-    g_pocket_ok = evaluate_golden_allin_signal(
-        hm=725,
-        rsi_14=18.4,
-        live_price=40.0,
-        golden_allin_mode="POCKET_ALLIN",
-        today_str="2026-03-10",
-        last_golden_allin_date="2026-03-09",
-    )
-    assert (
-        g_pocket_ok["should_buy"] is True
-        and g_pocket_ok["lot_type"] == "GOLDEN_POCKET"
-    ), f"TDD 실패(Case 80 POCKET_ALLIN 승인 오류): {g_pocket_ok}"
+        repay_res = compute_reserve_repayment_on_zero(
+            initial_seed_usd=10000.0,
+            cumulative_realized_net_usd=11418.55,
+            injected_reserve_usd=13242.27,
+            used_reserve_portions_cnt=6,
+        )
+        assert (
+            repay_res["did_repay"] is True
+            and abs(repay_res["repaid_usd"] - 13242.27) < 1e-4
+            and repay_res["rem_injected_reserve_usd"] == 0.0
+            and repay_res["rem_used_reserve_portions_cnt"] == 0
+            and repay_res["avail_reserve_portions"] == 6
+            and abs(repay_res["free_cash_after_repay_usd"] - 21418.55) < 1e-4
+        ), f"TDD 실패(Case 77 0주 졸업 예비시드 상환 오류): {repay_res}"
 
-    g_grid_ok = evaluate_golden_allin_signal(
-        hm=745,
-        rsi_14=19.0,
-        live_price=40.0,
-        golden_allin_mode="GRID_L1_ALLIN",
-        today_str="2026-03-10",
-        last_golden_allin_date="",
-    )
-    assert (
-        g_grid_ok["should_buy"] is True
-        and g_grid_ok["lot_type"] == "GOLDEN_L1"
-    ), f"TDD 실패(Case 80 GRID_L1_ALLIN 승인 오류): {g_grid_ok}"
+        # 10) [Case 78 : 지정가 부분 체결 후 잔량(TOPUP_1FL) 체결 시 무승격 단일 1층 합산 검증]
+        partial_q = vrev_add_quota_lot_and_merge_2tier(
+            [], 2, 90.71, round(2.0 * 90.71, 4), "REENTRY_1FL"
+        )
+        mock_part_st = {
+            "buckets": buckets_to_dicts(partial_q),
+            "initial_seed_usd": 19000.0,
+            "anchor_price": 90.71,
+            "cycle_min_buy_price": 90.71,
+            "l1_target_quota_qty": 17,
+        }
+        part_sum = summarize_stratum_portfolio(mock_part_st, live_price=90.75)
+        assert (
+            part_sum["l1_cur_qty"] == 2
+            and part_sum["l1_target_quota_qty"] == 17
+            and part_sum["l1_rem_quota_qty"] == 15
+        ), f"TDD 실패(Case 78 부분체결 잔량 요약 불일치): {part_sum}"
 
-    allin_q, allin_spent = resolve_allin_affordable_buy_qty(
-        price_t=40.0, free_cash_usd=8000.0
-    )
-    assert allin_q == 199 and abs(allin_spent - 7960.0) < 1e-4, (
-        f"TDD 실패(Case 80 전액매수 주수 산출 오류): q={allin_q}, spent={allin_spent}"
-    )
+        completed_q = vrev_add_quota_lot_and_merge_2tier(
+            partial_q, 15, 90.71, round(15.0 * 90.71, 4), "TOPUP_1FL"
+        )
+        assert (
+            len(completed_q) == 1
+            and completed_q[0].qty == 17
+            and completed_q[0].lot_count == 1
+            and abs(completed_q[0].book_price - 90.71) < 1e-4
+            and abs(completed_q[0].actual_cost_usd - 1542.07) < 1e-4
+        ), f"TDD 실패(Case 78 TOPUP_1FL 무승격 1층 합산 불일치): {completed_q}"
 
-    # 12) [NEW : 계좌별 동적 왕복 수수료율(0.14% vs 0.20%) 및 실측 수수료(actual_sell_fee_usd) 정산 검증]
-    pnl_014 = calc_sell_realized_pnl(
-        sold_qty=10,
-        sell_exec_price=74.29,
-        sold_actual_cost_usd=731.00,
-        round_trip_fee_rate_pct=0.14,
-    )
-    pnl_020 = calc_sell_realized_pnl(
-        sold_qty=10,
-        sell_exec_price=74.29,
-        sold_actual_cost_usd=731.00,
-        round_trip_fee_rate_pct=0.20,
-    )
-    assert (
-        abs(pnl_014["net_pnl_usd"] - 10.8683) < 1e-3
-        and abs(pnl_020["net_pnl_usd"] - 10.4261) < 1e-3
-        and pnl_014["net_pnl_usd"] > pnl_020["net_pnl_usd"]
-    ), f"TDD 실패(계좌별 0.14% vs 0.20% 수수료 정산 불일치): {pnl_014} vs {pnl_020}"
+        # 11) [Case 80 : 황금시간대(07:00 ~ 07:50 EST & RSI <= 19.0) 전액매수 판정 검증]
+        g_off = evaluate_golden_allin_signal(
+            hm=715,
+            rsi_14=17.5,
+            live_price=40.0,
+            golden_allin_mode="NONE",
+            today_str="2026-03-10",
+        )
+        assert g_off["should_buy"] is False and g_off["reason"] == "MODE_OFF", (
+            f"TDD 실패(Case 80 OFF 모드 차단 오류): {g_off}"
+        )
+
+        g_pocket_ok = evaluate_golden_allin_signal(
+            hm=725,
+            rsi_14=18.4,
+            live_price=40.0,
+            golden_allin_mode="POCKET_ALLIN",
+            today_str="2026-03-10",
+            last_golden_allin_date="2026-03-09",
+        )
+        assert (
+            g_pocket_ok["should_buy"] is True
+            and g_pocket_ok["lot_type"] == "GOLDEN_POCKET"
+        ), f"TDD 실패(Case 80 POCKET_ALLIN 승인 오류): {g_pocket_ok}"
+
+        g_grid_ok = evaluate_golden_allin_signal(
+            hm=745,
+            rsi_14=19.0,
+            live_price=40.0,
+            golden_allin_mode="GRID_L1_ALLIN",
+            today_str="2026-03-10",
+            last_golden_allin_date="",
+        )
+        assert (
+            g_grid_ok["should_buy"] is True
+            and g_grid_ok["lot_type"] == "GOLDEN_L1"
+        ), f"TDD 실패(Case 80 GRID_L1_ALLIN 승인 오류): {g_grid_ok}"
+
+        allin_q, allin_spent = resolve_allin_affordable_buy_qty(
+            price_t=40.0, free_cash_usd=8000.0
+        )
+        assert allin_q == 199 and abs(allin_spent - 7960.0) < 1e-4, (
+            f"TDD 실패(Case 80 전액매수 주수 산출 오류): q={allin_q}, spent={allin_spent}"
+        )
+
+        # 12) [Case 86 : 계좌별 동적 왕복 수수료율(0.14% vs 0.20%) 및 실측 수수료(actual_sell_fee_usd) 정산 검증]
+        pnl_014 = calc_sell_realized_pnl(
+            sold_qty=10,
+            sell_exec_price=74.29,
+            sold_actual_cost_usd=731.00,
+            round_trip_fee_rate_pct=0.14,
+        )
+        pnl_020 = calc_sell_realized_pnl(
+            sold_qty=10,
+            sell_exec_price=74.29,
+            sold_actual_cost_usd=731.00,
+            round_trip_fee_rate_pct=0.20,
+        )
+        assert (
+            abs(pnl_014["net_pnl_usd"] - 10.8683) < 1e-3
+            and abs(pnl_020["net_pnl_usd"] - 10.4261) < 1e-3
+            and pnl_014["net_pnl_usd"] > pnl_020["net_pnl_usd"]
+        ), f"TDD 실패(계좌별 0.14% vs 0.20% 수수료 정산 불일치): {pnl_014} vs {pnl_020}"
+    finally:
+        set_runtime_round_trip_fee_rate_pct(prev_rt, us_commission_rate=prev_one)
 
     logger.info(
-        "✅ [QuantEngine TDD 사전 무결성 검증 통과] 챔피언 🌟 POCKET_ALLIN / 🔥 GRID_L1_ALLIN × 💉 05_RESV_6P_GUARD30 × 🔓 06_STEP2X_15PCT_C20 & 방안 C · Case 84 · 동적수수료(Case 59~85) 검증 완료"
+        "✅ [QuantEngine TDD 사전 무결성 검증 통과] 챔피언 🌟 POCKET_ALLIN / 🔥 GRID_L1_ALLIN × 💉 05_RESV_6P_GUARD30 × 🔓 06_STEP2X_15PCT_C20 & 방안 C · Case 84(0주신규만 차단) · Case 86 동적수수료 검증 완료"
     )
     return True

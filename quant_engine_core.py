@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 """
 # MODIFIED: quant_engine_core.py
-인피니트 스노우볼 (Infinite Snowball) v3.0 — 퀀트 엔진 코어 Part 1 / 2 (Step 02 / 11)
+인피니트 스노우볼 (Infinite Snowball) v3.0 — 퀀트 엔진 코어 Part 1 / 2 (Step 04 / 11)
 역할:
-1) 전역 퀀트 상수 락온 (8% 황금비율 · 7-Layer 골디락스 그리드 · STEP2X_15PCT_C20 · GUARD30 예비수혈 · 황금시간 전액매수 기본값 NONE[OFF] · Case 84 15:30 컷오프)
-2) 계좌별 미국 주식 매매 수수료율(GET /api/v1/commissions : 편도 0.07% -> 왕복 0.14% / 편도 0.10% -> 왕복 0.20%) 런타임 동적 동기화 브릿지 탑재
+1) 전역 퀀트 상수 락온 (8% 황금비율 · 7-Layer 골디락스 그리드 · STEP2X_15PCT_C20 · GUARD30 예비수혈 · 황금시간 전액매수 기본값 NONE[OFF] · Case 84 15:30 0주 신규진입 컷오프)
+2) 계좌별 미국 주식 매매 수수료율(GET /api/v1/commissions : 편도 0.07% -> 왕복 0.14% / 편도 0.10% -> 왕복 0.20%) 런타임 동적 동기화 브릿지 탑재 (Case 86)
 3) 순수 실물 매수 원가(book_price == actual_avg_price) 구조체 (StratumBucket, GoldenAllInPocket) 및
    상단 그리드(2층 ~ 6층 개별 완충층 + 통합 7층 본대 GRID_L7) 번호 정규화·합병기(relabel_upper_grid_tiers)
 4) 8%(12.5분할) 황금비율 정액 기반 정량 산출기(min(1회분 예산 상한 주수, 기준가 고정 정량) 이중 캡핑 Case 67) 및
@@ -12,10 +12,10 @@
 5) 30% 자투리 1주 승격 방지 가드(GUARD30) & 토스 실계좌 여유자금 감지 기반 최대 +6회분 온디맨드 예비시드 자동 수혈 판정기 및
    0주 전량 졸업 시 예비시드 원금 자동 상환 연산기(Case 77)
 6) 보유 회차별 4단 와이드 점진 활주로(1~4회 -1.0% / 5~8회 -2.0% / 9~10회 -3.5% / 11회+ -5.5%) ·
-   1층 공석 시 2층 단가 상한 역전 차단(HOLD_PREVENT_INVERSION · Case 73) 및
-   정규장 마감 30분 전(15:30 ~ 16:00 EST) +1.00% 상승돌파 추격 차단(HOLD_LATE_SESSION_BREAKOUT_CUTOFF · Case 84) 기반 하이브리드 재장전 판정기 ·
+   1층 공석 시 2층 단가 상한 역전 차단(HOLD_PREVENT_INVERSION · Case 73) 기반 눌림목(-1.00%)/상승돌파(+1.00%) 하이브리드 재장전 판정기
+   (MODIFIED Case 84: 15:30 ~ 16:00 EST 구간에서도 상단 2~7층 보유 중 1층 공석 돌파 매수는 차단 없이 100% 허용 · 오직 0주 새 사이클 첫 1층 진입만 차단!) ·
    3중 안전문(보유 2층 이하 & 현금비중 20%+ & 저점대비 2.0배+ 반등) 통과 시 -15.0% 스텝업 저가 해금 판정기(Case 76)
-- 제1헌법 ~ 제6헌법 및 Case 01 ~ 85 완벽 준수
+- 제1헌법 ~ 제6헌법 및 Case 01 ~ 86 완벽 준수
 """
 
 from __future__ import annotations
@@ -58,7 +58,7 @@ MAX_GRID_TIERS_12: int = MAX_GRID_TIERS_7
 REENTRY_PULLBACK_DROP_PCT: float = -1.00
 REENTRY_BREAKOUT_RISE_PCT: float = 1.00
 
-# [Case 84]: 정규장 마감 30분 전(15:30 ~ 16:00 EST) 0주 새 사이클 1층 진입 및 1층 공석 +1.0% 돌파 추격 차단 기준 시각(HHMM)
+# MODIFIED [Case 84]: 정규장 마감 30분 전(15:30 ~ 16:00 EST) 오직 0주 새 사이클 첫 1층 진입만 차단하는 기준 시각(HHMM)
 NEW_CYCLE_BUY_CUTOFF_HM: int = int(
     getattr(toss_api, "NEW_CYCLE_BUY_CUTOFF_HM", 1530)
 )
@@ -121,11 +121,11 @@ GOLDEN_POCKET_RISE_PCT: float = float(
 
 
 # ---------------------------------------------------------------------------
-# [핵심 0 · NEW] 계좌별 미국 주식 수수료율 런타임 조회/갱신 브릿지
+# [핵심 0 · Case 86] 계좌별 미국 주식 수수료율 런타임 조회/갱신 브릿지
 # ---------------------------------------------------------------------------
 def get_runtime_us_commission_rate() -> float:
     """
-    # NEW: 현재 프로세스에 락온된 미국 주식 편도 수수료율(소수 비율, 기본 0.0007)을 반환한다.
+    현재 프로세스에 락온된 미국 주식 편도 수수료율(소수 비율, 기본 0.0007)을 반환한다.
     """
     fn = getattr(toss_api, "get_runtime_us_commission_rate", None)
     if callable(fn):
@@ -135,7 +135,7 @@ def get_runtime_us_commission_rate() -> float:
 
 def get_runtime_round_trip_fee_rate_pct() -> float:
     """
-    # NEW: 현재 프로세스에 락온된 미국 주식 왕복 수수료율(%, 기본 0.14 / 0.10% 계좌는 0.20)을 반환한다.
+    현재 프로세스에 락온된 미국 주식 왕복 수수료율(%, 기본 0.14 / 0.10% 계좌는 0.20)을 반환한다.
     """
     fn = getattr(toss_api, "get_runtime_round_trip_fee_rate_pct", None)
     if callable(fn):
@@ -150,7 +150,7 @@ def set_runtime_round_trip_fee_rate_pct(
     us_commission_rate: Optional[float] = None,
 ) -> float:
     """
-    # NEW: 계좌별 왕복 수수료율(%)을 런타임 메모리에 동기화한다.
+    계좌별 왕복 수수료율(%)을 런타임 메모리에 동기화한다.
     """
     fn = getattr(toss_api, "set_runtime_round_trip_fee_rate_pct", None)
     if callable(fn):
@@ -166,7 +166,7 @@ def resolve_effective_round_trip_fee_rate_pct(
     state_dict: Optional[Dict[str, Any]] = None,
 ) -> float:
     """
-    # NEW: 명시적 인자 -> 원장 상태(state_dict["round_trip_fee_rate_pct"]) -> 런타임 메모리 -> 기본 상수(0.14%) 순으로
+    명시적 인자 -> 원장 상태(state_dict["round_trip_fee_rate_pct"]) -> 런타임 메모리 -> 기본 상수(0.14%) 순으로
     유효 왕복 수수료율(%)을 결정한다.
     """
     if explicit_rate_pct is not None:
@@ -197,12 +197,12 @@ def get_golden_allin_mode_label(mode: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# [핵심 1] StratumBucket & GoldenAllInPocket : 순수 실물 매수 원가(book_price == actual_avg_price) 구조체 (Case 46 ~ 85)
+# [핵심 1] StratumBucket & GoldenAllInPocket : 순수 실물 매수 원가(book_price == actual_avg_price) 구조체 (Case 46 ~ 86)
 # ---------------------------------------------------------------------------
 @dataclass
 class StratumBucket:
     """
-    🎯 3 & Case 46 ~ 85:
+    🎯 3 & Case 46 ~ 86:
     SOXL 1층 ~ 7층 골디락스 멀티 그리드(1층 공격수 L1 / 2층 ~ 6층 개별 완충층 GRID_L2 ~ GRID_L6 / 통합 7층 본대 GRID_L7) 데이터 구조체.
     """
 
@@ -480,8 +480,8 @@ def relabel_upper_grid_tiers(
         overall_book_avg = (
             sum(float(b.qty) * b.book_price for b in overflow) / float(tot_q)
         )
-        raw_avg_p = max(0.01, tot_cost / float(tot_q))
-        capped_avg_p = round(min(raw_avg_p, overall_book_avg), 4)
+        raw_upper_p = max(0.01, tot_cost / float(tot_q))
+        capped_avg_p = round(min(raw_upper_p, overall_book_avg), 4)
         merged_top = StratumBucket(
             qty=tot_q,
             book_price=capped_avg_p,
@@ -543,7 +543,7 @@ def enforce_true_breakeven_floor_on_buckets(
 
 
 # ---------------------------------------------------------------------------
-# [핵심 2] 8%(12.5분할) 정량 주수 · 100% 전액매수 주수 · GUARD30 판정 · 온디맨드 수혈/상환기 (🎯 1 & Case 25 ~ 35, 67, 77, 80)
+# [핵심 2] 8%(12.5분할) 정량 주수 · 100% 전액매수 주수 · GUARD30 판정 · 온디맨드 수혈/상환기 (🎯 1 & Case 25 ~ 35, 67, 77, 80, 86)
 # ---------------------------------------------------------------------------
 def compute_golden8_quota_qty(
     anchor_price: float,
@@ -594,7 +594,7 @@ def resolve_affordable_buy_qty(
     round_trip_fee_rate_pct: Optional[float] = None,
 ) -> Tuple[int, float]:
     """
-    # MODIFIED [Case 25 ~ 35, Case 67 & 계좌별 동적 왕복 수수료율 연동]:
+    # MODIFIED [Case 25 ~ 35, Case 67 & Case 86 계좌별 동적 왕복 수수료율 연동]:
     직전 기준가로 산출된 목표 정량(target_qty)을 실제 주문가(price_t)로 매수하기 직전:
     1) max_portion_budget_usd(1회분 8% 예산) 상한 주수(budget_cap_qty)와 target_qty 중 작은 값으로 캡핑한다.
     2) 계좌의 왕복 수수료율(round_trip_fee_rate_pct, 미지정 시 런타임 락온 수수료율 0.14% 또는 0.20%) 버퍼를 감안한
@@ -643,7 +643,7 @@ def resolve_allin_affordable_buy_qty(
     round_trip_fee_rate_pct: Optional[float] = None,
 ) -> Tuple[int, float]:
     """
-    # MODIFIED [Case 80 : 황금시간대(07:00 ~ 07:50 EST & RSI <= 19.0) 가용 현금 시드 100% 전액 매수 주수 산출기]:
+    # MODIFIED [Case 80 & Case 86 : 황금시간대(07:00 ~ 07:50 EST & RSI <= 19.0) 가용 현금 시드 100% 전액 매수 주수 산출기]:
     계좌의 왕복 수수료 버퍼(0.14% 또는 0.20%)를 감안하여 현재 가용 현금(free_cash_usd)과
     토스 실계좌 주문가능 달러(broker_buying_power_usd) 중 작은 금액의 100% 전액으로 매수할 수 있는
     최대 정수 주식 수(allin_qty)와 실투입 원금(actual_spent_usd)을 반환한다.
@@ -794,7 +794,7 @@ def evaluate_guard30_and_reserve_injection(
     round_trip_fee_rate_pct: Optional[float] = None,
 ) -> Dict[str, Any]:
     """
-    # MODIFIED [Case 77 : 💉 05_RESV_6P_GUARD30 — 30% 자투리 1주 승격 방지 가드 & 온디맨드 예비시드 자동 수혈 판정기 (계좌별 동적 수수료율 반영)]:
+    # MODIFIED [Case 77 & Case 86 : 💉 05_RESV_6P_GUARD30 — 30% 자투리 1주 승격 방지 가드 & 온디맨드 예비시드 자동 수혈 판정기 (계좌별 동적 수수료율 반영)]:
     """
     f_cash = max(0.0, safe_float(free_cash_usd, 0.0))
     ex_p = max(0.01, safe_float(exec_price, 0.01))
@@ -967,7 +967,7 @@ def compute_reserve_repayment_on_zero(
 
 
 # ---------------------------------------------------------------------------
-# [핵심 3] 보유 회차별 4단 와이드 점진 단차 · 하이브리드 1층 재장전(Case 84 돌파차단 포함) · STEP2X_15PCT_C20 스텝업 해금 판정기 (Case 36 ~ 85)
+# [핵심 3] 보유 회차별 4단 와이드 점진 단차 · 하이브리드 1층 재장전(Case 84 돌파허용 반영) · STEP2X_15PCT_C20 스텝업 해금 판정기 (Case 36 ~ 86)
 # ---------------------------------------------------------------------------
 def get_golden8_prog_thresholds(
     held_lots: int,
@@ -1001,7 +1001,12 @@ def evaluate_l2_only_hybrid_reentry_signal(
     is_late_new_cycle_cutoff: bool = False,
 ) -> Dict[str, Any]:
     """
-    # [🎯 4 & Case 59, Case 67, Case 71, Case 72, Case 73 & Case 84]:
+    # MODIFIED [🎯 4 & Case 59, Case 67, Case 71, Case 72, Case 73 & Case 84 개정]:
+    상단 2층 ~ 7층(GRID_L2 ~ GRID_L7) 지층이 존재하는 상태에서 1층이 공석일 때:
+    - 현재가 > 2층 단가(ceil_p) 시에는 1층 > 2층 단가 역전을 막기 위해 HOLD_PREVENT_INVERSION 으로 차단(Case 73)하고,
+    - 현재가 <= 2층 단가 안전 영역 내에서는 정규장 마감 30분 전(15:30 ~ 16:00 EST) 여부를 불문하고
+      직전 익절가 대비 -1.00% 이하 눌림목(PULLBACK_RELOAD) 및 +1.00% 이상 상승돌파(BREAKOUT_RELOAD) 재장전을
+      100% 정상 승인한다! (장마감 30분전 1층 공석 돌파 매수 금지 룰 영구 폐기 · 오직 0주 새 사이클 진입만 차단)
     """
     lp = safe_float(live_price, 0.0)
     anc = safe_float(anchor_price, 0.0)
@@ -1054,7 +1059,7 @@ def evaluate_l2_only_hybrid_reentry_signal(
             "l2_ceiling_price": round(ceil_p, 4),
         }
 
-    # 조건 A : -1.00% 이하 눌림목 재장전 (15:30 ~ 16:00 EST 구간 포함 전 매수 구간 100% 정상 허용)
+    # 조건 A : -1.00% 이하 눌림목 재장전 (전 매수 구간 100% 정상 허용)
     if chg_from_exit_pct <= REENTRY_PULLBACK_DROP_PCT:
         return {
             "should_buy": True,
@@ -1067,19 +1072,8 @@ def evaluate_l2_only_hybrid_reentry_signal(
             "l2_ceiling_price": round(ceil_p, 4),
         }
 
-    # 조건 B : +1.00% 이상 상승돌파 재장전 (Case 84 : 15:30 ~ 16:00 EST 구간에서는 돌파 추격 차단!)
+    # 조건 B : +1.00% 이상 상승돌파 재장전 (MODIFIED Case 84 : 15:30 ~ 16:00 EST 구간 포함 전 매수 구간 100% 정상 허용!)
     if chg_from_exit_pct >= REENTRY_BREAKOUT_RISE_PCT:
-        if is_late_new_cycle_cutoff:
-            return {
-                "should_buy": False,
-                "signal_type": "HOLD_LATE_SESSION_BREAKOUT_CUTOFF",
-                "ref_anchor": round(ref_anchor, 4),
-                "quota_ref_price": round(ref_anchor, 4),
-                "chg_from_exit_pct": round(chg_from_exit_pct, 2),
-                "pullback_target_price": pullback_target_p,
-                "breakout_target_price": breakout_target_p,
-                "l2_ceiling_price": round(ceil_p, 4),
-            }
         return {
             "should_buy": True,
             "signal_type": "BREAKOUT_RELOAD",

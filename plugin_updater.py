@@ -2,20 +2,21 @@
 """
 # MODIFIED: plugin_updater.py
 인피니트 스노우볼 (Infinite Snowball) v3.0 — 순수 롱(🐂 SOXL 단독) 매수 04:07 ~ 16:00 EST 제한
-(정규장 마감 30분 전 15:30 ~ 16:00 EST 0주 새 사이클 1층 진입 및 1층 공석 +1.0% 돌파 추격 차단 · Case 84) &
+(정규장 마감 30분 전 15:30 ~ 16:00 EST 오직 0주 새 사이클 첫 1층 진입만 차단 · 상단 2~7층 보유 중 1층 공석 눌림/돌파 재장전 100% 허용 · Case 84 개정) &
 익절 매도 24시간 전 세션 확장(Case 83 방안 C 오버나이트 통합이평 사수 하이브리드) 오버나이트 7층 골디락스 멀티 그리드 지층관리 스나이퍼
-12대 코어 모듈(quant_engine_core.py + quant_engine.py 2분할 · sniper_plugin_core.py + sniper_plugin.py 2분할 · main_runtime.py + main.py 2분할 포함)
+13대 코어 모듈(toss_api_core.py + toss_api.py 2분할 · quant_engine_core.py + quant_engine.py 2분할 ·
+sniper_plugin_core.py + sniper_plugin.py 2분할 · main_runtime.py + main.py 2분할 포함)
 무디스크 인메모리 프리플라이트 컴파일 · AST 심볼 교차 검증 · Case 85 f-string 중괄호 정규식 자동 치유 및 4배수 선제 스냅 치유기 ·
 텔레그램 잔류 큐 소각 · 폴더별 원장/환경변수/오프셋 스냅샷 Dirty-Check 철벽 보존 · 무인 Git 업데이트 및
-Case 81 커널 레벨 인플레이스 프로세스 자가 교체(os.execv + 3.5초 하드 워치독) 코어 모듈 (Step 01 / 02)
+Case 81 커널 레벨 인플레이스 프로세스 자가 교체(os.execv + 3.5초 하드 워치독) 코어 모듈 (Step 10 / 11)
 - 제1헌법: 모든 파일 I/O 및 git/python 서브프로세스 실행을 asyncio.to_thread 로 비동기 격리 및 타임아웃 적용
 - 제3헌법: 구버전 폐기 파일(daymarket_sim_plugin.py, whipsaw_plugin.py, state_SOXS.json 등) 디스크 영구 소각
 - Case 07: 평일 04:00 ~ 16:05 EST 장중 백그라운드 무인 업데이트 재기동 전면 차단 및 systemd ExecStartPre 장중 락다운 지원
 - Case 11 & Case 62 & Case 85 & Case 86:
-  1) 12대 필수 코어 모듈(REQUIRED_CORE_MODULES : quant_engine_core.py + quant_engine.py · sniper_plugin_core.py + sniper_plugin.py ·
-     main_runtime.py + main.py 분할 반영) 인메모리 compile() 문법 검증 + AST ImportFrom 심볼 테이블 정적 교차 검증
-  2) 모바일 복사·붙여넣기 과정에서 발생한 f-string 닫는 중괄호 오기(f"...{var>.ext" -> f"...{var}.ext" · Case 85),
-     삼항 연산자 조건절 내 비괄호 walrus 오기, 마크다운 펜스 및 홀수 공백(1칸 -> 0칸, 9칸 -> 8칸)을 AST 파싱 전에 선제 스냅 교정(_auto_heal_indentation_glitches)
+  1) 13대 필수 코어 모듈(REQUIRED_CORE_MODULES : toss_api_core.py + toss_api.py · quant_engine_core.py + quant_engine.py ·
+     sniper_plugin_core.py + sniper_plugin.py · main_runtime.py + main.py 분할 반영) 인메모리 compile() 문법 검증 + AST ImportFrom 심볼 테이블 정적 교차 검증
+  2) 모바일 복사·붙여넣기 과정에서 발생한 f-string 닫는 중괄호 오기(f"...{var}.ext" · Case 85),
+     삼항 연산자 조건절 내 비괄호 walrus 오기(_TERNARY_WALRUS_GLITCH_RE), 마크다운 펜스 및 홀수 공백(1칸 -> 0칸, 9칸 -> 8칸)을 AST 파싱 전에 선제 스냅 교정(_auto_heal_indentation_glitches)
   3) /update 실행 시 구버전 RAM 캐시(sys.modules) 간섭을 막기 위해 `python3 plugin_updater.py --verify-only` 를
      독립 서브프로세스로 호출하고 실패 시 직전 정상 커밋 해시로 즉시 원자적 롤백 수행
   4) 부팅(ExecStartPre) 및 실제 원격 신규 커밋(remote_ahead > 0) 감지 시점에만 텔레그램 서버의 미확인 적체 큐를
@@ -61,9 +62,10 @@ from toss_api import (
 logger = logging.getLogger("toss_sniper.plugin_updater")
 
 # ---------------------------------------------------------------------------
-# [핵심 상수] 12대 필수 코어 모듈 및 영구 폐기 레거시 파일 목록 (제3헌법)
+# [핵심 상수] 13대 필수 코어 모듈 및 영구 폐기 레거시 파일 목록 (제3헌법)
 # ---------------------------------------------------------------------------
 REQUIRED_CORE_MODULES: Tuple[str, ...] = (
+    "toss_api_core.py",
     "toss_api.py",
     "quant_indicators_plugin.py",
     "quant_engine_core.py",
@@ -89,9 +91,14 @@ DEPRECATED_LEGACY_FILES: Tuple[str, ...] = (
 
 _TG_TOKEN_STRICT_RE = re.compile(r"\b(\d{8,12}:[A-Za-z0-9_-]{25,60})\b")
 
-# [Case 85]: f-string 내 닫는 중괄호 '}' 가 '>' 로 오기된 패턴(예: {folder_slug>.bak.json) 자동 치유 정규식
+# [Case 85]: f-string 내 닫는 중괄호 '}' 가 '>' 로 오기된 패턴 자동 치유 정규식
 _FSTRING_BROKEN_BRACE_RE = re.compile(
     r"(\{[A-Za-z_][A-Za-z0-9_]*)>(\.[A-Za-z0-9_]+)"
+)
+
+# MODIFIED [Case 85]: 삼항 연산자 조건절 내 비괄호 바다코끼리 연산자(:=) 오기 패턴 선제 치유 정규식
+_TERNARY_WALRUS_GLITCH_RE = re.compile(
+    r"\bif\s+\(?[A-Za-z_][A-Za-z0-9_]*\s*:=\s*res_obj\.get\(\s*(['\"]items['\"])\s*\)\s*\)?"
 )
 
 # [Case 81]: 중복 execv 방지를 위한 프로세스 전역 락 및 워치독 상태
@@ -479,11 +486,11 @@ def _flush_telegram_pending_updates_sync(
 
 
 # ---------------------------------------------------------------------------
-# [핵심 0-C · Case 68, Case 75, Case 80 & Case 81] git reset --hard 실행 전후 폴더별 원장 · .env · 오프셋 철벽 보호기
+# [핵심 0-C · Case 68, Case 75, Case 80, Case 81 & Case 86] git reset --hard 실행 전후 폴더별 원장 · .env · 오프셋 철벽 보호기
 # ---------------------------------------------------------------------------
 def _snapshot_protected_local_files_sync(target_dir: str) -> Dict[str, bytes]:
     """
-    🚨 Case 68, Case 75, Case 80 & Case 81:
+    🚨 Case 68, Case 75, Case 80, Case 81 & Case 86:
     git reset --hard 가 실행되기 직전(remote_ahead > 0 확인 후)에 현재 폴더(target_dir) 내의
     모든 원장, 백업, .env, .tg_update_offset 파일을 메모리에 스냅샷 보존한다.
     """
@@ -621,15 +628,16 @@ def purge_deprecated_legacy_files(
 
 
 # ---------------------------------------------------------------------------
-# [핵심 2] Case 85 f-string 닫는 중괄호 정규식 치유 & 4배수 선제 스냅 자동 치유기 (_auto_heal_indentation_glitches)
+# [핵심 2] Case 85 f-string 닫는 중괄호 정규식 치유 & 삼항식 walrus 정규식 치유 & 4배수 선제 스냅 자동 치유기 (_auto_heal_indentation_glitches)
 # ---------------------------------------------------------------------------
 def _auto_heal_indentation_glitches(
     filepath: str, max_passes: int = 6
 ) -> bool:
     r"""
-    # MODIFIED [Case 75 & Case 85 역방향 들여쓰기 오염 · f-string 닫는 중괄호('}' -> '>') 오기 · 삼항식 walrus 선제 자동 치유기]:
-    1) [Case 85 핵심]: 외부 편집 과정에서 f"...{var>.ext" 패턴이나 삼항식 조건절 내 비괄호 walrus(r_items :=) 패턴이 유입되었을 경우,
-       ast.parse() 실행 전에 정규식(_FSTRING_BROKEN_BRACE_RE) 및 문자열 치환으로 즉시 정상 구문으로 선제 치유한다!
+    # MODIFIED [Case 75 & Case 85 역방향 들여쓰기 오염 · f-string 닫는 중괄호('}' -> '>') 오기 · 삼항식 walrus 선제 정규식 자동 치유기]:
+    1) [Case 85 핵심]: 외부 편집 과정에서 f"...{var}.ext" 닫는 중괄호 자리에 '>' 가 혼입된 패턴이나
+       삼항식 조건절 내 비괄호 walrus 패턴이 유입되었을 경우, ast.parse() 실행 전에
+       정규식(_FSTRING_BROKEN_BRACE_RE 및 _TERNARY_WALRUS_GLITCH_RE)으로 즉시 정상 구문으로 선제 치유한다!
     2) 파일 상단에 복사 시 섞여 들어간 텍스트나 마크다운 코드펜스(```)를 제거하고,
        홀수 공백(1칸 -> 0칸, 9칸 -> 8칸)을 4의 배수로 일괄 선제 스냅 교정한다.
     3) 치유본 저장 시 OSError(errno.ENOSPC == 28)가 발생하면 미완성 .heal.tmp 를 삭제하고
@@ -647,11 +655,10 @@ def _auto_heal_indentation_glitches(
             with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
                 orig_src = f.read()
 
-            # 0단계 [Case 85]: f-string 닫는 중괄호 '>' 오기 및 삼항식 내 비괄호 walrus 선제 치유
+            # 0단계 [Case 85]: f-string 닫는 중괄호 '>' 오기 및 삼항식 내 비괄호 walrus 정규식 선제 치유
             src = _FSTRING_BROKEN_BRACE_RE.sub(r"\1}\2", orig_src)
-            src = src.replace(
-                'if r_items := res_obj.get("items") is not None',
-                'if res_obj.get("items") is not None',
+            src = _TERNARY_WALRUS_GLITCH_RE.sub(
+                r"if res_obj.get(\1) is not None", src
             )
 
             # 이미 문법적으로 완벽하고 변경 사항이 없으면 디스크 쓰기 없이 즉시 통과
@@ -685,9 +692,8 @@ def _auto_heal_indentation_glitches(
 
                 src = "\n".join(snapped_lines) + "\n"
                 src = _FSTRING_BROKEN_BRACE_RE.sub(r"\1}\2", src)
-                src = src.replace(
-                    'if r_items := res_obj.get("items") is not None',
-                    'if res_obj.get("items") is not None',
+                src = _TERNARY_WALRUS_GLITCH_RE.sub(
+                    r"if res_obj.get(\1) is not None", src
                 )
 
                 # 2단계: 선제 스냅 후에도 남은 IndentationError 미세 교정
@@ -777,7 +783,7 @@ def _auto_heal_indentation_glitches(
 
 
 # ---------------------------------------------------------------------------
-# [핵심 3] AST 최상위 익스포트 심볼 추출기 및 12대 코어 모듈 무디스크 인메모리 교차 검증기 (Case 75 & Case 85)
+# [핵심 3] AST 최상위 익스포트 심볼 추출기 및 13대 코어 모듈 무디스크 인메모리 교차 검증기 (Case 75 & Case 85)
 # ---------------------------------------------------------------------------
 def _extract_module_exported_symbols(tree: ast.AST) -> Set[str]:
     """
@@ -818,12 +824,12 @@ def verify_all_modules_compile(
     """
     🚨 Case 11, Case 62, Case 75 & Case 85 [디스크 쓰기 0 Byte 순수 인메모리 컴파일 검증]:
     1) 검증 시작 전 emergency_free_disk_space_sync(remove_pycache=False) 로 고아 .tmp.* 파일을 청소한다.
-    2) 12대 필수 코어 모듈(REQUIRED_CORE_MODULES)이 디스크에 모두 존재하는지 확인한다.
+    2) 13대 필수 코어 모듈(REQUIRED_CORE_MODULES)이 디스크에 모두 존재하는지 확인한다.
     3) Case 85 f-string 중괄호 및 홀수 공백 들여쓰기 자동 치유(_auto_heal_indentation_glitches) 후
        디스크에 단 1바이트도 쓰지 않는 파이썬 내장 인메모리 바이트코드 컴파일러
        `compile(src, fpath, "exec", dont_inherit=True)` 및 `ast.parse(src, filename=fpath)` 로
        문법 및 바이트코드 생성 무결성을 100% 검증한다!
-    4) 12대 코어 모듈 간 `from <local_module> import <symbol>` 구문을 전수 대조한다.
+    4) 13대 코어 모듈 간 `from <local_module> import <symbol>` 구문을 전수 대조한다.
     """
     target_dir = get_bot_base_dir(base_dir)
     emergency_free_disk_space_sync(
@@ -920,7 +926,7 @@ def _execute_git_pull_and_preflight_sync(
     base_dir: Optional[str] = None,
 ) -> Tuple[bool, str, bool]:
     """
-    🚨 Case 62, Case 68, Case 75, Case 80, Case 81 & Case 85:
+    🚨 Case 62, Case 68, Case 75, Case 80, Case 81, Case 85 & Case 86:
     원격 신규 커밋이 없을 때(remote_ahead == 0)는 getUpdates 호출(HTTP 409 유발)이나
     SoxlStratumLedger 재초기화 없이 즉시 인메모리 검증만 수행한다.
     """
@@ -1223,7 +1229,7 @@ def _cli_main() -> int:
     parser.add_argument(
         "--verify-only",
         action="store_true",
-        help="디스크의 12대 코어 모듈 인메모리 컴파일 및 AST 심볼 정합성만 검증하고 종료합니다.",
+        help="디스크의 13대 코어 모듈 인메모리 컴파일 및 AST 심볼 정합성만 검증하고 종료합니다.",
     )
     parser.add_argument(
         "--base-dir",

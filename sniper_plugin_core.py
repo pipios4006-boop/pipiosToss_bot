@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 # MODIFIED: sniper_plugin_core.py
-인피니트 스노우볼 (Infinite Snowball) v3.0 — 스나이퍼 매수 코어 Part 1 / 2 (Step 04 / 11)
+인피니트 스노우볼 (Infinite Snowball) v3.0 — 스나이퍼 매수 코어 Part 1 / 2 (Step 06 / 11)
 역할:
 1) 스나이퍼 매수 전역 상수 락온 (STEP2X_15PCT_C20 · BUY_ORDER_MAX_WAIT_SEC = 60.0 · AUTO_FILL_GRACE_SHIELD_SEC = 15.0 ·
    REENTRY_MONITOR_TIME_SHIELD_SEC = 60.0 · RESERVE_DEPOSIT_CHECK_INTERVAL_SEC = 60.0)
@@ -13,15 +13,15 @@
    (mark_reserve_deposit_check_shield, is_within_reserve_deposit_check_shield · Case 77, 80)
 5) 실시간 SOXL 현재가 추출 및 60초 타임쉴드 경과 직후 최신 현재가 직접 재조회기
    (_get_live_soxl_price, _fetch_fresh_current_soxl_price · Case 65, 73, 80)
-6) 💉 05_RESV_6P_GUARD30 (30% 자투리 1주 승격 방지 가드 · 계좌별 동적 왕복 수수료율 연동 · 골든포켓 가동 중 오발동 방어 ·
+6) 💉 05_RESV_6P_GUARD30 (30% 자투리 1주 승격 방지 가드 · 계좌별 동적 왕복 수수료율 연동[Case 86] · 골든포켓 가동 중 오발동 방어 ·
    예수금 API 0.0 반환 시 0.25초 재시도 · 시드고갈 단 1회 입금 요청 알림 영구 래치 waiting_reserve_deposit_alert_sent 및 중복 디스크 쓰기 스킵 ·
    토스 실계좌 여유자금 감지 기반 최대 +6회분 온디맨드 예비시드 자동 수혈) 실행 엔진
-   (_check_and_execute_guard30_or_reserve_injection · Case 75, 77, 80)
+   (_check_and_execute_guard30_or_reserve_injection · Case 75, 77, 80, 86)
 7) 매수 체결(FILLED / 부분 체결 후 60초 취소 종료 / 세션 경계 force_settle 강제 정산) 원장 커밋 ·
    독립 골든포켓(GOLDEN_POCKET) 분리 정산(Case 80) · 부분 체결 수량 비례 자투리 정산 및 1층 목표 정량(l1_target_quota_qty) 보존(Case 78) ·
-   STEP2X_15PCT_C20 스텝업 잠금 저가 갱신(Case 76) · 15:30 EST 경계 미체결 0주 1층/돌파 주문 즉시 취소(Case 84) 및
-   미체결 매수 주문 60.0초 동기화/안전 취소기 (_commit_filled_buy_to_stratum_ledger, sync_pending_buy_order_plugin · Case 19, 24, 59 ~ 85)
-- 제1헌법 ~ 제6헌법 및 Case 01 ~ 85 완벽 준수
+   STEP2X_15PCT_C20 스텝업 잠금 저가 갱신(Case 76) · 15:30 EST 경계 미체결 취소 시 오직 0주 신규 진입(is_zero_grid_reentry)만 안전 취소(Case 84 개정) 및
+   미체결 매수 주문 60.0초 동기화/안전 취소기 (_commit_filled_buy_to_stratum_ledger, sync_pending_buy_order_plugin · Case 19, 24, 59 ~ 86)
+- 제1헌법 ~ 제6헌법 및 Case 01 ~ 86 완벽 준수
 """
 
 from __future__ import annotations
@@ -471,7 +471,7 @@ def min_req_cash_str(val: float) -> str:
 
 
 # ---------------------------------------------------------------------------
-# [핵심 0-B · Case 75, Case 77 & Case 80] GUARD30 자투리 차단 · 계좌별 동적 수수료율 연동 · 예수금 API 일시 오류 방어 · 토스 계좌 여유자금 감지 자동 수혈 · 단 1회 입금 요청 알림 실행기
+# [핵심 0-B · Case 75, Case 77, Case 80 & Case 86] GUARD30 자투리 차단 · 계좌별 동적 수수료율 연동 · 예수금 API 일시 오류 방어 · 토스 계좌 여유자금 감지 자동 수혈 · 단 1회 입금 요청 알림 실행기
 # ---------------------------------------------------------------------------
 async def _check_and_execute_guard30_or_reserve_injection(
     context: Any,
@@ -484,7 +484,7 @@ async def _check_and_execute_guard30_or_reserve_injection(
     trigger_desc: str,
 ) -> Tuple[bool, float, float, Dict[str, Any]]:
     """
-    # MODIFIED [Case 75, Case 77, Case 80 & 계좌별 동적 왕복 수수료율 연동]:
+    # MODIFIED [Case 75, Case 77, Case 80 & Case 86 계좌별 동적 왕복 수수료율 연동]:
     매수 주문 발주 직전(뮤텍스 내부)에 호출되어:
     0) [Case 80 골든포켓 일시 가동 중 오발동 방어 및 60초 인메모리 쉴드]
     1) 토스 실계좌 주문가능 달러(`raw_bp_usd = await context.api.get_buying_power_usd(safety_buffer_pct=0.0)`)를 조회하되,
@@ -1150,8 +1150,11 @@ async def sync_pending_buy_order_plugin(
     force_settle: bool = False,
 ) -> Dict[str, Any]:
     """
-    # [🎯 1 & 🎯 5 & Case 19, 24, 59, 60, 61, 65, 66, 71, 72, 73, 76, 77, 78, 80, 84]:
+    # MODIFIED [🎯 1 & 🎯 5 & Case 19, 24, 59, 60, 61, 65, 66, 71, 72, 73, 76, 77, 78, 80 & Case 84 개정]:
     장부에 대기 중인 미체결 매수 주문(buy_order_id)이 존재할 때 체결/부분체결/취소를 동기화한다.
+    - 15:30 EST 경계 도래 시 미체결 안전 취소(should_abort_late_cutoff)는 오직 0주 새 사이클 첫 1층 진입 주문
+      (is_zero_grid_reentry: len(buckets_now) == 0 and lot_type == "REENTRY_1FL")에만 적용하며,
+      상단 2~7층 보유 중 1층 공석 상태에서 발주된 재장전 주문은 취소하지 않고 정상 체결을 대기한다!
     """
     st = context.ledger.get_state(TARGET_SYMBOL)
     buy_oid = str(st.get("buy_order_id") or "").strip()
@@ -1181,18 +1184,12 @@ async def sync_pending_buy_order_plugin(
     )
     is_golden_lot = lot_type in ("GOLDEN_POCKET", "GOLDEN_L1")
 
-    anchor_now = safe_float(st.get("anchor_price"), 0.0)
+    # MODIFIED [Case 84 개정]: 오직 0주 상태(len(buckets_now) == 0)에서의 새 사이클 첫 1층 진입 주문만 15:30 EST 도래 시 취소!
     is_zero_grid_reentry = bool(
         len(buckets_now) == 0 and lot_type == "REENTRY_1FL"
     )
-    is_vacant_l1_breakout = bool(
-        is_vacant_l1_now
-        and lot_type == "REENTRY_1FL"
-        and anchor_now > 0.0
-        and ord_price >= round(anchor_now * 1.005, 2)
-    )
     should_abort_late_cutoff = bool(
-        is_late_cutoff_now and (is_zero_grid_reentry or is_vacant_l1_breakout)
+        is_late_cutoff_now and is_zero_grid_reentry
     )
 
     now_mono = time.monotonic()
@@ -1353,7 +1350,7 @@ async def sync_pending_buy_order_plugin(
         await context.ledger.update_state(TARGET_SYMBOL, **timeout_kw)
         if should_abort_late_cutoff:
             logger.info(
-                "🛡️ [Case 84 장마감 30분전(15:30 EST) 도래 -> 미체결 고점 매수(%s) 즉시 안전 취소] 지정가 $%.2f 취소 ➔ 컷오프 방어 전환",
+                "🛡️ [Case 84 장마감 30분전(15:30 EST) 도래 -> 미체결 0주 신규 진입(%s) 즉시 안전 취소] 지정가 $%.2f 취소 ➔ 컷오프 방어 전환",
                 lot_type,
                 ord_price,
             )

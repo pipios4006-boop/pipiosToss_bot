@@ -2,9 +2,9 @@
 """
 # MODIFIED: tg_ui_plugin.py
 인피니트 스노우볼 (Infinite Snowball) v3.0 — 순수 롱(🐂 SOXL 단독) 매수 04:07 ~ 16:00 EST 제한
-(정규장 마감 30분 전 15:30 ~ 16:00 EST 0주 새 사이클 1층 진입 및 1층 공석 +1.0% 돌파 추격 차단 · Case 84) &
+(정규장 마감 30분 전 15:30 ~ 16:00 EST 오직 0주 새 사이클 첫 1층 진입만 차단 · 상단 2~7층 보유 중 1층 공석 눌림/돌파 재장전 100% 허용 · Case 84 개정) &
 익절 매도 24시간 전 세션(프리마켓 + 정규장 + 애프터마켓 + 데이마켓) 확장 오버나이트 7층 골디락스 멀티 그리드 지층관리 스나이퍼
-텔레그램 관제탑 사용자 중심 초슬림 UI 렌더러 · 계좌별 수수료율(편도/왕복) 실시간 표출 · 불사조 롱폴링(Immortal Telegram Polling) 및 명령어·콜백 비동기 컨트롤러 코어 모듈 (Step 08 / 11)
+텔레그램 관제탑 사용자 중심 초슬림 UI 렌더러 · 계좌별 수수료율(편도/왕복) 실시간 표출 · 불사조 롱폴링(Immortal Telegram Polling) 및 명령어·콜백 비동기 컨트롤러 코어 모듈 (Step 09 / 11)
 - 제1헌법: 모든 파일 I/O 및 동기 HTTP 폴백 호출을 asyncio.to_thread 로 비동기 격리 및 타임아웃 적용
 - 제4헌법: 모든 논리 시계열은 미국 동부 시간(EST/EDT) 100% 락온
 - Case 11 & Case 62:
@@ -23,7 +23,7 @@
   2) 보유 지층(buckets 및 golden_pocket)을 날려버리는 /reset 기능을 사용자 메뉴 및 명령어에서 전면 차단하고,
      보유 주식 지층(1~7층 단가·수량·정적 기억저가 및 독립 골든포켓)과 기준 시드머니는 100% 보존한 채 누적 실현수익만 0점으로 초기화하여
      설정된 기준 시드머니(예: $10,000 또는 $19,000)의 8% 정량 투입으로 복귀시키는 `/reset_profit` 전용 기능으로 대체!
-- Case 70, Case 73, Case 74, Case 75, Case 76, Case 77, Case 78, Case 79, Case 80, Case 81, Case 83, Case 84 & Case 85:
+- Case 70, Case 73, Case 74, Case 75, Case 76, Case 77, Case 78, Case 79, Case 80, Case 81, Case 83, Case 84, Case 85 & Case 86:
   1) 매수 직후 최초 60.0초 타임쉴드 유지 & 보유 중 60초 블라인드 대기 락 전면 해제 -> `/avwap` 레이더 상단 `⚡1.5s 실시간타점` 및 실시간 `RSI(14)` 표출
      (/avwap 호출 시 1분봉 기저값 미확보 상태면 즉시 온디맨드 1분봉 프리워밍 수행으로 RSI 50.0 박제 현상 원천 차단!)
   2) 0주 상태 / 상단 2층 ~ 7층 보유 중 1층 공석 / 활성 1층 보유 중 3대 매수 모니터 상태 및
@@ -32,9 +32,9 @@
   4) 🎯 [Case 78] 활성 1층 지정가 부분 체결로 미체결 잔량(l1_rem_quota_qty > 0) 대기 중일 때 실시간 잔량 감시 표출!
   5) 🌇🌃 [Case 79 & Case 83 방안 C] 애프터마켓(16:00 ~ 19:59 EST) 및 데이마켓(20:00 ~ 03:59 EST) 구간에서 상단 2~7층 보유 시
      개별 층 쪼개 팔기 잠금(`🔒장외잠금(04:07해금)`) 및 `2~7층 통합이평(+1.0%) 일괄졸업 ⚡1.5s 감시` 상태를 명확히 분리 표출!
-  6) 🛡️ [Case 84] 정규장 마감 30분 전(15:30 ~ 16:00 EST) 구간에서 0주 보유 시 새 사이클 1층 진입 차단 배지 및
-     상단 2~7층 보유 · 1층 공석 시 +1.0% 상승돌파 추격 차단 / -1.0% 눌림목 재장전 감시 상태 실시간 표출!
-  7) 💰 [NEW] 지시서(/sync) 및 전술 제어반(/settlement)에 계좌별 적용 미국 주식 수수료율(예: 편도 0.070% / 왕복 0.14% 또는 편도 0.100% / 왕복 0.20%) 실시간 표출!
+  6) 🛡️ [Case 84 개정] 정규장 마감 30분 전(15:30 ~ 16:00 EST) 구간에서 오직 0주 보유(사이클 종료) 시에만 새 사이클 1층 진입 차단 배지를 표출하고,
+     상단 2~7층 보유 · 1층 공석 시에는 2층 상한 이하 눌림(-1.0%)/돌파(+1.0%) 재장전 감시 상태를 정상 표출!
+  7) 💰 [Case 86] 지시서(/sync) 및 전술 제어반(/settlement)에 계좌별 적용 미국 주식 수수료율(예: 편도 0.07% / 왕복 0.14% 또는 편도 0.1% / 왕복 0.20%) 실시간 표출!
   8) 🛡️ [Case 75, Case 81 & Case 85] httpx/httpcore 단순 조회 INFO 로그 WARNING 묵음화 · 텔레그램 전용 독립 httpx.AsyncClient 분리 운용 ·
      HTTP 409 Conflict 또는 연속 3회 오류 시 클라이언트 자동 재생성 · 종료/재기동 시 롱폴링 소켓 즉시 반납(aclose) ·
      불사조 감독 루프(Immortal Supervisor Wrapper) 및 전 라인 f-string 중괄호({}) 짝 무결성 100% 보장!
@@ -294,10 +294,10 @@ def build_start_schedule_message(
     context: Optional[Any] = None,
 ) -> str:
     """
-    # [Case 02, Case 79, Case 80, Case 83 & Case 84]:
+    # MODIFIED [Case 02, Case 79, Case 80, Case 83 & Case 84 개정]:
     - /reset 을 메뉴에서 완전 삭제하고 그 자리에 /reset_profit 만 배치
     - 황금시간대(07:00 ~ 07:50 EST & RSI <= 19.0) 선택 옵션,
-      정규장 마감 30분 전(15:30 ~ 16:00 EST) 0주 새 사이클 1층 진입 및 1층 공석 +1% 돌파 차단(Case 84),
+      정규장 마감 30분 전(15:30 ~ 16:00 EST) 오직 0주 새 사이클 첫 1층 진입만 차단(Case 84 개정),
       애프터/데이마켓 방안 C (2~7층 통합이평 일괄졸업 감시 · 개별층 쪼개팔기 및 매수 잠금) 스케줄 명시
     """
     dt_now = now_est.astimezone(EST_TZ) if now_est else datetime.now(EST_TZ)
@@ -310,7 +310,7 @@ def build_start_schedule_message(
         "🔹 04:07 ~ 09:29: 🔫 프리장 (4중익절·매수 전면가동)",
         "       (🌟 07:00~07:50·RSI≤19 전액매수 선택 지원)",
         "🔹 09:30 ~ 16:00: 🔥 정규장 (4중익절·매수 전면가동)",
-        "       (🛡️ 15:30~16:00: 0주 새사이클·1층공석 돌파차단)",
+        "       (🛡️ 15:30~16:00: 0주 새사이클 첫1층 진입차단)",
         "🔹 16:00 ~ 19:59: 🌇 애프터장 (통합졸업·개별/매수잠금)",
         "🔹 20:00 ~ 03:59: 🌃 데이장 (통합졸업·개별/매수잠금)",
         "──────────────",
@@ -333,10 +333,12 @@ def _format_multi_grid_stratum_lines(
     is_late_cutoff: bool = False,
 ) -> List[str]:
     """
-    # [Case 71, Case 72, Case 73, Case 78, Case 79, Case 80, Case 83 & Case 84]:
+    # MODIFIED [Case 71, Case 72, Case 73, Case 78, Case 79, Case 80, Case 83 & Case 84 개정]:
     독립 골든포켓(golden_pocket · 보유 시 최상단 표출) 및
     1층(활성 공격수 · 부분체결 시 미체결 잔량 및 1.5s 감시 표시 / 또는 60초 주기 공석 감시 & 2층 단가 상한) 및
     상단 2층 ~ 6층 개별 완충층 · 통합 7층 본대와 2~7층 통합 이동평균 목표가를 모바일 화면에 최적화된 형태로 전수 렌더링한다.
+    (Case 84 개정: 15:30 ~ 16:00 EST 구간에서 오직 0주 상태일 때만 신규 진입 차단을 표출하고,
+     상단 2~7층 보유 중 1층 공석일 때는 2층 상한 이하 눌림/돌파 감시를 정상 표출한다.)
     """
     held_sh = safe_int(summary.get("held_shares"), 0)
     gp_qty = safe_int(summary.get("golden_pocket_qty"), 0)
@@ -412,10 +414,6 @@ def _format_multi_grid_stratum_lines(
             lines.append(
                 f"⚡ <b>[1층: 공석 · 🔒장외 매수잠금(04:07 EST 이후 재장전{cap_note})]</b>"
             )
-        elif is_late_cutoff:
-            lines.append(
-                f"⚡ <b>[1층: 공석 · 60초(1분) 주기 눌림목(-1.0%) 감시(🔒장마감 30분전 +1.0% 돌파차단{cap_note})]</b>"
-            )
         else:
             lines.append(
                 f"⚡ <b>[1층: 공석 · 60초(1분) 주기 눌림(-1.0%)/돌파(+1.0%) 감시{cap_note}]</b>"
@@ -482,8 +480,10 @@ def build_avwap_radar_message(
     now_est: Optional[datetime] = None,
 ) -> str:
     """
-    # [Case 65, Case 70 ~ 85]:
+    # MODIFIED [Case 65, Case 70 ~ 86]:
     📡 /avwap 사용자 중심 초슬림 레이더 메시지 생성
+    (Case 84 개정: 15:30 ~ 16:00 EST 구간에서 오직 0주 보유 시에만 새 사이클 진입 차단을 표시하고,
+     상단 2~7층 보유 중 1층 공석 시에는 2층 단가 상한 이하 눌림/돌파 감시를 정상 표시한다.)
     """
     dt_now = now_est.astimezone(EST_TZ) if now_est else datetime.now(EST_TZ)
     hm_now = dt_now.hour * 100 + dt_now.minute
@@ -604,19 +604,9 @@ def build_avwap_radar_message(
             f"현재 RSI(14) <b>{rsi_14:.2f}</b> (목표 <b>≤ {GOLDEN_RSI_MAX_THRESHOLD:.1f}</b> 도달 시 가용현금 100% 투입)"
         )
     elif is_l2_only and in_re_shield:
-        re_mode_note = (
-            "1층 눌림목(-1.0%) 검문[🔒장마감 30분전 +1% 돌파차단]"
-            if is_late_cutoff
-            else "1층 재장전(2층 단가 이하 눌림/돌파) 검문"
-        )
         shield_line = (
             f"🛡️ <b>[60초 1층 공석 재장전 타임쉴드 가동 중]</b> 잔여 <b>{rem_re_sec:.1f}초</b> 후 "
-            f"{re_mode_note} · 상단 익절 ⚡1.5초 상시감시 중"
-        )
-    elif is_l2_only and is_late_cutoff:
-        shield_line = (
-            "🛡️ <b>[장마감 30분전(15:30~16:00) 1층 공석 돌파차단 가동 중]</b> "
-            "+1.0% 상승돌파 추격 차단 · 2층단가 이하 -1.0% 눌림목 재장전만 허용"
+            "1층 재장전(2층 단가 이하 눌림/돌파) 검문 · 상단 익절 ⚡1.5초 상시감시 중"
         )
     elif in_sell_shield:
         shield_line = (
@@ -681,12 +671,6 @@ def build_avwap_radar_message(
         )
         if is_ext_sell_only:
             re_wait_label = "🔒장외 매수잠금 · 04:07 EST 재개"
-        elif is_late_cutoff:
-            re_wait_label = (
-                f"60초 주기 · 잔여 {rem_re_sec:.1f}초 · 🔒돌파차단"
-                if in_re_shield
-                else "60초 주기 눌림목 감시 · 🔒돌파차단"
-            )
         elif in_re_shield:
             re_wait_label = f"60초 주기 · 잔여 {rem_re_sec:.1f}초"
         else:
@@ -703,16 +687,10 @@ def build_avwap_radar_message(
         else:
             cap_status_str = ""
 
-        if is_late_cutoff:
-            gate_cond_line = (
-                f"▫️ 직전익절 ${ref_anchor:.2f} 대비 {c_sign}{chg_anchor:.2f}% "
-                f"(눌림목 <b>${pull_p:.2f}</b> 이하만 허용 · 🔒장마감 30분전 돌파[${brk_p:.2f}] 차단{cap_status_str} · 기억저가 ${locked_min_p:.2f} 잠금)"
-            )
-        else:
-            gate_cond_line = (
-                f"▫️ 직전익절 ${ref_anchor:.2f} 대비 {c_sign}{chg_anchor:.2f}% "
-                f"(눌림목 <b>${pull_p:.2f}</b> 이하 OR 돌파 <b>${brk_p:.2f}</b> 이상{cap_status_str} · 기억저가 ${locked_min_p:.2f} 잠금)"
-            )
+        gate_cond_line = (
+            f"▫️ 직전익절 ${ref_anchor:.2f} 대비 {c_sign}{chg_anchor:.2f}% "
+            f"(눌림목 <b>${pull_p:.2f}</b> 이하 OR 돌파 <b>${brk_p:.2f}</b> 이상{cap_status_str} · 기억저가 ${locked_min_p:.2f} 잠금)"
+        )
     else:
         drop_req = safe_float(summary.get("drop_buy_pct"), -1.0)
         trig_p = safe_float(summary.get("trigger_buy_price"), 0.0)
@@ -876,7 +854,7 @@ def build_settlement_control_message(
     context: Optional[Any] = None,
 ) -> str:
     """
-    # MODIFIED [Case 64, Case 80 & 계좌별 수수료율 표시]:
+    # MODIFIED [Case 64, Case 80 & Case 86 계좌별 수수료율 표시]:
     ⚙️ /settlement 사용자 중심 초슬림 전술 제어반 메시지 생성
     """
     dt_now = now_est.astimezone(EST_TZ) if now_est else datetime.now(EST_TZ)
@@ -948,7 +926,7 @@ def build_settlement_control_message(
 # ---------------------------------------------------------------------------
 class TelegramCommandController:
     """
-    🚨 제1헌법 & Case 02, 15, 16, 62, 64, 65, 66, 67, 68, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 83, 84, 85:
+    🚨 제1헌법 & Case 02, 15, 16, 62, 64, 65, 66, 67, 68, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 83, 84, 85, 86:
     main.py 의 SniperAppContext 와 정식 결속되는 텔레그램 봇 컨트롤러.
     """
 
@@ -1343,7 +1321,7 @@ class TelegramCommandController:
         now_est = datetime.now(EST_TZ)
         live_p, _ = await self._refresh_live_price_and_metrics()
 
-        # NEW: /sync 호출 시 계좌별 미국 주식 수수료율(GET /api/v1/commissions) 동기화 확인
+        # [Case 86]: /sync 호출 시 계좌별 미국 주식 수수료율(GET /api/v1/commissions) 동기화 확인
         ensure_comm_fn = getattr(
             self.context.api, "ensure_us_commission_rate", None
         )
@@ -1491,7 +1469,7 @@ class TelegramCommandController:
 
     async def _reset_realized_profit_only(self, chat_id: str) -> None:
         """
-        # [Case 02, Case 74, Case 76, Case 77 & Case 80]:
+        # [Case 02, Case 74, Case 76, Case 77, Case 80 & Case 86]:
         보유 중인 주식 지층(buckets) 및 독립 골든포켓(golden_pocket)과 설정된 기준 시드머니(initial_seed_usd),
         계좌별 수수료율(us_commission_rate, round_trip_fee_rate_pct)은 100% 보존하고,
         오직 누적/당일 세후 실현수익금 및 자투리 절약금·스텝업 해금 횟수·황금시간 매매 통계·예비시드 통계·입금 알림 래치만

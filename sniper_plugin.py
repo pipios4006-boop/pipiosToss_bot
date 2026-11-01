@@ -1,27 +1,26 @@
 # -*- coding: utf-8 -*-
 """
 # MODIFIED: sniper_plugin.py
-인피니트 스노우볼 (Infinite Snowball) v3.0 — 스나이퍼 매수 코어 Part 2 / 2 (Step 05 / 11)
+인피니트 스노우볼 (Infinite Snowball) v3.0 — 스나이퍼 매수 코어 Part 2 / 2 (Step 07 / 11)
 역할:
 1) sniper_plugin_core.py (Part 1 / 2) 의 모든 상수·타임쉴드·GUARD30 예비수혈·체결커밋·미체결 동기화 심볼 명시적 재익스포트(Facade Re-export)로
    타 모듈(defense_plugin.py, tg_ui_plugin.py, main_runtime.py, main.py, plugin_updater.py) AST 임포트 호환성 100% 보장
 2) 04:07 ~ 16:00 EST 비대칭 매수 타격 게이트 실행기 (execute_seed_protected_buy_gate_plugin):
    - 🌟 [분기 G · Case 80] : 미동부 프리장 황금시간대(07:00 ~ 07:50 EST & 14봉 이상 확보된 1분봉 Wilder RSI(14) <= 19.0) 도달 시
-     전술 제어반 선택 모드(기본값 NONE[OFF] ↔ POCKET_ALLIN ↔ GRID_L1_ALLIN)에 따라 가용 현금 시드 100% 전액 추가매수 발주 (계좌별 동적 왕복 수수료율 반영)
-   - 🛡️ [분기 A · Case 65, 80, 84] : 그리드 0주 상태(is_zero_shares)에서 0주 종료 후 60.0초 타임쉴드 경과 뒤 현재가 지정가 첫 1층(REENTRY_1FL) 산입하되,
-     정규장 마감 30분 전(15:30 ~ 16:00 EST, is_late_regular_new_cycle_cutoff_window) 구간에서는 고점 오버나이트 방어를 위해
-     0주 새 사이클 첫 1층 진입을 100% 원천 차단(HOLD_LATE_SESSION_NEW_CYCLE_CUTOFF)!
-   - 🔥 [분기 B-1 · Case 67, 73, 77, 84] : 상단 2층 ~ 7층(GRID_L2 ~ GRID_L7) 보유 중 1층 공석(is_l2_only_vacant_l1) 시
+     전술 제어반 선택 모드(기본값 NONE[OFF] ↔ POCKET_ALLIN ↔ GRID_L1_ALLIN)에 따라 가용 현금 시드 100% 전액 추가매수 발주 (계좌별 동적 왕복 수수료율 반영 · Case 86)
+   - 🛡️ [분기 A · Case 65, 67, 77, 80, 84] : 그리드 0주 상태(is_zero_shares)에서 0주 종료 후 60.0초 타임쉴드 경과 뒤 현재가 지정가 첫 1층(REENTRY_1FL) 산입하되
+     (뮤텍스 내부 st_now 기준 now_core_eq 재산출 동기화), 정규장 마감 30분 전(15:30 ~ 16:00 EST, is_late_regular_new_cycle_cutoff_window) 구간에서는
+     고점 오버나이트 방어를 위해 오직 0주 새 사이클 첫 1층 진입만 100% 원천 차단(HOLD_LATE_SESSION_NEW_CYCLE_CUTOFF)!
+   - 🔥 [분기 B-1 · Case 67, 73, 77, 84 개정] : 상단 2층 ~ 7층(GRID_L2 ~ GRID_L7) 보유 중 1층 공석(is_l2_only_vacant_l1) 시
      매 60.0초(1분) 타임쉴드 주기마다 실시간 현재가를 조회하되, 현재가 <= 2층 단가 상한 가드(HOLD_PREVENT_INVERSION · Case 73) 하에서
-     직전 익절가 대비 눌림목(-1.00%, PULLBACK_RELOAD) OR 상승돌파(+1.00%, BREAKOUT_RELOAD) 시 독립 실물 1층(REENTRY_1FL)을 재장전하며,
-     정규장 마감 30분 전(15:30 ~ 16:00 EST) 구간에서는 +1.00% 상승돌파(BREAKOUT_RELOAD) 추격만 핀포인트 차단(HOLD_LATE_SESSION_BREAKOUT_CUTOFF)하고
-     -1.00% 눌림목(PULLBACK_RELOAD) 재장전은 100% 정상 허용!
+     직전 익절가 대비 눌림목(-1.00%, PULLBACK_RELOAD) OR 상승돌파(+1.00%, BREAKOUT_RELOAD) 시 독립 실물 1층(REENTRY_1FL)을 재장전!
+     (MODIFIED Case 84: 15:30 ~ 16:00 EST 구간에서도 상단 2~7층 지층이 존재하는 1층 공석 상태에서는 돌파 매수 금지 룰을 폐기하고 눌림/돌파 모두 100% 정상 허용!)
    - 🎯 [분기 B-0 · Case 78] : 활성 1층 지정가 부분 체결(buckets[0].qty < l1_target_quota_qty) 시 매수 후 60.0초 타임쉴드 경과 뒤
      매 1.5초 실시간 모니터에서 현재가 <= 1층 단가(buckets[0].book_price) 재도래 시 미체결 잔량(TOPUP_1FL) 지정가 60.0초 재대기 발주 (15:30 ~ 16:00 EST 정상 허용)
    - 🔵 [분기 B-2 · Case 60, 72, 76, 77] : 활성 1층 보유 중 04:07 EST 기점 10분 고정 매수 게이트 도래 시
      정적 기억 최저가 대비 4단 와이드 활주로(-1.0% / -2.0% / -3.5% / -5.5%) 신저가 OR STEP2X_15PCT_C20 3중 안전문(-15.0% 스텝업) 추매(DIP_1FL) 집행
      (15:30 ~ 16:00 EST 정상 허용)
-- 제1헌법 ~ 제6헌법 및 Case 01 ~ 85 완벽 준수
+- 제1헌법 ~ 제6헌법 및 Case 01 ~ 86 완벽 준수
 """
 
 from __future__ import annotations
@@ -105,11 +104,11 @@ logger = logging.getLogger("toss_sniper.sniper_plugin")
 
 
 # ---------------------------------------------------------------------------
-# [핵심 2] 진화 챔피언 (🌟 POCKET_ALLIN / 🔥 GRID_L1_ALLIN × 💉 05_RESV_6P_GUARD30 × 🔓 06_STEP2X_15PCT_C20 × 🛡️ Case 84) : 비대칭 매수 타격 엔진
+# [핵심 2] 진화 챔피언 (🌟 POCKET_ALLIN / 🔥 GRID_L1_ALLIN × 💉 05_RESV_6P_GUARD30 × 🔓 06_STEP2X_15PCT_C20 × 🛡️ Case 84 개정) : 비대칭 매수 타격 엔진
 #  - 분기 G   : 07:00 ~ 07:50 EST & RSI(14) <= 19.0 황금시간 가용시드 100% 전액 추가매수 (제어반 ON 시 · Case 80)
-#  - 분기 A   : 그리드 0주 상태 -> 15:30 ~ 16:00 EST 구간에서는 새 사이클 1층 진입 100% 차단(Case 84) · 그 외 60초 타임쉴드 후 첫 1층(REENTRY_1FL) 산입
-#  - 분기 B-1 : 상단 2~7층 보유 중 1층 공석 -> 매 60.0초(1분) 주기 재장전 모니터 & 2층 단가 상한(Case 73) &
-#               15:30 ~ 16:00 EST 구간 +1.00% 상승돌파(BREAKOUT_RELOAD)만 차단 / -1.00% 눌림목(PULLBACK_RELOAD) 허용(Case 84)
+#  - 분기 A   : 그리드 0주 상태(사이클 종료) -> 15:30 ~ 16:00 EST 구간에서는 새 사이클 첫 1층 진입 100% 차단(Case 84) · 그 외 60초 타임쉴드 후 첫 1층(REENTRY_1FL) 산입
+#  - 분기 B-1 : 상단 2~7층 보유 중 1층 공석 -> 매 60.0초(1분) 주기 재장전 모니터 & 2층 단가 상한(Case 73) 하에서
+#               15:30 ~ 16:00 EST 포함 전 매수 구간에서 -1.00% 눌림목(PULLBACK_RELOAD) 및 +1.00% 상승돌파(BREAKOUT_RELOAD) 모두 정상 허용!(Case 84 개정)
 #  - 분기 B-0 : 활성 1층 부분체결 미체결 잔량(rem_quota_qty > 0) -> 60초 타임쉴드 후 매 1.5초 모니터에서 현재가 <= 1층 단가 도래 시 잔량(TOPUP_1FL) 발주(Case 78)
 #  - 분기 B-2 : 활성 1층 보유 중 -> 10분 고정 게이트 & 정적 기억저가 4단 와이드 신저가 OR STEP2X_15PCT_C20 스텝업 추매(Case 76) & GUARD30/예비수혈(Case 77)
 # ---------------------------------------------------------------------------
@@ -120,7 +119,7 @@ async def execute_seed_protected_buy_gate_plugin(
     now_est: Optional[datetime] = None,
 ) -> Dict[str, Any]:
     """
-    🎯 1, 🎯 2, 🎯 4 & Case 25 ~ 85 (챔피언 : 🌟 POCKET_ALLIN / 🔥 GRID_L1_ALLIN × 💉 05_RESV_6P_GUARD30 × 🔓 06_STEP2X_15PCT_C20 × 🛡️ Case 84):
+    🎯 1, 🎯 2, 🎯 4 & Case 25 ~ 86 (챔피언 : 🌟 POCKET_ALLIN / 🔥 GRID_L1_ALLIN × 💉 05_RESV_6P_GUARD30 × 🔓 06_STEP2X_15PCT_C20 × 🛡️ Case 84 개정):
     04:07:00 ~ 16:00:00 EST 운용 구간에서 작동하는 비대칭 매수 타격 엔진.
     """
     dt_now = now_est.astimezone(EST_TZ) if now_est else datetime.now(EST_TZ)
@@ -535,17 +534,42 @@ async def execute_seed_protected_buy_gate_plugin(
                     0.01, math.floor((fresh_live_p + 1e-9) * 100.0) / 100.0
                 )
 
+                # MODIFIED [Case 67 & Case 77 : 뮤텍스 내부 st_now 기준 now_core_eq 및 now_init_seed 재산출 통일]
                 eff_rt_pct_0sh = resolve_effective_round_trip_fee_rate_pct(
                     state_dict=st_now
                 )
+                now_gp_0sh = pocket_from_dict(st_now.get("golden_pocket"))
+                now_free_cash_0sh = max(
+                    0.0, safe_float(st_now.get("free_cash_usd"), 0.0)
+                )
+                now_init_seed_0sh = max(
+                    100.0,
+                    safe_float(
+                        st_now.get("initial_seed_usd"),
+                        DEFAULT_INITIAL_SEED_USD,
+                    ),
+                )
+                now_inj_res_0sh = max(
+                    0.0, safe_float(st_now.get("injected_reserve_usd"), 0.0)
+                )
+                now_inv_tot_0sh = (
+                    now_gp_0sh.actual_cost_usd
+                    if now_gp_0sh.is_active
+                    else 0.0
+                )
+                now_core_eq_0sh = max(
+                    now_init_seed_0sh,
+                    (now_free_cash_0sh + now_inv_tot_0sh) - now_inj_res_0sh,
+                )
+
                 prev_anchor_p = safe_float(st_now.get("anchor_price"), 0.0)
                 ref_zero_anchor = (
                     prev_anchor_p if prev_anchor_p > 0.0 else exec_order_p
                 )
                 target_qty, portion_budget = compute_golden8_quota_qty(
                     anchor_price=ref_zero_anchor,
-                    current_total_equity=core_equity,
-                    initial_seed_usd=init_seed,
+                    current_total_equity=now_core_eq_0sh,
+                    initial_seed_usd=now_init_seed_0sh,
                     portion_mode=portion_mode,
                     exec_price=exec_order_p,
                 )
@@ -647,7 +671,9 @@ async def execute_seed_protected_buy_gate_plugin(
                 }
 
     # -----------------------------------------------------------------------
-    # [분기 B-1 · Case 73, Case 77 & Case 84 : 상단 그리드(2층 ~ 7층)만 보유 중 (1층 공석, is_l2_only_vacant_l1 == True)]
+    # [분기 B-1 · Case 73, Case 77 & Case 84 개정 : 상단 그리드(2층 ~ 7층)만 보유 중 (1층 공석, is_l2_only_vacant_l1 == True)]
+    # -> 15:30 ~ 16:00 EST 구간에서도 상단 2~7층 지층이 존재하는 상태에서는 돌파 매수 금지를 폐기하고
+    #    2층 단가 이하(Case 73) 안전 영역 내 눌림목(-1.00%) 및 상승돌파(+1.00%) 모두 100% 정상 허용!
     # -----------------------------------------------------------------------
     if is_l2_only_vacant_l1:
         in_re_shield, rem_re_sec = is_within_reentry_monitor_time_shield(
@@ -683,46 +709,6 @@ async def execute_seed_protected_buy_gate_plugin(
             is_late_new_cycle_cutoff=is_late_cutoff,
         )
         sig_type = str(reentry_sig.get("signal_type") or "HOLD_WAIT_GATE")
-
-        if (
-            sig_type == "HOLD_LATE_SESSION_BREAKOUT_CUTOFF"
-            or (
-                bool(reentry_sig.get("should_buy"))
-                and sig_type == "BREAKOUT_RELOAD"
-                and is_late_cutoff
-            )
-        ):
-            new_pass_cnt = safe_int(st.get("seed_protect_pass_cnt"), 0) + 1
-            new_day_pass = (
-                safe_int(st.get("daily_seed_protect_pass_cnt"), 0) + 1
-            )
-            re_eval_epoch = mark_reentry_monitor_60s_cycle_shield(
-                context=context,
-                symbol=TARGET_SYMBOL,
-                eval_price=fresh_live_p,
-            )
-            await context.ledger.update_state(
-                TARGET_SYMBOL,
-                last_reentry_eval_ts=re_eval_epoch,
-                seed_protect_pass_cnt=new_pass_cnt,
-                daily_seed_protect_pass_cnt=new_day_pass,
-            )
-            logger.info(
-                "🛡️ [Case 84 장마감 30분전(15:30~16:00) 1층 공석 +1%% 돌파 추격 차단] 현재가 $%.2f (직전익절 $%.2f 대비 %+.2f%%) -> 돌파 재장전 패스 & 눌림목(-1.0%%)만 허용 (60초 타임쉴드 재장전)",
-                fresh_live_p,
-                safe_float(reentry_sig.get("ref_anchor"), anchor_p),
-                safe_float(reentry_sig.get("chg_from_exit_pct"), 0.0),
-            )
-            return {
-                "status": "L2_ONLY_REENTRY_LATE_BREAKOUT_BLOCKED",
-                "signal_type": "HOLD_LATE_SESSION_BREAKOUT_CUTOFF",
-                "live_price": fresh_live_p,
-                "l2_ceiling_price": min_upper_tier_p,
-                "ref_anchor": reentry_sig.get("ref_anchor"),
-                "chg_from_exit_pct": reentry_sig.get("chg_from_exit_pct"),
-                "seed_protect_pass_cnt": new_day_pass,
-                "next_reentry_check_sec": REENTRY_MONITOR_TIME_SHIELD_SEC,
-            }
 
         if not bool(reentry_sig.get("should_buy")):
             new_pass_cnt = safe_int(st.get("seed_protect_pass_cnt"), 0) + 1
@@ -785,46 +771,6 @@ async def execute_seed_protected_buy_gate_plugin(
                 )
                 if in_re_m:
                     return {"status": "HOLD_60S_REENTRY_TIME_SHIELD_IN_MUTEX"}
-
-                dt_mutex = (
-                    now_est.astimezone(EST_TZ)
-                    if now_est
-                    else datetime.now(EST_TZ)
-                )
-                hm_mutex = dt_mutex.hour * 100 + dt_mutex.minute
-                if (
-                    sig_type == "BREAKOUT_RELOAD"
-                    and is_late_regular_new_cycle_cutoff_window(
-                        hm_mutex, now_est=dt_mutex
-                    )
-                ):
-                    new_pass_cnt = (
-                        safe_int(st_now.get("seed_protect_pass_cnt"), 0) + 1
-                    )
-                    new_day_pass = (
-                        safe_int(st_now.get("daily_seed_protect_pass_cnt"), 0)
-                        + 1
-                    )
-                    re_eval_epoch = mark_reentry_monitor_60s_cycle_shield(
-                        context=context,
-                        symbol=TARGET_SYMBOL,
-                        eval_price=fresh_live_p,
-                    )
-                    await context.ledger.update_state(
-                        TARGET_SYMBOL,
-                        last_reentry_eval_ts=re_eval_epoch,
-                        seed_protect_pass_cnt=new_pass_cnt,
-                        daily_seed_protect_pass_cnt=new_day_pass,
-                    )
-                    return {
-                        "status": "L2_ONLY_REENTRY_LATE_BREAKOUT_BLOCKED",
-                        "signal_type": "HOLD_LATE_SESSION_BREAKOUT_CUTOFF",
-                        "live_price": fresh_live_p,
-                        "l2_ceiling_price": min(
-                            b.book_price for b in now_buckets
-                        ),
-                        "seed_protect_pass_cnt": new_day_pass,
-                    }
 
                 min_upper_tier_p = min(b.book_price for b in now_buckets)
                 exec_order_p = max(
