@@ -4,9 +4,11 @@
 순수 롱(SOXL) 전용 '매수 체결 후 최초 60초 강제 타임쉴드(POST_BUY_TO_SELL_SHIELD_SEC = 60.0) &
 매수 후 60초 경과 시점부터 프리마켓·정규장·애프터마켓(16:00 ~ 19:59 EST)·데이마켓(20:00 ~ 03:59 EST) 24시간 전 세션에서
 보유 중 60초 블라인드 대기 락 없이 매 1.5초 실시간 다중 익절(7층 본 그리드 + Default-ON 3층 서브 그리드 + 독립 골든포켓) 타점 스나이퍼 매도 모니터(Case 70, Case 71, Case 72, Case 79, Case 80, Case 82, Case 83, Case 84, Case 87, Case 88) ·
-🚨 [Case 83 방안 C 오버나이트 통합이평 사수 하이브리드 & Case 88] 애프터마켓·데이마켓(is_ext_sell_only == True) 구간에서 상단 지층(본 2~7층 / 서브 2~3층) 보유 시
+🚨 [Case 83 방안 C 오버나이트 통합이평 사수 하이브리드 & Case 88 & 상단 순수 통합이평 +1.00% 도달 시 1층 무조건 동일 가격 포함 전량 매도 사이클 종료]
+애프터마켓·데이마켓(is_ext_sell_only == True) 구간에서 상단 지층(본 2 ~ 7층 / 서브 2 ~ 3층) 보유 시
 하단 개별 층(1층 및 상단 개별/합병층) 쪼개 팔기를 잠가 저가 물량 이탈로 인한 통합 이동평균(wma_2_to_7 / sub_wma_2_to_3) 도망을 100% 원천 봉쇄하고,
-오버나이트 중에는 통합 이동평균(+1.00%) 일괄 졸업(또는 1층 단독 보유 +1.50% / 독립 골든포켓 +1.50%)만 허용한 뒤,
+2층 ~ 7층(서브 2층 ~ 3층) 순수 이동평균(1층 매수 가격 100% 배제) 대비 +1.00% 목표가 도달 시에는
+1층 매수 가격과 무관하게 1층 물량까지 동일한 가격에 조건 없이 전량 포함 매도(SELL_ALL_GRAD / SELL_SUB_ALL_GRAD)하여 즉시 0주 사이클을 종료시키며,
 04:07:00 EST 프리장 개장(is_ext_sell_only == False) 즉시 프리장 시초가로 본·서브·골든포켓 다중 익절을 전면 개방하여 시초가 갭상승 수익 극대화! ·
 🛡️ [Case 84 : 정규장 마감 30분 전(15:30 ~ 16:00 EST) 0주 새 사이클 첫 1층 진입 및 1층 공석 +1.0% 돌파 추격 동시 차단 알림 연동]
 15:29:01 ~ 16:00:00 EST 구간에 0주 전량 졸업 달성 시 60초 타임쉴드 직후 15:30 EST 이상이 되어 새 사이클 1층 진입이 자동 차단되므로
@@ -955,7 +957,7 @@ async def _commit_filled_sell_and_reanchor_ledger(
     actual_sell_fee_usd: Optional[float] = None,
 ) -> Dict[str, Any]:
     """
-    # MODIFIED [🎯 1 ~ 🎯 4 & Case 19, 59 ~ 88 & 본/서브 최고 도달 회차 잠금 유지 · Default-ON 3층 서브 그리드 분리 정산 · 본+서브/서브+포켓 동시익절 통계/알림 보강 · Case 84 알림 연동]:
+    # MODIFIED [🎯 1 ~ 🎯 4 & Case 19, 59 ~ 88 & 본/서브 최고 도달 회차 잠금 유지 · Default-ON 3층 서브 그리드 분리 정산 · 상단 순수 통합이평 +1.00% 도달 시 1층 포함 전량 매도 사이클 종료 · 본+서브/서브+포켓 동시익절 통계/알림 보강 · Case 84 알림 연동]:
     7층 골디락스 본 그리드, Default-ON 3층 서브 그리드 및 독립 골든포켓 스나이퍼 매도 주문이 체결(FILLED 또는 부분 체결 후 취소 종료)되었을 때:
     1) pending_sell_pocket_qty, pending_sub_sell_indices, pending_sell_indices 에 해당하는 순수 매수 원금과 실제 매도 체결가(avg_fill_price)에 대해,
        토스 execution.commission + tax 실측값(actual_sell_fee_usd) 및 계좌별 왕복 수수료율(eff_rt_pct : 0.14% 또는 0.20%)을 적용하여
@@ -1089,14 +1091,14 @@ async def _commit_filled_sell_and_reanchor_ledger(
             }
         )
 
+    # MODIFIED: 서브 그리드 상단 통합이평 졸업 시 서브 1층(index 0)도 무조건 포함하여 전량 졸업
     if not sub_target_indices and rem_fill_to_alloc > 0 and sub_buckets:
-        if mode in ("SELL_SUB_ALL_GRAD", "SELL_SUB_AND_POCKET") or (
-            mode.startswith("SELL_SUB_") and len(sub_buckets) == 1
-        ):
+        if mode in (
+            "SELL_SUB_ALL_GRAD",
+            "SELL_SUB_WMA_UPPER",
+            "SELL_SUB_AND_POCKET",
+        ) or (mode.startswith("SELL_SUB_") and len(sub_buckets) == 1):
             sub_target_indices = list(range(len(sub_buckets)))
-        elif mode == "SELL_SUB_WMA_UPPER" and len(sub_buckets) >= 2:
-            s_start_i = 1 if was_sub_active_l1 else 0
-            sub_target_indices = list(range(s_start_i, len(sub_buckets)))
         elif mode in ("SELL_SUB_L1_ONLY", "SELL_SUB_L1_AND_GRID"):
             sub_target_indices = [0]
 
@@ -1167,6 +1169,7 @@ async def _commit_filled_sell_and_reanchor_ledger(
             }
         )
 
+    # MODIFIED: 본 그리드 2~7층 통합이평 졸업 시 1층(index 0)도 무조건 포함하여 전량 졸업(사이클 완전 종료)
     if (
         not target_indices
         and not sub_target_indices
@@ -1174,11 +1177,11 @@ async def _commit_filled_sell_and_reanchor_ledger(
         and buckets
         and not mode.startswith("SELL_SUB_")
     ):
-        if mode in ("SELL_ALL_GRAD", "SELL_L2_GRAD") or len(buckets) == 1:
+        if (
+            mode in ("SELL_ALL_GRAD", "SELL_L2_GRAD", "SELL_WMA_UPPER")
+            or len(buckets) == 1
+        ):
             target_indices = list(range(len(buckets)))
-        elif mode == "SELL_WMA_UPPER" and len(buckets) >= 2:
-            start_i = 1 if was_active_l1 else 0
-            target_indices = list(range(start_i, len(buckets)))
         elif mode != "SELL_GOLDEN_POCKET":
             target_indices = [0]
 
@@ -2151,7 +2154,7 @@ async def execute_1m_sniper_sell_and_reanchor_plugin(
     now_est: Optional[datetime] = None,
 ) -> Dict[str, Any]:
     """
-    # MODIFIED [🎯 2 Step 2 & Case 24, 44, 46 ~ 88 (방안 C 오버나이트 통합이평 사수 하이브리드 & 본+서브+포켓 다중 익절 & 2차 재조회 시 순수 fresh_live_p 우선 평가로 하위층 미체결 역설 원천 차단)]:
+    # MODIFIED [🎯 2 Step 2 & Case 24, 44, 46 ~ 88 (방안 C 오버나이트 통합이평 사수 하이브리드 & 2~7층 순수 통합이평 +1.00% 도달 시 1층 물량 무조건 동일 가격 포함 전량 매도 & 본+서브+포켓 다중 익절 & 2차 재조회 시 순수 fresh_live_p 우선 평가)]:
     """
     global _LAST_CONSUMED_WICK_TRADE_TS
 

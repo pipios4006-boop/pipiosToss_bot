@@ -14,12 +14,11 @@
    SUB_DIP_1FL 3층 이하 개별 승격 및 3층 초과[4층 발생] 시 서브 구 1층 + 구 3층 양끝 합병 후 오름차순 재배치[SUB_L1_L3_MERGE · Case 88])
 3) 수동 매도 시 독립 골든포켓 · 3층 서브 그리드 · 7층 본 그리드 최하단 저가 지층 순차 1:1 매칭 정산기(match_and_remove_sold_buckets_7tier · Case 63, 69, 80, 87, 88) 및
    계좌별 동적 왕복 수수료율(0.14% / 0.20%) · 실측 매도 수수료(execution.commission + tax) 반영 세후 실현손익 산출기(calc_sell_realized_pnl · Case 86)
-4) 본 그리드 상단 2층 ~ 7층 통합 이동평균(compute_upper_2_to_7_moving_avg) 및 서브 그리드 상단 2층 ~ 3층 통합 이동평균(compute_sub_upper_2_to_3_moving_avg · Case 88) 산출 ·
-   🚨 [Case 83 방안 C & Case 88] 오버나이트(애프터·데이마켓, is_overnight_session=True) 중 상단층 보유 시
+4) 본 그리드 상단 2층 ~ 7층 순수 통합 이동평균(compute_upper_2_to_7_moving_avg : 1층 단가 100% 배제) 및 서브 그리드 상단 2층 ~ 3층 순수 통합 이동평균(compute_sub_upper_2_to_3_moving_avg · Case 88) 산출 ·
+   🚨 [Case 83 방안 C & Case 88 & 상단 순수 통합이평 +1.00% 도달 시 1층 무조건 동시 포함 전량 졸업] 오버나이트(애프터·데이마켓, is_overnight_session=True) 중 상단층 보유 시
    해당 그리드의 개별 층(1층 및 상단 개별/합병층) 쪼개 팔기를 잠가 통합 이동평균(wma_2_to_7 / sub_wma_2_to_3) 도망을 원천 봉쇄하고,
-   장외에서는 통합 이동평균(+1.00%) 일괄 졸업(1층 본전 이상 시 전량 졸업 / 1층 본전 미달 시 상단 일괄 졸업,
-   또는 1층 단독 보유 +1.50% / 독립 골든포켓 +1.50%)만 허용한 뒤
-   04:07 EST 프리장 개장(is_overnight_session=False) 즉시 본 그리드·서브 그리드·골든포켓 다중 익절을 전면 개방하는 하이브리드 매도 판정기(evaluate_multi_grid_sell_targets)
+   2층 ~ 7층(서브 2층 ~ 3층) 순수 이동평균 단가 대비 +1.00% 목표가(wma_target_p / sub_wma_target_p) 도달 시에는
+   1층 매수 단가와 무관하게 1층 물량까지 동일한 가격(wma_target_p)에 조건 없이 100% 포함하여 전량 매도(SELL_ALL_GRAD / SELL_SUB_ALL_GRAD)함으로써 즉시 0주 사이클을 완전 종료시키는 하이브리드 매도 판정기(evaluate_multi_grid_sell_targets)
 5) 포트폴리오 통합 요약기(summarize_stratum_portfolio · Case 84 15:30~16:00 0주 신규 진입 및 1층 공석 돌파 추격 차단 ·
    Case 86 계좌별 수수료율 동기화 · Case 87 cycle_ratchet_max_lots 단차 잠금 · Case 88 Default-ON 3층 서브 그리드/최대 4회분 캡/0.5회분 보호예수 통합) 및
    기동 전 TDD 사전 무결성 검증 슈트(run_quant_engine_tdd · Case 25 ~ 88 전수 검증)
@@ -770,7 +769,9 @@ def compute_upper_2_to_12_moving_avg(
     rise_upper_pct: float = 1.00,
 ) -> Dict[str, Any]:
     """
-    🚨 [Case 71, Case 72 & Case 88 상단 지층(본 2층 ~ 7층 / 서브 2층 ~ 3층) 통합 이동평균법(수량 가중평균) 단가 및 목표가 산출기]:
+    🚨 [Case 71, Case 72 & Case 88 상단 지층(본 2층 ~ 7층 / 서브 2층 ~ 3층) 순수 통합 이동평균법(수량 가중평균) 단가 및 목표가 산출기]:
+    - 활성 1층(active_l1 == True)이 존재할 때 valid[1:] 만 슬라이싱하여 1층 매수 가격을 절대 포함하지 않고
+      오직 2층 ~ 7층(서브 2층 ~ 3층)의 순수 이동평균 단가(upper_wma_price)와 +1.00% 익절 목표가(upper_wma_target_price)를 산출한다.
     """
     valid = [
         b
@@ -848,7 +849,11 @@ def evaluate_multi_grid_sell_targets(
     sub_buckets: Optional[Sequence[StratumBucket]] = None,
 ) -> Dict[str, Any]:
     """
-    🚨 [Case 69, Case 70, Case 71, Case 72, Case 80, Case 83, Case 87 & Case 88 (방안 C 오버나이트 통합이평 사수 & 본 그리드 + 서브 그리드 + 골든포켓 동시 다중 익절 판정기)]:
+    # MODIFIED [Case 69, Case 70, Case 71, Case 72, Case 80, Case 83, Case 87 & Case 88 (방안 C 오버나이트 통합이평 사수 & 2~7층 순수 통합이평 +1.00% 도달 시 1층 물량 무조건 동일 가격 포함 전량 매도 사이클 종료 판정기)]:
+    - 2층 ~ 7층(서브 2층 ~ 3층) 이동평균 단가는 1층 매수 가격을 포함하지 않고 순수 2층 ~ 7층(서브 2층 ~ 3층) 물량만으로 산출한다.
+    - 현재가(lp)가 2층 ~ 7층 순수 이동평균 단가 대비 +1.00% 익절가(wma_target_p)에 도달하면,
+      1층 매수 가격과 무관하게 1층(index 0) 물량도 조건 없이 동일한 가격(wma_target_p)에 포함하여
+      전 지층(0 ~ len(valid)-1)을 전량 매도(SELL_ALL_GRAD)함으로써 즉시 0주 사이클을 종료시킨다!
     """
     valid = [
         b
@@ -904,57 +909,44 @@ def evaluate_multi_grid_sell_targets(
             sell_pocket_qty = gp.qty
             floor_candidates.append(gp_target_p)
 
-    # ② ~ ④ 본 그리드(valid) 1층(+1.50%) / 2~7층 통합이평(+1.00%) / 2~7층 개별·중간합병층(+1.00%) 판정
+    # ② ~ ④ 본 그리드(valid) : 2~7층 순수 통합이평(+1.00%) 전량 졸업 최우선 판정 후 미달 시 1층(+1.50%) / 2~7층 개별층(+1.00%) 판정
     active_l1 = has_active_l1_bucket(valid)
     upper_start_idx = 1 if (active_l1 and valid) else 0
     has_upper_tiers = bool(len(valid) > upper_start_idx)
 
-    if active_l1 and valid:
-        b1 = valid[0]
-        min_l1_target_p = (
-            math.ceil(
-                (b1.book_price * (1.0 + rise_l1_pct / 100.0) - 1e-9) * 100.0
-            )
-            / 100.0
-        )
-        if lp >= min_l1_target_p:
-            if is_overnight_session and has_upper_tiers:
-                overnight_indiv_locked = True
-            else:
-                sold_idx_set.add(0)
-                floor_candidates.append(min_l1_target_p)
-                hit_l1 = True
-
     if has_upper_tiers:
+        # 1층(valid[0]) 가격을 배제한 순수 2~7층 이동평균 및 +1.00% 익절가 산출
         wma_info = compute_upper_2_to_12_moving_avg(
             valid, rise_upper_pct=rise_upper_pct
         )
         wma_target_p = safe_float(wma_info.get("upper_wma_target_price"), 0.0)
-        b1_breakeven_p = (
-            round(
-                math.ceil(
-                    (
-                        max(0.01, valid[0].actual_avg_price, valid[0].book_price)
-                        - 1e-9
-                    )
-                    * 100.0
-                )
-                / 100.0,
-                2,
-            )
-            if (active_l1 and valid)
-            else 0.0
-        )
 
+        # MODIFIED: 2~7층 순수 이동평균 +1.00% 익절가 도달 시 1층 물량도 같은 가격(wma_target_p)에 무조건 포함하여 전량 매도(사이클 완전 종료)
         if wma_target_p > 0.0 and lp >= wma_target_p:
-            for k in range(upper_start_idx, len(valid)):
+            for k in range(len(valid)):
                 sold_idx_set.add(k)
             floor_candidates.append(wma_target_p)
             hit_wma_grad = True
-            if active_l1 and valid and lp >= b1_breakeven_p:
-                sold_idx_set.add(0)
-                floor_candidates.append(b1_breakeven_p)
-        else:
+
+    if not hit_wma_grad:
+        if active_l1 and valid:
+            b1 = valid[0]
+            min_l1_target_p = (
+                math.ceil(
+                    (b1.book_price * (1.0 + rise_l1_pct / 100.0) - 1e-9)
+                    * 100.0
+                )
+                / 100.0
+            )
+            if lp >= min_l1_target_p:
+                if is_overnight_session and has_upper_tiers:
+                    overnight_indiv_locked = True
+                else:
+                    sold_idx_set.add(0)
+                    floor_candidates.append(min_l1_target_p)
+                    hit_l1 = True
+
+        if has_upper_tiers:
             for k in range(upper_start_idx, len(valid)):
                 bk = valid[k]
                 bk_target_p = (
@@ -972,63 +964,46 @@ def evaluate_multi_grid_sell_targets(
                         floor_candidates.append(bk_target_p)
                         hit_indiv_grid = True
 
-    # ⑤ ~ ⑦ 서브 그리드(valid_sub) 1층(+1.50%) / 2~3층 통합이평(+1.00%) / 2~3층 개별·양끝합병층(+1.00%) 판정 (Case 88)
+    # ⑤ ~ ⑦ 서브 그리드(valid_sub) : 2~3층 순수 통합이평(+1.00%) 전량 졸업 최우선 판정 후 미달 시 서브 1층(+1.50%) / 2~3층 개별층(+1.00%) 판정 (Case 88)
     sub_active_l1 = has_active_l1_bucket(valid_sub)
     sub_upper_start_idx = 1 if (sub_active_l1 and valid_sub) else 0
     has_sub_upper_tiers = bool(len(valid_sub) > sub_upper_start_idx)
 
-    if sub_active_l1 and valid_sub:
-        sb1 = valid_sub[0]
-        min_sub_l1_target_p = (
-            math.ceil(
-                (sb1.book_price * (1.0 + rise_l1_pct / 100.0) - 1e-9) * 100.0
-            )
-            / 100.0
-        )
-        if lp >= min_sub_l1_target_p:
-            if is_overnight_session and has_sub_upper_tiers:
-                overnight_indiv_locked = True
-            else:
-                sub_sold_idx_set.add(0)
-                floor_candidates.append(min_sub_l1_target_p)
-                hit_sub_l1 = True
-
     if has_sub_upper_tiers:
+        # 서브 1층(valid_sub[0]) 가격을 배제한 순수 서브 2~3층 이동평균 및 +1.00% 익절가 산출
         sub_wma_info = compute_sub_upper_2_to_3_moving_avg(
             valid_sub, rise_upper_pct=rise_upper_pct
         )
         sub_wma_target_p = safe_float(
             sub_wma_info.get("upper_wma_target_price"), 0.0
         )
-        sb1_breakeven_p = (
-            round(
-                math.ceil(
-                    (
-                        max(
-                            0.01,
-                            valid_sub[0].actual_avg_price,
-                            valid_sub[0].book_price,
-                        )
-                        - 1e-9
-                    )
-                    * 100.0
-                )
-                / 100.0,
-                2,
-            )
-            if (sub_active_l1 and valid_sub)
-            else 0.0
-        )
 
+        # MODIFIED: 서브 2~3층 순수 이동평균 +1.00% 익절가 도달 시 서브 1층 물량도 같은 가격(sub_wma_target_p)에 무조건 포함하여 전량 매도
         if sub_wma_target_p > 0.0 and lp >= sub_wma_target_p:
-            for sk in range(sub_upper_start_idx, len(valid_sub)):
+            for sk in range(len(valid_sub)):
                 sub_sold_idx_set.add(sk)
             floor_candidates.append(sub_wma_target_p)
             hit_sub_wma_grad = True
-            if sub_active_l1 and valid_sub and lp >= sb1_breakeven_p:
-                sub_sold_idx_set.add(0)
-                floor_candidates.append(sb1_breakeven_p)
-        else:
+
+    if not hit_sub_wma_grad:
+        if sub_active_l1 and valid_sub:
+            sb1 = valid_sub[0]
+            min_sub_l1_target_p = (
+                math.ceil(
+                    (sb1.book_price * (1.0 + rise_l1_pct / 100.0) - 1e-9)
+                    * 100.0
+                )
+                / 100.0
+            )
+            if lp >= min_sub_l1_target_p:
+                if is_overnight_session and has_sub_upper_tiers:
+                    overnight_indiv_locked = True
+                else:
+                    sub_sold_idx_set.add(0)
+                    floor_candidates.append(min_sub_l1_target_p)
+                    hit_sub_l1 = True
+
+        if has_sub_upper_tiers:
             for sk in range(sub_upper_start_idx, len(valid_sub)):
                 sbk = valid_sub[sk]
                 sbk_target_p = (
@@ -1092,7 +1067,7 @@ def evaluate_multi_grid_sell_targets(
                 else "SELL_SUB_L1_ONLY"
             )
         elif hit_sub_wma_grad:
-            reason_tag = "SELL_SUB_WMA_UPPER"
+            reason_tag = "SELL_SUB_ALL_GRAD"
         elif hit_sub_l1 and hit_sub_indiv:
             reason_tag = "SELL_SUB_L1_AND_GRID"
         elif hit_sub_indiv:
@@ -1120,7 +1095,7 @@ def evaluate_multi_grid_sell_targets(
             else "SELL_L1_ONLY"
         )
     elif hit_wma_grad:
-        reason_tag = "SELL_WMA_UPPER"
+        reason_tag = "SELL_ALL_GRAD"
     elif hit_l1 and hit_indiv_grid:
         reason_tag = "SELL_L1_AND_GRID"
     elif hit_indiv_grid:
@@ -2146,7 +2121,7 @@ def summarize_stratum_portfolio(
         "ref_buy_anchor": round(ref_buy_anchor, 4),
         "chg_from_buy_anchor_pct": chg_from_buy_anchor_pct,
         "cycle_min_buy_price": round(
-            cycle_min_p if cycle_min_p > 0.0 else active_buy_anchor, 4
+            cycle_min_p if cycle_min_p > 0.0 else active_buy_anchor, 4,
         ),
         "ratchet_anchor_price": round(ratchet_p, 4),
         "trigger_buy_price": trigger_buy_price,
@@ -2202,8 +2177,8 @@ def run_quant_engine_tdd() -> bool:
     4단 와이드 활주로(-1.0% / -2.0% / -3.5% / -5.5%) 및 사이클 최고 도달 회차(cycle_ratchet_max_lots / sub_ratchet_max_lots) 단차 잠금(Case 87, 88),
     👑 Case 87: 본 그리드 7층 초과(8회차 유입) 시 구 1층(새 2층 후보) 보존 + 구 2층 + 구 7층 가중평균 통합 후 평단 오름차순 중간층 재배치(L2_L7_MERGE_SORT),
     🛡️ Case 88: Default-ON 3층 서브 그리드(4.0% 정량 · 0.5회분 보호예수금 · 최대 4회분[16%] 상한 캡 · 3층 초과 시 구 1층+구 3층 양끝합병 SUB_L1_L3_MERGE · 10일/-10% 저가해금),
-    골든포켓(+1.50%) / 본·서브 1층(+1.50%) / 본 2~7층·서브 2~3층 개별 및 합병층(+1.00%) / 본 2~7층·서브 2~3층 통합 이동평균(+1.00%) 다중 익절 판정(Case 71, 72, 80, 87, 88),
-    🚨 Case 83 (방안 C) 오버나이트(is_overnight_session=True) 중 상단층 보유 시 개별층 매도 잠금 및 통합이평 일괄 졸업 허용,
+    골든포켓(+1.50%) / 본·서브 1층(+1.50%) / 본 2~7층·서브 2~3층 개별 및 합병층(+1.00%) / 본 2~7층·서브 2~3층 순수 통합 이동평균(+1.00% 도달 시 1층 물량 무조건 동일 가격 포함 전량 매도 사이클 종료) 다중 익절 판정(Case 71, 72, 80, 87, 88),
+    🚨 Case 83 (방안 C) 오버나이트(is_overnight_session=True) 중 상단층 보유 시 개별층 매도 잠금 및 상단 순수 통합이평(+1.00%) 도달 시 1층 포함 전량 일괄 졸업 허용,
     상단 그리드 단독 보유(1층 공석) 시 2층 단가 상한 역전 차단(HOLD_PREVENT_INVERSION · Case 73) 및
     눌림/돌파 독립 1층 재장전(Case 59, 73),
     🛡️ Case 84: 정규장 마감 30분 전(is_late_new_cycle_cutoff=True, 15:30 ~ 16:00 EST) 구간에서 상단 지층 보유 중 1층 공석 시
@@ -2307,7 +2282,7 @@ def run_quant_engine_tdd() -> bool:
             and abs(grid_q[-1].book_price - 99.00) < 1e-4
         ), f"TDD 실패(Case 87 L2+L7 중간층 재배치 불일치): {[b.to_dict() for b in grid_q]}"
 
-        # 4) 🚨 Case 71, Case 72, Case 80 & Case 83(방안 C): 4중 다중 익절 및 오버나이트 개별층 잠금 검증
+        # 4) 🚨 Case 71, Case 72, Case 80 & Case 83(방안 C): 4중 다중 익절 및 오버나이트 개별층 잠금 & 2~7층 순수 통합이평(+1.00%) 도달 시 1층 무조건 동시 포함 전량 매도 검증
         test_grid = [
             StratumBucket(10, 80.0, 800.0, 800.0, 1, "DIP_1FL"),
             StratumBucket(10, 81.0, 810.0, 810.0, 1, "GRID_L2"),
@@ -2341,6 +2316,7 @@ def run_quant_engine_tdd() -> bool:
             res_ov_grad["should_sell"] is True
             and res_ov_grad["sold_indices"] == [0, 1, 2, 3]
             and res_ov_grad["sell_qty"] == 40
+            and abs(res_ov_grad["min_floor_price"] - 86.19) < 1e-4
             and res_ov_grad["hit_wma_grad"] is True
             and res_ov_grad["reason_tag"] == "SELL_ALL_GRAD"
         ), f"TDD 실패(Case 83 방안 C 오버나이트 통합이평 전량 졸업 미작동): {res_ov_grad}"
@@ -2357,7 +2333,9 @@ def run_quant_engine_tdd() -> bool:
             and res_ov_l1_single["reason_tag"] == "SELL_L1_ONLY"
         ), f"TDD 실패(Case 83 1층 단독 오버나이트 익절 미작동): {res_ov_l1_single}"
 
-        res_ov_wma_upper = evaluate_multi_grid_sell_targets(
+        # MODIFIED: 1층 단가($88.00)가 2~3층 순수 이동평균($83.00 -> +1.00% 목표 $83.83)보다 높더라도
+        # 2~3층 순수 이동평균 +1.00%($83.83) 도달 시 1층 물량까지 동일한 가격($83.83)에 전량 매도(SELL_ALL_GRAD) 검증
+        res_ov_wma_all = evaluate_multi_grid_sell_targets(
             [
                 StratumBucket(20, 88.0, 1760.0, 1760.0, 1, "GOLDEN_L1"),
                 StratumBucket(10, 81.0, 810.0, 810.0, 1, "GRID_L2"),
@@ -2367,11 +2345,13 @@ def run_quant_engine_tdd() -> bool:
             is_overnight_session=True,
         )
         assert (
-            res_ov_wma_upper["should_sell"] is True
-            and res_ov_wma_upper["sold_indices"] == [1, 2]
-            and res_ov_wma_upper["sell_qty"] == 20
-            and res_ov_wma_upper["reason_tag"] == "SELL_WMA_UPPER"
-        ), f"TDD 실패(Case 83 1층 고단가 시 상단 일괄졸업 SELL_WMA_UPPER 미작동): {res_ov_wma_upper}"
+            res_ov_wma_all["should_sell"] is True
+            and res_ov_wma_all["sold_indices"] == [0, 1, 2]
+            and res_ov_wma_all["sell_qty"] == 40
+            and abs(res_ov_wma_all["min_floor_price"] - 83.83) < 1e-4
+            and res_ov_wma_all["hit_wma_grad"] is True
+            and res_ov_wma_all["reason_tag"] == "SELL_ALL_GRAD"
+        ), f"TDD 실패(Case 83 2~7층 순수 이평 +1.00% 도달 시 1층 포함 전량졸업 SELL_ALL_GRAD 미작동): {res_ov_wma_all}"
 
         mock_gp = GoldenAllInPocket(
             qty=50,
@@ -2469,6 +2449,7 @@ def run_quant_engine_tdd() -> bool:
             res_grad["should_sell"]
             and res_grad["sold_indices"] == [0, 1, 2]
             and res_grad["sell_qty"] == 30
+            and abs(res_grad["min_floor_price"] - 88.38) < 1e-4
             and res_grad["hit_wma_grad"]
         ), f"TDD 실패(Case 71/72 2~7층 이동평균 일괄졸업): {res_grad}"
 
@@ -2815,6 +2796,7 @@ def run_quant_engine_tdd() -> bool:
             and res_sub_grad["sold_indices"] == []
             and res_sub_grad["sub_sold_indices"] == [0, 1, 2]
             and res_sub_grad["sub_sell_qty"] == 32
+            and abs(res_sub_grad["min_floor_price"] - 49.49) < 1e-4
             and res_sub_grad["reason_tag"] == "SELL_SUB_ALL_GRAD"
         ), f"TDD 실패(Case 88 서브 그리드 통합이평 전량 졸업 판정 오류): {res_sub_grad}"
 
