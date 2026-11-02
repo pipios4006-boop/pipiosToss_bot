@@ -28,8 +28,8 @@
      compute_reserve_repayment_on_zero() 로 온디맨드 예비시드 원금을 자동 상환(Case 77)하며,
      mark_post_sell_time_shield(is_cycle_end=True) 와 last_sell_fill_ts / last_cycle_end_ts / last_reentry_eval_ts=0.0 / last_sub_reentry_eval_ts=0.0 을 각인하여 60.0초 타임쉴드를 강제하고
      15:29:01 ~ 16:00:00 EST 구간에는 Case 84 새 사이클 진입 차단 안내를 표출!
-3) 🛡️ [Case 63, Case 69, Case 71 ~ Case 88 : 수동 매수·매도 CLOSED 체결가 및 실측 수수료 역추적 · L2+L7 중간합병 및 단가 비교 층간 편입 ·
-   수동 부분매도 시 cycle_ratchet_max_lots / sub_ratchet_max_lots 잠금 보존 · 수동 매수 실시간 텔레그램 알림 타전 · 본/서브/포켓 순수 원가 1:1 매칭 복리 정산]
+3) 🛡️ [Case 63, Case 69, Case 71 ~ Case 88 : 수동 매수·매도 CLOSED 체결가 및 실측 수수료 역추적 · L2+L7 중간합병 및 단가 비교 층간 편입 시 1층 anchor_price 보존 ·
+   수동 부분매도 시 cycle_ratchet_max_lots / sub_ratchet_max_lots 잠금 보존 · 수동 매매 카운터 동기화 · 수동 매수 실시간 텔레그램 알림 타전 · 본/서브/포켓 순수 원가 1:1 매칭 복리 정산]
 4) 🔗 [tg_ui_plugin.py 심볼 완벽 호환] 전술 제어반(/settlement)에서 봇 작동 OFF ➔ ON 재개 시 호출되는
    relock_stratum_on_bot_resume() 함수를 정식 제공하여 AST 심볼 임포트 무결성 100% 충족!
 5) 04:00 ~ 04:06 EST 프리장 개장 초기 호가 안정화 · 계좌별 미국 주식 수수료율(GET /api/v1/commissions) 일일 갱신 및 당일 시드보호 패스(Case 74) · 당일 스텝업 해금(Case 76) ·
@@ -50,6 +50,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 from quant_engine import (
+    BASE_MAX_LOTS_8PCT,
     DEFAULT_GRID_MERGE_MODE,
     GoldenAllInPocket,
     MAX_GRID_TIERS_7,
@@ -406,6 +407,17 @@ async def reconcile_stratum_with_broker_holdings_plugin(
             1 if grid_qty > 0 else 0
         )
 
+        # MODIFIED [Case 63 & Case 74 : 수동 전량 청산 시 본 그리드 상단층 소진 유무에 따른 wma_grad_sell_cnt 동기화]
+        wma_inc_zero = (
+            1
+            if (grid_qty > 0 and bool(match_res.get("sold_upper_tier")))
+            else 0
+        )
+        wma_cnt = safe_int(st.get("wma_grad_sell_cnt"), 0) + wma_inc_zero
+        day_wma_cnt = (
+            safe_int(st.get("daily_wma_grad_sell_cnt"), 0) + wma_inc_zero
+        )
+
         sub_sell_ev = safe_int(st.get("sub_sell_events"), 0) + sub_sell_inc
         sub_sold_sh = safe_int(st.get("sub_sold_shares"), 0) + sold_sub_q
         day_sub_sell_cnt = (
@@ -543,6 +555,8 @@ async def reconcile_stratum_with_broker_holdings_plugin(
             main_consec_frozen_days=0,
             sub_consec_frozen_days=0,
             daily_main_sell_cnt=day_main_sell_cnt,
+            wma_grad_sell_cnt=wma_cnt,
+            daily_wma_grad_sell_cnt=day_wma_cnt,
             sub_sell_events=sub_sell_ev,
             sub_sold_shares=sub_sold_sh,
             daily_sub_sell_cnt=day_sub_sell_cnt,
@@ -826,6 +840,11 @@ async def reconcile_stratum_with_broker_holdings_plugin(
             symbol=TARGET_SYMBOL,
             clear_shield=True,
         )
+        tot_buy_ev_0sh = safe_int(st.get("total_buy_events"), 0) + 1
+        tot_buy_sh_0sh = safe_int(st.get("total_buy_shares"), 0) + h_qty
+        day_buy_ev_0sh = safe_int(st.get("daily_buy_events"), 0) + 1
+        day_main_buy_0sh = safe_int(st.get("daily_main_buy_cnt"), 0) + 1
+
         update_kw: Dict[str, Any] = {
             "initial_seed_usd": init_seed,
             "buckets": buckets_to_dicts([restored_bucket]),
@@ -843,6 +862,10 @@ async def reconcile_stratum_with_broker_holdings_plugin(
             "sub_l1_target_quota_qty": 0,
             "main_consec_frozen_days": 0,
             "sub_consec_frozen_days": 0,
+            "total_buy_events": tot_buy_ev_0sh,
+            "total_buy_shares": tot_buy_sh_0sh,
+            "daily_buy_events": day_buy_ev_0sh,
+            "daily_main_buy_cnt": day_main_buy_0sh,
             "buy_order_id": "",
             "sell_order_id": "",
             "ordered_qty": 0,
@@ -1006,8 +1029,18 @@ async def reconcile_stratum_with_broker_holdings_plugin(
         new_ratchet_lots = max(
             new_held_lots, safe_int(st.get("cycle_ratchet_max_lots"), 0)
         )
+        tot_buy_ev_add = safe_int(st.get("total_buy_events"), 0) + 1
+        tot_buy_sh_add = safe_int(st.get("total_buy_shares"), 0) + delta_q
+        day_buy_ev_add = safe_int(st.get("daily_buy_events"), 0) + 1
         day_main_buy_cnt = safe_int(st.get("daily_main_buy_cnt"), 0) + 1
+        extra_13_add = safe_int(st.get("extra_13plus_buy_events"), 0) + (
+            1 if new_held_lots > BASE_MAX_LOTS_8PCT else 0
+        )
 
+        # MODIFIED [Case 63 & Case 87 : 중간층 편입 시에도 1층 기준가(merged_buckets[0].book_price)를 anchor_price 로 일원화 보존]
+        eff_l1_anchor_p = (
+            merged_buckets[0].book_price if merged_buckets else est_buy_p
+        )
         old_min_p = safe_float(st.get("cycle_min_buy_price"), 0.0)
         new_min_p = (
             min(old_min_p, est_buy_p) if old_min_p > 0.0 else est_buy_p
@@ -1034,14 +1067,18 @@ async def reconcile_stratum_with_broker_holdings_plugin(
         updated_st = await context.ledger.update_state(
             TARGET_SYMBOL,
             buckets=buckets_to_dicts(merged_buckets),
-            anchor_price=est_buy_p,
+            anchor_price=eff_l1_anchor_p,
             cycle_min_buy_price=round(new_min_p, 4),
             cycle_ratchet_max_lots=new_ratchet_lots,
-            ratchet_anchor_price=est_buy_p,
+            ratchet_anchor_price=eff_l1_anchor_p,
             cycle_reanchor_credit_usd=0.0,
             l1_target_quota_qty=next_l1_target_q_manual,
             main_consec_frozen_days=0,
+            total_buy_events=tot_buy_ev_add,
+            total_buy_shares=tot_buy_sh_add,
+            daily_buy_events=day_buy_ev_add,
             daily_main_buy_cnt=day_main_buy_cnt,
+            extra_13plus_buy_events=extra_13_add,
             pending_step_up_min_price=0.0,
             waiting_reserve_deposit=False,
             waiting_reserve_deposit_alert_sent=False,
@@ -1170,6 +1207,7 @@ async def reconcile_stratum_with_broker_holdings_plugin(
     sold_sub_cost = safe_float(match_res.get("sold_sub_cost_usd"), 0.0)
     sold_sub_merged_flag = bool(match_res.get("sold_sub_merged_bucket", False))
     sold_main_q = sum(b.qty for b in match_res.get("sold_buckets", []))
+    sold_main_upper_flag = bool(match_res.get("sold_upper_tier", False))
 
     pnl_info = match_res["pnl_info"]
     gross_pnl = safe_float(pnl_info.get("gross_pnl_usd"), 0.0)
@@ -1277,6 +1315,32 @@ async def reconcile_stratum_with_broker_holdings_plugin(
         0
         if (sold_main_q > 0 or not rem_buckets)
         else max(0, safe_int(st.get("main_consec_frozen_days"), 0))
+    )
+
+    # MODIFIED [Case 63 & Case 74 : 수동 부분매도로 본 그리드 상단층 소진 시 wma_grad_sell_cnt / indiv_grid_sell_cnt 정밀 집계]
+    rem_upper_cnt_part = (
+        max(0, len(rem_buckets) - (1 if rem_has_l1 else 0))
+        if rem_buckets
+        else 0
+    )
+    if sold_main_upper_flag and sold_main_q > 0:
+        if rem_upper_cnt_part == 0:
+            wma_inc_part = 1
+            indiv_inc_part = 0
+        else:
+            wma_inc_part = 0
+            indiv_inc_part = 1
+    else:
+        wma_inc_part = 0
+        indiv_inc_part = 0
+
+    indiv_cnt = safe_int(st.get("indiv_grid_sell_cnt"), 0) + indiv_inc_part
+    day_indiv_cnt = (
+        safe_int(st.get("daily_indiv_grid_sell_cnt"), 0) + indiv_inc_part
+    )
+    wma_cnt = safe_int(st.get("wma_grad_sell_cnt"), 0) + wma_inc_part
+    day_wma_cnt = (
+        safe_int(st.get("daily_wma_grad_sell_cnt"), 0) + wma_inc_part
     )
 
     sub_sell_ev = safe_int(st.get("sub_sell_events"), 0) + sub_sell_inc
@@ -1413,6 +1477,10 @@ async def reconcile_stratum_with_broker_holdings_plugin(
         "main_consec_frozen_days": next_main_frozen_d,
         "sub_consec_frozen_days": next_sub_frozen_d,
         "daily_main_sell_cnt": day_main_sell_cnt,
+        "indiv_grid_sell_cnt": indiv_cnt,
+        "daily_indiv_grid_sell_cnt": day_indiv_cnt,
+        "wma_grad_sell_cnt": wma_cnt,
+        "daily_wma_grad_sell_cnt": day_wma_cnt,
         "sub_sell_events": sub_sell_ev,
         "sub_sold_shares": sub_sold_sh,
         "daily_sub_sell_cnt": day_sub_sell_cnt,

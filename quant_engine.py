@@ -1081,6 +1081,7 @@ def evaluate_multi_grid_sell_targets(
     total_sell_qty = grid_sell_qty + sub_sell_qty + sell_pocket_qty
     min_floor_p = max(floor_candidates) if floor_candidates else round(lp, 2)
 
+    # MODIFIED [Case 80 & Case 88 : 본 그리드 미포함 상태에서 서브 그리드 + 골든포켓 동시 익절 시 SELL_SUB_AND_POCKET 태그 분리]
     if hit_golden_pocket and not sorted_indices and not sorted_sub_indices:
         reason_tag = "SELL_GOLDEN_POCKET"
     elif sorted_sub_indices and not sorted_indices and not hit_golden_pocket:
@@ -1098,7 +1099,9 @@ def evaluate_multi_grid_sell_targets(
             reason_tag = "SELL_SUB_GRID_INDIV"
         else:
             reason_tag = "SELL_SUB_L1_ONLY"
-    elif sorted_sub_indices and (sorted_indices or hit_golden_pocket):
+    elif sorted_sub_indices and hit_golden_pocket and not sorted_indices:
+        reason_tag = "SELL_SUB_AND_POCKET"
+    elif sorted_sub_indices and sorted_indices:
         if len(sorted_indices) == len(valid) and len(sorted_sub_indices) == len(
             valid_sub
         ):
@@ -2726,7 +2729,7 @@ def run_quant_engine_tdd() -> bool:
             and pnl_014["net_pnl_usd"] > pnl_020["net_pnl_usd"]
         ), f"TDD 실패(계좌별 0.14% vs 0.20% 수수료 정산 불일치): {pnl_014} vs {pnl_020}"
 
-        # 13) NEW [Case 88 : 🛡️ 13_SUB_L1L3_RESV05_CAP4L — Default-ON 3층 서브 그리드 4% 정량 · 0.5회분 보호예수 · SUB_L1_L3_MERGE 합병 · 4회분 상한 캡 · 10일/-10% 저가해금 검증]
+        # 13) NEW [Case 88 : 🛡️ 13_SUB_L1L3_RESV05_CAP4L — Default-ON 3층 서브 그리드 4% 정량 · 0.5회분 보호예수 · SUB_L1_L3_MERGE 합병 · 4회분 상한 캡 · 10일/-10% 저가해금 · 서브+골든포켓 동시익절 검증]
         sub_q_qty, sub_q_bud = compute_sub4_quota_qty(
             sub_anchor_price=50.0,
             current_core_equity=10000.0,
@@ -2814,6 +2817,30 @@ def run_quant_engine_tdd() -> bool:
             and res_sub_grad["sub_sell_qty"] == 32
             and res_sub_grad["reason_tag"] == "SELL_SUB_ALL_GRAD"
         ), f"TDD 실패(Case 88 서브 그리드 통합이평 전량 졸업 판정 오류): {res_sub_grad}"
+
+        # 본 그리드 미매도 상태에서 서브 그리드 + 독립 골든포켓 동시 익절 시 SELL_SUB_AND_POCKET 판정 검증
+        res_sub_and_gp = evaluate_multi_grid_sell_targets(
+            buckets=[StratumBucket(10, 95.0, 950.0, 950.0, 1, "REENTRY_1FL")],
+            live_price=49.55,
+            golden_pocket=GoldenAllInPocket(
+                qty=20,
+                book_price=48.0,
+                book_invested_usd=960.0,
+                actual_cost_usd=960.0,
+                entry_ts=1000.0,
+                order_date="2026-03-10",
+            ),
+            sub_buckets=sub_q,
+            is_overnight_session=True,
+        )
+        assert (
+            res_sub_and_gp["should_sell"] is True
+            and res_sub_and_gp["sold_indices"] == []
+            and res_sub_and_gp["sub_sold_indices"] == [0, 1, 2]
+            and res_sub_and_gp["sell_pocket_qty"] == 20
+            and res_sub_and_gp["sell_qty"] == 52
+            and res_sub_and_gp["reason_tag"] == "SELL_SUB_AND_POCKET"
+        ), f"TDD 실패(Case 80/88 서브+골든포켓 동시익절 SELL_SUB_AND_POCKET 판정 오류): {res_sub_and_gp}"
     finally:
         set_runtime_round_trip_fee_rate_pct(prev_rt, us_commission_rate=prev_one)
 

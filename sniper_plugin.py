@@ -8,9 +8,9 @@
 2) 🛡️ [Case 88 : 13_SUB_L1L3_RESV05_CAP4L] 스위치 없는 100% 기본 상시 적용(Default ON) 3층 서브 그리드 매수 엔진(_execute_sub_grid_buy_engine_plugin):
    - 본 그리드 1개 층 이상 보유 중(len(buckets) > 0) 본 그리드 5영업일 이상 연속 무매매(main_consec_frozen_days >= 5) 도달 시 또는 서브 그리드 기가동 중(len(sub_buckets) > 0) 상시 작동
    - 본 그리드 0.5회분(4.0%) 보호예수금(reserved_for_main_usd) 차감 가용 유휴 현금(avail_idle_cash_usd) 및 서브 최대 누적 4회분(16.0%) 상한 캡(SUB_MAX_TOTAL_LOTS_4 = 4) 엄격 적용
-   - 분기 S-A (서브 0주 첫 진입 SUB_REENTRY_1FL : 15:30 ~ 16:00 EST 차단 Case 84 & 유휴현금 부족 시 60초 쉴드) ·
-     분기 S-B1 (서브 1층 공석 60초 주기 눌림/돌파 재장전 SUB_REENTRY_1FL : 서브 2층 단가 상한 가드 Case 73 & 15:30 ~ 16:00 EST 돌파 차단 Case 84) ·
-     분기 S-B0 (서브 1층 부분체결 잔량 SUB_TOPUP_1FL 1.5초 모니터 재대기 Case 78 & 유휴현금 부족 시 60초 쉴드) ·
+   - 분기 S-A (서브 0주 첫 진입 SUB_REENTRY_1FL : 15:30 ~ 16:00 EST 차단 Case 84 & 유휴현금 부족 시 60초 쉴드 & 뮤텍스 2차 타임쉴드 검문) ·
+     분기 S-B1 (서브 1층 공석 60초 주기 눌림/돌파 재장전 SUB_REENTRY_1FL : 서브 2층 단가 상한 가드 Case 73 & 15:30 ~ 16:00 EST 돌파 차단 Case 84 & 뮤텍스 2차 타임쉴드 검문) ·
+     분기 S-B0 (서브 1층 부분체결 잔량 SUB_TOPUP_1FL 1.5초 모니터 재대기 Case 78 & 유휴현금 부족 시 60초 쉴드 & 뮤텍스 2차 타임쉴드 검문) ·
      분기 S-B2 (서브 활성 1층 보유 중 10분 게이트 : 서브 최고도달회차 4단 와이드 신저가 OR 서브 10영업일 무매매 & -10.0% 저가해금 SUB_UNLOCK_10D_D10 추매 SUB_DIP_1FL & 유휴현금 부족 시 해당 10분 버킷 즉시 소모 처리로 무한 API 폴링 차단)
 3) 04:07 ~ 16:00 EST 비대칭 매수 타격 게이트 실행기 (execute_seed_protected_buy_gate_plugin):
    - 🌟 [분기 G · Case 80] : 미동부 프리장 황금시간대(07:00 ~ 07:50 EST & 14봉 이상 확보된 1분봉 Wilder RSI(14) <= 19.0) 도달 시
@@ -19,7 +19,7 @@
      정규장 마감 30분 전(15:30 ~ 16:00 EST, is_late_regular_new_cycle_cutoff_window) 구간에서는 0주 새 사이클 첫 1층 진입을 100% 원천 차단(HOLD_LATE_SESSION_NEW_CYCLE_CUTOFF)!
    - 🔥 [분기 B-1 · Case 67, 73, 77, 84, 88] : 본 그리드 상단 2층 ~ 7층(GRID_L2 ~ GRID_L7) 보유 중 1층 공석 시 매 60.0초 주기 재장전 모니터
      (본 그리드 패스/대기 시 즉시 Default-ON 3층 서브 그리드 엔진으로 제어권 인계)
-   - 🎯 [분기 B-0 · Case 78, 88] : 본 그리드 활성 1층 지정가 부분 체결 미체결 잔량(TOPUP_1FL) 1.5초 모니터
+   - 🎯 [분기 B-0 · Case 78, 88] : 본 그리드 활성 1층 지정가 부분 체결 미체결 잔량(TOPUP_1FL) 1.5초 모니터 (원장 가용현금 1주 비용 선행 가드 및 부족 시 60초 쿨다운 쉴드 적용)
    - 🔵 [분기 B-2 · Case 60, 72, 76, 77, 87, 88] : 본 그리드 활성 1층 보유 중 10분 고정 매수 게이트(4단 와이드 신저가 OR STEP2X_15PCT_C20 스텝업 해금) 및
      본 그리드 대기/패스 틱에서 Default-ON 3층 서브 그리드 매수 엔진 연속 가동
 - 제1헌법 ~ 제6헌법 및 Case 01 ~ 88 완벽 준수
@@ -252,7 +252,10 @@ async def _execute_sub_grid_buy_engine_plugin(
                 in_b_sh, _ = is_within_post_buy_time_shield(
                     context, st_now, TARGET_SYMBOL
                 )
-                if in_s_sh or in_b_sh:
+                in_sub_re_m, _ = is_within_sub_reentry_monitor_time_shield(
+                    context, st_now, TARGET_SYMBOL
+                )
+                if in_s_sh or in_b_sh or in_sub_re_m:
                     return {"status": "HOLD_60S_TIME_SHIELD_IN_MUTEX"}
 
                 now_buckets = buckets_from_dicts(st_now.get("buckets", []))
@@ -524,7 +527,10 @@ async def _execute_sub_grid_buy_engine_plugin(
                 in_b_sh, _ = is_within_post_buy_time_shield(
                     context, st_now, TARGET_SYMBOL
                 )
-                if in_s_sh or in_b_sh:
+                in_sub_re_m, _ = is_within_sub_reentry_monitor_time_shield(
+                    context, st_now, TARGET_SYMBOL
+                )
+                if in_s_sh or in_b_sh or in_sub_re_m:
                     return {"status": "HOLD_60S_TIME_SHIELD_IN_MUTEX"}
 
                 now_buckets = buckets_from_dicts(st_now.get("buckets", []))
@@ -782,7 +788,10 @@ async def _execute_sub_grid_buy_engine_plugin(
                     in_b_sh, _ = is_within_post_buy_time_shield(
                         context, st_now, TARGET_SYMBOL
                     )
-                    if in_s_sh or in_b_sh:
+                    in_sub_top_m, _ = is_within_sub_reentry_monitor_time_shield(
+                        context, st_now, TARGET_SYMBOL
+                    )
+                    if in_s_sh or in_b_sh or in_sub_top_m:
                         return {"status": "HOLD_60S_TIME_SHIELD_IN_MUTEX"}
 
                     now_buckets = buckets_from_dicts(st_now.get("buckets", []))
@@ -2270,15 +2279,21 @@ async def execute_seed_protected_buy_gate_plugin(
         }
 
     # -----------------------------------------------------------------------
-    # [분기 B-0 · Case 77, Case 78 & Case 80 : 본 그리드 활성 1층 부분 체결 미체결 잔량(rem_quota_qty > 0) 존재 시]
+    # [분기 B-0 · Case 77, Case 78, Case 80 & Case 88 : 본 그리드 활성 1층 부분 체결 미체결 잔량(rem_quota_qty > 0) 존재 시]
+    # -> 원장 가용현금(free_cash)이 최소 1주 매수 비용 이상일 때만 진입하고, 부족 시 60초 쿨다운 쉴드 각인!
     # -----------------------------------------------------------------------
     l1_target_q = max(
         buckets[0].qty, safe_int(st.get("l1_target_quota_qty"), 0)
     )
     rem_quota_qty = max(0, l1_target_q - buckets[0].qty)
     l1_book_p = round(buckets[0].book_price, 2)
+    one_share_min_cost = live_p * (1.0 + eff_rt_pct / 100.0)
 
-    if rem_quota_qty > 0 and live_p <= (l1_book_p + 1e-6):
+    if (
+        rem_quota_qty > 0
+        and live_p <= (l1_book_p + 1e-6)
+        and free_cash >= one_share_min_cost
+    ):
         async with context.in_memory_ordering_lock:
             async with context.dual_strike_mutex:
                 st_now = context.ledger.get_state(TARGET_SYMBOL)
@@ -2297,7 +2312,10 @@ async def execute_seed_protected_buy_gate_plugin(
                 in_b_sh, _ = is_within_post_buy_time_shield(
                     context, st_now, TARGET_SYMBOL
                 )
-                if in_s_sh or in_b_sh:
+                in_res_m, _ = is_within_reserve_deposit_check_shield(
+                    context, st_now, TARGET_SYMBOL
+                )
+                if in_s_sh or in_b_sh or in_res_m:
                     return {"status": "HOLD_60S_TIME_SHIELD_IN_MUTEX"}
 
                 now_target_q = max(
@@ -2335,18 +2353,20 @@ async def execute_seed_protected_buy_gate_plugin(
                         now_gp_top = pocket_from_dict(
                             st_now.get("golden_pocket")
                         )
-                        if (
-                            now_gp_top.is_active
-                            and now_free_cash < one_share_top_cost
-                        ):
+                        if now_free_cash < one_share_top_cost:
                             mark_reserve_deposit_check_shield(
                                 context=context,
                                 symbol=TARGET_SYMBOL,
                                 clear_shield=False,
                             )
                             return {
-                                "status": "HOLD_TOPUP_CASH_IN_GOLDEN_POCKET",
+                                "status": (
+                                    "HOLD_TOPUP_CASH_IN_GOLDEN_POCKET"
+                                    if now_gp_top.is_active
+                                    else "HOLD_TOPUP_INSUFFICIENT_FREE_CASH"
+                                ),
                                 "golden_pocket_qty": now_gp_top.qty,
+                                "free_cash_usd": now_free_cash,
                             }
 
                         raw_bp_top = await context.api.get_buying_power_usd(
@@ -2445,6 +2465,12 @@ async def execute_seed_protected_buy_gate_plugin(
                                     "status": "TOPUP_ORDER_ERROR",
                                     "error": str(exc),
                                 }
+                        else:
+                            mark_reserve_deposit_check_shield(
+                                context=context,
+                                symbol=TARGET_SYMBOL,
+                                clear_shield=False,
+                            )
 
     # -----------------------------------------------------------------------
     # [분기 B-2 · Case 60, Case 72, Case 76, Case 77, Case 87 & Case 88 : 본 그리드 활성 1층 보유 중 (has_active_l1_bucket(buckets) == True)]

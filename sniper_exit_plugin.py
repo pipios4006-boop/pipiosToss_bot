@@ -17,11 +17,11 @@
 1분봉 윗꼬리(Upper-Wick) 슈팅을 100% 포착하되, 2차 재조회 시 max(live_p, fresh_live_p) 고점 박제를 배제하고 순수 fresh_live_p 기준으로 즉시 체결 가능한 하위 지층을 분리 보호하며
 윗꼬리 타임스탬프(_LAST_CONSUMED_WICK_TRADE_TS)는 실주문 발주 성공 시에만 각인하고
 목표 익절 하한가(min_floor_p, +0.50% 초과 대폭 갭상승 시 fresh_live_p * 0.997 마켓터블 지정가)로 직결 지정가(LIMIT) 매도 발주(Case 82) ·
-연타 익절 시 장외 sellableQuantity 정산 시차 대비 폴링 대기 2.0초 확장 및 일시 0주 반환 시 쿨다운 5.0초 단축(진성 422 거래제한 시 60초 묵음 쿨다운 유지 · Case 79, Case 82) ·
+연타 익절 시 장외 sellableQuantity 정산 시차 대비 폴링 대기 2.0초 정량 확인(sellable_q >= target_sell_qty) 및 일시 0주 반환 시 쿨다운 5.0초 단축(진성 422 거래제한 시 60초 묵음 쿨다운 유지 · Case 79, Case 82) ·
 매수 1호가(Bid 1) 하향 추격 정정 100% 영구 소각 및 미체결 단조시계(last_modify_mono) 역전 자가 치유 · 세션 경계 force_settle 강제 정산(Case 65, Case 66) ·
 리앵커링 원가 차감 영구 폐기 및 순수 실물 원가(book_price == actual_avg_price) 100% 보존(Case 69, Case 71, Case 72, Case 80, Case 88) ·
 💰 [Case 86] 매도 FILLED 정산 시 토스 execution.commission / tax 실측 수수료 및 계좌별 고유 왕복 수수료율(0.14% / 0.20%) 자동 반영 ·
-독립 골든포켓(golden_pocket) 및 3층 서브 그리드(sub_buckets) 단독 익절 시 기존 본 그리드(buckets)의 단가·기억저가·최고회차·목표정량 100% 비오염 보존 및 원리금 복리 환원(Case 80, Case 87, Case 88) ·
+독립 골든포켓(golden_pocket) 및 3층 서브 그리드(sub_buckets) 단독/동시 익절 시 기존 본 그리드(buckets)의 단가·기억저가·최고회차·목표정량 100% 비오염 보존 및 원리금 복리 환원(Case 80, Case 87, Case 88) ·
 1층 익절 후 상단층 잔존 시 1층 공석 보존 · 상단 익절 후 1층 단독 잔류 시 알림 정밀 표출 ·
 l1_target_quota_qty / sub_l1_target_quota_qty = 0 자동 클리어 및 1층 부분 익절 시 잔여 수량 동기화(허위 TOPUP_1FL 재매수 차단 · Case 78) ·
 익절 매도로 가용현금 회복 시 시드고갈 입금 대기 및 단 1회 알림 래치(waiting_reserve_deposit_alert_sent) 자동 해제 &
@@ -791,11 +791,12 @@ async def execute_bulletproof_sell_sweep(
             except Exception:
                 pass
 
+        # MODIFIED [Case 82 & Case 88 : 목표 매도 수량(target_sell_qty) 전량 반영까지 최대 2.0초 정량 폴링 대기]
         sellable_q = 0
         deadline = time.monotonic() + SELLABLE_QTY_POLL_WAIT_SEC
         while time.monotonic() < deadline:
             sellable_q = await context.api.get_sellable_quantity(sym)
-            if sellable_q >= target_sell_qty or sellable_q > 0:
+            if sellable_q >= target_sell_qty:
                 break
             await asyncio.sleep(SELLABLE_QTY_POLL_INTERVAL_SEC)
 
@@ -954,12 +955,12 @@ async def _commit_filled_sell_and_reanchor_ledger(
     actual_sell_fee_usd: Optional[float] = None,
 ) -> Dict[str, Any]:
     """
-    # MODIFIED [🎯 1 ~ 🎯 4 & Case 19, 59 ~ 88 & 본/서브 최고 도달 회차 잠금 유지 · Default-ON 3층 서브 그리드 분리 정산 · 본+서브 동시익절 통계/알림 보강 · Case 84 알림 연동]:
+    # MODIFIED [🎯 1 ~ 🎯 4 & Case 19, 59 ~ 88 & 본/서브 최고 도달 회차 잠금 유지 · Default-ON 3층 서브 그리드 분리 정산 · 본+서브/서브+포켓 동시익절 통계/알림 보강 · Case 84 알림 연동]:
     7층 골디락스 본 그리드, Default-ON 3층 서브 그리드 및 독립 골든포켓 스나이퍼 매도 주문이 체결(FILLED 또는 부분 체결 후 취소 종료)되었을 때:
     1) pending_sell_pocket_qty, pending_sub_sell_indices, pending_sell_indices 에 해당하는 순수 매수 원금과 실제 매도 체결가(avg_fill_price)에 대해,
        토스 execution.commission + tax 실측값(actual_sell_fee_usd) 및 계좌별 왕복 수수료율(eff_rt_pct : 0.14% 또는 0.20%)을 적용하여
        세후 실현 순수익금(net_pnl_usd)을 정밀 산출한다.
-    2) 🚨 [Case 80 & Case 88 : 골든포켓 또는 서브 그리드 단독 익절 시 7층 본 그리드 100% 비오염 보존]
+    2) 🚨 [Case 80 & Case 88 : 골든포켓 또는 서브 그리드 단독/동시 익절 시 7층 본 그리드 100% 비오염 보존]
     3) 👑 [Case 87 & Case 88 : 부분 익절 시 잔여 지층이 존재하는 동안에는 cycle_ratchet_max_lots / sub_ratchet_max_lots 잠금을 그대로 유지하고,
        해당 그리드가 0주 졸업했을 때만 0으로 리셋!]
     4) 🚨 [Case 78 : 본·서브 1층 부분 익절 시 l1_target_quota_qty / sub_l1_target_quota_qty 잔여 수량 동기화로 허위 TOPUP_1FL 재매수 원천 차단]
@@ -1034,6 +1035,7 @@ async def _commit_filled_sell_and_reanchor_ledger(
     if raw_pending_pocket_q <= 0 and gp.is_active and mode in (
         "SELL_GOLDEN_POCKET",
         "SELL_POCKET_AND_GRID",
+        "SELL_SUB_AND_POCKET",
     ):
         raw_pending_pocket_q = gp.qty
 
@@ -1088,7 +1090,7 @@ async def _commit_filled_sell_and_reanchor_ledger(
         )
 
     if not sub_target_indices and rem_fill_to_alloc > 0 and sub_buckets:
-        if mode == "SELL_SUB_ALL_GRAD" or (
+        if mode in ("SELL_SUB_ALL_GRAD", "SELL_SUB_AND_POCKET") or (
             mode.startswith("SELL_SUB_") and len(sub_buckets) == 1
         ):
             sub_target_indices = list(range(len(sub_buckets)))
@@ -1488,8 +1490,8 @@ async def _commit_filled_sell_and_reanchor_ledger(
     is_pocket_only_sell = bool(
         sold_pocket_q > 0 and sold_grid_q == 0 and sold_sub_q == 0
     )
-    is_sub_only_sell = bool(
-        sold_sub_q > 0 and sold_grid_q == 0 and sold_pocket_q == 0
+    is_sub_without_main_sell = bool(
+        sold_sub_q > 0 and sold_grid_q == 0
     )
 
     # [Case 87 & Case 88 : 부분 익절 시 본/서브 최고 도달 회차 잠금 유지 및 해당 그리드 0주 졸업 시 리셋]
@@ -1802,16 +1804,21 @@ async def _commit_filled_sell_and_reanchor_ledger(
                 f"기존 본그리드({len(rem_buckets)}개층·{grid_sh}주{sub_p_note} · 기억저가 ${next_cycle_min_p:.2f}{ratchet_lock_note}) 무결성 유지 · "
                 f"가용현금 ${free_cash_now:,.2f}"
             )
-        elif is_sub_only_sell:
+        elif is_sub_without_main_sell:
             grid_sh = sum(b.qty for b in rem_buckets)
             sub_sh = sum(sb.qty for sb in rem_sub_buckets)
+            gp_co_note = (
+                f"(서브 {sold_sub_q}주 + 골든포켓 {sold_pocket_q}주 동시익절) · "
+                if sold_pocket_q > 0
+                else ""
+            )
             if is_sub_empty:
                 sub_state_note = (
-                    f"🎓 서브그리드 전량 졸업 완료(누적 {sub_comp_cycles}회 졸업 · 서브누적순익 +${sub_net_cum:,.2f})"
+                    f"{gp_co_note}🎓 서브그리드 전량 졸업 완료(누적 {sub_comp_cycles}회 졸업 · 서브누적순익 +${sub_net_cum:,.2f})"
                 )
             else:
                 sub_state_note = (
-                    f"📦 잔여 서브그리드 {len(rem_sub_buckets)}개층({sub_sh}주 · {rem_sub_held_lots}/{SUB_MAX_TOTAL_LOTS_4}회분) 감시 지속"
+                    f"{gp_co_note}📦 잔여 서브그리드 {len(rem_sub_buckets)}개층({sub_sh}주 · {rem_sub_held_lots}/{SUB_MAX_TOTAL_LOTS_4}회분) 감시 지속"
                 )
             title_msg = (
                 f"🛡️ [SOXL 3층 서브그리드 지정가 익절 체결 ({mode}{sess_tag})] "
