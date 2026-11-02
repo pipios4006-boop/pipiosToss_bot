@@ -34,7 +34,7 @@
    relock_stratum_on_bot_resume() 함수를 정식 제공하여 AST 심볼 임포트 무결성 100% 충족!
 5) 04:00 ~ 04:06 EST 프리장 개장 초기 호가 안정화 · 계좌별 미국 주식 수수료율(GET /api/v1/commissions) 일일 갱신 및 당일 시드보호 패스(Case 74) · 당일 스텝업 해금(Case 76) ·
    당일 서브 그리드 카운터(Case 88) · 당일 황금시간 전액매수/포켓익절(Case 80) · 당일 예비수혈/자투리차단(Case 77) 0회 리셋(단 1회 입금 알림 래치 보존) ·
-   16:00 EST 정규장 마감 시 당일 본/서브 무매매 동결일(main_consec_frozen_days, sub_consec_frozen_days) 자동 갱신(Case 88) 및 일일 결산 후 애프터·데이마켓 익절 감시 무중단 직결(Case 79, Case 83) ·
+   16:00 EST 정규장 마감 시 일일 롤오버 선행 보장 후 당일 본/서브 무매매 동결일(main_consec_frozen_days, sub_consec_frozen_days) 자동 갱신(Case 88) 및 일일 결산 후 애프터·데이마켓 익절 감시 무중단 직결(Case 79, Case 83) ·
    17:00 EST 일일 GC 및 3중 금고 스냅샷 백업(Case 68)
 - 제1헌법 ~ 제6헌법 및 Case 01 ~ 88 완벽 준수
 """
@@ -1168,6 +1168,7 @@ async def reconcile_stratum_with_broker_holdings_plugin(
     sold_pocket_q = safe_int(match_res.get("sold_pocket_qty"), 0)
     sold_sub_q = safe_int(match_res.get("sold_sub_qty"), 0)
     sold_sub_cost = safe_float(match_res.get("sold_sub_cost_usd"), 0.0)
+    sold_sub_merged_flag = bool(match_res.get("sold_sub_merged_bucket", False))
     sold_main_q = sum(b.qty for b in match_res.get("sold_buckets", []))
 
     pnl_info = match_res["pnl_info"]
@@ -1289,6 +1290,12 @@ async def reconcile_stratum_with_broker_holdings_plugin(
     sub_comp_cycles = safe_int(st.get("sub_completed_cycles"), 0) + (
         1 if (sub_qty > 0 and not rem_sub_buckets) else 0
     )
+    sub_m_esc_inc = (
+        1 if (sold_sub_merged_flag and len(rem_sub_buckets) > 0) else 0
+    )
+    sub_m_esc_cnt = (
+        safe_int(st.get("sub_merged_indiv_escape_cnt"), 0) + sub_m_esc_inc
+    )
     sub_gross_cum = round(
         safe_float(st.get("sub_realized_gross_usd"), 0.0) + sub_gross_pnl, 4
     )
@@ -1349,11 +1356,18 @@ async def reconcile_stratum_with_broker_holdings_plugin(
         if (sold_main_q > 0 or not rem_buckets)
         else (old_anchor_p if old_anchor_p > 0.0 else manual_sell_p)
     )
+    old_cycle_min_p = safe_float(st.get("cycle_min_buy_price"), 0.0)
+    next_cycle_min_p = round(old_cycle_min_p, 4) if rem_buckets else 0.0
+
     old_sub_anchor_p = safe_float(st.get("sub_anchor_price"), manual_sell_p)
     next_sub_anchor_p = (
         manual_sell_p
         if (sold_sub_q > 0 or not rem_sub_buckets)
         else (old_sub_anchor_p if old_sub_anchor_p > 0.0 else manual_sell_p)
+    )
+    old_sub_cycle_min_p = safe_float(st.get("sub_cycle_min_buy_price"), 0.0)
+    next_sub_cycle_min_p = (
+        round(old_sub_cycle_min_p, 4) if rem_sub_buckets else 0.0
     )
 
     now_part_sell_ts = time.time()
@@ -1381,57 +1395,68 @@ async def reconcile_stratum_with_broker_holdings_plugin(
         symbol=TARGET_SYMBOL,
         clear_shield=True,
     )
+
+    part_update_kw: Dict[str, Any] = {
+        "buckets": buckets_to_dicts(rem_buckets),
+        "sub_buckets": buckets_to_dicts(rem_sub_buckets),
+        "golden_pocket": rem_gp_obj.to_dict(),
+        "anchor_price": next_anchor_p,
+        "cycle_min_buy_price": next_cycle_min_p,
+        "cycle_ratchet_max_lots": next_ratchet_lots,
+        "ratchet_anchor_price": next_anchor_p,
+        "cycle_reanchor_credit_usd": 0.0,
+        "l1_target_quota_qty": next_l1_target_q,
+        "sub_anchor_price": next_sub_anchor_p,
+        "sub_cycle_min_buy_price": next_sub_cycle_min_p,
+        "sub_ratchet_max_lots": next_sub_ratchet_lots,
+        "sub_l1_target_quota_qty": next_sub_l1_target_q,
+        "main_consec_frozen_days": next_main_frozen_d,
+        "sub_consec_frozen_days": next_sub_frozen_d,
+        "daily_main_sell_cnt": day_main_sell_cnt,
+        "sub_sell_events": sub_sell_ev,
+        "sub_sold_shares": sub_sold_sh,
+        "daily_sub_sell_cnt": day_sub_sell_cnt,
+        "daily_sub_sell_events": day_sub_sell_ev,
+        "sub_completed_cycles": sub_comp_cycles,
+        "sub_merged_indiv_escape_cnt": sub_m_esc_cnt,
+        "sub_realized_gross_usd": sub_gross_cum,
+        "sub_realized_fee_usd": sub_fee_cum,
+        "sub_realized_net_usd": sub_net_cum,
+        "daily_sub_realized_net_usd": sub_net_day,
+        "waiting_reserve_deposit": False,
+        "waiting_reserve_deposit_alert_sent": False,
+        "required_reserve_deposit_usd": 0.0,
+        "last_reserve_check_ts": 0.0,
+        "last_sell_fill_ts": now_part_sell_ts,
+        "last_sell_gate_eval_ts": 0.0,
+        "last_reentry_eval_ts": 0.0,
+        "last_sub_reentry_eval_ts": 0.0,
+        "pending_sell_indices": [],
+        "pending_sub_sell_indices": [],
+        "pending_sell_pocket_qty": 0,
+        "pending_step_up_min_price": 0.0,
+        "pending_sub_step_up_min_price": 0.0,
+        "last_settled_order_ids": updated_settled_oids,
+        "total_sell_events": tot_sell_ev,
+        "total_sold_shares": tot_sold_sh,
+        "win_sell_events": win_ev,
+        "daily_sell_events": day_sell_ev,
+        "golden_pocket_sell_cnt": gp_sell_cnt,
+        "daily_golden_pocket_sell_cnt": day_gp_sell_cnt,
+        "golden_realized_net_usd": gp_net_cum,
+        "daily_golden_realized_net_usd": gp_net_day,
+        "cumulative_realized_gross_usd": cum_gross,
+        "cumulative_realized_fee_usd": cum_fee,
+        "cumulative_realized_net_usd": cum_net,
+        "daily_realized_net_usd": day_net,
+    }
+    if sold_sub_q > 0:
+        part_update_kw["last_sub_sell_fill_ts"] = now_part_sell_ts
+    if sub_qty > 0 and not rem_sub_buckets:
+        part_update_kw["last_sub_cycle_end_ts"] = now_part_sell_ts
+
     updated_st = await context.ledger.update_state(
-        TARGET_SYMBOL,
-        buckets=buckets_to_dicts(rem_buckets),
-        sub_buckets=buckets_to_dicts(rem_sub_buckets),
-        golden_pocket=rem_gp_obj.to_dict(),
-        anchor_price=next_anchor_p,
-        cycle_ratchet_max_lots=next_ratchet_lots,
-        ratchet_anchor_price=next_anchor_p,
-        cycle_reanchor_credit_usd=0.0,
-        l1_target_quota_qty=next_l1_target_q,
-        sub_anchor_price=next_sub_anchor_p,
-        sub_ratchet_max_lots=next_sub_ratchet_lots,
-        sub_l1_target_quota_qty=next_sub_l1_target_q,
-        main_consec_frozen_days=next_main_frozen_d,
-        sub_consec_frozen_days=next_sub_frozen_d,
-        daily_main_sell_cnt=day_main_sell_cnt,
-        sub_sell_events=sub_sell_ev,
-        sub_sold_shares=sub_sold_sh,
-        daily_sub_sell_cnt=day_sub_sell_cnt,
-        daily_sub_sell_events=day_sub_sell_ev,
-        sub_completed_cycles=sub_comp_cycles,
-        sub_realized_gross_usd=sub_gross_cum,
-        sub_realized_fee_usd=sub_fee_cum,
-        sub_realized_net_usd=sub_net_cum,
-        daily_sub_realized_net_usd=sub_net_day,
-        waiting_reserve_deposit=False,
-        waiting_reserve_deposit_alert_sent=False,
-        required_reserve_deposit_usd=0.0,
-        last_reserve_check_ts=0.0,
-        last_sell_fill_ts=now_part_sell_ts,
-        last_sell_gate_eval_ts=0.0,
-        last_reentry_eval_ts=0.0,
-        last_sub_reentry_eval_ts=0.0,
-        pending_sell_indices=[],
-        pending_sub_sell_indices=[],
-        pending_sell_pocket_qty=0,
-        pending_step_up_min_price=0.0,
-        pending_sub_step_up_min_price=0.0,
-        last_settled_order_ids=updated_settled_oids,
-        total_sell_events=tot_sell_ev,
-        total_sold_shares=tot_sold_sh,
-        win_sell_events=win_ev,
-        daily_sell_events=day_sell_ev,
-        golden_pocket_sell_cnt=gp_sell_cnt,
-        daily_golden_pocket_sell_cnt=day_gp_sell_cnt,
-        golden_realized_net_usd=gp_net_cum,
-        daily_golden_realized_net_usd=gp_net_day,
-        cumulative_realized_gross_usd=cum_gross,
-        cumulative_realized_fee_usd=cum_fee,
-        cumulative_realized_net_usd=cum_net,
-        daily_realized_net_usd=day_net,
+        TARGET_SYMBOL, **part_update_kw
     )
     free_cash_now = safe_float(updated_st.get("free_cash_usd"), 0.0)
     rem_sub_sh = sum(sb.qty for sb in rem_sub_buckets)
@@ -1738,6 +1763,8 @@ async def execute_1600_daily_closing_settlement_plugin(
     """
     # MODIFIED [Case 01, Case 65, Case 66, Case 68, Case 72, Case 74, Case 76, Case 77, Case 78, Case 79, Case 80, Case 83, Case 84, Case 87 & Case 88]:
     🔹 16:00 ~ 16:59 EST:
+    0) 원장의 logical_date 가 당일(today_str)이 아니면 rollover_daily_counters_if_needed(today_str) 를 선행 실행하여
+       전일 매매 카운터가 당일 동결일이나 마감 결산에 혼입되는 것을 원천 차단한다.
     1) 16:00:xx EST 에 아직 60.0초 대기 중인 미결 주문이 있으면 대기를 보호하고,
     2) 마감 결산 시 미체결 잔량 취소 및 force_settle=True 정산 후,
        당일 본 그리드 및 서브 그리드 매매 유무를 판정하여 연속 무매매 동결일(main_consec_frozen_days, sub_consec_frozen_days)을 갱신하고
@@ -1749,6 +1776,12 @@ async def execute_1600_daily_closing_settlement_plugin(
         return {"status": "NOT_CLOSING_WINDOW"}
 
     today_str = dt_now.strftime("%Y-%m-%d")
+    if hasattr(context.ledger, "rollover_daily_counters_if_needed"):
+        try:
+            await context.ledger.rollover_daily_counters_if_needed(today_str)
+        except Exception as exc:
+            logger.debug("16:00 마감 선행 일일 롤오버 예외(묵음): %s", exc)
+
     st = context.ledger.get_state(TARGET_SYMBOL)
     if str(st.get("last_closing_report_date") or "") == today_str:
         return {"status": "CLOSING_REPORT_ALREADY_SENT", "date": today_str}

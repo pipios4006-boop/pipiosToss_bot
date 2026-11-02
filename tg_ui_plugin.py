@@ -25,7 +25,7 @@
      ① [작동 ON/OFF 버튼], ② [황금시간(07:00~07:50·RSI≤19) 전액매수 모드 선택 버튼(기본값 OFF : NONE ↔ POCKET_ALLIN ↔ GRID_L1_ALLIN)],
      ③ [시드머니 설정 버튼] 3대 핵심 조작 옵션 제공 (서브 그리드는 스위치 없이 100% 기본 상시 가동 Default ON)!
   2) 보유 지층(buckets, sub_buckets 및 golden_pocket)을 날려버리는 /reset 기능을 사용자 메뉴 및 명령어에서 전면 차단하고,
-     보유 주식 지층(본 그리드 1~7층 · 서브 그리드 1~3층 · 독립 골든포켓)과 기준 시드머니, 계좌별 수수료율은 100% 보존한 채 누적 실현수익만 0점으로 초기화하여
+     보유 주식 지층(본 그리드 1~7층 · 서브 그리드 1~3층 · 독립 골든포켓), 당일 무매매 동결 판정용 매매 횟수(daily_main_buy_cnt 등)와 기준 시드머니, 계좌별 수수료율은 100% 보존한 채 누적 실현수익만 0점으로 초기화하여
      설정된 기준 시드머니의 8%(서브 4%) 정량 투입으로 복귀시키는 `/reset_profit` 전용 기능으로 대체!
 - Case 70, Case 73, Case 74, Case 75, Case 76, Case 77, Case 78, Case 79, Case 80, Case 81, Case 83, Case 84, Case 85, Case 86, Case 87 & Case 88:
   1) 매수 직후 최초 60.0초 타임쉴드 유지 & 보유 중 60초 블라인드 대기 락 전면 해제 -> `/avwap` 레이더 상단 `⚡1.5s 실시간타점` 및 실시간 `RSI(14)` 표출
@@ -1814,8 +1814,9 @@ class TelegramCommandController:
         """
         # MODIFIED [Case 02, Case 74, Case 76, Case 77, Case 80, Case 86, Case 87 & Case 88]:
         보유 중인 본 그리드 지층(buckets · cycle_ratchet_max_lots 포함), Default-ON 3층 서브 그리드(sub_buckets · sub_ratchet_max_lots 포함) 및
-        독립 골든포켓(golden_pocket)과 설정된 기준 시드머니(initial_seed_usd), 계좌별 수수료율(us_commission_rate, round_trip_fee_rate_pct)은 100% 보존하고,
-        오직 누적/당일 세후 실현수익금 및 자투리 절약금·스텝업 해금 횟수·서브 그리드 통계·황금시간 매매 통계·예비시드 통계·입금 알림 래치만
+        독립 골든포켓(golden_pocket), 당일 무매매 동결 판정용 매매 횟수(daily_main_buy_cnt, daily_main_sell_cnt, daily_sub_buy_cnt, daily_sub_sell_cnt),
+        설정된 기준 시드머니(initial_seed_usd), 계좌별 수수료율(us_commission_rate, round_trip_fee_rate_pct)은 100% 보존하고,
+        오직 누적/당일 세후 실현수익금 및 자투리 절약금·스텝업 해금 횟수·서브 그리드 누적 통계·황금시간 매매 통계·예비시드 통계·입금 알림 래치만
         0점으로 초기화하여 설정된 기준 시드머니의 8%(서브 4%) 정량 투입으로 복귀시킨다.
         """
         mark_reserve_deposit_check_shield(
@@ -1841,11 +1842,9 @@ class TelegramCommandController:
             "daily_unlock_buy_events": 0,
             "sub_buy_events": 0,
             "sub_buy_shares": 0,
-            "daily_sub_buy_cnt": 0,
             "daily_sub_buy_events": 0,
             "sub_sell_events": 0,
             "sub_sold_shares": 0,
-            "daily_sub_sell_cnt": 0,
             "daily_sub_sell_events": 0,
             "sub_merge_events": 0,
             "sub_merged_indiv_escape_cnt": 0,
@@ -1856,8 +1855,6 @@ class TelegramCommandController:
             "sub_realized_fee_usd": 0.0,
             "sub_realized_net_usd": 0.0,
             "daily_sub_realized_net_usd": 0.0,
-            "daily_main_buy_cnt": 0,
-            "daily_main_sell_cnt": 0,
             "golden_allin_buy_events": 0,
             "daily_golden_allin_buy_events": 0,
             "golden_pocket_sell_cnt": 0,
@@ -1888,6 +1885,12 @@ class TelegramCommandController:
             "daily_reanchor_cnt": 0,
             "cumulative_reanchor_drop_usd": 0.0,
         }
+        if not has_buckets:
+            reset_kw["daily_main_buy_cnt"] = 0
+            reset_kw["daily_main_sell_cnt"] = 0
+        if not has_sub_buckets:
+            reset_kw["daily_sub_buy_cnt"] = 0
+            reset_kw["daily_sub_sell_cnt"] = 0
         if not has_buckets and not has_sub_buckets and not has_gp:
             reset_kw["used_reserve_portions_cnt"] = 0
             reset_kw["injected_reserve_usd"] = 0.0

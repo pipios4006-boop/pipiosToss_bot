@@ -1076,7 +1076,6 @@ class SoxlStratumLedger:
             ),
             "order_date": str(raw_pocket.get("order_date") or "").strip(),
         }
-
     def _sanitize_and_enforce_identity(
         self, raw_st: Dict[str, Any]
     ) -> Dict[str, Any]:
@@ -1383,9 +1382,10 @@ class SoxlStratumLedger:
         else:
             st["pending_sell_pocket_qty"] = 0
 
-        # 본 그리드 상태 정합성 강제
+        # MODIFIED [Case 60, Case 87 & Case 88 : 본 그리드 0주 시 cycle_min_buy_price 및 cycle_ratchet_max_lots 동시 초기화 강제]
         if not clean_buckets:
             st["cycle_ratchet_max_lots"] = 0
+            st["cycle_min_buy_price"] = 0.0
             st["main_consec_frozen_days"] = 0
             st["last_sell_gate_eval_ts"] = 0.0
             st["last_reentry_eval_ts"] = 0.0

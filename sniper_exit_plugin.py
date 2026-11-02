@@ -14,9 +14,8 @@
 👑 [Case 87 : 06_L2L7_RATCHET_8PCT] & 🛡️ [Case 88 : 13_SUB_L1L3_RESV05_CAP4L] 본 그리드 중간 합병층 또는 서브 그리드 양끝 합병층 익절 체결 시
 잔여 지층이 존재하는 동안에는 사이클 최고 도달 회차(cycle_ratchet_max_lots / sub_ratchet_max_lots) 잠금을 그대로 유지하고 해당 그리드 0주 졸업 시에만 0으로 리셋! ·
 1.5초 실시간 감시 중 익절 조건 도래 및 최근접 유효 목표가 -2.50% 이내 근접 시 GET /api/v1/trades 최근 5.0초 체결틱 최고가(wick_high_p) 병행 감지로
-1분봉 윗꼬리(Upper-Wick) 슈팅을 100% 포착하되, 다중 지층 윗꼬리 스침 시 상위층 고가 목표가 결합으로 인한 하위층 미체결 역설을 분리 차단하고
-윗꼬리 타임스탬프(_LAST_CONSUMED_WICK_TRADE_TS)는 실주문 발주 성공 시에만 각인하며,
-윗꼬리 최고점 박제(max(live_p, fresh_live_p)) 및 장외 재조회 매도 포기(fallback_price=0.0)를 영구 제거하여
+1분봉 윗꼬리(Upper-Wick) 슈팅을 100% 포착하되, 2차 재조회 시 max(live_p, fresh_live_p) 고점 박제를 배제하고 순수 fresh_live_p 기준으로 즉시 체결 가능한 하위 지층을 분리 보호하며
+윗꼬리 타임스탬프(_LAST_CONSUMED_WICK_TRADE_TS)는 실주문 발주 성공 시에만 각인하고
 목표 익절 하한가(min_floor_p, +0.50% 초과 대폭 갭상승 시 fresh_live_p * 0.997 마켓터블 지정가)로 직결 지정가(LIMIT) 매도 발주(Case 82) ·
 연타 익절 시 장외 sellableQuantity 정산 시차 대비 폴링 대기 2.0초 확장 및 일시 0주 반환 시 쿨다운 5.0초 단축(진성 422 거래제한 시 60초 묵음 쿨다운 유지 · Case 79, Case 82) ·
 매수 1호가(Bid 1) 하향 추격 정정 100% 영구 소각 및 미체결 단조시계(last_modify_mono) 역전 자가 치유 · 세션 경계 force_settle 강제 정산(Case 65, Case 66) ·
@@ -955,7 +954,7 @@ async def _commit_filled_sell_and_reanchor_ledger(
     actual_sell_fee_usd: Optional[float] = None,
 ) -> Dict[str, Any]:
     """
-    # MODIFIED [🎯 1 ~ 🎯 4 & Case 19, 59 ~ 88 & 본/서브 최고 도달 회차 잠금 유지 · Default-ON 3층 서브 그리드 분리 정산 · Case 84 알림 연동]:
+    # MODIFIED [🎯 1 ~ 🎯 4 & Case 19, 59 ~ 88 & 본/서브 최고 도달 회차 잠금 유지 · Default-ON 3층 서브 그리드 분리 정산 · 본+서브 동시익절 통계/알림 보강 · Case 84 알림 연동]:
     7층 골디락스 본 그리드, Default-ON 3층 서브 그리드 및 독립 골든포켓 스나이퍼 매도 주문이 체결(FILLED 또는 부분 체결 후 취소 종료)되었을 때:
     1) pending_sell_pocket_qty, pending_sub_sell_indices, pending_sell_indices 에 해당하는 순수 매수 원금과 실제 매도 체결가(avg_fill_price)에 대해,
        토스 execution.commission + tax 실측값(actual_sell_fee_usd) 및 계좌별 왕복 수수료율(eff_rt_pct : 0.14% 또는 0.20%)을 적용하여
@@ -1153,6 +1152,7 @@ async def _commit_filled_sell_and_reanchor_ledger(
 
     # 3) 1층 ~ 7층 본 그리드(buckets) 매도 수량 배분 및 잔여 지층 산출
     was_active_l1 = has_active_l1_bucket(buckets)
+    main_upper_start_idx = 1 if was_active_l1 else 0
     orig_l1_qty = buckets[0].qty if (was_active_l1 and buckets) else 0
     raw_p_indices = st.get("pending_sell_indices")
     target_indices: List[int] = []
@@ -1184,6 +1184,7 @@ async def _commit_filled_sell_and_reanchor_ledger(
     sold_l1_flag = bool(
         was_active_l1 and (0 in target_set) and rem_fill_to_alloc > 0
     )
+    sold_main_upper_flag = False
 
     sold_buckets: List[StratumBucket] = []
     rem_buckets: List[StratumBucket] = []
@@ -1192,6 +1193,9 @@ async def _commit_filled_sell_and_reanchor_ledger(
         if idx not in target_set or rem_fill_to_alloc <= 0:
             rem_buckets.append(b)
             continue
+
+        if idx >= main_upper_start_idx:
+            sold_main_upper_flag = True
 
         if rem_fill_to_alloc >= b.qty:
             sold_buckets.append(b)
@@ -1288,6 +1292,8 @@ async def _commit_filled_sell_and_reanchor_ledger(
                 rem_fill_to_alloc -= bf.qty
                 if idx_f == 0 and was_active_l1 and not sold_l1_flag:
                     sold_l1_flag = True
+                else:
+                    sold_main_upper_flag = True
             else:
                 part_q = rem_fill_to_alloc
                 rem_fill_to_alloc = 0
@@ -1321,6 +1327,8 @@ async def _commit_filled_sell_and_reanchor_ledger(
                         lot_type=bf.lot_type,
                     )
                 )
+                if not (idx_f == 0 and was_active_l1):
+                    sold_main_upper_flag = True
         rem_buckets = fallback_rem
 
     if rem_fill_to_alloc > 0 and rem_gp.is_active:
@@ -1574,26 +1582,23 @@ async def _commit_filled_sell_and_reanchor_ledger(
         else max(0, safe_int(st.get("sub_consec_frozen_days"), 0))
     )
 
+    # MODIFIED [Case 87 & Case 88 : 본 그리드와 서브 그리드/골든포켓 동시 매도(SELL_MAIN_AND_SUB 등) 시에도 본 그리드 상단 실제 소진 여부로 wma_inc / indiv_inc 정밀 집계]
     rem_upper_cnt = (
         max(0, len(rem_buckets) - (1 if rem_has_active_l1 else 0))
         if rem_buckets
         else 0
     )
-    is_wma_mode = bool(
-        mode == "SELL_WMA_UPPER"
-        or (mode == "SELL_ALL_GRAD" and len(buckets) > 1)
-    )
-    wma_inc = (
-        1 if (is_wma_mode and sold_grid_q > 0 and rem_upper_cnt == 0) else 0
-    )
-    indiv_inc = (
-        1
-        if (
-            mode in ("SELL_GRID_INDIV", "SELL_L1_AND_GRID")
-            or (is_wma_mode and sold_grid_q > 0 and rem_upper_cnt > 0)
-        )
-        else 0
-    )
+    if sold_main_upper_flag and sold_grid_q > 0:
+        if rem_upper_cnt == 0:
+            wma_inc = 1
+            indiv_inc = 0
+        else:
+            wma_inc = 0
+            indiv_inc = 1
+    else:
+        wma_inc = 0
+        indiv_inc = 0
+
     gp_sell_inc = 1 if sold_pocket_q > 0 else 0
 
     indiv_cnt = safe_int(st.get("indiv_grid_sell_cnt"), 0) + indiv_inc
@@ -1818,6 +1823,17 @@ async def _commit_filled_sell_and_reanchor_ledger(
                 f"가용현금 ${free_cash_now:,.2f}"
             )
         else:
+            co_sold_parts: List[str] = []
+            if sold_sub_q > 0:
+                co_sold_parts.append(f"서브 {sold_sub_q}주")
+            if sold_pocket_q > 0:
+                co_sold_parts.append(f"골든포켓 {sold_pocket_q}주")
+            co_sold_note = (
+                f"(본 {sold_grid_q}주 + {' + '.join(co_sold_parts)} 동시익절) · "
+                if co_sold_parts
+                else ""
+            )
+
             if is_graduated_zero:
                 repay_note = ""
                 if repaid_this_time > 0.0:
@@ -1838,13 +1854,13 @@ async def _commit_filled_sell_and_reanchor_ledger(
                         "🛡️60초 타임쉴드 경과 후 현재가 조회 및 첫 1층 진입!"
                     )
                 note_str = (
-                    f"🎓 전 지층 흑자 졸업 완료(0주 싸이클 종료{repay_note} "
+                    f"{co_sold_note}🎓 전 지층 흑자 졸업 완료(0주 싸이클 종료{repay_note} "
                     f"➔ {next_entry_guide})"
                 )
             elif is_grid_empty and (rem_gp.is_active or not is_sub_empty):
                 rem_sub_sh = sum(sb.qty for sb in rem_sub_buckets)
                 note_str = (
-                    f"🌟 본그리드 전량 졸업 완료 · 잔여 서브({rem_sub_sh}주)/골든포켓({rem_gp.qty}주) 익절 감시 지속"
+                    f"{co_sold_note}🌟 본그리드 전량 졸업 완료 · 잔여 서브({rem_sub_sh}주)/골든포켓({rem_gp.qty}주) 익절 감시 지속"
                 )
             else:
                 wma_info = compute_upper_2_to_7_moving_avg(rem_buckets)
@@ -1873,12 +1889,12 @@ async def _commit_filled_sell_and_reanchor_ledger(
                             f"🛡️60초 타임쉴드 후 1분 주기 1층재장전(2층상한 ${l2_cap_p:.2f} 이하 · 기억저가 ${next_cycle_min_p:.2f}{ratchet_lock_note} 잠금)"
                         )
                     note_str = (
-                        f"📦 잔여 2~{u_cnt + 1}층({u_cnt}개층·{u_qty}주) 순수이평 ${u_wma_p:.2f}(목표 ${u_wma_t:.2f}) 1.5초 실시간 익절감시 "
+                        f"{co_sold_note}📦 잔여 2~{u_cnt + 1}층({u_cnt}개층·{u_qty}주) 순수이평 ${u_wma_p:.2f}(목표 ${u_wma_t:.2f}) 1.5초 실시간 익절감시 "
                         f"· {reload_guide}"
                     )
                 elif u_cnt > 0:
                     note_str = (
-                        f"📦 잔여 1층+상단({len(rem_buckets)}개층) 순수이평 ${u_wma_p:.2f}(목표 ${u_wma_t:.2f}) 1.5초 실시간 익절감시 "
+                        f"{co_sold_note}📦 잔여 1층+상단({len(rem_buckets)}개층) 순수이평 ${u_wma_p:.2f}(목표 ${u_wma_t:.2f}) 1.5초 실시간 익절감시 "
                         f"· 10분게이트 대기(기억저가 ${next_cycle_min_p:.2f}{ratchet_lock_note} 잠금)"
                     )
                 else:
@@ -1888,7 +1904,7 @@ async def _commit_filled_sell_and_reanchor_ledger(
                         / 100.0
                     )
                     note_str = (
-                        f"📦 잔여 1층 단독({b1_rem.qty}주 · 단가 ${b1_rem.book_price:.2f} ➔ 목표 ${b1_rem_target:.2f}) 1.5초 실시간 익절감시 "
+                        f"{co_sold_note}📦 잔여 1층 단독({b1_rem.qty}주 · 단가 ${b1_rem.book_price:.2f} ➔ 목표 ${b1_rem_target:.2f}) 1.5초 실시간 익절감시 "
                         f"· 10분게이트 대기(기억저가 ${next_cycle_min_p:.2f}{ratchet_lock_note} 잠금)"
                     )
             title_msg = (
@@ -2128,7 +2144,7 @@ async def execute_1m_sniper_sell_and_reanchor_plugin(
     now_est: Optional[datetime] = None,
 ) -> Dict[str, Any]:
     """
-    # [🎯 2 Step 2 & Case 24, 44, 46 ~ 88 (방안 C 오버나이트 통합이평 사수 하이브리드 & 본+서브+포켓 다중 익절 & 윗꼬리 다중 층 역설 차단)]:
+    # MODIFIED [🎯 2 Step 2 & Case 24, 44, 46 ~ 88 (방안 C 오버나이트 통합이평 사수 하이브리드 & 본+서브+포켓 다중 익절 & 2차 재조회 시 순수 fresh_live_p 우선 평가로 하위층 미체결 역설 원천 차단)]:
     """
     global _LAST_CONSUMED_WICK_TRADE_TS
 
@@ -2254,19 +2270,18 @@ async def execute_1m_sniper_sell_and_reanchor_plugin(
 
     wick_high_p: float = 0.0
     wick_trade_ts: float = 0.0
-    nearest_target_p: float = 0.0
+    nearest_target_p: float = _compute_nearest_sell_target_price(
+        buckets=buckets,
+        golden_pocket=gp,
+        rise_l1_pct=rise_sell_l1_pct,
+        rise_upper_pct=rise_sell_upper_pct,
+        rise_pocket_pct=GOLDEN_POCKET_RISE_PCT,
+        is_overnight_session=is_ext_sell_only,
+        sub_buckets=sub_buckets,
+    )
     triggered_by_wick_only: bool = False
 
     if not bool(sell_eval.get("should_sell")):
-        nearest_target_p = _compute_nearest_sell_target_price(
-            buckets=buckets,
-            golden_pocket=gp,
-            rise_l1_pct=rise_sell_l1_pct,
-            rise_upper_pct=rise_sell_upper_pct,
-            rise_pocket_pct=GOLDEN_POCKET_RISE_PCT,
-            is_overnight_session=is_ext_sell_only,
-            sub_buckets=sub_buckets,
-        )
         if nearest_target_p > 0.0 and live_p >= (
             nearest_target_p * WICK_PROXIMITY_TRIGGER_RATIO
         ):
@@ -2301,7 +2316,7 @@ async def execute_1m_sniper_sell_and_reanchor_plugin(
                 if not bool(wick_eval.get("should_sell")):
                     wick_eval = evaluate_multi_grid_sell_targets(
                         buckets=buckets,
-                        live_price=max(live_p, wick_high_p),
+                        live_price=wick_high_p,
                         rise_l1_pct=rise_sell_l1_pct,
                         rise_upper_pct=rise_sell_upper_pct,
                         golden_pocket=gp,
@@ -2328,10 +2343,10 @@ async def execute_1m_sniper_sell_and_reanchor_plugin(
         if fresh_live_p <= 0.0:
             fresh_live_p = live_p
 
-        live_peak_p = max(live_p, fresh_live_p)
+        # MODIFIED [Case 82 핵심 : max(live_p, fresh_live_p) 고점 박제 영구 배제 & 순수 fresh_live_p 기준 우선 재평가로 하위 지층 즉시 체결 보장]
         fresh_only_eval = evaluate_multi_grid_sell_targets(
             buckets=buckets,
-            live_price=live_peak_p,
+            live_price=fresh_live_p,
             rise_l1_pct=rise_sell_l1_pct,
             rise_upper_pct=rise_sell_upper_pct,
             golden_pocket=gp,
@@ -2342,6 +2357,19 @@ async def execute_1m_sniper_sell_and_reanchor_plugin(
         if bool(fresh_only_eval.get("should_sell")):
             sell_eval = fresh_only_eval
             triggered_by_wick_only = False
+        elif nearest_target_p > 0.0:
+            lowest_tier_eval = evaluate_multi_grid_sell_targets(
+                buckets=buckets,
+                live_price=nearest_target_p,
+                rise_l1_pct=rise_sell_l1_pct,
+                rise_upper_pct=rise_sell_upper_pct,
+                golden_pocket=gp,
+                rise_pocket_pct=GOLDEN_POCKET_RISE_PCT,
+                is_overnight_session=is_ext_sell_only,
+                sub_buckets=sub_buckets,
+            )
+            if bool(lowest_tier_eval.get("should_sell")):
+                sell_eval = lowest_tier_eval
 
         sold_indices = list(sell_eval.get("sold_indices") or [])
         sub_sold_indices = list(sell_eval.get("sub_sold_indices") or [])

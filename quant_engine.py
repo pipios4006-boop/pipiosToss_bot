@@ -12,7 +12,7 @@
    🛡️ Default-ON 3층 서브 그리드 배치 및 양끝 합병기(add_lot_to_sub_grid_with_flag / add_lot_to_sub_grid :
    SUB_REENTRY_1FL 독립 서브 1층 배치 / SUB_TOPUP_1FL 기존 서브 1층 무승격 합산[Case 78] /
    SUB_DIP_1FL 3층 이하 개별 승격 및 3층 초과[4층 발생] 시 서브 구 1층 + 구 3층 양끝 합병 후 오름차순 재배치[SUB_L1_L3_MERGE · Case 88])
-3) 수동 매도 시 독립 골든포켓 · 3층 서브 그리드 · 7층 본 그리드 순수 원가 1:1 매칭 정산기(match_and_remove_sold_buckets_7tier · Case 63, 69, 80, 87, 88) 및
+3) 수동 매도 시 독립 골든포켓 · 3층 서브 그리드 · 7층 본 그리드 최하단 저가 지층 순차 1:1 매칭 정산기(match_and_remove_sold_buckets_7tier · Case 63, 69, 80, 87, 88) 및
    계좌별 동적 왕복 수수료율(0.14% / 0.20%) · 실측 매도 수수료(execution.commission + tax) 반영 세후 실현손익 산출기(calc_sell_realized_pnl · Case 86)
 4) 본 그리드 상단 2층 ~ 7층 통합 이동평균(compute_upper_2_to_7_moving_avg) 및 서브 그리드 상단 2층 ~ 3층 통합 이동평균(compute_sub_upper_2_to_3_moving_avg · Case 88) 산출 ·
    🚨 [Case 83 방안 C & Case 88] 오버나이트(애프터·데이마켓, is_overnight_session=True) 중 상단층 보유 시
@@ -404,11 +404,14 @@ def match_and_remove_sold_buckets_7tier(
     sub_merge_mode: str = SUB_MERGE_MODE_L1_L3,
 ) -> Dict[str, Any]:
     """
-    # [Case 63, Case 69, Case 71, Case 72, Case 80, Case 86, Case 87 & Case 88 계좌별 동적/실측 수수료 및 서브 그리드 연동]:
+    # MODIFIED [Case 63, Case 69, Case 71, Case 72, Case 80, Case 86, Case 87 & Case 88 최하단 저가 지층 순차 매칭 정산기]:
     수동 매도(전량 또는 부분 매도)로 보유 수량이 delta_remove_qty 만큼 줄었을 때:
-    1) 독립 골든포켓(golden_pocket) -> 3층 서브 그리드(sub_buckets) -> 7층 본 그리드(buckets)의 하단 층부터
-       순차 차감하여 골든포켓, 서브 그리드, 본 그리드 각 레이어의 고유 순수 원가를 100% 보존한다.
-    2) 실제로 차감된 물량의 고유 순수 매수 원금(sold_actual_cost_usd)과 계좌별 수수료율을 적용하여
+    1) 차감 수량(rem_to_cut)이 독립 골든포켓(golden_pocket), 서브 그리드(sub_buckets), 본 그리드(buckets)의
+       단독 보유 수량과 정확히 일치하면 해당 레이어를 1:1 우선 차감한다.
+    2) 복합 수량 차감 시에는 매 스텝마다 잔존 (rem_gp, sub_queue[0], main_queue[0]) 후보 중
+       매수 단가(book_price)가 가장 낮은 최하단 저가 지층부터 순차적으로 차감하여,
+       본 그리드 고가 상단층이 서브 그리드 저가 1층보다 먼저 차감되는 원가 왜곡 역설을 100% 원천 차단한다!
+    3) 실제로 차감된 물량의 고유 순수 매수 원금(sold_actual_cost_usd)과 계좌별 수수료율을 적용하여
        calc_sell_realized_pnl() 로 세후 실현수익(net_pnl_usd)을 정밀 산출한다.
     """
     valid = [
@@ -435,6 +438,7 @@ def match_and_remove_sold_buckets_7tier(
             "sold_sub_cost_usd": 0.0,
             "sold_sub_buckets": [],
             "sold_sub_l1_completely": False,
+            "sold_sub_merged_bucket": False,
             "sold_buckets": [],
             "sold_qty": 0,
             "sold_actual_cost_usd": 0.0,
@@ -455,6 +459,23 @@ def match_and_remove_sold_buckets_7tier(
     sold_pocket_cost = 0.0
     rem_gp = pocket_from_dict(gp.to_dict())
     sold_tier_parts: List[str] = []
+
+    was_active_l1 = has_active_l1_bucket(valid)
+    was_sub_active_l1 = has_active_l1_bucket(valid_sub)
+
+    main_queue: List[Tuple[int, StratumBucket]] = [
+        (idx, b) for idx, b in enumerate(valid)
+    ]
+    sub_queue: List[Tuple[int, StratumBucket]] = [
+        (s_idx, sb) for s_idx, sb in enumerate(valid_sub)
+    ]
+
+    sold_buckets: List[StratumBucket] = []
+    sold_sub_buckets: List[StratumBucket] = []
+    removed_first_tier_completely = False
+    sold_upper_tier = False
+    sold_sub_l1_completely = False
+    sold_sub_merged_bucket = False
 
     def _cut_from_golden_pocket(cut_q: int) -> int:
         nonlocal sold_pocket_qty, sold_pocket_cost, rem_gp
@@ -491,215 +512,166 @@ def match_and_remove_sold_buckets_7tier(
         )
         return taken
 
-    lowest_grid_p = min(
-        [b.book_price for b in valid] + [sb.book_price for sb in valid_sub]
-    ) if (valid or valid_sub) else 0.0
-
-    if rem_gp.is_active and (
-        (not valid and not valid_sub)
-        or rem_to_cut == rem_gp.qty
-        or rem_gp.book_price <= lowest_grid_p + 1e-6
-    ):
-        cut_done = _cut_from_golden_pocket(rem_to_cut)
-        rem_to_cut -= cut_done
-
-    # 서브 그리드(valid_sub) 차감
-    was_sub_active_l1 = has_active_l1_bucket(valid_sub)
-    rem_sub_buckets: List[StratumBucket] = []
-    sold_sub_buckets: List[StratumBucket] = []
-    sold_sub_l1_completely = False
-
-    if valid_sub and rem_to_cut > 0 and (
-        not valid
-        or rem_to_cut == sum(sb.qty for sb in valid_sub)
-        or valid_sub[0].book_price <= valid[0].book_price + 1e-6
-    ):
-        for s_idx, sb in enumerate(valid_sub):
-            s_label = (
-                "서브1층"
-                if (s_idx == 0 and was_sub_active_l1)
-                else f"서브{s_idx + 1 if was_sub_active_l1 else s_idx + 2}층"
+    def _pop_from_sub(cut_q: int) -> int:
+        nonlocal sold_sub_l1_completely, sold_sub_merged_bucket
+        if not sub_queue or cut_q <= 0:
+            return 0
+        s_idx, sb = sub_queue[0]
+        s_label = (
+            "서브1층"
+            if (s_idx == 0 and was_sub_active_l1)
+            else f"서브{s_idx + 1 if was_sub_active_l1 else s_idx + 2}층"
+        )
+        if cut_q >= sb.qty:
+            taken = sb.qty
+            sold_sub_buckets.append(sb)
+            sold_tier_parts.append(
+                f"{s_label}({sb.qty}주@${sb.book_price:.2f})"
             )
-            if rem_to_cut <= 0:
-                rem_sub_buckets.append(sb)
-                continue
-            if rem_to_cut >= sb.qty:
-                sold_sub_buckets.append(sb)
-                sold_tier_parts.append(
-                    f"{s_label}({sb.qty}주@${sb.book_price:.2f})"
-                )
-                rem_to_cut -= sb.qty
-                if s_idx == 0 and was_sub_active_l1:
-                    sold_sub_l1_completely = True
-            else:
-                sold_sq_part = rem_to_cut
-                keep_sq = sb.qty - rem_to_cut
-                rem_to_cut = 0
-                pure_s_unit_p = sb.actual_avg_price
-                sold_scost_part = round(float(sold_sq_part) * pure_s_unit_p, 4)
-                keep_scost_part = round(
-                    max(
-                        0.01 * float(keep_sq),
-                        sb.actual_cost_usd - sold_scost_part,
-                    ),
-                    4,
-                )
-                sold_sub_buckets.append(
-                    StratumBucket(
-                        qty=sold_sq_part,
-                        book_price=round(
-                            sold_scost_part / float(sold_sq_part), 4
-                        ),
-                        book_invested_usd=sold_scost_part,
-                        actual_cost_usd=sold_scost_part,
-                        lot_count=1,
-                        lot_type=sb.lot_type,
-                    )
-                )
-                rem_sub_buckets.append(
-                    StratumBucket(
-                        qty=keep_sq,
-                        book_price=round(keep_scost_part / float(keep_sq), 4),
-                        book_invested_usd=keep_scost_part,
-                        actual_cost_usd=keep_scost_part,
-                        lot_count=max(1, sb.lot_count),
-                        lot_type=sb.lot_type,
-                    )
-                )
-                sold_tier_parts.append(
-                    f"{s_label}부분({sold_sq_part}주@${pure_s_unit_p:.2f})"
-                )
-    else:
-        rem_sub_buckets = list(valid_sub)
+            sub_queue.pop(0)
+            if s_idx == 0 and was_sub_active_l1:
+                sold_sub_l1_completely = True
+            if max(1, sb.lot_count) > 1:
+                sold_sub_merged_bucket = True
+            return taken
 
-    # 본 그리드(valid) 차감
-    was_active_l1 = has_active_l1_bucket(valid)
-    rem_buckets: List[StratumBucket] = []
-    sold_buckets: List[StratumBucket] = []
-    removed_first_tier_completely = False
-    sold_upper_tier = False
+        sold_sq_part = cut_q
+        keep_sq = sb.qty - cut_q
+        pure_s_unit_p = sb.actual_avg_price
+        sold_scost_part = round(float(sold_sq_part) * pure_s_unit_p, 4)
+        keep_scost_part = round(
+            max(
+                0.01 * float(keep_sq),
+                sb.actual_cost_usd - sold_scost_part,
+            ),
+            4,
+        )
+        sold_sub_buckets.append(
+            StratumBucket(
+                qty=sold_sq_part,
+                book_price=round(sold_scost_part / float(sold_sq_part), 4),
+                book_invested_usd=sold_scost_part,
+                actual_cost_usd=sold_scost_part,
+                lot_count=1,
+                lot_type=sb.lot_type,
+            )
+        )
+        sub_queue[0] = (
+            s_idx,
+            StratumBucket(
+                qty=keep_sq,
+                book_price=round(keep_scost_part / float(keep_sq), 4),
+                book_invested_usd=keep_scost_part,
+                actual_cost_usd=keep_scost_part,
+                lot_count=max(1, sb.lot_count),
+                lot_type=sb.lot_type,
+            ),
+        )
+        sold_tier_parts.append(
+            f"{s_label}부분({sold_sq_part}주@${pure_s_unit_p:.2f})"
+        )
+        return sold_sq_part
 
-    for idx, b in enumerate(valid):
+    def _pop_from_main(cut_q: int) -> int:
+        nonlocal removed_first_tier_completely, sold_upper_tier
+        if not main_queue or cut_q <= 0:
+            return 0
+        idx, b = main_queue[0]
         tier_label = (
             "1층"
             if (idx == 0 and was_active_l1)
             else f"{idx + 1 if was_active_l1 else idx + 2}층"
         )
-        if rem_to_cut <= 0:
-            rem_buckets.append(b)
-            continue
-
-        if rem_to_cut >= b.qty:
+        if cut_q >= b.qty:
+            taken = b.qty
             sold_buckets.append(b)
             sold_tier_parts.append(
                 f"{tier_label}({b.qty}주@${b.book_price:.2f})"
             )
-            rem_to_cut -= b.qty
+            main_queue.pop(0)
             if idx == 0 and was_active_l1:
                 removed_first_tier_completely = True
             else:
                 sold_upper_tier = True
+            return taken
+
+        sold_q_part = cut_q
+        keep_q = b.qty - cut_q
+        pure_unit_p = b.actual_avg_price
+        sold_cost_part = round(float(sold_q_part) * pure_unit_p, 4)
+        keep_cost_part = round(
+            max(0.01 * float(keep_q), b.actual_cost_usd - sold_cost_part),
+            4,
+        )
+        sold_buckets.append(
+            StratumBucket(
+                qty=sold_q_part,
+                book_price=round(sold_cost_part / float(sold_q_part), 4),
+                book_invested_usd=sold_cost_part,
+                actual_cost_usd=sold_cost_part,
+                lot_count=1,
+                lot_type=b.lot_type,
+            )
+        )
+        main_queue[0] = (
+            idx,
+            StratumBucket(
+                qty=keep_q,
+                book_price=round(keep_cost_part / float(keep_q), 4),
+                book_invested_usd=keep_cost_part,
+                actual_cost_usd=keep_cost_part,
+                lot_count=max(1, b.lot_count),
+                lot_type=b.lot_type,
+            ),
+        )
+        sold_tier_parts.append(
+            f"{tier_label}부분({sold_q_part}주@${pure_unit_p:.2f})"
+        )
+        if not (idx == 0 and was_active_l1):
+            sold_upper_tier = True
+        return sold_q_part
+
+    # 1단계: 단독 레이어 전체 수량과 1:1 정확히 일치하는 수동 청산일 경우 해당 레이어 우선 차감
+    tot_sub_q = sum(sb.qty for _, sb in sub_queue)
+    tot_main_q = sum(b.qty for _, b in main_queue)
+
+    if rem_gp.is_active and rem_to_cut == rem_gp.qty:
+        rem_to_cut -= _cut_from_golden_pocket(rem_to_cut)
+    elif sub_queue and rem_to_cut == tot_sub_q and rem_to_cut != tot_main_q:
+        while rem_to_cut > 0 and sub_queue:
+            rem_to_cut -= _pop_from_sub(rem_to_cut)
+    elif main_queue and rem_to_cut == tot_main_q and rem_to_cut != tot_sub_q:
+        while rem_to_cut > 0 and main_queue:
+            rem_to_cut -= _pop_from_main(rem_to_cut)
+
+    # 2단계: 매 스텝마다 잔존 (골든포켓, 서브 최하단층, 본그리드 최하단층) 중 단가(book_price)가 가장 낮은 층부터 순차 차감
+    while rem_to_cut > 0 and (rem_gp.is_active or sub_queue or main_queue):
+        candidates: List[Tuple[float, int, str]] = []
+        if rem_gp.is_active:
+            candidates.append((round(rem_gp.book_price, 4), 0, "GP"))
+        if sub_queue:
+            candidates.append((round(sub_queue[0][1].book_price, 4), 1, "SUB"))
+        if main_queue:
+            candidates.append(
+                (round(main_queue[0][1].book_price, 4), 2, "MAIN")
+            )
+        if not candidates:
+            break
+
+        _, _, chosen_src = min(candidates, key=lambda item: (item[0], item[1]))
+        if chosen_src == "GP":
+            cut_done = _cut_from_golden_pocket(rem_to_cut)
+        elif chosen_src == "SUB":
+            cut_done = _pop_from_sub(rem_to_cut)
         else:
-            sold_q_part = rem_to_cut
-            keep_q = b.qty - rem_to_cut
-            rem_to_cut = 0
+            cut_done = _pop_from_main(rem_to_cut)
 
-            pure_unit_p = b.actual_avg_price
-            sold_cost_part = round(float(sold_q_part) * pure_unit_p, 4)
-            keep_cost_part = round(
-                max(0.01 * float(keep_q), b.actual_cost_usd - sold_cost_part),
-                4,
-            )
-
-            sold_buckets.append(
-                StratumBucket(
-                    qty=sold_q_part,
-                    book_price=round(sold_cost_part / float(sold_q_part), 4),
-                    book_invested_usd=sold_cost_part,
-                    actual_cost_usd=sold_cost_part,
-                    lot_count=1,
-                    lot_type=b.lot_type,
-                )
-            )
-            rem_buckets.append(
-                StratumBucket(
-                    qty=keep_q,
-                    book_price=round(keep_cost_part / float(keep_q), 4),
-                    book_invested_usd=keep_cost_part,
-                    actual_cost_usd=keep_cost_part,
-                    lot_count=max(1, b.lot_count),
-                    lot_type=b.lot_type,
-                )
-            )
-            sold_tier_parts.append(
-                f"{tier_label}부분({sold_q_part}주@${pure_unit_p:.2f})"
-            )
-            if not (idx == 0 and was_active_l1):
-                sold_upper_tier = True
-
-    # 잔여 미차감 수량이 남아 있고 서브 그리드가 남아 있으면 서브 그리드에서 추가 차감
-    if rem_to_cut > 0 and rem_sub_buckets:
-        next_rem_sub: List[StratumBucket] = []
-        for s_idx, sb in enumerate(rem_sub_buckets):
-            s_label = (
-                "서브1층"
-                if (s_idx == 0 and was_sub_active_l1)
-                else f"서브{s_idx + 1 if was_sub_active_l1 else s_idx + 2}층"
-            )
-            if rem_to_cut <= 0:
-                next_rem_sub.append(sb)
-                continue
-            if rem_to_cut >= sb.qty:
-                sold_sub_buckets.append(sb)
-                sold_tier_parts.append(
-                    f"{s_label}({sb.qty}주@${sb.book_price:.2f})"
-                )
-                rem_to_cut -= sb.qty
-                if s_idx == 0 and was_sub_active_l1:
-                    sold_sub_l1_completely = True
-            else:
-                sold_sq_part = rem_to_cut
-                keep_sq = sb.qty - rem_to_cut
-                rem_to_cut = 0
-                pure_s_unit_p = sb.actual_avg_price
-                sold_scost_part = round(float(sold_sq_part) * pure_s_unit_p, 4)
-                keep_scost_part = round(
-                    max(
-                        0.01 * float(keep_sq),
-                        sb.actual_cost_usd - sold_scost_part,
-                    ),
-                    4,
-                )
-                sold_sub_buckets.append(
-                    StratumBucket(
-                        qty=sold_sq_part,
-                        book_price=round(
-                            sold_scost_part / float(sold_sq_part), 4
-                        ),
-                        book_invested_usd=sold_scost_part,
-                        actual_cost_usd=sold_scost_part,
-                        lot_count=1,
-                        lot_type=sb.lot_type,
-                    )
-                )
-                next_rem_sub.append(
-                    StratumBucket(
-                        qty=keep_sq,
-                        book_price=round(keep_scost_part / float(keep_sq), 4),
-                        book_invested_usd=keep_scost_part,
-                        actual_cost_usd=keep_scost_part,
-                        lot_count=max(1, sb.lot_count),
-                        lot_type=sb.lot_type,
-                    )
-                )
-                sold_tier_parts.append(
-                    f"{s_label}부분({sold_sq_part}주@${pure_s_unit_p:.2f})"
-                )
-        rem_sub_buckets = next_rem_sub
-
-    if rem_to_cut > 0 and rem_gp.is_active:
-        cut_done = _cut_from_golden_pocket(rem_to_cut)
+        if cut_done <= 0:
+            break
         rem_to_cut -= cut_done
+
+    rem_buckets: List[StratumBucket] = [b for _, b in main_queue]
+    rem_sub_buckets: List[StratumBucket] = [sb for _, sb in sub_queue]
 
     eff_max_t = max(2, safe_int(max_tiers, MAX_GRID_TIERS_7))
     eff_merge_mode = (
@@ -779,6 +751,7 @@ def match_and_remove_sold_buckets_7tier(
         "sold_sub_cost_usd": sold_sub_cost_total,
         "sold_sub_buckets": sold_sub_buckets,
         "sold_sub_l1_completely": sold_sub_l1_completely,
+        "sold_sub_merged_bucket": sold_sub_merged_bucket,
         "sold_buckets": sold_buckets,
         "sold_qty": sold_qty_total,
         "sold_actual_cost_usd": sold_cost_total,
@@ -2563,7 +2536,7 @@ def run_quant_engine_tdd() -> bool:
             and abs(res_step_ok["next_cycle_min_price"] - 42.44) < 1e-4
         ), f"TDD 실패(Case 76 2025-11-05 스텝업 해금 미작동): {res_step_ok}"
 
-        # 8) 단가 비교 층간 스마트 중간 편입 & 매도 층 원가 매칭 정산 검증
+        # 8) 단가 비교 층간 스마트 중간 편입 & 매도 층 원가 매칭 정산(본 그리드 + 서브 그리드 교차 저가 매칭 포함) 검증
         mid_inserted = vrev_add_quota_lot_and_merge_2tier(
             reloaded_grid, 10, 84.50, 845.0, "MANUAL_SYNC_L1"
         )
@@ -2587,6 +2560,28 @@ def run_quant_engine_tdd() -> bool:
             and not has_active_l1_bucket(match_res["rem_buckets"])
             and match_res["pnl_info"]["net_pnl_usd"] > 0.0
         ), f"TDD 실패(수동 매도 층별 원가 매칭 정산): {match_res}"
+
+        # 본 그리드 [10주@$40.0, 50주@$90.0] + 서브 그리드 [8주@$45.0] 보유 중 18주 수동 매도 시 저가인 본 1층(10주@$40) + 서브 1층(8주@$45) 우선 매칭 검증
+        cross_match = match_and_remove_sold_buckets_7tier(
+            buckets=[
+                StratumBucket(10, 40.0, 400.0, 400.0, 1, "REENTRY_1FL"),
+                StratumBucket(50, 90.0, 4500.0, 4500.0, 5, "GRID_L2"),
+            ],
+            sub_buckets=[
+                StratumBucket(8, 45.0, 360.0, 360.0, 1, "SUB_REENTRY_1FL"),
+            ],
+            delta_remove_qty=18,
+            sell_exec_price=48.0,
+        )
+        assert (
+            cross_match["sold_qty"] == 18
+            and cross_match["sold_sub_qty"] == 8
+            and abs(cross_match["sold_actual_cost_usd"] - 760.0) < 1e-4
+            and len(cross_match["rem_buckets"]) == 1
+            and cross_match["rem_buckets"][0].qty == 50
+            and abs(cross_match["rem_buckets"][0].book_price - 90.0) < 1e-4
+            and len(cross_match["rem_sub_buckets"]) == 0
+        ), f"TDD 실패(Case 88 본+서브 교차 저가 매칭 오류): {cross_match}"
 
         # 9) [Case 77 : 💉 05_RESV_6P_GUARD30 검증]
         g30_block = evaluate_guard30_and_reserve_injection(
