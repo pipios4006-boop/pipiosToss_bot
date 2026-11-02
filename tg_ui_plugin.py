@@ -8,7 +8,7 @@
 (👑 06_L2L7_RATCHET_8PCT : 구 1층 보존 + 구 2층 + 구 7층 통합 후 평단 오름차순 중간층 재배치 & 사이클 최고 도달 회차 단차 잠금 · Case 87) +
 🛡️ 스위치 없는 100% 기본 상시 적용(Default ON) 3층 서브 그리드
 (13_SUB_L1L3_RESV05_CAP4L : 본 그리드 5일 무매매 시 4.0% 정량 · 0.5회분 보호예수 · 최대 4회분[16%] 상한 캡 · 3층 초과 시 구 1층 + 구 3층 양끝 합병 · 10일/-10% 저가해금 · Case 88) 지층관리 스나이퍼
-텔레그램 관제탑 사용자 중심 초슬림 UI 렌더러(4버튼 메뉴 단일화 & 제어반 /reset_profit 탑재) · 계좌별 수수료율(편도/왕복) 실시간 표출 · 불사조 롱폴링(Immortal Telegram Polling) 및 명령어·콜백 비동기 컨트롤러 코어 모듈 (Step 10 / 13)
+텔레그램 관제탑 모바일 가로폭(36자) 칼맞춤 초슬림 UI 렌더러(4버튼 메뉴 단일화 & 제어반 /reset_profit 탑재) · 계좌별 수수료율(편도/왕복) 실시간 표출 · 불사조 롱폴링(Immortal Telegram Polling) 및 명령어·콜백 비동기 컨트롤러 코어 모듈 (Step 10 / 13)
 """
 
 from __future__ import annotations
@@ -167,33 +167,38 @@ def _resolve_folder_identity_badge(
 
 def _format_case67_quota_badge(summary: Dict[str, Any]) -> str:
     """
-    # MODIFIED [사용자 중심 UI 슬림화 & Case 67]:
-    개발자용 수식(min(1회분, 고정 N주) 대기) 노출을 제거하고 직관적인 매수 예정 주수만 반환한다.
+    # MODIFIED [모바일 36자 가로폭 칼맞춤 & Case 67]:
+    직관적인 매수 예정 주수만 간결하게 반환한다.
     """
     next_qty = safe_int(summary.get("next_target_qty"), 1)
-    anc_qty = safe_int(summary.get("anchor_quota_qty"), next_qty)
-    if next_qty < anc_qty:
-        return f"<b>{next_qty}주</b> (예산상한 적용)"
     return f"<b>{next_qty}주</b>"
 
 
 def _format_sub_quota_badge(summary: Dict[str, Any]) -> str:
     """
-    # MODIFIED [사용자 중심 UI 슬림화 & Case 88]:
-    서브 그리드 4% 정량 매수 예정 주수를 직관적으로 반환한다.
+    # MODIFIED [모바일 36자 가로폭 칼맞춤 & Case 88]:
+    서브 그리드 4% 정량 매수 예정 주수를 간결하게 반환한다.
     """
     sub_next_qty = safe_int(summary.get("sub_next_target_qty"), 1)
-    sub_anc_qty = safe_int(summary.get("sub_anchor_quota_qty"), sub_next_qty)
-    if sub_next_qty < sub_anc_qty:
-        return f"<b>{sub_next_qty}주</b> (예산상한 적용)"
     return f"<b>{sub_next_qty}주</b>"
+
+
+def _format_short_golden_mode(mode: str) -> str:
+    """
+    전술 제어반 및 레이더에서 줄바꿈이 발생하지 않도록 황금시간 모드명을 간결하게 반환한다.
+    """
+    m = str(mode or DEFAULT_GOLDEN_ALLIN_MODE).upper().strip()
+    if m == "POCKET_ALLIN":
+        return "🌟 골든포켓 100% (ON)"
+    if m == "GRID_L1_ALLIN":
+        return "🔥 1층편입 100% (ON)"
+    return "⚪ OFF (기본)"
 
 
 def _build_main_reply_keyboard() -> Dict[str, Any]:
     """
     # MODIFIED [4대 핵심 메뉴(2x2) 단일화]:
-    중복 메뉴였던 '📜 지층 지시서'와 '⬅️ 메인 메뉴'(/start)를 제거하고
-    사용자 중심 4대 핵심 버튼(레이더 · 잔고 동기화 · 전술 제어반 · 시스템 업데이트)으로 구성한다.
+    사용자 중심 4대 핵심 버튼(스나이퍼 레이더 · 잔고 동기화 · 전술 제어반 · 시스템 업데이트)으로 구성한다.
     """
     return {
         "keyboard": [
@@ -269,7 +274,7 @@ def _build_settlement_inline_keyboard(
 
 
 # ---------------------------------------------------------------------------
-# [핵심 1] 관제 보드 메시지 빌더 (하단 4대 메뉴 체제 & 사용자 중심 초슬림 UI)
+# [핵심 1] 관제 보드 메시지 빌더 (모바일 36자 가로폭 1줄 수납 칼정렬 UI)
 # ---------------------------------------------------------------------------
 def build_start_schedule_message(
     st: Dict[str, Any],
@@ -277,9 +282,7 @@ def build_start_schedule_message(
     context: Optional[Any] = None,
 ) -> str:
     """
-    # MODIFIED [AST 하위호환 유지 및 초기 /start 진입 시 4대 핵심 메뉴 안내]:
-    하단 메뉴에서 운용 시간표 버튼을 제거하고 4대 메뉴 체제로 축소함에 따라,
-    최초 /start 입력 시 하단 4대 메뉴 키보드를 활성화하면서 핵심 메뉴 4개만 간결히 안내한다.
+    # MODIFIED [초기 /start 진입 시 4대 핵심 메뉴 1줄 칼정렬 안내]:
     """
     dt_now = now_est.astimezone(EST_TZ) if now_est else datetime.now(EST_TZ)
     dst_str = _get_dst_badge(dt_now)
@@ -287,9 +290,9 @@ def build_start_schedule_message(
     lines = [
         f"🐂 <b>[SOXL 스나이퍼 ({escape_html(dst_str)})]</b>",
         "──────────────",
-        "🔫 <b>스나이퍼 레이더</b> : 실시간 타점 · 보유 지층 조회",
-        "🔄 <b>잔고 동기화</b> : 계좌 잔고 · 예수금 · 수익 현황",
-        "⚙️ <b>전술 제어반</b> : 작동 ON/OFF · 시드 설정 · 수익 초기화",
+        "🔫 <b>스나이퍼 레이더</b> : 타점 · 지층 조회",
+        "🔄 <b>잔고 동기화</b> : 잔고 · 예수금 · 수익",
+        "⚙️ <b>전술 제어반</b> : 전원 · 시드 · 수익초기화",
         "🚀 <b>시스템 업데이트</b> : 최신 코드 동기화",
     ]
     return "\n".join(lines)
@@ -302,8 +305,9 @@ def _format_multi_grid_stratum_lines(
     is_late_cutoff: bool = False,
 ) -> List[str]:
     """
-    # MODIFIED [사용자 중심 초슬림 지층 렌더러 · Case 71 ~ 88]:
-    독립 골든포켓 및 본 그리드 1층 ~ 7층의 매수 단가·익절 목표가·수익률을 직관적으로 표시한다.
+    # MODIFIED [모바일 36자 가로폭 1줄 칼맞춤 지층 렌더러 · Case 71 ~ 88]:
+    2~7층 통합이평 라인('📦 [2~7층: 219주·6회] $93.93 ➔ 졸업 $94.88 (-14.29%)')을
+    1층 라인과 동일한 가로폭으로 정렬하여 스마트폰에서 줄바꿈이 절대 발생하지 않게 한다.
     """
     held_sh = safe_int(summary.get("held_shares"), 0)
     gp_qty = safe_int(summary.get("golden_pocket_qty"), 0)
@@ -316,22 +320,22 @@ def _format_multi_grid_stratum_lines(
         gp_g = safe_float(summary.get("golden_pocket_gain_pct"), 0.0)
         gp_sign = "+" if gp_g >= 0.0 else ""
         lines.append(
-            f"🌟 <b>[골든포켓: {gp_qty}주]</b> 단가 <b>${gp_p:.2f}</b> ➔ "
+            f"🌟 <b>[포켓: {gp_qty}주]</b> <b>${gp_p:.2f}</b> ➔ "
             f"익절 <b>${gp_t:.2f}</b> ({gp_sign}{gp_g:.2f}%)"
         )
 
     if held_sh <= 0 or not buckets:
         if is_ext_sell_only:
             lines.append(
-                "⚪ <b>[본그리드: 0주]</b> 🔒장외 매수잠금 (04:07 EST 프리장 개시 후 1층 진입 대기)"
+                "⚪ <b>[본그리드: 0주]</b> 🔒장외 매수잠금 (04:07 해금)"
             )
         elif is_late_cutoff:
             lines.append(
-                "⚪ <b>[본그리드: 0주]</b> 🔒장마감 30분전(15:30~16:00) 신규 진입 차단 (익일 04:07 진입 대기)"
+                "⚪ <b>[본그리드: 0주]</b> 🔒15:30~16:00 신규진입 차단"
             )
         else:
             lines.append(
-                "⚪ <b>[본그리드: 0주]</b> 60초 대기 후 현재가 지정가 1층 진입 대기"
+                "⚪ <b>[본그리드: 0주]</b> 60초 대기 후 1층 진입 대기"
             )
         return lines
 
@@ -348,14 +352,12 @@ def _format_multi_grid_stratum_lines(
         l1_rem_q = safe_int(summary.get("l1_rem_quota_qty"), 0)
         l1_target_q = safe_int(summary.get("l1_target_quota_qty"), b1.qty)
         if l1_rem_q > 0 and l1_target_q > b1.qty:
-            l1_qty_label = f"{b1.qty}주/목표{l1_target_q}주 · 🎯잔량 {l1_rem_q}주"
+            l1_qty_label = f"{b1.qty}/{l1_target_q}주"
         else:
             l1_qty_label = f"{b1.qty}주"
 
         l1_ov_lock_note = (
-            " · 🔒장외잠금(04:07해금)"
-            if (is_ext_sell_only and has_upper_tiers)
-            else ""
+            "·🔒" if (is_ext_sell_only and has_upper_tiers) else ""
         )
         lines.append(
             f"⚡ <b>[1층: {l1_qty_label}]</b> 단가 <b>${b1.book_price:.2f}</b> ➔ "
@@ -366,18 +368,18 @@ def _format_multi_grid_stratum_lines(
             summary.get("l2_ceiling_price"),
             safe_float(summary.get("min_indiv_upper_price"), 0.0),
         )
-        cap_note = f" · 상한 ${l2_cap:.2f}" if l2_cap > 0.0 else ""
+        cap_note = f" (상한 ${l2_cap:.2f})" if l2_cap > 0.0 else ""
         if is_ext_sell_only:
             lines.append(
-                f"⚡ <b>[1층: 공석]</b> 🔒장외 매수잠금 (04:07 이후 재장전{cap_note})"
+                f"⚡ <b>[1층: 공석]</b> 🔒장외잠금 · 04:07 재장전{cap_note}"
             )
         elif is_late_cutoff:
             lines.append(
-                f"⚡ <b>[1층: 공석]</b> 🛡️장마감 30분전 돌파차단 · 눌림(-1.0%) 감시{cap_note}"
+                f"⚡ <b>[1층: 공석]</b> 🛡️돌파차단 · 눌림(-1%) 감시{cap_note}"
             )
         else:
             lines.append(
-                f"⚡ <b>[1층: 공석]</b> 1분 주기 눌림(-1.0%) · 돌파(+1.0%) 재장전 감시{cap_note}"
+                f"⚡ <b>[1층: 공석]</b> 1분주기 눌림/돌파 감시{cap_note}"
             )
 
     if upper_buckets:
@@ -393,17 +395,12 @@ def _format_multi_grid_stratum_lines(
         u_gain = safe_float(summary.get("l2_gain_pct"), 0.0)
         ug_sign = "+" if u_gain >= 0.0 else ""
         tier_range_label = "2층" if u_cnt == 1 else f"2~{u_cnt + 1}층"
-        wma_act_badge = (
-            "장외일괄졸업" if is_ext_sell_only else "일괄졸업"
-        )
         lines.append(
-            f"📦 <b>[{tier_range_label} 통합: {u_qty}주({u_lots}회차)]</b> "
-            f"평단 <b>${u_wma_p:.2f}</b> ➔ {wma_act_badge} <b>${u_wma_t:.2f}</b> ({ug_sign}{u_gain:.2f}%)"
+            f"📦 <b>[{tier_range_label}: {u_qty}주·{u_lots}회]</b> "
+            f"<b>${u_wma_p:.2f}</b> ➔ 졸업 <b>${u_wma_t:.2f}</b> ({ug_sign}{u_gain:.2f}%)"
         )
 
-        indiv_ov_lock_note = (
-            " · 🔒장외잠금(04:07해금)" if is_ext_sell_only else ""
-        )
+        indiv_ov_lock_note = "·🔒" if is_ext_sell_only else ""
         for idx_u, bu in enumerate(upper_buckets):
             t_no = idx_u + 2
             bu_t = (
@@ -420,13 +417,11 @@ def _format_multi_grid_stratum_lines(
             )
             bg_s = "+" if bu_g >= 0.0 else ""
             if bu.lot_count > 1:
-                tier_tag = f"{t_no}층(👑합병)"
-                lot_note = f"({bu.lot_count}회분)"
+                tier_tag = f"{t_no}층(👑{bu.lot_count}회)"
             else:
                 tier_tag = f"{t_no}층"
-                lot_note = ""
             lines.append(
-                f"  ▫️ <b>{tier_tag}</b>: {bu.qty}주{lot_note} @ ${bu.book_price:.2f} "
+                f"  ▫️ <b>{tier_tag}</b>: {bu.qty}주 @ ${bu.book_price:.2f} "
                 f"➔ 익절 <b>${bu_t:.2f}</b> ({bg_s}{bu_g:.2f}%{indiv_ov_lock_note})"
             )
 
@@ -440,9 +435,7 @@ def _format_sub_grid_stratum_lines(
     is_late_cutoff: bool = False,
 ) -> List[str]:
     """
-    # MODIFIED [Case 88 : 3층 서브그리드 사용자 중심 슬림 렌더러]:
-    - 서브 그리드 미보유(0주) 평시에는 1줄 상태 요약으로 압축하고,
-      실제 보유 중(sub_sh > 0)이거나 5일 무매매 동결 발동 시에만 상세 표시한다.
+    # MODIFIED [Case 88 : 3층 서브그리드 36자 가로폭 1줄 칼맞춤 렌더러]:
     """
     held_sh_main = safe_int(summary.get("held_shares"), 0)
     sub_sh = safe_int(summary.get("sub_held_shares"), 0)
@@ -457,43 +450,38 @@ def _format_sub_grid_stratum_lines(
     sub_tiers = safe_int(summary.get("sub_held_tiers"), 0)
     main_frozen = safe_int(summary.get("main_consec_frozen_days"), 0)
     sub_comp = safe_int(summary.get("sub_completed_cycles"), 0)
-    sub_net = safe_float(summary.get("sub_realized_net_usd"), 0.0)
     avail_idle = safe_float(summary.get("avail_idle_cash_usd"), 0.0)
     lines: List[str] = []
 
     if sub_sh <= 0 or not sub_buckets:
         if held_sh_main > 0 and main_frozen >= SUB_FROZEN_DAYS_TRIGGER:
             wait_note = (
-                "🔒장외 매수잠금(04:07 출격)"
+                "🔒04:07 출격"
                 if is_ext_sell_only
                 else (
-                    "🔒15:30~16:00 신규차단(익일 출격)"
+                    "🔒익일 출격"
                     if is_late_cutoff
-                    else f"유휴현금 ${avail_idle:,.2f} 즉시 1층 진입 대기"
+                    else f"유휴 ${avail_idle:,.0f} 진입대기"
                 )
             )
             lines.append(
-                f"🛡️ <b>[서브그리드 가동 개시 (본그리드 동결 {main_frozen}/{SUB_FROZEN_DAYS_TRIGGER}일)]</b> {wait_note}"
+                f"🛡️ <b>[서브 가동 ({main_frozen}/{SUB_FROZEN_DAYS_TRIGGER}일)]</b> {wait_note}"
             )
         else:
-            grad_note = (
-                f" · 졸업 {sub_comp}회(+${sub_net:,.2f})"
-                if sub_comp > 0
-                else ""
-            )
+            grad_note = f"·졸업{sub_comp}회" if sub_comp > 0 else ""
             lines.append(
-                f"🛡️ <b>[서브그리드 대기]</b> 본그리드 5일 무매매 시 자동 가동 (현재 {main_frozen}/{SUB_FROZEN_DAYS_TRIGGER}일{grad_note})"
+                f"🛡️ <b>[서브 대기]</b> 본그리드 5일 무매매 시 가동 ({main_frozen}/{SUB_FROZEN_DAYS_TRIGGER}일{grad_note})"
             )
         return lines
 
-    cap_badge = " · 🔒4회캡" if sub_lots >= sub_max_lots else ""
+    cap_badge = "·🔒4회캡" if sub_lots >= sub_max_lots else ""
     lot_str = (
-        f"보유{sub_lots}/잠금{sub_ratchet_lots}회분{cap_badge}"
+        f"{sub_lots}/{sub_ratchet_lots}회{cap_badge}"
         if sub_ratchet_lots > sub_lots
-        else f"{sub_lots}/{sub_max_lots}회분{cap_badge}"
+        else f"{sub_lots}/{sub_max_lots}회{cap_badge}"
     )
     lines.append(
-        f"🛡️ <b>[1~3층 서브그리드]</b> (총 {sub_sh}주 · {sub_tiers}개층 · {lot_str})"
+        f"🛡️ <b>[서브그리드: 총 {sub_sh}주]</b> ({sub_tiers}층 · {lot_str})"
     )
 
     sub_active_l1 = bool(summary.get("has_sub_active_l1", True))
@@ -509,13 +497,11 @@ def _format_sub_grid_stratum_lines(
         sub_rem_q = safe_int(summary.get("sub_l1_rem_quota_qty"), 0)
         sub_target_q = safe_int(summary.get("sub_l1_target_quota_qty"), sb1.qty)
         if sub_rem_q > 0 and sub_target_q > sb1.qty:
-            sl1_label = f"{sb1.qty}주/목표{sub_target_q}주 · 🎯잔량 {sub_rem_q}주"
+            sl1_label = f"{sb1.qty}/{sub_target_q}주"
         else:
             sl1_label = f"{sb1.qty}주"
         sl1_ov_note = (
-            " · 🔒장외잠금(04:07해금)"
-            if (is_ext_sell_only and has_sub_uppers)
-            else ""
+            "·🔒" if (is_ext_sell_only and has_sub_uppers) else ""
         )
         lines.append(
             f"  ⚡ <b>[서브1층: {sl1_label}]</b> 단가 <b>${sb1.book_price:.2f}</b> ➔ "
@@ -526,18 +512,18 @@ def _format_sub_grid_stratum_lines(
             summary.get("sub_l2_ceiling_price"),
             safe_float(summary.get("sub_min_indiv_upper_price"), 0.0),
         )
-        s_cap_note = f" · 상한 ${sub_l2_cap:.2f}" if sub_l2_cap > 0.0 else ""
+        s_cap_note = f" (상한 ${sub_l2_cap:.2f})" if sub_l2_cap > 0.0 else ""
         if sub_lots >= sub_max_lots:
             lines.append(
-                f"  ⚡ <b>[서브1층: 공석]</b> 🔒{sub_max_lots}회분 상한 도달 (익절 대기)"
+                f"  ⚡ <b>[서브1층: 공석]</b> 🔒{sub_max_lots}회 상한 도달 (익절 대기)"
             )
         elif is_ext_sell_only:
             lines.append(
-                f"  ⚡ <b>[서브1층: 공석]</b> 🔒장외 매수잠금 (04:07 이후 재장전{s_cap_note})"
+                f"  ⚡ <b>[서브1층: 공석]</b> 🔒장외잠금 · 04:07 재장전{s_cap_note}"
             )
         else:
             lines.append(
-                f"  ⚡ <b>[서브1층: 공석]</b> 1분 주기 재장전 감시{s_cap_note}"
+                f"  ⚡ <b>[서브1층: 공석]</b> 1분주기 재장전 감시{s_cap_note}"
             )
 
     if sub_upper_buckets:
@@ -554,15 +540,12 @@ def _format_sub_grid_stratum_lines(
         su_gain = safe_float(summary.get("sub_l2_gain_pct"), 0.0)
         sug_s = "+" if su_gain >= 0.0 else ""
         s_range_lbl = "서브2층" if su_cnt == 1 else f"서브2~{su_cnt + 1}층"
-        s_wma_badge = "장외일괄졸업" if is_ext_sell_only else "일괄졸업"
         lines.append(
-            f"  📦 <b>[{s_range_lbl} 통합: {su_qty}주({su_lots}회분)]</b> "
-            f"평단 <b>${su_wma_p:.2f}</b> ➔ {s_wma_badge} <b>${su_wma_t:.2f}</b> ({sug_s}{su_gain:.2f}%)"
+            f"  📦 <b>[{s_range_lbl}: {su_qty}주·{su_lots}회]</b> "
+            f"<b>${su_wma_p:.2f}</b> ➔ 졸업 <b>${su_wma_t:.2f}</b> ({sug_s}{su_gain:.2f}%)"
         )
 
-        s_indiv_ov_note = (
-            " · 🔒장외잠금(04:07해금)" if is_ext_sell_only else ""
-        )
+        s_indiv_ov_note = "·🔒" if is_ext_sell_only else ""
         for idx_su, sbu in enumerate(sub_upper_buckets):
             st_no = idx_su + 2
             sbu_t = (
@@ -579,13 +562,11 @@ def _format_sub_grid_stratum_lines(
             )
             sbg_s = "+" if sbu_g >= 0.0 else ""
             if sbu.lot_count > 1:
-                stier_tag = f"서브{st_no}층(🔄합병)"
-                slot_note = f"({sbu.lot_count}회분)"
+                stier_tag = f"서브{st_no}층(🔄{sbu.lot_count}회)"
             else:
                 stier_tag = f"서브{st_no}층"
-                slot_note = ""
             lines.append(
-                f"    ▫️ <b>{stier_tag}</b>: {sbu.qty}주{slot_note} @ ${sbu.book_price:.2f} "
+                f"    ▫️ <b>{stier_tag}</b>: {sbu.qty}주 @ ${sbu.book_price:.2f} "
                 f"➔ 익절 <b>${sbu_t:.2f}</b> ({sbg_s}{sbu_g:.2f}%{s_indiv_ov_note})"
             )
 
@@ -600,8 +581,9 @@ def build_avwap_radar_message(
     now_est: Optional[datetime] = None,
 ) -> str:
     """
-    # MODIFIED [사용자 중심 초슬림 레이더 보드 (/avwap) · Case 65, Case 70 ~ 88]:
-    개발자용 디버깅 카운터 및 수식을 제거하고 보유 지층, 익절 목표가, 다음 매수 타점, 자산 현황만 깔끔하게 표출한다.
+    # MODIFIED [모바일 36자 가로폭 1줄 칼맞춤 스나이퍼 레이더 (/avwap) · Case 65, Case 70 ~ 88]:
+    모든 라인을 36자 이내로 정렬하고, 추매 조건과 현재 위치를 의도적 2줄로 분리하여
+    스마트폰 화면에서 비정상 줄바꿈이 단 한 줄도 발생하지 않게 한다.
     """
     dt_now = now_est.astimezone(EST_TZ) if now_est else datetime.now(EST_TZ)
     hm_now = dt_now.hour * 100 + dt_now.minute
@@ -622,9 +604,9 @@ def build_avwap_radar_message(
 
     summary = summarize_stratum_portfolio(st, live_price=lp, now_est=dt_now)
     is_active = bool(st.get("is_active", True))
-    active_badge = "🟢 가동중" if is_active else "🔴 일시정지"
+    active_badge = "🟢 가동중" if is_active else "🔴 정지중"
     mode_badge = (
-        "🌃장외 통합졸업감시"
+        "🌃장외졸업감시"
         if is_ext_sell_only
         else "⚡실시간감시"
     )
@@ -648,16 +630,12 @@ def build_avwap_radar_message(
     upper_wma_t = safe_float(summary.get("upper_wma_target_price"), 0.0)
     is_l2_only = bool(summary.get("is_l2_only_anti_bloat"))
     l1_rem_q = safe_int(summary.get("l1_rem_quota_qty"), 0)
-    l1_target_q = safe_int(summary.get("l1_target_quota_qty"), 0)
     buckets_list = summary.get("buckets", [])
     l1_book_p = buckets_list[0].book_price if buckets_list else lp
     g_mode = str(
         summary.get("golden_allin_mode") or DEFAULT_GOLDEN_ALLIN_MODE
     ).upper()
-    g_mode_lbl = str(
-        summary.get("golden_allin_mode_label")
-        or get_golden_allin_mode_label(g_mode)
-    )
+    g_mode_short = _format_short_golden_mode(g_mode)
 
     in_buy_shield, rem_buy_sec = is_within_post_buy_time_shield(
         context, st, TARGET_SYMBOL
@@ -682,38 +660,37 @@ def build_avwap_radar_message(
     shield_line = ""
     if in_buy_shield:
         shield_line = (
-            f"🛡️ <b>[매수 후 60초 보호 대기 중]</b> 잔여 <b>{rem_buy_sec:.1f}초</b> 후 익절 감시 개시"
+            f"🛡️ <b>[매수 보호대기]</b> <b>{rem_buy_sec:.0f}초</b> 후 익절감시 개시"
         )
     elif waiting_dep:
         shield_line = (
-            f"🚨 <b>[💉 시드고갈 입금 대기 중]</b> 권장입금 <b>${req_dep_usd:,.2f}</b> (잔여한도 {avail_res_cnt}/{max_res_cnt}회분)"
+            f"🚨 <b>[시드고갈 대기]</b> 권장입금 <b>${req_dep_usd:,.0f}</b> (잔여 {avail_res_cnt}/{max_res_cnt}회)"
         )
     elif is_ext_sell_only:
-        sess_lbl = get_market_session_label(dt_now)
         if upper_tier_cnt > 0 or sub_upper_tier_cnt > 0:
             wma_note = f"${upper_wma_t:.2f}" if upper_wma_t > 0.0 else "+1.0%"
             shield_line = (
-                f"🌃 <b>[{escape_html(sess_lbl)}]</b> 개별층 매도잠금 · 통합이평(<b>{wma_note}</b>) 일괄졸업 감시 중"
+                f"🌃 <b>[장외 통합졸업 감시]</b> 목표 <b>{wma_note}</b> (개별·매수 잠금)"
             )
         else:
             shield_line = (
-                f"🌃 <b>[{escape_html(sess_lbl)}]</b> 목표가 도달 시 즉시 익절 · 신규매수는 04:07 EST 해금"
+                "🌃 <b>[장외 익절감시]</b> 목표가 즉시 익절 (04:07 매수해금)"
             )
     elif held_sh <= 0 and is_late_cutoff:
         shield_line = (
-            "🛡️ <b>[15:30~16:00 마감 전 신규진입 차단]</b> 익일 04:07 EST 첫 1층 진입 대기"
+            "🛡️ <b>[15:30~16:00 신규차단]</b> 익일 04:07 첫 1층 진입 대기"
         )
     elif in_golden_win and g_mode != "NONE":
         shield_line = (
-            f"🌟 <b>[황금시간 전액매수 감시 중]</b> RSI <b>{rsi_14:.1f}</b> ≤ {GOLDEN_RSI_MAX_THRESHOLD:.1f} 도달 시 즉시 투입"
+            f"🌟 <b>[황금시간 감시]</b> RSI <b>{rsi_14:.1f}</b> ≤ {GOLDEN_RSI_MAX_THRESHOLD:.0f} 시 전액매수"
         )
     elif in_sell_shield:
         shield_line = (
-            f"🛡️ <b>[매도 후 60초 보호 대기 중]</b> 잔여 <b>{rem_sell_sec:.1f}초</b> 후 매수 감시 개시"
+            f"🛡️ <b>[매도 보호대기]</b> <b>{rem_sell_sec:.0f}초</b> 후 매수감시 개시"
         )
     elif l1_rem_q > 0 and not is_l2_only:
         shield_line = (
-            f"🎯 <b>[1층 잔량 {l1_rem_q}주 대기 중]</b> <b>${l1_book_p:.2f}</b> 이하 도달 시 즉시 매수"
+            f"🎯 <b>[1층 잔량 {l1_rem_q}주 대기]</b> <b>${l1_book_p:.2f}</b> 이하 시 매수"
         )
 
     stratum_lines = _format_multi_grid_stratum_lines(
@@ -744,13 +721,16 @@ def build_avwap_radar_message(
     chg_anchor = safe_float(summary.get("chg_from_buy_anchor_pct"), 0.0)
     c_sign = "+" if chg_anchor >= 0.0 else ""
 
+    gate_cond_lines: List[str] = []
     if held_sh <= 0:
         gate_header_line = "🎯 <b>[다음 매수 타점 · 0주 첫 진입]</b>"
         if is_late_cutoff:
-            gate_cond_line = "▫️ 15:30~16:00 고점 방어 중 · 익일 04:07 EST 프리장 개시 후 첫 1층 매수"
+            gate_cond_lines.append(
+                "▫️ 15:30~16:00 고점방어 (익일 04:07 진입)"
+            )
         else:
-            gate_cond_line = (
-                f"▫️ 본그리드(8%): 현재가(<b>${lp:.2f}</b>) 기준 {quota_badge_str} (예산 ${next_bud:,.0f}) 진입 대기"
+            gate_cond_lines.append(
+                f"▫️ 본그리드(8%): 현재가 <b>${lp:.2f}</b> 기준 {quota_badge_str} (${next_bud:,.0f})"
             )
     elif is_l2_only:
         pull_p = safe_float(summary.get("reentry_pullback_price"), 0.0)
@@ -762,13 +742,16 @@ def build_avwap_radar_message(
         rem_re_note = f" (잔여 {rem_re_sec:.0f}초)" if in_re_shield else ""
         gate_header_line = f"🎯 <b>[다음 매수 타점 · 1층 재장전{rem_re_note}]</b>"
         brk_str = (
-            "돌파차단(15:30~16:00)"
+            "돌파차단(15:30~)"
             if is_late_cutoff
-            else f"돌파 <b>${brk_p:.2f}</b> 이상"
+            else f"돌파 <b>${brk_p:.2f}</b>"
         )
-        cap_str = f" · 2층상한 ${l2_cap_p:.2f}" if l2_cap_p > 0.0 else ""
-        gate_cond_line = (
-            f"▫️ 눌림목 <b>${pull_p:.2f}</b> 이하 또는 {brk_str}{cap_str} 시 {quota_badge_str} 매수"
+        cap_str = f" · 상한 ${l2_cap_p:.2f}" if l2_cap_p > 0.0 else ""
+        gate_cond_lines.append(
+            f"▫️ 눌림 <b>${pull_p:.2f}</b> / {brk_str} 시 {quota_badge_str} 매수"
+        )
+        gate_cond_lines.append(
+            f"▫️ 기준 ${ref_anchor:.2f} 대비 {c_sign}{chg_anchor:.2f}%{cap_str}"
         )
     else:
         drop_req = safe_float(summary.get("drop_buy_pct"), -1.0)
@@ -786,9 +769,11 @@ def build_avwap_radar_message(
         eff_lot_tag = (
             f"·잠금{eff_lots}회" if ratchet_lots > held_lots else ""
         )
-        gate_cond_line = (
-            f"▫️ 본그리드(8%): <b>${trig_p:.2f}</b> 이하 시 {quota_badge_str} 매수 "
-            f"(저가 ${ref_anchor:.2f} 대비 {c_sign}{chg_anchor:.2f}% / 목표 {drop_req:.1f}%{eff_lot_tag}{step_note})"
+        gate_cond_lines.append(
+            f"▫️ 추매타점(8%): <b>${trig_p:.2f}</b> 이하 시 {quota_badge_str} 매수{step_note}"
+        )
+        gate_cond_lines.append(
+            f"▫️ 현재위치: 저가 ${ref_anchor:.2f} 대비 {c_sign}{chg_anchor:.2f}% (목표 {drop_req:.1f}%{eff_lot_tag})"
         )
 
     sub_lots = safe_int(summary.get("sub_held_lots"), 0)
@@ -797,14 +782,20 @@ def build_avwap_radar_message(
     )
     sub_trig_p = safe_float(summary.get("sub_trigger_buy_price"), 0.0)
     sub_quota_badge = _format_sub_quota_badge(summary)
-    sub_extra_line = ""
     if sub_sh > 0:
         if sub_lots >= sub_max_lots:
-            sub_extra_line = f"▫️ 서브그리드(4%): 🔒<b>{sub_lots}/{sub_max_lots}회분 상한 도달</b> (추매 잠금 · 익절 대기)"
-        else:
-            sub_extra_line = (
-                f"▫️ 서브그리드(4%): <b>${sub_trig_p:.2f}</b> 이하 시 {sub_quota_badge} 추매"
+            gate_cond_lines.append(
+                f"▫️ 서브(4%): 🔒<b>{sub_lots}/{sub_max_lots}회 상한 도달</b> (추매잠금)"
             )
+        else:
+            gate_cond_lines.append(
+                f"▫️ 서브타점(4%): <b>${sub_trig_p:.2f}</b> 이하 시 {sub_quota_badge} 추매"
+            )
+
+    if g_mode != "NONE":
+        gate_cond_lines.append(
+            f"▫️ 황금시간(07:00~07:50): <b>{escape_html(g_mode_short)}</b>"
+        )
 
     cum_net = safe_float(summary.get("cumulative_realized_net_usd"), 0.0)
     free_cash = safe_float(summary.get("free_cash_usd"), 0.0)
@@ -813,10 +804,10 @@ def build_avwap_radar_message(
     n_sign = "+" if cum_net >= 0.0 else "-"
     m_sign = "+" if mark_roi >= 0.0 else ""
 
-    sub_header_note = f" + 서브 {sub_sh}주" if sub_sh > 0 else ""
-    gp_header_note = f" + 포켓 {gp_qty}주" if gp_qty > 0 else ""
+    sub_header_note = f"+서브{sub_sh}주" if sub_sh > 0 else ""
+    gp_header_note = f"+포켓{gp_qty}주" if gp_qty > 0 else ""
     lot_header_str = (
-        f"보유{held_lots}/잠금{ratchet_lots}회차"
+        f"{held_lots}/{ratchet_lots}회"
         if ratchet_lots > held_lots
         else f"{held_lots}회차"
     )
@@ -836,18 +827,13 @@ def build_avwap_radar_message(
             *sub_stratum_lines,
             "──────────────",
             gate_header_line,
-            gate_cond_line,
+            *gate_cond_lines,
+            "──────────────",
         ]
     )
-    if sub_extra_line:
-        lines.append(sub_extra_line)
-    if g_mode != "NONE":
-        lines.append(f"▫️ 황금시간 전액매수: <b>{escape_html(g_mode_lbl)}</b>")
-
-    lines.append("──────────────")
     if used_res_cnt > 0:
         lines.append(
-            f"💉 예비시드 수혈: <b>{used_res_cnt}/{max_res_cnt}회분</b> 사용 중 (${inj_res_usd:,.2f} · 졸업 시 자동상환)"
+            f"💉 예비시드: <b>{used_res_cnt}/{max_res_cnt}회분</b> 사용 (${inj_res_usd:,.2f} · 자동상환)"
         )
     lines.extend(
         [
@@ -869,8 +855,7 @@ def build_sync_instruction_message(
     context: Optional[Any] = None,
 ) -> str:
     """
-    # MODIFIED [잔고 동기화 (/sync) 통합 계좌 보드 · Case 77, 78, 80, 86, 87, 88]:
-    기존 '지층 지시서'와 '잔고 동기화'를 하나로 통합하여 자산·수익·현금·예비시드·수수료 현황을 일목요연하게 브리핑한다.
+    # MODIFIED [모바일 36자 가로폭 1줄 칼맞춤 잔고 동기화 (/sync) 보드 · Case 77, 78, 80, 86, 87, 88]:
     """
     dt_now = now_est.astimezone(EST_TZ) if now_est else datetime.now(EST_TZ)
     h_info = (holdings or {}).get(TARGET_SYMBOL, {})
@@ -895,16 +880,13 @@ def build_sync_instruction_message(
 
     held_sh = safe_int(summary.get("held_shares"), 0)
     sub_sh = safe_int(summary.get("sub_held_shares"), 0)
-    sub_tiers = safe_int(summary.get("sub_held_tiers"), 0)
     sub_lots = safe_int(summary.get("sub_held_lots"), 0)
     sub_max_lots = safe_int(
         summary.get("sub_max_total_lots"), SUB_MAX_TOTAL_LOTS_4
     )
     sub_comp = safe_int(summary.get("sub_completed_cycles"), 0)
-    sub_net = safe_float(summary.get("sub_realized_net_usd"), 0.0)
     main_frozen = safe_int(summary.get("main_consec_frozen_days"), 0)
     gp_qty = safe_int(summary.get("golden_pocket_qty"), 0)
-    gp_price = safe_float(summary.get("golden_pocket_price"), 0.0)
     total_held_sh = safe_int(
         summary.get("total_held_shares"), held_sh + sub_sh + gp_qty
     )
@@ -924,18 +906,10 @@ def build_sync_instruction_message(
     inj_res_usd = safe_float(summary.get("injected_reserve_usd"), 0.0)
     unalloc_dep_usd = max(0.0, safe_float(broker_bp_usd, 0.0) - free_cash)
 
-    sub_sync_note = (
-        f" + 서브 {sub_sh}주({sub_tiers}층·{sub_lots}/{sub_max_lots}회분)"
-        if sub_sh > 0
-        else ""
-    )
-    gp_sync_note = (
-        f" + 골든포켓 {gp_qty}주(@${gp_price:.2f})"
-        if gp_qty > 0
-        else ""
-    )
+    sub_sync_note = f"+서브{sub_sh}주" if sub_sh > 0 else ""
+    gp_sync_note = f"+포켓{gp_qty}주" if gp_qty > 0 else ""
     lot_sync_str = (
-        f"보유{held_lots}/잠금{ratchet_lots}회차"
+        f"{held_lots}/{ratchet_lots}회"
         if ratchet_lots > held_lots
         else f"{held_lots}회차"
     )
@@ -952,16 +926,17 @@ def build_sync_instruction_message(
         "──────────────",
         "🏦 <b>[현금 및 예비시드 현황]</b>",
         f"▫️ 봇 가용현금: <b>${free_cash:,.2f}</b> (서브가용 ${avail_idle:,.2f})",
-        f"▫️ 토스 주문가능: <b>${broker_bp_usd:,.2f}</b> (입금여력 +${unalloc_dep_usd:,.2f})",
-        f"▫️ 예비시드 탄창: 사용 <b>{used_res_cnt}/{max_res_cnt}회분</b> (수혈잔액 ${inj_res_usd:,.2f})",
+        f"▫️ 토스 주문가능: <b>${broker_bp_usd:,.2f}</b> (여력 +${unalloc_dep_usd:,.2f})",
+        f"▫️ 예비시드 탄창: <b>{used_res_cnt}/{max_res_cnt}회분</b> 사용 (${inj_res_usd:,.2f})",
         "──────────────",
         "📦 <b>[보유 주식 요약]</b>",
         f"▫️ 총 보유수량: <b>{total_held_sh}주</b> (본 {held_sh}주[{held_tiers}층·{lot_sync_str}]{sub_sync_note}{gp_sync_note})",
-        f"▫️ 총 매수원금: <b>${actual_inv:,.2f}</b> (전체평단 <b>${actual_avg:.2f}</b> · 2~7층 <b>${upper_wma:.2f}</b> · 저가 ${locked_min_p:.2f})",
-        f"▫️ 서브그리드: 보유 <b>{sub_sh}주</b> ({sub_lots}/{sub_max_lots}회분 · 본동결 {main_frozen}/{SUB_FROZEN_DAYS_TRIGGER}일 · 졸업 {sub_comp}회[+${sub_net:,.2f}])",
+        f"▫️ 총 매수원금: <b>${actual_inv:,.2f}</b> (전체평단 <b>${actual_avg:.2f}</b>)",
+        f"▫️ 상단/기억저가: 2~7층이평 <b>${upper_wma:.2f}</b> · 저가 ${locked_min_p:.2f}",
+        f"▫️ 서브그리드: <b>{sub_sh}주</b> ({sub_lots}/{sub_max_lots}회 · 동결 {main_frozen}/{SUB_FROZEN_DAYS_TRIGGER}일 · 졸업 {sub_comp}회)",
         f"▫️ 적용 수수료: 편도 {us_comm_pct:.3g}% / 왕복 <b>{rt_fee_pct:.2f}%</b>",
         "──────────────",
-        f"🕒 동기화: {dt_now.strftime('%Y-%m-%d %H:%M:%S EST')}",
+        f"🕒 동기화: {dt_now.strftime('%m-%d %H:%M:%S EST')}",
     ]
     return "\n".join(lines)
 
@@ -973,8 +948,7 @@ def build_settlement_control_message(
     context: Optional[Any] = None,
 ) -> str:
     """
-    # MODIFIED [전술 제어반 (/settlement) 슬림화 및 /reset_profit 명령어 탑재 · Case 02, 64, 80, 86, 87, 88]:
-    사용자 중심 제어 항목만 직관적으로 표시하고, /reset_profit 수익 초기화 명령어를 제어반 내에 직접 배치한다.
+    # MODIFIED [모바일 36자 가로폭 1줄 칼맞춤 전술 제어반 (/settlement) & /reset_profit 탑재 · Case 02, 64, 80, 86, 87, 88]:
     """
     dt_now = now_est.astimezone(EST_TZ) if now_est else datetime.now(EST_TZ)
     lp = safe_float(live_price, safe_float(st.get("anchor_price"), 100.0))
@@ -1001,7 +975,6 @@ def build_settlement_control_message(
         summary.get("sub_max_total_lots"), SUB_MAX_TOTAL_LOTS_4
     )
     sub_comp = safe_int(summary.get("sub_completed_cycles"), 0)
-    sub_net = safe_float(summary.get("sub_realized_net_usd"), 0.0)
     main_frozen = safe_int(summary.get("main_consec_frozen_days"), 0)
 
     held_tiers = safe_int(summary.get("held_tiers"), 0)
@@ -1014,26 +987,29 @@ def build_settlement_control_message(
         summary.get("max_reserve_portions"), MAX_RESERVE_PORTIONS
     )
     inj_res_usd = safe_float(summary.get("injected_reserve_usd"), 0.0)
-    g_mode_lbl = str(summary.get("golden_allin_mode_label") or "")
+    g_mode = str(
+        summary.get("golden_allin_mode") or DEFAULT_GOLDEN_ALLIN_MODE
+    ).upper()
+    g_mode_short = _format_short_golden_mode(g_mode)
 
     lot_ctrl_str = (
-        f"보유{held_lots}/잠금{ratchet_lots}회차"
+        f"{held_lots}/{ratchet_lots}회"
         if ratchet_lots > held_lots
-        else f"{held_lots}회차"
+        else f"{held_lots}회"
     )
 
     lines = [
         "⚙️ <b>[전술 제어반]</b>",
         "──────────────",
-        f"1️⃣ 스나이퍼 전원: <b>{power_str}</b> (왕복 수수료 {rt_fee_pct:.2f}%)",
-        f"2️⃣ 기준 시드머니: <b>${init_seed:,.2f}</b> (실현기준 총자산 ${real_eq:,.2f})",
-        f"       (본그리드 1회 ${next_bud:,.2f} [{quota_badge_str}] · 서브 1회 ${sub_bud:,.2f} [{sub_quota_badge}])",
-        f"3️⃣ 보유 및 예비탄창: 본 <b>{held_sh}주</b>({held_tiers}층·{lot_ctrl_str}) · 예비시드 <b>{used_res_cnt}/{max_res_cnt}회분</b>(${inj_res_usd:,.2f})",
-        f"       (서브그리드 상시 ON: {sub_sh}주[{sub_lots}/{sub_max_lots}회분] · 본동결 {main_frozen}/{SUB_FROZEN_DAYS_TRIGGER}일 · 졸업 {sub_comp}회[+${sub_net:,.2f}])",
-        f"4️⃣ 황금시간(07:00~07:50·RSI≤19) 전액매수: <b>{escape_html(g_mode_lbl)}</b>",
+        f"1️⃣ 스나이퍼 전원: <b>{power_str}</b> (수수료 {rt_fee_pct:.2f}%)",
+        f"2️⃣ 기준 시드: <b>${init_seed:,.2f}</b> (총자산 ${real_eq:,.2f})",
+        f"   ▫️ 1회 정량: 본 ${next_bud:,.0f}({quota_badge_str}) · 서브 ${sub_bud:,.0f}({sub_quota_badge})",
+        f"3️⃣ 보유/탄창: 본 <b>{held_sh}주</b>({held_tiers}층·{lot_ctrl_str}) · 예비 <b>{used_res_cnt}/{max_res_cnt}회</b>(${inj_res_usd:,.0f})",
+        f"   ▫️ 서브(상시): <b>{sub_sh}주</b>({sub_lots}/{sub_max_lots}회) · 동결 {main_frozen}/{SUB_FROZEN_DAYS_TRIGGER}일 · 졸업 {sub_comp}회",
+        f"4️⃣ 황금시간(07:00~07:50·RSI≤19): <b>{escape_html(g_mode_short)}</b>",
         "──────────────",
-        "🧹 /reset_profit : 실현수익 0점 초기화 (보유 주식·시드 100% 보존)",
-        "💡 아래 버튼으로 <b>작동 ON/OFF</b> · <b>황금시간 모드</b> · <b>기준 시드머니($)</b>를 변경할 수 있습니다.",
+        "🧹 /reset_profit : 수익 0점 초기화 (주식·시드 보존)",
+        "💡 아래 버튼으로 전원 · 황금시간 · 시드를 설정하세요.",
         f"🕒 기준 시각: {dt_now.strftime('%m-%d %H:%M:%S EST')}",
     ]
     return "\n".join(lines)
@@ -1579,12 +1555,10 @@ class TelegramCommandController:
             chat_id=chat_id,
             text=(
                 "✅ <b>[기준 시드머니 설정 완료]</b>\n"
-                f"🔸 새 기준 시드머니: <b>${val:,.2f}</b>\n"
-                f"🔸 가용 현금시드: <b>${safe_float(summary.get('free_cash_usd'), 0.0):,.2f}</b>\n"
-                f"🔸 본그리드 1회(8%) 예산: <b>${safe_float(summary.get('next_portion_budget'), 0.0):,.2f}</b> "
-                f"➔ {quota_badge_str}\n"
-                f"🔸 서브그리드 1회(4%) 예산: <b>${safe_float(summary.get('sub_next_portion_budget'), 0.0):,.2f}</b> "
-                f"➔ {sub_quota_badge}"
+                f"▫️ 기준 시드: <b>${val:,.2f}</b>\n"
+                f"▫️ 가용 현금: <b>${safe_float(summary.get('free_cash_usd'), 0.0):,.2f}</b>\n"
+                f"▫️ 본그리드(8%): <b>${safe_float(summary.get('next_portion_budget'), 0.0):,.0f}</b> ({quota_badge_str})\n"
+                f"▫️ 서브그리드(4%): <b>${safe_float(summary.get('sub_next_portion_budget'), 0.0):,.0f}</b> ({sub_quota_badge})"
             ),
             reply_markup=_build_settlement_inline_keyboard(
                 bool(updated_st.get("is_active", True)),
@@ -1706,17 +1680,16 @@ class TelegramCommandController:
         quota_badge_str = _format_case67_quota_badge(summary)
         held_sh = safe_int(summary.get("held_shares"), 0)
         sub_sh = safe_int(summary.get("sub_held_shares"), 0)
-        sub_tiers = safe_int(summary.get("sub_held_tiers"), 0)
         gp_sh = safe_int(summary.get("golden_pocket_qty"), 0)
         held_tiers = safe_int(summary.get("held_tiers"), 0)
         held_lots = safe_int(summary.get("held_lots"), 0)
         ratchet_lots = safe_int(
             summary.get("cycle_ratchet_max_lots"), held_lots
         )
-        sub_note = f"+서브 {sub_sh}주({sub_tiers}층)" if sub_sh > 0 else ""
-        gp_note = f"+골든포켓 {gp_sh}주" if gp_sh > 0 else ""
+        sub_note = f"+서브{sub_sh}주" if sub_sh > 0 else ""
+        gp_note = f"+포켓{gp_sh}주" if gp_sh > 0 else ""
         lot_keep_str = (
-            f"보유 {held_lots}회차/단차잠금 {ratchet_lots}회차"
+            f"{held_lots}/{ratchet_lots}회"
             if ratchet_lots > held_lots
             else f"{held_lots}회차"
         )
@@ -1725,10 +1698,11 @@ class TelegramCommandController:
             chat_id=chat_id,
             text=(
                 "🧹 <b>[실현수익 0점 초기화 완료]</b>\n"
-                "🔸 누적 세후실현익: <b>$0.00</b>\n"
-                f"🔸 복귀 기준시드: <b>${init_seed:,.2f}</b> (가용현금 <b>${free_cash:,.2f}</b>)\n"
-                f"🔸 차기 1회(8%) 정량: 예산 <b>${next_bud:,.2f}</b> ➔ {quota_badge_str}\n"
-                f"🔸 보유 지층 보존: 본 <b>{held_sh}주</b> ({held_tiers}개층 · {lot_keep_str}{sub_note}{gp_note} 유지)"
+                "▫️ 누적 실현수익: <b>$0.00</b>\n"
+                f"▫️ 복귀 기준시드: <b>${init_seed:,.2f}</b>\n"
+                f"▫️ 현재 가용현금: <b>${free_cash:,.2f}</b>\n"
+                f"▫️ 차기 1회(8%): <b>${next_bud:,.0f}</b> ({quota_badge_str})\n"
+                f"▫️ 보유지층 보존: 본 <b>{held_sh}주</b>({held_tiers}층·{lot_keep_str}{sub_note}{gp_note})"
             ),
             reply_markup=_build_main_reply_keyboard(),
         )
@@ -1742,7 +1716,7 @@ class TelegramCommandController:
             chat_id=chat_id,
             text=(
                 "⏳ <b>[시스템 업데이트 개시]</b>\n"
-                "🔸 GitHub 최신 코드 동기화 및 13대 코어 모듈 프리플라이트 검증 중..."
+                "🔸 최신 코드 동기화 및 프리플라이트 검증 중..."
             ),
             reply_markup=_build_main_reply_keyboard(),
         )
@@ -1771,7 +1745,7 @@ class TelegramCommandController:
         if not ok:
             await self.send_message(
                 chat_id=chat_id,
-                text=f"⚠️ <b>[업데이트 중단 · 기존 원장 안전 보존]</b>\n{escape_html(msg)}",
+                text=f"⚠️ <b>[업데이트 중단 · 원장 보존]</b>\n{escape_html(msg)}",
                 reply_markup=_build_main_reply_keyboard(),
             )
             return
@@ -1780,8 +1754,8 @@ class TelegramCommandController:
             await self.send_message(
                 chat_id=chat_id,
                 text=(
-                    "✅ <b>[최신 버전 검증 완료 · 무중단 가동 유지]</b>\n"
-                    "🔸 원격 변경사항이 없으므로 재기동 없이 현재 스나이퍼 엔진과 원장을 계속 유지합니다."
+                    "✅ <b>[최신 버전 확인 · 무중단 가동]</b>\n"
+                    "🔸 변경사항이 없어 현재 엔진을 그대로 유지합니다."
                 ),
                 reply_markup=_build_main_reply_keyboard(),
             )
@@ -1791,7 +1765,7 @@ class TelegramCommandController:
             chat_id=chat_id,
             text=(
                 "🚀 <b>[신규 업데이트 검증 통과]</b>\n"
-                "🔸 원장 데이터 100% 보존 상태로 스나이퍼 데몬을 무중단 자가 재기동합니다..."
+                "🔸 원장 100% 보존 상태로 무중단 재기동합니다..."
             ),
             reply_markup=_build_main_reply_keyboard(),
         )
@@ -1834,9 +1808,8 @@ class TelegramCommandController:
                 await self.send_message(
                     chat_id=chat_id,
                     text=(
-                        "🔒 <b>[시드머니 오입력 방지 잠금 안내]</b>\n"
-                        "🔸 실수로 숫자가 입력되어 시드머니가 변조되는 것을 방지하기 위해 잠금 상태입니다.\n"
-                        "🔸 시드를 변경하시려면 <b>⚙️ 전술 제어반(/settlement)</b> 에서 <b>[💵 기준 시드머니($) 설정]</b> 버튼을 먼저 누르거나, "
+                        "🔒 <b>[시드머니 오입력 방지 잠금]</b>\n"
+                        "🔸 <b>⚙️ 전술 제어반</b>에서 <b>[💵 기준 시드머니 설정]</b> 버튼을 먼저 누르거나,\n"
                         f"<code>/seed {escape_html(clean_num_check)}</code> 명령어로 입력해 주세요."
                     ),
                     reply_markup=_build_main_reply_keyboard(),
@@ -1914,8 +1887,8 @@ class TelegramCommandController:
                 chat_id=chat_id,
                 text=(
                     "🔒 <b>[지층 리셋 영구 차단 안내]</b>\n"
-                    "🔸 보유 중인 주식 지층 보호를 위해 지층 초기화 기능은 비활성화되었습니다.\n"
-                    "🔸 보유 주식을 유지한 채 실현수익만 초기화하여 설정된 기준 시드로 복귀하시려면 <code>/reset_profit</code> 명령어를 입력해 주세요."
+                    "🔸 보유 지층 보호를 위해 리셋은 비활성화되었습니다.\n"
+                    "🔸 수익만 0점 초기화하시려면 <code>/reset_profit</code> 을 입력해 주세요."
                 ),
                 reply_markup=_build_main_reply_keyboard(),
             )
@@ -2017,8 +1990,8 @@ class TelegramCommandController:
                 chat_id=chat_id,
                 text=(
                     "💵 <b>[기준 시드머니($) 입력 안내]</b>\n"
-                    "🔸 지금부터 <b>5분 이내</b>에 운용할 기준 달러 시드머니 금액을 숫자만 채팅창에 입력해 주세요.\n"
-                    "🔸 예시: <code>10000</code> 또는 <code>19000</code>"
+                    "🔸 <b>5분 이내</b>에 기준 시드 금액(숫자)을 입력해 주세요.\n"
+                    "🔸 예시: <code>10000</code> 또는 <code>20000</code>"
                 ),
                 reply_markup=_build_main_reply_keyboard(),
             )
