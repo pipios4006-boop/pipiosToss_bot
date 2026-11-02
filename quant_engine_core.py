@@ -5,7 +5,7 @@
 역할:
 1) 전역 퀀트 상수 락온 (본 그리드 8% 황금비율 · 7-Layer 골디락스 그리드 · DEFAULT_GRID_MERGE_MODE = "L2_L7_MERGE_SORT" [Case 87] ·
    🛡️ 스위치 없는 100% 기본 상시 적용[Default ON] 3-Layer 서브 그리드 4% 정량 · 0.5회분 보호예수 · 최대 4회분[16%] 상한 캡 · SUB_L1_L3_MERGE [Case 88] ·
-   STEP2X_15PCT_C20 · GUARD30 예비수혈 · 황금시간 전액매수 기본값 NONE[OFF] · Case 84 15:30 0주 신규진입 및 1층 공석 돌파추격 차단)
+   STEP2X_15PCT_C20 · GUARD30 예비수혈[실계좌 30% 가드 이상 시 미할당 여유달러 즉시 수혈 Case 89] · 황금시간 전액매수 기본값 NONE[OFF] · Case 84 15:30 0주 신규진입 및 1층 공석 돌파추격 차단)
 2) 계좌별 미국 주식 매매 수수료율(GET /api/v1/commissions : 편도 0.07% -> 왕복 0.14% / 편도 0.10% -> 왕복 0.20%) 런타임 동적 동기화 브릿지 탑재 (Case 86)
 3) 순수 실물 매수 원가(book_price == actual_avg_price) 구조체 (StratumBucket, GoldenAllInPocket) ·
    본 그리드 상단(7층 초과 시 구 1층[새 2층 후보] 보존 + 구 2층 + 구 7층 가중평균 통합 후 평단 오름차순 중간층 재배치 L2_L7_MERGE_SORT · Case 87) 번호 정규화·합병기(relabel_upper_grid_tiers) 및
@@ -13,14 +13,14 @@
 4) 본 그리드 8%(12.5분할) & 서브 그리드 4%(25분할) 황금비율 정액 기반 정량 산출기(min(1회분 예산 상한 주수, 기준가 고정 정량) 이중 캡핑 Case 67, Case 88) ·
    본 그리드 0.5회분(4.0%) 보호예수금 차감 서브 가용 유휴 현금 산출기(compute_sub_grid_available_idle_cash · Case 88) 및
    황금시간대(07:00 ~ 07:50 EST & 1분봉 Wilder RSI(14) <= 19.0) 가용현금 100% 전액매수 판정기(Case 80)
-5) 30% 자투리 1주 승격 방지 가드(GUARD30) & 토스 실계좌 여유자금 감지 기반 최대 +6회분 온디맨드 예비시드 자동 수혈 판정기 및
+5) 30% 자투리 1주 승격 방지 가드(GUARD30) & 토스 실계좌 주문가능금액이 30% 가드 이상일 때 미할당 여유자금 즉시 온디맨드 예비시드 자동 수혈 판정기(Case 77, Case 89) 및
    0주 전량 졸업 시 예비시드 원금 자동 상환 연산기(Case 77)
 6) 사이클 최고 도달 회차(eff_lots = max(held_lots, cycle_ratchet_max_lots)) 잠금 기반 4단 와이드 점진 활주로(1~4회 -1.0% / 5~8회 -2.0% / 9~10회 -3.5% / 11회+ -5.5% · Case 87, Case 88) ·
    1층 공석 시 2층 단가 상한 역전 차단(HOLD_PREVENT_INVERSION · Case 73) 기반 눌림목(-1.00%)/상승돌파(+1.00%) 하이브리드 재장전 판정기
    (Case 84: 15:30 ~ 16:00 EST 구간에서는 1층 공석 +1.00% 상승돌파 추격을 HOLD_LATE_SESSION_BREAKOUT_CUTOFF 로 원천 차단하고 2층 단가 이하 -1.00% 눌림목만 허용!) ·
    본 그리드 3중 안전문(보유 2층 이하 & 현금비중 20%+ & 저점대비 2.0배+ 반등) 통과 시 -15.0% 스텝업 저가 해금 판정기(Case 76) 및
    서브 그리드 최대 4회분(16%) 상한 캡 검문 & 10영업일 무매매·서브 1층 대비 -10.0% 저가 해금 판정기(evaluate_sub_grid_dip_signal · Case 88)
-- 제1헌법 ~ 제6헌법 및 Case 01 ~ 88 완벽 준수
+- 제1헌법 ~ 제6헌법 및 Case 01 ~ 89 완벽 준수
 """
 
 from __future__ import annotations
@@ -599,13 +599,6 @@ def relabel_sub_upper_grid_tiers_with_flag(
 ) -> Tuple[List[StratumBucket], bool]:
     """
     # NEW [Case 88 : 🛡️ 13_SUB_L1L3_RESV05_CAP4L — 3층 서브 그리드 초과(4층 발생) 시 서브 구 1층 + 구 3층 양끝 합병(SUB_L1_L3_MERGE) 및 오름차순 재배치]:
-    서브 그리드 상단 지층 배열(valid)의 개수가 max_upper_cnt (2개 : GRID_L2 ~ GRID_L3)를 초과할 때:
-    1) merge_mode == "SUB_L1_L3_MERGE" 이고 len(valid) >= 3 인 경우:
-       - 최하단 상단층 후보인 low_b = valid[0] (서브 구 1층)과 최상단층 후보인 high_b = valid[-1] (서브 구 3층)의
-         수량·원금·회차를 가중평균 합산하고 Case 53 상한 하드 캡핑(min(raw_upper_p, overall_book_avg))을 적용하여
-         합병 본대(merged_bucket, lot_count = low_b.lot_count + high_b.lot_count)를 생성한다.
-       - 보존된 중간 구 2층(valid[1:-1])과 합병 본대를 합쳐 단가(book_price) 오름차순으로 정렬한다.
-    2) 서브 상단 지층들을 GRID_L2, GRID_L3 로 정규화하여 (relabeled_list, did_merge) 튜플로 반환한다.
     """
     valid = [
         b
@@ -731,7 +724,7 @@ def enforce_true_breakeven_floor_on_buckets(
 
 
 # ---------------------------------------------------------------------------
-# [핵심 2] 본 그리드 8%(12.5분할) & 서브 그리드 4%(25분할) 정량 주수 · 유휴현금(0.5회분 보호예수) · 100% 전액매수 주수 · GUARD30 판정 · 온디맨드 수혈/상환기 (🎯 1 & Case 25 ~ 35, 67, 77, 80, 86, 88)
+# [핵심 2] 본 그리드 8%(12.5분할) & 서브 그리드 4%(25분할) 정량 주수 · 유휴현금(0.5회분 보호예수) · 100% 전액매수 주수 · GUARD30 판정 · 온디맨드 수혈/상환기 (🎯 1 & Case 25 ~ 35, 67, 77, 80, 86, 88, 89)
 # ---------------------------------------------------------------------------
 def compute_golden8_quota_qty(
     anchor_price: float,
@@ -810,8 +803,6 @@ def compute_sub_grid_available_idle_cash(
 ) -> Dict[str, Any]:
     """
     # NEW [Case 88 : 본 그리드 보호예수금 0.5회분(4.0%) 차감 후 서브 그리드 가용 유휴 현금(avail_idle_cash_usd) 산출기]:
-    본 그리드의 급락 추매 탄약을 침해하지 않도록 코어 총자산 기준 본 그리드 1회분(8.0%)의 0.5회분(4.0%)을
-    보호예수금(reserved_for_main_usd)으로 차감한 뒤 남은 순수 유휴 현금만 서브 그리드 가용 현금으로 반환한다.
     """
     f_cash = max(0.0, safe_float(free_cash_usd, 0.0))
     c_eq = max(
@@ -858,11 +849,6 @@ def resolve_affordable_buy_qty(
 ) -> Tuple[int, float]:
     """
     # [Case 25 ~ 35, Case 67, Case 86 & Case 88 계좌별 동적 왕복 수수료율 연동]:
-    직전 기준가로 산출된 목표 정량(target_qty)을 실제 주문가(price_t)로 매수하기 직전:
-    1) max_portion_budget_usd(본 그리드 8% / 서브 그리드 4% 예산) 상한 주수(budget_cap_qty)와 target_qty 중 작은 값으로 캡핑한다.
-    2) 계좌의 왕복 수수료율(round_trip_fee_rate_pct, 미지정 시 런타임 락온 수수료율 0.14% 또는 0.20%) 버퍼를 감안한
-       가용 현금(free_cash_usd) 및 토스 실계좌 매수가능금액 한도 내로 캡핑한다.
-    반환값: (buy_qty, actual_spent_usd)
     """
     t_qty = max(0, safe_int(target_qty, 0))
     exec_p = safe_float(price_t, 0.0)
@@ -907,9 +893,6 @@ def resolve_allin_affordable_buy_qty(
 ) -> Tuple[int, float]:
     """
     # [Case 80 & Case 86 : 황금시간대(07:00 ~ 07:50 EST & RSI <= 19.0) 가용 현금 시드 100% 전액 매수 주수 산출기]:
-    계좌의 왕복 수수료 버퍼(0.14% 또는 0.20%)를 감안하여 현재 가용 현금(free_cash_usd)과
-    토스 실계좌 주문가능 달러(broker_buying_power_usd) 중 작은 금액의 100% 전액으로 매수할 수 있는
-    최대 정수 주식 수(allin_qty)와 실투입 원금(actual_spent_usd)을 반환한다.
     """
     exec_p = safe_float(price_t, 0.0)
     if exec_p <= 0.0:
@@ -1040,8 +1023,6 @@ def evaluate_golden_allin_signal(
         "rsi_14": rsi_val,
         "rsi_threshold": GOLDEN_RSI_MAX_THRESHOLD,
     }
-
-
 def evaluate_guard30_and_reserve_injection(
     free_cash_usd: float,
     broker_bp_usd: Optional[float],
@@ -1057,7 +1038,13 @@ def evaluate_guard30_and_reserve_injection(
     round_trip_fee_rate_pct: Optional[float] = None,
 ) -> Dict[str, Any]:
     """
-    # [Case 77 & Case 86 : 💉 05_RESV_6P_GUARD30 — 30% 자투리 1주 승격 방지 가드 & 온디맨드 예비시드 자동 수혈 판정기 (계좌별 동적 수수료율 반영)]:
+    # MODIFIED [Case 77, Case 86 & Case 89 : 💉 05_RESV_6P_GUARD30 — 30% 자투리 1주 승격 방지 가드 & 실계좌 30% 가드 이상 보유 시 미할당 여유자금 즉시 온디맨드 자동 수혈 판정기]:
+    - 장부 가용현금(f_cash)이 30% 가드(min_req_cash) 미만이더라도,
+      토스 실계좌 주문가능금액(eff_bp)이 30% 가드(min_req_cash) 이상이고
+      미할당 여유 달러(unallocated_deposit_usd = eff_bp - f_cash > 0)가 존재하여
+      (f_cash + unallocated_deposit_usd) >= min_req_cash 를 충족하면,
+      1회분 전액(95%) 입금 조건에 가로막히지 않고 현재 계좌의 미할당 여유 달러를 즉시 수혈(INJECT_AND_PROCEED)하여
+      1회분의 30% 이상 자금 보유 시 매수가 누락되지 않도록 보장한다!
     """
     f_cash = max(0.0, safe_float(free_cash_usd, 0.0))
     ex_p = max(0.01, safe_float(exec_price, 0.01))
@@ -1076,7 +1063,7 @@ def evaluate_guard30_and_reserve_injection(
     bud_ratio = max(0.0, safe_float(min_dip_budget_ratio, MIN_DIP_BUDGET_RATIO))
     l1_ratio = max(0.0, safe_float(min_dip_vs_l1_ratio, MIN_DIP_VS_L1_RATIO))
     tol_ratio = max(
-        0.50,
+        0.30,
         min(
             1.0,
             safe_float(
@@ -1124,13 +1111,17 @@ def evaluate_guard30_and_reserve_injection(
     )
     required_inj_usd = round(float(needed_portions) * p_bud, 4)
 
+    # MODIFIED [Case 89 : 토스 실계좌 주문가능금액(eff_bp)이 30% 가드(min_req_cash) 이상이고 미할당 여유 달러로 가드 충족 시 즉시 수혈 승인]
     if (
         rem_portions >= needed_portions
         and eff_bp >= min_req_cash
-        and unallocated_deposit_usd >= (required_inj_usd * tol_ratio)
+        and unallocated_deposit_usd > 0.0
+        and (f_cash + unallocated_deposit_usd) >= min_req_cash
     ):
         if unallocated_deposit_usd >= required_inj_usd:
             actual_inj_usd = required_inj_usd
+        elif unallocated_deposit_usd >= (required_inj_usd * tol_ratio):
+            actual_inj_usd = round(unallocated_deposit_usd, 4)
         else:
             actual_inj_usd = round(unallocated_deposit_usd, 4)
 
@@ -1143,7 +1134,7 @@ def evaluate_guard30_and_reserve_injection(
                 "inject_usd": actual_inj_usd,
                 "min_req_cash": round(min_req_cash, 4),
                 "rem_portions_before": rem_portions,
-                "rem_portions_after": rem_portions - needed_portions,
+                "rem_portions_after": max(0, rem_portions - needed_portions),
                 "unallocated_deposit_usd": round(unallocated_deposit_usd, 4),
                 "recommended_deposit_usd": 0.0,
                 "minimum_shortfall_usd": 0.0,
@@ -1600,11 +1591,6 @@ def evaluate_sub_grid_dip_signal(
 ) -> Dict[str, Any]:
     """
     # NEW [Case 88 : 🛡️ 13_SUB_L1L3_RESV05_CAP4L — 3층 서브 그리드 10분 게이트 추매 & 최대 4회분(16%) 상한 캡 & 10영업일/-10% 저가 해금 판정기]:
-    1) 현재 서브 그리드의 총 누적 회차(sub_cur_total_lots = sum(sb.lot_count for sb in sub_buckets))가
-       최대 상한(sub_max_total_lots = 4회분, 코어시드의 16.0%) 이상이면 본 그리드 탄약 보전을 위해 즉시 매수를 차단(HOLD_SUB_CAP_4_LOTS_REACHED)한다!
-    2) 제1경로(SUB_STATIC_NEW_LOW) : 서브 정적 최저가(sub_ref_static_anchor) 대비 서브 최고도달회차 기반 4단 와이드 단차(sub_drop_buy_pct) 신저가 도달 시 승인.
-    3) 제2경로(SUB_UNLOCK_10D_D10) : 정적 신저가 미달 시에도 서브 연속 무매매일(sub_consec_frozen_days)이 10영업일 이상이고
-       현재가가 서브 활성 1층 단가 대비 -10.0% 이하(live_price <= round(sub_l1_p * 0.90, 4))로 조정받았을 때 저가 해금 승인!
     """
     valid = [
         sb

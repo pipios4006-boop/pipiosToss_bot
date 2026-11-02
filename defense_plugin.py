@@ -8,35 +8,11 @@
 🛡️ 스위치 없는 100% 기본 상시 적용(Default ON) 3층 서브 그리드(4.0% 정량 · 0.5회분 보호예수 · 최대 4회분[16%] 상한 캡 · 3층 초과 시 구 1층 + 구 3층 양끝 합병 SUB_L1_L3_MERGE · Case 88) 및
 황금시간대(07:00 ~ 07:50 EST & RSI <= 19.0) 독립 골든포켓(GoldenAllInPocket) 지층관리 스나이퍼 전용 (Step 09 / 13):
 1) 🚨 [Case 66, Case 78, Case 79, Case 80 & Case 88 봇 주문 진행 중 가로채기 차단 및 04:00 / 16:01 세션 경계 force_settle 선취소-후정산(Cancel-then-Sync) 가드]
-   - 평시 원장에 미결 매수(buy_order_id) 또는 미결 매도(sell_order_id)가 존재할 때 reconcile 모듈이 호출되면
-     즉시 sync_pending_buy_order_plugin() / sync_pending_sell_order_plugin() 을 선행 호출하여 가로채기를 차단한다.
-   - 04:00 EST 오프닝 안정화 및 16:01 EST 정규장 마감 결산 진입 시에는 먼저 cancel_all_open_orders() 로 거래소 미체결 잔량을 확정 취소 종료시킨 직후
-     sync_pending_buy_order_plugin(..., force_settle=True) / sync_pending_sell_order_plugin(..., force_settle=True) 를 호출하여,
-     발주 후 60초 미만인 부분 체결(PARTIAL_FILLED / PENDING_CANCEL) 대기 물량이나 취소 직전 체결분의
-     비례 자투리 절약금 · 서브 그리드 / 골든포켓 분리 기록 · 세후 실현익 복리 산입 · 텔레그램 체결 알림 · 양방향 60초 타임쉴드 각인이 단 1주도 유실되지 않도록 100% 보장!
-   - 특히 16:00:00 ~ 16:00:59 EST (hm == 1600) 동안에는 15:59:xx EST 발주 미결 주문 및 16:00 EST 마감봉(72번 버킷) 타격 기회를 보호한 뒤
-     16:01 EST 부터(또는 16:00 에 미결 주문이 없고 72번 버킷 평가가 완료된 직후) 마감 결산을 집행한다.
 2) 🛡️ [Case 61, Case 65, Case 69, Case 80, Case 84, Case 87 & Case 88 양방향 15초 인덱싱 그레이스 쉴드 전 구간(h_qty != ledger_qty) 최우선 적용]
-   - 원장 총 보유 수량을 ledger_qty = sum(b.qty for b in buckets) + sum(sb.qty for sb in sub_buckets) + golden_pocket.qty 로 통합 산출하여
-     서브 그리드 및 골든포켓 보유 중에도 유령 추매/매도 오판을 원천 차단!
-   - 매수 체결뿐만 아니라 매도 체결(본·서브 개별 층 익절 · 골든포켓 익절 및 0주 졸업) 직후 15.0초 동안은 모든 수량 불일치(h_qty != ledger_qty)에서
-     즉시 PROTECTED_BY_AUTO_FILL_GRACE_SHIELD 를 반환하여, 토스 잔고 API 인덱싱 시차(0.1 ~ 0.4초)로 인한
-     유령 추매(h_qty > ledger_qty) ➔ 유령 부분매도(h_qty < ledger_qty) 핑퐁 오염 및 0주 졸업 직후 과거 백업 덮어쓰기를 원천 봉쇄!
-   - 수동 전량 청산(CLEARED_TO_ZERO_HOLDINGS)으로 0주 싸이클이 끝나는 순간에도 토스 CLOSED 체결원장에서 실제 매도 체결가와 실측 수수료(commission + tax)를 역추적하여
-     보유 본 그리드·서브 그리드·골든포켓의 순수 매수 원금 대비 세후 실현수익(net_pnl_usd, 계좌 고유 수수료율 0.14% / 0.20% 반영)을 원장에 즉시 복리 산입하고,
-     cycle_ratchet_max_lots = 0 / sub_ratchet_max_lots = 0 및 l1_target_quota_qty = 0 / sub_l1_target_quota_qty = 0 클리어(Case 78, Case 87, Case 88) ·
-     compute_reserve_repayment_on_zero() 로 온디맨드 예비시드 원금을 자동 상환(Case 77)하며,
-     mark_post_sell_time_shield(is_cycle_end=True) 와 last_sell_fill_ts / last_cycle_end_ts / last_reentry_eval_ts=0.0 / last_sub_reentry_eval_ts=0.0 을 각인하여 60.0초 타임쉴드를 강제하고
-     15:29:01 ~ 16:00:00 EST 구간에는 Case 84 새 사이클 진입 차단 안내를 표출!
-3) 🛡️ [Case 63, Case 69, Case 71 ~ Case 88 : 수동 매수·매도 CLOSED 체결가 및 실측 수수료 역추적 · L2+L7 중간합병 및 단가 비교 층간 편입 시 1층 anchor_price 보존 ·
-   수동 부분매도 시 cycle_ratchet_max_lots / sub_ratchet_max_lots 잠금 보존 · 수동 매매 카운터 동기화 · 수동 매수 실시간 텔레그램 알림 타전 · 본/서브/포켓 순수 원가 1:1 매칭 복리 정산]
-4) 🔗 [tg_ui_plugin.py 심볼 완벽 호환] 전술 제어반(/settlement)에서 봇 작동 OFF ➔ ON 재개 시 호출되는
-   relock_stratum_on_bot_resume() 함수를 정식 제공하여 AST 심볼 임포트 무결성 100% 충족!
-5) 04:00 ~ 04:06 EST 프리장 개장 초기 호가 안정화 · 계좌별 미국 주식 수수료율(GET /api/v1/commissions) 일일 갱신 및 당일 시드보호 패스(Case 74) · 당일 스텝업 해금(Case 76) ·
-   당일 서브 그리드 카운터(Case 88) · 당일 황금시간 전액매수/포켓익절(Case 80) · 당일 예비수혈/자투리차단(Case 77) 0회 리셋(단 1회 입금 알림 래치 보존) ·
-   16:00 EST 정규장 마감 시 일일 롤오버 선행 보장 후 당일 본/서브 무매매 동결일(main_consec_frozen_days, sub_consec_frozen_days) 자동 갱신(Case 88) 및 일일 결산 후 애프터·데이마켓 익절 감시 무중단 직결(Case 79, Case 83) ·
-   17:00 EST 일일 GC 및 3중 금고 스냅샷 백업(Case 68)
-- 제1헌법 ~ 제6헌법 및 Case 01 ~ 88 완벽 준수
+3) 🛡️ [Case 63, Case 69, Case 71 ~ Case 89 : 수동 매수·매도 CLOSED 체결가 및 실측 수수료 역추적 · 수동 매수 시 장부 가용현금 초과 투입 원금의 예비시드(injected_reserve_usd) 자동 산입(Case 89)으로 추후 익절 시 가용현금 증발 원천 차단 · L2+L7 중간합병 및 단가 비교 층간 편입 시 1층 anchor_price 보존 · 수동 부분매도 시 cycle_ratchet_max_lots / sub_ratchet_max_lots 잠금 보존 · 본/서브/포켓 순수 원가 1:1 매칭 복리 정산]
+4) 🔗 [tg_ui_plugin.py 심볼 완벽 호환] 전술 제어반(/settlement)에서 봇 작동 OFF ➔ ON 재개 시 호출되는 relock_stratum_on_bot_resume() 정식 제공
+5) 04:00 ~ 04:06 EST 오프닝 안정화 · 16:00 EST 정규장 마감 무매매 동결일(main_consec_frozen_days, sub_consec_frozen_days) 자동 갱신 및 일일 결산 · 17:00 EST 일일 GC 및 3중 금고 스냅샷 백업
+- 제1헌법 ~ 제6헌법 및 Case 01 ~ 89 완벽 준수
 """
 
 from __future__ import annotations
@@ -44,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import gc
 import logging
+import math
 import os
 import time
 from datetime import datetime
@@ -182,7 +159,7 @@ def _get_last_probed_manual_fee(context: Any) -> Optional[float]:
 
 
 # ---------------------------------------------------------------------------
-# [핵심 1] 로컬 7층 본 그리드(L2_L7_MERGE_SORT) + Default-ON 3층 서브 그리드(SUB_L1_L3_MERGE) + 독립 골든포켓 원장 ↔ 토스 실보유 잔고(/api/v1/holdings) 무결성 화해 (Case 58 ~ 88)
+# [핵심 1] 로컬 7층 본 그리드(L2_L7_MERGE_SORT) + Default-ON 3층 서브 그리드(SUB_L1_L3_MERGE) + 독립 골든포켓 원장 ↔ 토스 실보유 잔고(/api/v1/holdings) 무결성 화해 (Case 58 ~ 89)
 # ---------------------------------------------------------------------------
 async def reconcile_stratum_with_broker_holdings_plugin(
     context: Any,
@@ -192,7 +169,7 @@ async def reconcile_stratum_with_broker_holdings_plugin(
     force_sync: bool = False,
 ) -> Dict[str, Any]:
     """
-    🚨 Case 58, Case 60, Case 61, Case 63, Case 65, Case 66, Case 68, Case 69, Case 71 ~ Case 88:
+    🚨 Case 58, Case 60, Case 61, Case 63, Case 65, Case 66, Case 68, Case 69, Case 71 ~ Case 89:
     프로세스 재기동 시, 04:00 EST 오프닝 동기화 시, 또는 장중/애프터장/데이장 사용자가 토스 앱에서 수동 매매했을 때
     로컬 7층 본 그리드 원장(buckets), Default-ON 3층 서브 그리드(sub_buckets), 독립 골든포켓(golden_pocket)의
     합산 보유 주수(ledger_qty = grid_qty + sub_qty + gp_qty)를 토스 실계좌 보유 주수(h_qty)와 대조하여 화해한다.
@@ -660,7 +637,7 @@ async def reconcile_stratum_with_broker_holdings_plugin(
             "free_cash_usd": free_cash_now,
         }
 
-    # [케이스 3] 토스 실보유 수량(h_qty > 0)이 존재하는데 로컬 원장이 비어 있는 경우 (Case 68, Case 80, Case 87 & Case 88 백업 금고 우선 복원)
+    # [케이스 3] 토스 실보유 수량(h_qty > 0)이 존재하는데 로컬 원장이 비어 있는 경우 (Case 68, Case 80, Case 87, Case 88 & Case 89 백업 금고 우선 복원 및 초과 원금 예비수혈 반영)
     if h_qty > 0 and ledger_qty == 0:
         in_sell_sh, rem_sell_s = is_within_post_sell_time_shield(
             context, st, TARGET_SYMBOL
@@ -804,6 +781,24 @@ async def reconcile_stratum_with_broker_holdings_plugin(
         if isinstance(vault_st, dict) and init_seed <= 100.0:
             init_seed = _resolve_valid_seed_from_state(vault_st)
 
+        # MODIFIED [Case 89 : 0주 상태에서 수동 매수 원금(cost_u)이 장부 가용현금을 초과할 경우 초과분을 injected_reserve_usd 에 자동 산입]
+        cur_free_cash_0sh = max(0.0, safe_float(st.get("free_cash_usd"), init_seed))
+        cur_inj_res_0sh = max(0.0, safe_float(st.get("injected_reserve_usd"), 0.0))
+        cur_used_res_0sh = max(0, safe_int(st.get("used_reserve_portions_cnt"), 0))
+        if cost_u > (cur_free_cash_0sh + 0.01):
+            excess_0sh_usd = round(cost_u - cur_free_cash_0sh, 4)
+            next_inj_res_0sh = round(cur_inj_res_0sh + excess_0sh_usd, 4)
+            est_p_unit_0sh = max(1.0, init_seed * 0.08)
+            add_p_cnt_0sh = max(
+                1, int(math.ceil((excess_0sh_usd - 1e-9) / est_p_unit_0sh))
+            )
+            next_used_res_0sh = min(
+                MAX_RESERVE_PORTIONS, max(1, cur_used_res_0sh + add_p_cnt_0sh)
+            )
+        else:
+            next_inj_res_0sh = cur_inj_res_0sh
+            next_used_res_0sh = cur_used_res_0sh
+
         est_lots = max(
             1, int(round(cost_u / max(1.0, init_seed * 0.08)))
         )
@@ -862,6 +857,8 @@ async def reconcile_stratum_with_broker_holdings_plugin(
             "sub_l1_target_quota_qty": 0,
             "main_consec_frozen_days": 0,
             "sub_consec_frozen_days": 0,
+            "injected_reserve_usd": next_inj_res_0sh,
+            "used_reserve_portions_cnt": next_used_res_0sh,
             "total_buy_events": tot_buy_ev_0sh,
             "total_buy_shares": tot_buy_sh_0sh,
             "daily_buy_events": day_buy_ev_0sh,
@@ -971,7 +968,6 @@ async def reconcile_stratum_with_broker_holdings_plugin(
             "held_shares": h_qty,
             "avg_price": pure_ref_p,
         }
-
     # [케이스 4] 토스 실보유 수량(h_qty > 0)과 로컬 원장 수량(ledger_qty > 0)이 부분 불일치하는 경우
     if h_qty > ledger_qty:
         delta_q = h_qty - ledger_qty
@@ -997,6 +993,29 @@ async def reconcile_stratum_with_broker_holdings_plugin(
         prev_had_active_l1 = has_active_l1_bucket(buckets)
         prev_l1_p = buckets[0].book_price if buckets else 0.0
         added_spent_usd = round(float(delta_q) * est_buy_p, 4)
+
+        # MODIFIED [Case 89 : 수동 추가매수 원금(added_spent_usd)이 기존 장부 가용현금을 초과할 경우 초과 투입분을 injected_reserve_usd 에 자동 산입하여 추후 익절 시 가용현금 증발 원천 차단]
+        init_seed_add = _resolve_valid_seed_from_state(st)
+        cur_free_cash_add = max(0.0, safe_float(st.get("free_cash_usd"), 0.0))
+        cur_inj_res_add = max(
+            0.0, safe_float(st.get("injected_reserve_usd"), 0.0)
+        )
+        cur_used_res_add = max(
+            0, safe_int(st.get("used_reserve_portions_cnt"), 0)
+        )
+        if added_spent_usd > (cur_free_cash_add + 0.01):
+            excess_add_usd = round(added_spent_usd - cur_free_cash_add, 4)
+            next_inj_res_add = round(cur_inj_res_add + excess_add_usd, 4)
+            est_p_unit_add = max(1.0, init_seed_add * 0.08)
+            add_p_cnt = max(
+                1, int(math.ceil((excess_add_usd - 1e-9) / est_p_unit_add))
+            )
+            next_used_res_add = min(
+                MAX_RESERVE_PORTIONS, max(1, cur_used_res_add + add_p_cnt)
+            )
+        else:
+            next_inj_res_add = cur_inj_res_add
+            next_used_res_add = cur_used_res_add
 
         merged_buckets = vrev_add_quota_lot_and_merge_2tier(
             queue=buckets,
@@ -1074,6 +1093,8 @@ async def reconcile_stratum_with_broker_holdings_plugin(
             cycle_reanchor_credit_usd=0.0,
             l1_target_quota_qty=next_l1_target_q_manual,
             main_consec_frozen_days=0,
+            injected_reserve_usd=next_inj_res_add,
+            used_reserve_portions_cnt=next_used_res_add,
             total_buy_events=tot_buy_ev_add,
             total_buy_shares=tot_buy_sh_add,
             daily_buy_events=day_buy_ev_add,
@@ -1100,7 +1121,7 @@ async def reconcile_stratum_with_broker_holdings_plugin(
         free_cash_add = safe_float(summary_add.get("free_cash_usd"), 0.0)
 
         logger.info(
-            "➕ [SOXL 수동 추가매수 7층 본그리드 단가비교 편입 완료] +%d주 @ $%.2f 반영 -> 총 %d주(본 %d개층·보유%d/잠금%d회차 + 서브 %d주 + 포켓 %d주 · 기억저가 $%.2f)",
+            "➕ [SOXL 수동 추가매수 7층 본그리드 단가비교 편입 완료] +%d주 @ $%.2f 반영 -> 총 %d주(본 %d개층·보유%d/잠금%d회차 + 서브 %d주 + 포켓 %d주 · 기억저가 $%.2f · 예비수혈잔액 $%.2f)",
             delta_q,
             est_buy_p,
             h_qty,
@@ -1110,6 +1131,7 @@ async def reconcile_stratum_with_broker_holdings_plugin(
             sub_qty,
             gp_qty,
             new_min_p,
+            next_inj_res_add,
         )
         if hasattr(context, "send_slim_alert"):
             if not prev_had_active_l1:
@@ -1581,6 +1603,8 @@ async def reconcile_stratum_with_broker_holdings_plugin(
         "actual_avg_price": pure_overall_avg,
         "book_price": pure_overall_avg,
     }
+
+
 # ---------------------------------------------------------------------------
 # [핵심 1-B] tg_ui_plugin.py 호환 : 봇 작동 재개(OFF ➔ ON) 시 실잔고 즉시 재락온 헬퍼
 # ---------------------------------------------------------------------------
