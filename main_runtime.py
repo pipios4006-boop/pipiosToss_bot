@@ -8,10 +8,10 @@
   3) 폴더별 3중 원장 인스턴스 팩토리(_instantiate_stratum_ledger · Case 68, Case 87, Case 88) 및 주말 휴장 판별(_check_weekend_nyse_closed_dynamic · Case 01, 79, 83)
   4) 100% 벡터화 1분봉/일봉 지표 및 실시간 틱 Wilder's RSI(14) 무손실 직결(_compute_candle_metrics_dynamic · Case 80 RSI 50.0 고정 버그 영구 소각)
   5) 폴더 위치(base_dir) 전용 텔레그램 토큰·채팅방 ID 자동 탐색기(_discover_telegram_credentials · Case 68)
-  6) 내장형 사용자 중심 초슬림 텔레그램 불사조 롱폴링/관제탑 브릿지(_AdaptiveTelegramBridge · tg_ui_plugin 단일 렌더러 직결 ·
-     13대 코어 모듈 프리플라이트 안내 동기화 · /avwap 조회 시 1분봉 미확보 상태면 즉시 온디맨드 프리워밍 수행 ·
+  6) 내장형 사용자 중심 초슬림 텔레그램 불사조 롱폴링/관제탑 브릿지(_AdaptiveTelegramBridge · tg_ui_plugin 4버튼 단일 렌더러 직결 ·
+     전술 제어반 /reset_profit 명령어 탑재 · 13대 코어 모듈 프리플라이트 안내 동기화 · /avwap 조회 시 1분봉 미확보 상태면 즉시 온디맨드 프리워밍 수행 ·
      /sync 조회 시 계좌별 미국 주식 수수료율 자동 확인[Case 86] · /reset_profit 실행 시 본 그리드 + Default-ON 3층 서브 그리드 + 골든포켓 및 당일 무매매 동결 판정 카운터 100% 보존 초기화[Case 88] ·
-     전술 제어반 황금시간[07:00~07:50 EST & RSI <= 19.0] 전액매수 모드 선택기 완벽 지원 ·
+     전술 제어반 황금시간[07:00 ~ 07:50 EST & RSI <= 19.0] 전액매수 모드 선택기 완벽 지원 ·
      Case 75 httpx/httpcore INFO 로그 묵음화 & Case 81 전용 httpx.AsyncClient 자동 재생성 불사조 폴링 · 오프셋 파일 선행 영속화 · os.execv 인플레이스 자가 교체 · Case 84/85/86/87/88 완벽 준수)
 - 제1헌법 ~ 제6헌법 및 Case 01 ~ 88 전수 락온
 """
@@ -1331,8 +1331,8 @@ def _discover_telegram_credentials(
 # ---------------------------------------------------------------------------
 class _AdaptiveTelegramBridge:
     """
-    # MODIFIED [Case 62 ~ 88]:
-    tg_ui_plugin 의 4대 관제 보드 렌더러(build_start_schedule_message, build_avwap_radar_message,
+    # MODIFIED [Case 62 ~ 88 & 사용자 중심 4버튼 초슬림 UI 통합]:
+    tg_ui_plugin 의 관제 보드 렌더러(build_start_schedule_message, build_avwap_radar_message,
     build_sync_instruction_message, build_settlement_control_message)를 단일 소스로 재사용하여
     코드 중복을 제거하고,
     - [Case 81] 토스 API 클라이언트와 완전히 독립된 텔레그램 전용 httpx.AsyncClient 세션 운용 및
@@ -1641,7 +1641,7 @@ class _AdaptiveTelegramBridge:
 
     async def send_startup_alive_banner(self) -> None:
         """
-        # 기동 완료 후 "✅ 서버가 정상 작동 중입니다." 단일 라인 생존 신호 타전 (Case 16)
+        # 기동 완료 후 "✅ 서버가 정상 작동 중입니다." 단일 라인 생존 신호 타전 및 4버튼 하단 키보드 활성화 (Case 16)
         """
         text = "<b>✅ 서버가 정상 작동 중입니다.</b>"
         sent = await self.send_message(
@@ -1712,11 +1712,16 @@ class _AdaptiveTelegramBridge:
             live_price=live_p,
             now_est=datetime.now(EST_TZ),
         )
+        kb = (
+            None
+            if (edit_msg_id is not None and edit_msg_id > 0)
+            else _build_main_reply_keyboard()
+        )
         await self.edit_or_send_message(
             chat_id=chat_id,
             message_id=edit_msg_id,
             text=msg,
-            reply_markup=None,
+            reply_markup=kb,
         )
 
     async def _render_and_send_sync(
@@ -1785,11 +1790,16 @@ class _AdaptiveTelegramBridge:
             now_est=now_est,
             context=self.context,
         )
+        kb = (
+            None
+            if (edit_msg_id is not None and edit_msg_id > 0)
+            else _build_main_reply_keyboard()
+        )
         await self.edit_or_send_message(
             chat_id=chat_id,
             message_id=edit_msg_id,
             text=msg,
-            reply_markup=None,
+            reply_markup=kb,
         )
 
     async def _render_and_send_settlement(
@@ -1834,6 +1844,7 @@ class _AdaptiveTelegramBridge:
             await self.send_message(
                 chat_id=chat_id,
                 text="⚠️ 시드머니는 <b>$100 ~ $10,000,000</b> 사이의 숫자로 입력해 주세요. (예: <code>10000</code>)",
+                reply_markup=_build_main_reply_keyboard(),
             )
             return
 
@@ -2006,11 +2017,12 @@ class _AdaptiveTelegramBridge:
             chat_id=chat_id,
             text=(
                 "🧹 <b>[실현수익 0점 초기화 완료]</b>\n"
-                "🔸 누적 세후실현익: <b>$0.00</b> (자투리절약 <b>$0.00</b> · 🔓해금/🛡️서브/🌟골든통계 <b>0회</b>)\n"
+                "🔸 누적 세후실현익: <b>$0.00</b>\n"
                 f"🔸 복귀 기준시드: <b>${init_seed:,.2f}</b> (가용현금 <b>${free_cash:,.2f}</b>)\n"
                 f"🔸 차기 1회(8%) 정량: 예산 <b>${next_bud:,.2f}</b> ➔ {quota_badge_str}\n"
                 f"🔸 보유 지층 보존: 본 <b>{held_sh}주</b> ({held_tiers}개층 · {lot_keep_str}{sub_note}{gp_note} 유지)"
             ),
+            reply_markup=_build_main_reply_keyboard(),
         )
 
     async def _execute_manual_update_command(self, chat_id: str) -> None:
@@ -2024,6 +2036,7 @@ class _AdaptiveTelegramBridge:
                 "⏳ <b>[시스템 업데이트 개시]</b>\n"
                 "🔸 GitHub 최신 코드 동기화 및 13대 코어 모듈 프리플라이트 검증 중..."
             ),
+            reply_markup=_build_main_reply_keyboard(),
         )
         fn_upd = getattr(
             plugin_updater, "execute_git_pull_and_preflight", None
@@ -2059,6 +2072,7 @@ class _AdaptiveTelegramBridge:
             await self.send_message(
                 chat_id=chat_id,
                 text=f"⚠️ <b>[업데이트 중단 · 기존 원장 안전 보존]</b>\n{_escape_html(msg)}",
+                reply_markup=_build_main_reply_keyboard(),
             )
             return
 
@@ -2069,6 +2083,7 @@ class _AdaptiveTelegramBridge:
                     "✅ <b>[최신 버전 검증 완료 · 무중단 가동 유지]</b>\n"
                     "🔸 원격 변경사항이 없으므로 재기동 없이 현재 스나이퍼 엔진과 원장을 계속 유지합니다."
                 ),
+                reply_markup=_build_main_reply_keyboard(),
             )
             return
 
@@ -2078,6 +2093,7 @@ class _AdaptiveTelegramBridge:
                 "🚀 <b>[신규 업데이트 검증 통과]</b>\n"
                 "🔸 원장 데이터 100% 보존 상태로 스나이퍼 데몬을 무중단 자가 재기동합니다..."
             ),
+            reply_markup=_build_main_reply_keyboard(),
         )
         await self._close_tg_http_client()
         trigger_graceful_restart(
@@ -2156,6 +2172,7 @@ class _AdaptiveTelegramBridge:
                         "🔸 시드를 변경하시려면 <b>⚙️ 전술 제어반(/settlement)</b> 에서 <b>[💵 기준 시드머니($) 설정]</b> 버튼을 먼저 누르거나, "
                         f"<code>/seed {_escape_html(clean_num_check)}</code> 명령어로 입력해 주세요."
                     ),
+                    reply_markup=_build_main_reply_keyboard(),
                 )
             return
 
@@ -2177,14 +2194,15 @@ class _AdaptiveTelegramBridge:
 
         if (
             first_token in ("/avwap", "/status", "/radar")
-            or text == "🔫 스나이퍼 레이더"
+            or text in ("🔫 스나이퍼 레이더", "📡 스나이퍼 레이더")
         ):
             await self._render_and_send_avwap(chat_id=chat_id)
             return
 
         if first_token == "/sync" or text in (
-            "📜 지층 지시서",
             "🔄 잔고 동기화",
+            "📜 지층 지시서",
+            "💼 내 계좌 · 동기화",
         ):
             await self._render_and_send_sync(chat_id=chat_id)
             return
@@ -2226,10 +2244,14 @@ class _AdaptiveTelegramBridge:
                     "🔸 보유 중인 주식 지층 보호를 위해 지층 초기화 기능은 비활성화되었습니다.\n"
                     "🔸 보유 주식을 유지한 채 실현수익만 초기화하여 설정된 기준 시드로 복귀하시려면 <code>/reset_profit</code> 명령어를 입력해 주세요."
                 ),
+                reply_markup=_build_main_reply_keyboard(),
             )
             return
 
-        if first_token == "/update" or text == "🚀 시스템 업데이트":
+        if first_token == "/update" or text in (
+            "🚀 시스템 업데이트",
+            "🚀 업데이트",
+        ):
             await self._execute_manual_update_command(chat_id=chat_id)
             return
 
@@ -2320,6 +2342,7 @@ class _AdaptiveTelegramBridge:
                     "🔸 지금부터 <b>5분 이내</b>에 운용할 기준 달러 시드머니 금액을 숫자만 채팅창에 입력해 주세요.\n"
                     "🔸 예시: <code>10000</code> 또는 <code>19000</code>"
                 ),
+                reply_markup=_build_main_reply_keyboard(),
             )
         elif data == "reset_profit_only":
             await self._reset_realized_profit_only(chat_id=chat_id)
@@ -2433,7 +2456,10 @@ class _AdaptiveTelegramBridge:
                                                             "/update"
                                                         )
                                                         or txt
-                                                        == "🚀 시스템 업데이트"
+                                                        in (
+                                                            "🚀 시스템 업데이트",
+                                                            "🚀 업데이트",
+                                                        )
                                                     )
                                                 ):
                                                     await self._ack_telegram_offset(
