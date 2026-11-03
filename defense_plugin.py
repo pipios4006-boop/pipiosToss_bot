@@ -5,11 +5,12 @@
 익절 매도 24시간 전 세션(프리마켓 + 정규장 + 애프터마켓 + 데이마켓 · 방안 C 오버나이트 통합이평 사수 · Case 83) 확장
 오버나이트 7층 골디락스 본 그리드(1층 공격수 + 2 ~ 7층 상단 완충/합병 그리드 · 7층 초과 시 구 1층 보존 + 구 2층 + 구 7층 통합 중간배치 L2_L7_MERGE_SORT &
 사이클 최고 도달 회차 cycle_ratchet_max_lots 단차 잠금 · Case 87) ·
-🛡️ 스위치 없는 100% 기본 상시 적용(Default ON) 3층 서브 그리드(4.0% 정량 · 0.5회분 보호예수 · 최대 4회분[16%] 상한 캡 · 3층 초과 시 구 1층 + 구 3층 양끝 합병 SUB_L1_L3_MERGE · Case 88) 및
+🛡️ 스위치 없는 100% 기본 상시 적용(Default ON) 3층 서브 그리드(4.0% 정량 · 0.5회분 보호예수 · 최대 4회분[16%] 상한 캡 · 3층 초과 시 구 1층 + 구 3층 양끝 합병 SUB_L1_L3_MERGE · Case 88) ·
+🔄 현재 진행 사이클 단위 실현수익(cycle_realized_net_usd) 누적 및 0주 졸업 시 직전 사이클 수익(last_cycle_realized_net_usd) 박제 후 $0.00 자동 리셋 및
 황금시간대(07:00 ~ 07:50 EST & RSI <= 19.0) 독립 골든포켓(GoldenAllInPocket) 지층관리 스나이퍼 전용 (Step 09 / 13):
 1) 🚨 [Case 66, Case 78, Case 79, Case 80 & Case 88 봇 주문 진행 중 가로채기 차단 및 04:00 / 16:01 세션 경계 force_settle 선취소-후정산(Cancel-then-Sync) 가드]
 2) 🛡️ [Case 61, Case 65, Case 69, Case 80, Case 84, Case 87 & Case 88 양방향 15초 인덱싱 그레이스 쉴드 전 구간(h_qty != ledger_qty) 최우선 적용]
-3) 🛡️ [Case 63, Case 69, Case 71 ~ Case 89 : 수동 매수·매도 CLOSED 체결가 및 실측 수수료 역추적 · 수동 매수 시 장부 가용현금 초과 투입 원금의 예비시드(injected_reserve_usd) 자동 산입(Case 89)으로 추후 익절 시 가용현금 증발 원천 차단 · L2+L7 중간합병 및 단가 비교 층간 편입 시 1층 anchor_price 보존 · 수동 부분매도 시 cycle_ratchet_max_lots / sub_ratchet_max_lots 잠금 보존 · 본/서브/포켓 순수 원가 1:1 매칭 복리 정산]
+3) 🛡️ [Case 63, Case 69, Case 71 ~ Case 89 : 수동 매수·매도 CLOSED 체결가 및 실측 수수료 역추적 · 수동 매수 시 장부 가용현금 초과 투입 원금의 예비시드(injected_reserve_usd) 자동 산입(Case 89)으로 추후 익절 시 가용현금 증발 원천 차단 · L2+L7 중간합병 및 단가 비교 층간 편입 시 1층 anchor_price 보존 · 수동 부분매도 시 cycle_realized_net_usd 누적 및 cycle_ratchet_max_lots / sub_ratchet_max_lots 잠금 보존 · 수동 전량매도(0주) 시 직전 사이클 수익 박제 후 $0.00 자동 리셋 · 본/서브/포켓 순수 원가 1:1 매칭 복리 정산]
 4) 🔗 [tg_ui_plugin.py 심볼 완벽 호환] 전술 제어반(/settlement)에서 봇 작동 OFF ➔ ON 재개 시 호출되는 relock_stratum_on_bot_resume() 정식 제공
 5) 04:00 ~ 04:06 EST 오프닝 안정화 · 16:00 EST 정규장 마감 무매매 동결일(main_consec_frozen_days, sub_consec_frozen_days) 자동 갱신 및 일일 결산 · 17:00 EST 일일 GC 및 3중 금고 스냅샷 백업
 - 제1헌법 ~ 제6헌법 및 Case 01 ~ 89 완벽 준수
@@ -289,7 +290,7 @@ async def reconcile_stratum_with_broker_holdings_plugin(
         }
 
     # [케이스 2] 토스 실보유 0주인데 로컬 원장에 지층/서브그리드/골든포켓이 남아 있는 경우
-    # (데이장/장중 수동 전량 청산 -> 전 지층·서브·골든포켓 순수원가 매칭 세후 실현수익 복리 산입 & 예비시드 자동 상환 & 0주 싸이클 종료)
+    # (데이장/장중 수동 전량 청산 -> 전 지층·서브·골든포켓 순수원가 매칭 세후 실현수익 복리 산입 & 사이클 최종수익 박제 후 $0.00 리셋 & 예비시드 자동 상환 & 0주 싸이클 종료)
     if h_qty == 0 and ledger_qty > 0:
         default_fb_p = (
             buckets[0].actual_avg_price
@@ -450,6 +451,15 @@ async def reconcile_stratum_with_broker_holdings_plugin(
             safe_float(st.get("daily_realized_net_usd"), 0.0) + net_pnl, 4
         )
 
+        # NEW: 수동 전량 청산(0주) 시 이번 사이클 최종 확정수익 박제 후 현재 사이클 수익 $0.00 자동 리셋
+        final_cyc_net = round(
+            safe_float(st.get("cycle_realized_net_usd"), 0.0) + net_pnl, 4
+        )
+        final_cyc_ev = max(0, safe_int(st.get("cycle_sell_events"), 0)) + 1
+        next_comp_main_cycles = (
+            max(0, safe_int(st.get("completed_main_cycles"), 0)) + 1
+        )
+
         # [Case 77 : 수동 전량 매도(0주) 시 온디맨드 예비시드 원금 자동 상환 및 6/6회분 한도 복구]
         init_seed = _resolve_valid_seed_from_state(st)
         cur_inj_res_usd = max(
@@ -581,20 +591,32 @@ async def reconcile_stratum_with_broker_holdings_plugin(
             cumulative_realized_fee_usd=cum_fee,
             cumulative_realized_net_usd=cum_net,
             daily_realized_net_usd=day_net,
+            cycle_realized_gross_usd=0.0,
+            cycle_realized_fee_usd=0.0,
+            cycle_realized_net_usd=0.0,
+            cycle_sub_realized_net_usd=0.0,
+            cycle_sell_events=0,
+            cycle_leftover_saved_usd=0.0,
+            last_cycle_realized_net_usd=final_cyc_net,
+            last_cycle_sell_events=final_cyc_ev,
+            completed_main_cycles=next_comp_main_cycles,
         )
         free_cash_now = safe_float(updated_st.get("free_cash_usd"), 0.0)
         logger.info(
-            "🧹 [SOXL 수동 전량청산 0주 싸이클 종료 & 실현익 복리 정산] %d주 @ $%.2f (매칭층: %s · 세후손익 %+.2f$ · 예비상환 $%.2f · 가용현금 $%.2f · 🛡️60초 타임쉴드 각인)",
+            "🧹 [SOXL 수동 전량청산 0주 싸이클 종료 & 실현익 복리 정산] %d주 @ $%.2f (매칭층: %s · 세후손익 %+.2f$ · 이번사이클최종 %+.2f$ · 예비상환 $%.2f · 가용현금 $%.2f · 🛡️60초 타임쉴드 각인)",
             ledger_qty,
             manual_sell_p,
             match_res.get("sold_tier_desc"),
             net_pnl,
+            final_cyc_net,
             repaid_this_time,
             free_cash_now,
         )
         if hasattr(context, "send_slim_alert"):
             s_sign = "+" if net_pnl >= 0.0 else "-"
             r_sign = "+" if net_rate >= 0.0 else ""
+            cyc_sign = "+" if final_cyc_net >= 0.0 else "-"
+            cum_sign = "+" if cum_net >= 0.0 else "-"
             repay_note = ""
             if repaid_this_time > 0.0:
                 avail_p = max(0, MAX_RESERVE_PORTIONS - next_used_res_cnt)
@@ -616,15 +638,17 @@ async def reconcile_stratum_with_broker_holdings_plugin(
             if is_ext_now:
                 next_entry_note = "🔒장외 매수잠금 · 04:07 EST 프리장 개시 후 새 1층 진입 대기"
             elif will_hit_late_cutoff:
-                next_entry_note = "🔒장마감 30분전(15:30~16:00) 새 사이클 진입 차단(고점 오버나이트 방어) · 익일 04:07 EST 프리장 새 1층 진입 대기"
+                next_entry_note = "🔒장마감 30분전(15:30 ~ 16:00) 새 사이클 진입 차단(고점 오버나이트 방어) · 익일 04:07 EST 프리장 새 1층 진입 대기"
             else:
-                next_entry_note = "🛡️04:07~15:29 EST 매수구간 내 60초 타임쉴드 후 새 1층 진입 대기"
+                next_entry_note = "🛡️04:07 ~ 15:29 EST 매수구간 내 60초 타임쉴드 후 새 1층 진입 대기"
 
             await context.send_slim_alert(
                 title=f"🧹 [SOXL 수동 전량매도 0주 동기화] {ledger_qty}주 @ ${manual_sell_p:.2f} ({r_sign}{net_rate:.2f}%)",
                 body=(
                     f"소진층: {match_res.get('sold_tier_desc')} · "
-                    f"세후순익 {s_sign}${abs(net_pnl):,.2f} 시드 복리산입 완료{repay_note} · "
+                    f"세후순익 {s_sign}${abs(net_pnl):,.2f} 시드 복리산입 완료 · "
+                    f"🏆이번 사이클 최종수익: {cyc_sign}${abs(final_cyc_net):,.2f} (총 {final_cyc_ev}회 익절 ➔ 새 사이클 $0.00 리셋!) · "
+                    f"💰전체 누적실현익: {cum_sign}${abs(cum_net):,.2f} (누적 {next_comp_main_cycles}회 졸업){repay_note} · "
                     f"가용현금 ${free_cash_now:,.2f} ({next_entry_note})"
                 ),
             )
@@ -633,6 +657,8 @@ async def reconcile_stratum_with_broker_holdings_plugin(
             "prev_qty": ledger_qty,
             "manual_sell_price": manual_sell_p,
             "net_pnl_usd": net_pnl,
+            "last_cycle_realized_net_usd": final_cyc_net,
+            "completed_main_cycles": next_comp_main_cycles,
             "repaid_reserve_usd": repaid_this_time,
             "free_cash_usd": free_cash_now,
         }
@@ -892,6 +918,15 @@ async def reconcile_stratum_with_broker_holdings_plugin(
                 "cumulative_realized_fee_usd",
                 "cumulative_leftover_saved_usd",
                 "cumulative_reanchor_drop_usd",
+                "cycle_realized_gross_usd",
+                "cycle_realized_fee_usd",
+                "cycle_realized_net_usd",
+                "cycle_sub_realized_net_usd",
+                "cycle_sell_events",
+                "cycle_leftover_saved_usd",
+                "last_cycle_realized_net_usd",
+                "last_cycle_sell_events",
+                "completed_main_cycles",
                 "reanchor_cnt",
                 "indiv_grid_sell_cnt",
                 "wma_grad_sell_cnt",
@@ -1426,6 +1461,21 @@ async def reconcile_stratum_with_broker_holdings_plugin(
         safe_float(st.get("daily_realized_net_usd"), 0.0) + net_pnl, 4
     )
 
+    # NEW: 수동 부분 매도 시 현재 진행 사이클 실현수익 및 익절 횟수 동시 누적
+    cur_cyc_gross = round(
+        safe_float(st.get("cycle_realized_gross_usd"), 0.0) + gross_pnl, 4
+    )
+    cur_cyc_fee = round(
+        safe_float(st.get("cycle_realized_fee_usd"), 0.0) + fee_usd, 4
+    )
+    cur_cyc_net = round(
+        safe_float(st.get("cycle_realized_net_usd"), 0.0) + net_pnl, 4
+    )
+    cur_cyc_sub_net = round(
+        safe_float(st.get("cycle_sub_realized_net_usd"), 0.0) + sub_net_pnl, 4
+    )
+    cur_cyc_ev = max(0, safe_int(st.get("cycle_sell_events"), 0)) + 1
+
     total_rem_cost = round(
         sum(b.actual_cost_usd for b in rem_buckets)
         + sum(sb.actual_cost_usd for sb in rem_sub_buckets)
@@ -1539,6 +1589,11 @@ async def reconcile_stratum_with_broker_holdings_plugin(
         "cumulative_realized_fee_usd": cum_fee,
         "cumulative_realized_net_usd": cum_net,
         "daily_realized_net_usd": day_net,
+        "cycle_realized_gross_usd": cur_cyc_gross,
+        "cycle_realized_fee_usd": cur_cyc_fee,
+        "cycle_realized_net_usd": cur_cyc_net,
+        "cycle_sub_realized_net_usd": cur_cyc_sub_net,
+        "cycle_sell_events": cur_cyc_ev,
     }
     if sold_sub_q > 0:
         part_update_kw["last_sub_sell_fill_ts"] = now_part_sell_ts
@@ -1551,7 +1606,7 @@ async def reconcile_stratum_with_broker_holdings_plugin(
     free_cash_now = safe_float(updated_st.get("free_cash_usd"), 0.0)
     rem_sub_sh = sum(sb.qty for sb in rem_sub_buckets)
     logger.info(
-        "➖ [Case 69/72/78/80/87/88 SOXL 수동 부분매도 순수원가 정산 완료] %d주 -> %d주(본 %d개층·보유%d/잠금%d회차+서브 %d주+포켓 %d주) 조정 (매칭층: %s @ 체결가 $%.2f · 세후손익 %+.2f$ 복리산입)",
+        "➖ [Case 69/72/78/80/87/88 SOXL 수동 부분매도 순수원가 정산 완료] %d주 -> %d주(본 %d개층·보유%d/잠금%d회차+서브 %d주+포켓 %d주) 조정 (매칭층: %s @ 체결가 $%.2f · 세후손익 %+.2f$ 복리산입 · 이번사이클누적 %+.2f$)",
         ledger_qty,
         h_qty,
         len(rem_buckets),
@@ -1562,10 +1617,12 @@ async def reconcile_stratum_with_broker_holdings_plugin(
         match_res.get("sold_tier_desc"),
         manual_sell_p,
         net_pnl,
+        cur_cyc_net,
     )
     if hasattr(context, "send_slim_alert"):
         s_sign = "+" if net_pnl >= 0.0 else "-"
         r_sign = "+" if net_rate >= 0.0 else ""
+        cyc_sign = "+" if cur_cyc_net >= 0.0 else "-"
         sub_rem_note = (
             f"+서브 {rem_sub_sh}주({len(rem_sub_buckets)}개층)"
             if rem_sub_sh > 0
@@ -1584,6 +1641,7 @@ async def reconcile_stratum_with_broker_holdings_plugin(
             body=(
                 f"매칭층: {match_res.get('sold_tier_desc')} · "
                 f"세후순익 {s_sign}${abs(net_pnl):,.2f} 시드 복리산입 · "
+                f"🔄이번사이클 누적: {cyc_sign}${abs(cur_cyc_net):,.2f}({cur_cyc_ev}회) · "
                 f"잔여 {h_qty}주({len(rem_buckets)}개층{sub_rem_note}{gp_rem_note}{ratchet_rem_note} · 순수평단 ${pure_overall_avg:.2f}) 보존 · 가용현금 ${free_cash_now:,.2f}"
             ),
         )
@@ -1593,6 +1651,7 @@ async def reconcile_stratum_with_broker_holdings_plugin(
         "sold_qty": delta_remove,
         "manual_sell_price": manual_sell_p,
         "net_pnl_usd": net_pnl,
+        "cycle_realized_net_usd": cur_cyc_net,
         "tiers": len(rem_buckets),
         "sub_tiers": len(rem_sub_buckets),
         "cycle_ratchet_max_lots": next_ratchet_lots,
@@ -1860,7 +1919,7 @@ async def execute_1600_daily_closing_settlement_plugin(
     1) 16:00:xx EST 에 아직 60.0초 대기 중인 미결 주문이 있으면 대기를 보호하고,
     2) 마감 결산 시 미체결 잔량 취소 및 force_settle=True 정산 후,
        당일 본 그리드 및 서브 그리드 매매 유무를 판정하여 연속 무매매 동결일(main_consec_frozen_days, sub_consec_frozen_days)을 갱신하고
-       오버나이트 이월 보고를 단 1회 발송한다.
+       이번 사이클 누적 수익 및 오버나이트 이월 보고를 단 1회 발송한다.
     """
     dt_now = now_est.astimezone(EST_TZ) if now_est else datetime.now(EST_TZ)
     hm = dt_now.hour * 100 + dt_now.minute
@@ -2018,6 +2077,9 @@ async def execute_1600_daily_closing_settlement_plugin(
     )
     day_net = safe_float(updated_st.get("daily_realized_net_usd"), 0.0)
     day_krw = day_net * fx_rate
+    cyc_net = safe_float(summary.get("cycle_realized_net_usd"), 0.0)
+    cyc_ev = safe_int(summary.get("cycle_sell_events"), 0)
+    comp_cycles = safe_int(summary.get("completed_main_cycles"), 0)
     cum_net = safe_float(summary.get("cumulative_realized_net_usd"), 0.0)
     cum_roi = safe_float(summary.get("realized_roi_pct"), 0.0)
     free_cash = safe_float(summary.get("free_cash_usd"), 0.0)
@@ -2049,6 +2111,7 @@ async def execute_1600_daily_closing_settlement_plugin(
 
     if hasattr(context, "send_slim_alert"):
         d_sign = "+" if day_net >= 0.0 else "-"
+        cyc_sign = "+" if cyc_net >= 0.0 else "-"
         c_sign = "+" if cum_net >= 0.0 else "-"
         unlock_note = (
             f"(🔓해금 {day_unlock_ev}회/누적 {cum_unlock_ev}회)"
@@ -2090,7 +2153,8 @@ async def execute_1600_daily_closing_settlement_plugin(
             title=f"🌙 [16:00 EST 정규장 마감 일일 결산] ({today_str})",
             body=(
                 f"당일 세후실현: {d_sign}${abs(day_net):,.2f} ({d_sign}{abs(day_krw):,.0f}원) "
-                f"· 누적실현: {c_sign}${abs(cum_net):,.2f} ({c_sign}{abs(cum_roi):.2f}%) "
+                f"· 🔄이번사이클: {cyc_sign}${abs(cyc_net):,.2f}({cyc_ev}회) "
+                f"· 💰누적실현: {c_sign}${abs(cum_net):,.2f} ({c_sign}{abs(cum_roi):.2f}% · 졸업 {comp_cycles}회) "
                 f"· 당일 매수 {day_buy_ev}회{unlock_note} / 익절 {day_sell_ev}회(2~7층이평졸업 {day_wma_grad}회·개별층 {day_indiv_sell}회)"
                 f"{sub_day_note}{golden_note}{res_note} "
                 f"· 🛡️시드패스 {day_pass:,}회 / 자투리절약 +${day_saved:,.2f} "
@@ -2100,9 +2164,10 @@ async def execute_1600_daily_closing_settlement_plugin(
         )
 
     logger.info(
-        "🌙 [16:00 EST 일일 결산 완료 · %s] 당일실현=$%.2f · 누적실현=$%.2f · 본동결=%d일 · 서브동결=%d일 · 오버나이트보유=본%d주(%d개층)+서브%d주(%d개층)+포켓%d주 -> 애프터/데이장 익절감시 직결",
+        "🌙 [16:00 EST 일일 결산 완료 · %s] 당일실현=$%.2f · 이번사이클=$%.2f · 누적실현=$%.2f · 본동결=%d일 · 서브동결=%d일 · 오버나이트보유=본%d주(%d개층)+서브%d주(%d개층)+포켓%d주 -> 애프터/데이장 익절감시 직결",
         folder_slug,
         day_net,
+        cyc_net,
         cum_net,
         next_main_frozen,
         next_sub_frozen,
@@ -2116,6 +2181,7 @@ async def execute_1600_daily_closing_settlement_plugin(
         "status": "DAILY_CLOSING_SETTLEMENT_DONE",
         "date": today_str,
         "daily_realized_net_usd": day_net,
+        "cycle_realized_net_usd": cyc_net,
         "cumulative_realized_net_usd": cum_net,
         "held_shares": held_sh,
         "sub_held_shares": sub_sh,

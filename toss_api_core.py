@@ -4,17 +4,18 @@
 인피니트 스노우볼 (Infinite Snowball) v3.0 — 토스증권 코어 상수 · 폴더 격리 · 디스크 자가 치유 ·
 GlobalThrottle 동시성 통제 및 SOXL 7-Tier 골디락스 본 그리드(구 2층 + 구 7층 통합 중간층 재배치 & 최고 도달 회차 단차 잠금 · Case 87) /
 스위치 없는 100% 기본 상시 적용(Default ON) 3-Tier 서브 그리드(4.0% 정량 · 구 1층 + 구 3층 양끝 합병 & 최대 4회분[16%] 상한 캡 & 0.5회분 보호예수 · Case 88) /
-독립 골든포켓 3중 원장(SoxlStratumLedger) 코어 모듈 (Part 1 / 2 · Step 01 / 13)
+현재 사이클 단위 실현수익(cycle_realized_net_usd) 자동 추적·리셋 및 독립 골든포켓 3중 원장(SoxlStratumLedger) 코어 모듈 (Part 1 / 2 · Step 01 / 13)
 - 역할:
-  1) 제4헌법 EST 단일 타임존 및 최종 확정 챔피언(Case 01 ~ Case 88 · 👑 06_L2L7_RATCHET_8PCT × 🛡️ 13_SUB_L1L3_RESV05_CAP4L[Default ON]) 전역 상수 락온
+  1) 제4헌법 EST 단일 타임존 및 최종 확정 챔피언(Case 01 ~ Case 89 · 👑 06_L2L7_RATCHET_8PCT × 🛡️ 13_SUB_L1L3_RESV05_CAP4L[Default ON]) 전역 상수 락온
   2) 안전한 수치 형변환(safe_float, safe_int), 36자 멱등성 키 생성기(generate_client_order_id),
      4xx 비재시도 예외(_NonRetryableApiError) 및 계좌별 미국 주식 수수료율 런타임 캐시 동기화기(Case 86)
   3) 폴더 위치(base_dir) 기반 자동 식별기(get_bot_base_dir, get_folder_slug, resolve_folder_isolated_ledger_paths),
      격리 환경변수 로더(_load_env_files_into_environ) 및 클라우드 VM 디스크 고갈(Errno 28) 자가 치유기(emergency_free_disk_space_sync · Case 68, Case 75, Case 85)
   4) 제1헌법 동기/비동기 양방향 호환 _HybridFileLock 및 GlobalThrottle 중앙 통제소(Case 06, Case 20)
   5) SOXL 단일 롱 7-Tier 본 그리드(L2_L7_MERGE_SORT & cycle_ratchet_max_lots 단차 잠금 · Case 87) ·
-     Default-ON 3-Tier 서브 그리드(SUB_L1_L3_MERGE & sub_ratchet_max_lots & SUB_MAX_TOTAL_LOTS_4 캡 · Case 88) 및
-     독립 골든포켓(GoldenAllInPocket) 폴더별 3중 안전 지층 원장(SoxlStratumLedger · Case 58 ~ Case 88)
+     Default-ON 3-Tier 서브 그리드(SUB_L1_L3_MERGE & sub_ratchet_max_lots & SUB_MAX_TOTAL_LOTS_4 캡 · Case 88) ·
+     현재 사이클 단위 실현수익(cycle_realized_net_usd · 0주 전량 졸업 시 last_cycle_realized_net_usd 박제 후 0.0 자동 리셋) 및
+     독립 골든포켓(GoldenAllInPocket) 폴더별 3중 안전 지층 원장(SoxlStratumLedger · Case 58 ~ Case 89)
 """
 
 from __future__ import annotations
@@ -38,7 +39,7 @@ from zoneinfo import ZoneInfo
 logger = logging.getLogger("toss_sniper.toss_api_core")
 
 # ---------------------------------------------------------------------------
-# [핵심 상수] 제4헌법 EST 단일 타임존 & 최종 확정 진화 챔피언 (Case 72 ~ 88) 전역 상수
+# [핵심 상수] 제4헌법 EST 단일 타임존 & 최종 확정 진화 챔피언 (Case 72 ~ 89) 전역 상수
 # ---------------------------------------------------------------------------
 EST_TZ = ZoneInfo("America/New_York")
 KST_TZ = ZoneInfo("Asia/Seoul")
@@ -532,11 +533,11 @@ class GlobalThrottle:
 
 
 # ---------------------------------------------------------------------------
-# [핵심 2] SOXL 단일 롱 7-Tier 본 그리드(L2_L7_MERGE_SORT) · Default-ON 3-Tier 서브 그리드(SUB_L1_L3_MERGE & CAP4L) · 골든포켓 폴더별 3중 안전 지층 원장 (SoxlStratumLedger — Case 68 ~ 88)
+# [핵심 2] SOXL 단일 롱 7-Tier 본 그리드(L2_L7_MERGE_SORT) · Default-ON 3-Tier 서브 그리드(SUB_L1_L3_MERGE & CAP4L) · 사이클 수익 추적 · 골든포켓 폴더별 3중 안전 지층 원장 (SoxlStratumLedger — Case 68 ~ 89)
 # ---------------------------------------------------------------------------
 class SoxlStratumLedger:
     """
-    🎯 1 ~ 🎯 5 & Case 02, 05, 06, 58 ~ 88:
+    🎯 1 ~ 🎯 5 & Case 02, 05, 06, 58 ~ 89:
     현재 봇이 위치한 폴더(`base_dir`)를 기준으로:
     ① 폴더 고유 원장(`soxl_stratum_ledger_<folder_slug>.json` — Git 덮어쓰기 100% 면역)
     ② 표준 호환 원장(`soxl_stratum_ledger.json` — 기존 코드 및 외부 도구 호환 미러)
@@ -550,7 +551,8 @@ class SoxlStratumLedger:
     정적 잠금/조건부 스텝업 사이클 최저 매수가(`cycle_min_buy_price` / `sub_cycle_min_buy_price`),
     💉 05_RESV_6P_GUARD30 예비시드 수혈 잔액 · 사용 회분 · 시드고갈 입금 대기 플래그 · 단 1회 입금 알림 영구 래치,
     🎯 Case 78 현재 본/서브 1층 목표 정량 주수(`l1_target_quota_qty` / `sub_l1_target_quota_qty`), 양방향·주기 60초 타임쉴드 시각,
-    다중 그리드(본+서브) 및 골든포켓 매도 대기 정보, 기정산 주문 ID 링버퍼, 누적 세후 실현수익금 및 자투리 절약금을
+    다중 그리드(본+서브) 및 골든포켓 매도 대기 정보, 기정산 주문 ID 링버퍼,
+    누적 세후 실현수익금(`cumulative_realized_net_usd`) 및 현재 진행 사이클 단위 실현수익(`cycle_realized_net_usd` · 0주 졸업 시 `last_cycle_realized_net_usd` 박제 후 0.0 리셋)을
     Dirty-Check 적용 후 원자적(.tmp -> os.replace)으로 동시 영속화한다.
     """
 
@@ -813,6 +815,16 @@ class SoxlStratumLedger:
             "cumulative_realized_fee_usd": 0.0,
             "cumulative_realized_net_usd": 0.0,
             "daily_realized_net_usd": 0.0,
+            # NEW: 현재 진행 사이클 단위 실현수익 및 0주 졸업 사이클 기록 영속화 필드
+            "cycle_realized_gross_usd": 0.0,
+            "cycle_realized_fee_usd": 0.0,
+            "cycle_realized_net_usd": 0.0,
+            "cycle_sub_realized_net_usd": 0.0,
+            "cycle_sell_events": 0,
+            "cycle_leftover_saved_usd": 0.0,
+            "last_cycle_realized_net_usd": 0.0,
+            "last_cycle_sell_events": 0,
+            "completed_main_cycles": 0,
             "updated_at": datetime.now(EST_TZ).isoformat(),
         }
 
@@ -1080,7 +1092,7 @@ class SoxlStratumLedger:
         self, raw_st: Dict[str, Any]
     ) -> Dict[str, Any]:
         """
-        🚨 Case 63, Case 64, Case 67, Case 68, Case 69, Case 70, Case 71, Case 72, Case 73, Case 74, Case 76, Case 77, Case 78, Case 80, Case 86, Case 87 & Case 88:
+        🚨 Case 63, Case 64, Case 67, Case 68, Case 69, Case 70, Case 71, Case 72, Case 73, Case 74, Case 76, Case 77, Case 78, Case 80, Case 86, Case 87, Case 88 & Case 89:
         1) buy_interval_min = 10, sell_interval_min = 1, max_grid_tiers = 7 (MAX_GRID_TIERS_7),
            portion_mode = "COMP_08PCT", threshold_mode = "WIDE_RUNWAY",
            grid_merge_mode = "L2_L7_MERGE_SORT", unlock_mode = "STEP2X_15PCT_C20",
@@ -1092,6 +1104,7 @@ class SoxlStratumLedger:
         3) 시드머니 결측 또는 0.0 유입 시 $100.0 으로 변조되지 않도록 _resolve_safe_initial_seed() 를 적용한다.
         4) 🛡️ [Case 69, Case 71, Case 72, Case 80, Case 87 & Case 88 순수 실물 원가 100% 보존 및 본/서브 최고 도달 회차(cycle_ratchet_max_lots / sub_ratchet_max_lots) 잠금 강제]
         5) 💉 [Case 77, Case 80 & Case 88 온디맨드 예비시드 수혈 잔액(injected_reserve_usd) · 본 그리드 · 서브 그리드 · 골든포켓 투입원금 통합 회계 항등식]
+        6) 🔄 [현재 진행 사이클 단위 실현수익(cycle_realized_net_usd) 및 직전 졸업 사이클 기록(last_cycle_realized_net_usd, completed_main_cycles) 정합성 강제]
         """
         st = self._default_symbol_state(
             folder_slug=self.folder_slug,
@@ -1604,6 +1617,44 @@ class SoxlStratumLedger:
             0, safe_int(st.get("daily_main_sell_cnt"), 0)
         )
 
+        # NEW: 현재 진행 사이클 단위 실현수익 및 0주 졸업 사이클 기록 정규화
+        st["last_cycle_realized_net_usd"] = round(
+            safe_float(st.get("last_cycle_realized_net_usd"), 0.0), 4
+        )
+        st["last_cycle_sell_events"] = max(
+            0, safe_int(st.get("last_cycle_sell_events"), 0)
+        )
+        st["completed_main_cycles"] = max(
+            0, safe_int(st.get("completed_main_cycles"), 0)
+        )
+
+        if not clean_buckets and not clean_sub_buckets and pocket_qty <= 0:
+            st["cycle_realized_gross_usd"] = 0.0
+            st["cycle_realized_fee_usd"] = 0.0
+            st["cycle_realized_net_usd"] = 0.0
+            st["cycle_sub_realized_net_usd"] = 0.0
+            st["cycle_sell_events"] = 0
+            st["cycle_leftover_saved_usd"] = 0.0
+        else:
+            st["cycle_realized_gross_usd"] = round(
+                safe_float(st.get("cycle_realized_gross_usd"), 0.0), 4
+            )
+            st["cycle_realized_fee_usd"] = round(
+                safe_float(st.get("cycle_realized_fee_usd"), 0.0), 4
+            )
+            st["cycle_realized_net_usd"] = round(
+                safe_float(st.get("cycle_realized_net_usd"), 0.0), 4
+            )
+            st["cycle_sub_realized_net_usd"] = round(
+                safe_float(st.get("cycle_sub_realized_net_usd"), 0.0), 4
+            )
+            st["cycle_sell_events"] = max(
+                0, safe_int(st.get("cycle_sell_events"), 0)
+            )
+            st["cycle_leftover_saved_usd"] = round(
+                safe_float(st.get("cycle_leftover_saved_usd"), 0.0), 4
+            )
+
         # 🚨 [Case 77, Case 80 & Case 88 통합 회계 항등식(Accounting Identity) 강제]
         actual_inv_buckets = round(
             sum(safe_float(b["actual_cost_usd"], 0.0) for b in clean_buckets),
@@ -1810,7 +1861,7 @@ class SoxlStratumLedger:
                         (sanitized.get("golden_pocket") or {}).get("qty"), 0
                     )
                     logger.info(
-                        "📂 [Case 68~88 폴더별 3중 7층 본그리드 + Default-ON 3층 서브그리드 원장 락온 완료] 폴더=[%s] · 채택소스=%s · 시드=$%.2f · 왕복수수료=%.2f%% · 본그리드=%d주(%d개층·보유%d/잠금%d회차) · 서브그리드=%d주(%d개층·%d/%d회분) · 골든포켓=%d주(모드=%s) · 예비수혈=%d/%d회분($%.2f) · 고유원장=%s",
+                        "📂 [Case 68~89 폴더별 3중 7층 본그리드 + Default-ON 3층 서브그리드 원장 락온 완료] 폴더=[%s] · 채택소스=%s · 시드=$%.2f · 왕복수수료=%.2f%% · 본그리드=%d주(%d개층·보유%d/잠금%d회차) · 서브그리드=%d주(%d개층·%d/%d회분) · 골든포켓=%d주(모드=%s) · 이번사이클순익=$%.2f · 예비수혈=%d/%d회분($%.2f) · 고유원장=%s",
                         self.folder_slug,
                         best_label,
                         safe_float(sanitized.get("initial_seed_usd"), 10000.0),
@@ -1830,6 +1881,9 @@ class SoxlStratumLedger:
                         str(
                             sanitized.get("golden_allin_mode")
                             or DEFAULT_GOLDEN_ALLIN_MODE
+                        ),
+                        safe_float(
+                            sanitized.get("cycle_realized_net_usd"), 0.0
                         ),
                         safe_int(sanitized.get("used_reserve_portions_cnt"), 0),
                         MAX_RESERVE_PORTIONS,
@@ -2136,6 +2190,12 @@ class SoxlStratumLedger:
             sym,
             initial_seed_usd=round(init_seed, 4),
             cumulative_realized_net_usd=round(cum_net, 4),
+            cycle_realized_gross_usd=0.0,
+            cycle_realized_fee_usd=0.0,
+            cycle_realized_net_usd=0.0,
+            cycle_sub_realized_net_usd=0.0,
+            cycle_sell_events=0,
+            cycle_leftover_saved_usd=0.0,
             buckets=[],
             sub_buckets=[],
             golden_pocket=self._empty_golden_pocket_dict(),
@@ -2194,6 +2254,15 @@ class SoxlStratumLedger:
             kw["cumulative_realized_net_usd"] = 0.0
             kw["cumulative_realized_gross_usd"] = 0.0
             kw["cumulative_realized_fee_usd"] = 0.0
+            kw["cycle_realized_gross_usd"] = 0.0
+            kw["cycle_realized_fee_usd"] = 0.0
+            kw["cycle_realized_net_usd"] = 0.0
+            kw["cycle_sub_realized_net_usd"] = 0.0
+            kw["cycle_sell_events"] = 0
+            kw["cycle_leftover_saved_usd"] = 0.0
+            kw["last_cycle_realized_net_usd"] = 0.0
+            kw["last_cycle_sell_events"] = 0
+            kw["completed_main_cycles"] = 0
         return await self.update_state(TARGET_SYMBOL, **kw)
 
     async def toggle_bot_active(

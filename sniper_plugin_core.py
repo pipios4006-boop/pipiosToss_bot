@@ -20,17 +20,18 @@
 6) 💉 05_RESV_6P_GUARD30 (30% 자투리 1주 승격 방지 가드 · 계좌별 동적 왕복 수수료율 연동[Case 86] · 골든포켓 가동 중 오발동 방어 ·
    예수금 API 0.0 반환 시 0.25초 재시도 · 시드고갈 단 1회 입금 요청 알림 영구 래치 waiting_reserve_deposit_alert_sent 및 중복 디스크 쓰기 스킵 ·
    토스 실계좌 여유자금 감지 기반 최대 +6회분 온디맨드 예비시드 자동 수혈) 실행 엔진
-   (_check_and_execute_guard30_or_reserve_injection · Case 75, 77, 80, 86)
+   (_check_and_execute_guard30_or_reserve_injection · Case 75, 77, 80, 86, 89)
 7) 매수 체결(FILLED / 부분 체결 후 60초 취소 종료 / 세션 경계 force_settle 강제 정산) 원장 커밋 ·
    독립 골든포켓(GOLDEN_POCKET) 분리 정산(Case 80) ·
    🛡️ Default-ON 3층 서브 그리드(SUB_REENTRY_1FL / SUB_TOPUP_1FL / SUB_DIP_1FL : 3층 초과 시 구 1층+구 3층 양끝 합병 SUB_L1_L3_MERGE ·
    서브 최고 도달 회차 sub_ratchet_max_lots 잠금 · 10일/-10% 저가해금 · sub_consec_frozen_days = 0 리셋 · Case 88) 분리 정산 ·
-   본 그리드 부분 체결 수량 비례 자투리 정산 및 1층 목표 정량(l1_target_quota_qty) 보존(Case 78) ·
+   본 그리드 부분 체결 수량 비례 자투리 정산 및 현재 사이클 자투리 절약금(cycle_leftover_saved_usd) 동시 누적 ·
+   1층 목표 정량(l1_target_quota_qty) 보존(Case 78) ·
    7층 초과 시 구 1층 보존 + 구 2층 + 구 7층 통합 중간층 재배치(L2_L7_MERGE_SORT) 및 사이클 최고 도달 회차(cycle_ratchet_max_lots) 단차 잠금 갱신(Case 87) ·
    STEP2X_15PCT_C20 스텝업 잠금 저가/회차 갱신(Case 76, 87) ·
    15:30 EST 경계 미체결 취소 시 본·서브 0주 신규 진입 및 1층 공석 +1.0% 돌파 추격 동시 안전 취소(Case 84, Case 88) 및
-   미체결 매수 주문 60.0초 동기화/안전 취소기 (_commit_filled_buy_to_stratum_ledger, sync_pending_buy_order_plugin · Case 19, 24, 59 ~ 88)
-- 제1헌법 ~ 제6헌법 및 Case 01 ~ 88 완벽 준수
+   미체결 매수 주문 60.0초 동기화/안전 취소기 (_commit_filled_buy_to_stratum_ledger, sync_pending_buy_order_plugin · Case 19, 24, 59 ~ 89)
+- 제1헌법 ~ 제6헌법 및 Case 01 ~ 89 완벽 준수
 """
 
 from __future__ import annotations
@@ -621,7 +622,7 @@ def min_req_cash_str(val: float) -> str:
 
 
 # ---------------------------------------------------------------------------
-# [핵심 0-B · Case 75, Case 77, Case 80 & Case 86] GUARD30 자투리 차단 · 계좌별 동적 수수료율 연동 · 예수금 API 일시 오류 방어 · 토스 계좌 여유자금 감지 자동 수혈 · 단 1회 입금 요청 알림 실행기
+# [핵심 0-B · Case 75, Case 77, Case 80, Case 86 & Case 89] GUARD30 자투리 차단 · 계좌별 동적 수수료율 연동 · 예수금 API 일시 오류 방어 · 토스 계좌 여유자금 감지 자동 수혈 · 단 1회 입금 요청 알림 실행기
 # ---------------------------------------------------------------------------
 async def _check_and_execute_guard30_or_reserve_injection(
     context: Any,
@@ -634,7 +635,7 @@ async def _check_and_execute_guard30_or_reserve_injection(
     trigger_desc: str,
 ) -> Tuple[bool, float, float, Dict[str, Any]]:
     """
-    # [Case 75, Case 77, Case 80 & Case 86 계좌별 동적 왕복 수수료율 연동]:
+    # [Case 75, Case 77, Case 80, Case 86 & Case 89 계좌별 동적 왕복 수수료율 연동]:
     본 그리드(및 황금시간 전액매수) 주문 발주 직전(뮤텍스 내부)에 호출되어:
     0) [Case 80 골든포켓 일시 가동 중 오발동 방어 및 60초 인메모리 쉴드]
     1) 토스 실계좌 주문가능 달러(`raw_bp_usd = await context.api.get_buying_power_usd(safety_buffer_pct=0.0)`)를 조회하되,
@@ -736,7 +737,7 @@ async def _check_and_execute_guard30_or_reserve_injection(
             )
         return True, now_free_cash, eff_bp_for_order, guard_eval
 
-    # [케이스 2] 토스 계좌에 1회분 이상 여유자금이 입금되어 있어 온디맨드 예비시드 자동 수혈 실행!
+    # [케이스 2] 토스 계좌에 여유자금이 입금되어 있어 온디맨드 예비시드 자동 수혈 실행!
     if action == "INJECT_AND_PROCEED":
         inj_portions = max(1, safe_int(guard_eval.get("inject_portions"), 1))
         inj_usd = round(max(0.01, safe_float(guard_eval.get("inject_usd"), 0.0)), 4)
@@ -769,7 +770,7 @@ async def _check_and_execute_guard30_or_reserve_injection(
             safe_float(updated_st.get("free_cash_usd"), now_free_cash + inj_usd),
         )
         logger.info(
-            "💉 [Case 77 SOXL 온디맨드 예비시드 자동 수혈 완료] +%d회분(+%.2f$) 수혈 -> 가용현금 $%.2f (사용 %d/%d회분 · 잔여한도 %d회분 · 타점=%s)",
+            "💉 [Case 77/89 SOXL 온디맨드 예비시드 자동 수혈 완료] +%d회분(+%.2f$) 수혈 -> 가용현금 $%.2f (사용 %d/%d회분 · 잔여한도 %d회분 · 타점=%s)",
             inj_portions,
             inj_usd,
             updated_free_cash,
@@ -883,10 +884,8 @@ async def _check_and_execute_guard30_or_reserve_injection(
         )
 
     return False, now_free_cash, eff_bp_for_order, guard_eval
-
-
 # ---------------------------------------------------------------------------
-# [핵심 1] 매수 체결(FILLED) 커밋 · 비례 자투리 정산(Case 78) · 독립 골든포켓(Case 80) · Default-ON 3층 서브 그리드 SUB_L1_L3_MERGE(Case 88) · 1~7층 본 그리드 L2+L7 중간합병 및 최고도달회차 잠금(Case 87) · 매수 후 60초 타임쉴드 각인
+# [핵심 1] 매수 체결(FILLED) 커밋 · 비례 자투리 정산(Case 78) · 현재 사이클 자투리 절약금(cycle_leftover_saved_usd) 누적 · 독립 골든포켓(Case 80) · Default-ON 3층 서브 그리드 SUB_L1_L3_MERGE(Case 88) · 1~7층 본 그리드 L2+L7 중간합병 및 최고도달회차 잠금(Case 87) · 매수 후 60초 타임쉴드 각인
 # ---------------------------------------------------------------------------
 async def _commit_filled_buy_to_stratum_ledger(
     context: Any,
@@ -901,8 +900,8 @@ async def _commit_filled_buy_to_stratum_ledger(
     # MODIFIED [🎯 1, 🎯 3, 🎯 4 & Case 25, 46, 53, 59, 60, 61, 65, 67, 69, 71, 72, 73, 74, 76, 77, 78, 80, Case 87 & Case 88]:
     매수 주문 체결(FILLED 또는 부분 체결 후 60초 타임아웃/세션 경계 취소 종료)이 확인된 즉시:
     0) 🚨 [Case 80 : POCKET_ALLIN 모드 독립 골든포켓(lot_type == "GOLDEN_POCKET") 체결 분리 정산]
-    1) 🛡️ [Case 88 : Default-ON 3층 서브 그리드(lot_type 이 "SUB_" 로 시작) 체결 분리 정산 · SUB_L1_L3_MERGE 양끝 합병 · sub_consec_frozen_days = 0 리셋]
-    2) 👑 [Case 78 & Case 87 : 본 그리드 부분 체결 비례 자투리 정산 · L2_L7_MERGE_SORT 중간층 재배치 · cycle_ratchet_max_lots 잠금 갱신 · main_consec_frozen_days = 0 리셋]
+    1) 🛡️ [Case 88 : Default-ON 3층 서브 그리드(lot_type 이 "SUB_" 로 시작) 체결 분리 정산 · SUB_L1_L3_MERGE 양끝 합병 · sub_consec_frozen_days = 0 리셋 · cycle_leftover_saved_usd 동시 누적]
+    2) 👑 [Case 78 & Case 87 : 본 그리드 부분 체결 비례 자투리 정산 · cycle_leftover_saved_usd 동시 누적 · L2_L7_MERGE_SORT 중간층 재배치 · cycle_ratchet_max_lots 잠금 갱신 · main_consec_frozen_days = 0 리셋]
     """
     st = context.ledger.get_state(TARGET_SYMBOL)
     old_buckets = buckets_from_dicts(st.get("buckets", []))
@@ -1144,6 +1143,11 @@ async def _commit_filled_buy_to_stratum_ledger(
             + saved_from_sub_portion,
             4,
         )
+        cyc_saved = round(
+            safe_float(st.get("cycle_leftover_saved_usd"), 0.0)
+            + saved_from_sub_portion,
+            4,
+        )
 
         mark_auto_fill_grace_shield(
             context=context,
@@ -1198,6 +1202,7 @@ async def _commit_filled_buy_to_stratum_ledger(
             daily_sub_unlock_events=day_sub_unlock_ev,
             cumulative_leftover_saved_usd=cum_saved,
             daily_leftover_saved_usd=day_saved,
+            cycle_leftover_saved_usd=cyc_saved,
             entry_ts=now_buy_epoch,
             last_buy_fill_ts=now_buy_epoch,
             last_sub_buy_fill_ts=now_buy_epoch,
@@ -1400,6 +1405,11 @@ async def _commit_filled_buy_to_stratum_ledger(
         + saved_from_portion,
         4,
     )
+    cyc_saved = round(
+        safe_float(st.get("cycle_leftover_saved_usd"), 0.0)
+        + saved_from_portion,
+        4,
+    )
 
     mark_auto_fill_grace_shield(
         context=context,
@@ -1454,6 +1464,7 @@ async def _commit_filled_buy_to_stratum_ledger(
         extra_13plus_buy_events=extra_13,
         cumulative_leftover_saved_usd=cum_saved,
         daily_leftover_saved_usd=day_saved,
+        cycle_leftover_saved_usd=cyc_saved,
         entry_ts=now_buy_epoch,
         last_buy_fill_ts=now_buy_epoch,
         last_reentry_eval_ts=0.0,

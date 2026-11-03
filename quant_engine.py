@@ -19,10 +19,9 @@
    해당 그리드의 개별 층(1층 및 상단 개별/합병층) 쪼개 팔기를 잠가 통합 이동평균(wma_2_to_7 / sub_wma_2_to_3) 도망을 원천 봉쇄하고,
    2층 ~ 7층(서브 2층 ~ 3층) 순수 이동평균 단가 대비 +1.00% 목표가(wma_target_p / sub_wma_target_p) 도달 시에는
    1층 매수 단가와 무관하게 1층 물량까지 동일한 가격(wma_target_p)에 조건 없이 100% 포함하여 전량 매도(SELL_ALL_GRAD / SELL_SUB_ALL_GRAD)함으로써 즉시 0주 사이클을 완전 종료시키는 하이브리드 매도 판정기(evaluate_multi_grid_sell_targets)
-5) 포트폴리오 통합 요약기(summarize_stratum_portfolio · Case 84 15:30~16:00 0주 신규 진입 및 1층 공석 돌파 추격 차단 ·
-   Case 86 계좌별 수수료율 동기화 · Case 87 cycle_ratchet_max_lots 단차 잠금 · Case 88 Default-ON 3층 서브 그리드/최대 4회분 캡/0.5회분 보호예수 통합) 및
-   기동 전 TDD 사전 무결성 검증 슈트(run_quant_engine_tdd · Case 25 ~ 88 전수 검증)
-- 제1헌법 ~ 제6헌법 및 Case 01 ~ 88 완벽 준수
+5) 포트폴리오 통합 요약기(summarize_stratum_portfolio · 층별 자산 금액($)/비중(%) · 10칸 유니코드 배분 게이지(🟦🟨🟩) · 현재 사이클 단위 실현수익(cycle_realized_net_usd) · 전량 졸업 시 확정 예정 총자산(projected_graduation_equity_usd) 산출 포함) 및
+   기동 전 TDD 사전 무결성 검증 슈트(run_quant_engine_tdd · Case 25 ~ 89 전수 검증)
+- 제1헌법 ~ 제6헌법 및 Case 01 ~ 89 완벽 준수
 """
 
 from __future__ import annotations
@@ -1240,15 +1239,71 @@ def calc_sell_realized_pnl(
         "net_rate_pct": net_rate_pct,
     }
 # ---------------------------------------------------------------------------
-# [핵심 5] 포트폴리오 · 1~7층 골디락스 본 그리드(L2_L7_MERGE_SORT & 최고도달회차 잠금) · Default-ON 1~3층 서브 그리드(SUB_L1_L3_MERGE & 최대4회분 캡) · 독립 골든포켓 · STEP2X_15PCT_C20 · GUARD30 · Case 84 통합 요약기 (Case 59 ~ 88)
+# [핵심 5] 포트폴리오 · 1~7층 골디락스 본 그리드(L2_L7_MERGE_SORT & 최고도달회차 잠금) · Default-ON 1~3층 서브 그리드(SUB_L1_L3_MERGE & 최대4회분 캡) · 시드 배분 게이지(🟦🟨🟩) · 현재 사이클 단위 수익 · 전량졸업 예정자산(🎓) 통합 요약기 (Case 59 ~ 89)
 # ---------------------------------------------------------------------------
+def _build_10block_allocation_gauge(
+    main_and_pocket_cost: float,
+    sub_cost: float,
+    free_cash: float,
+) -> Tuple[str, float, float, float, float]:
+    """
+    # NEW [시드 배분 10칸 유니코드 블록 게이지(🟦본그리드 · 🟨서브그리드 · 🟩가용현금) 및 비중(%) 산출기]:
+    보유 물량이 존재하는 영역은 최소 1칸 이상 표시되도록 보정하며 총 10칸 길이를 100% 유지한다.
+    반환값: (gauge_bar_10blocks, main_pct, sub_pct, stock_pct, cash_pct)
+    """
+    m_val = max(0.0, safe_float(main_and_pocket_cost, 0.0))
+    s_val = max(0.0, safe_float(sub_cost, 0.0))
+    c_val = max(0.0, safe_float(free_cash, 0.0))
+    tot = m_val + s_val + c_val
+
+    if tot <= 0.0:
+        return "🟩" * 10, 0.0, 0.0, 0.0, 100.0
+
+    main_pct = round((m_val / tot) * 100.0, 1)
+    sub_pct = round((s_val / tot) * 100.0, 1)
+    stock_pct = round(((m_val + s_val) / tot) * 100.0, 1)
+    cash_pct = round(max(0.0, 100.0 - stock_pct), 1)
+
+    m_blk = int(round((m_val / tot) * 10.0))
+    s_blk = int(round((s_val / tot) * 10.0))
+    c_blk = int(round((c_val / tot) * 10.0))
+
+    if m_val > 0.0 and m_blk == 0:
+        m_blk = 1
+    if s_val > 0.0 and s_blk == 0:
+        s_blk = 1
+    if c_val > 0.0 and c_blk == 0:
+        c_blk = 1
+
+    while (m_blk + s_blk + c_blk) > 10:
+        if m_blk >= s_blk and m_blk >= c_blk and m_blk > 1:
+            m_blk -= 1
+        elif c_blk >= m_blk and c_blk >= s_blk and c_blk > 1:
+            c_blk -= 1
+        elif s_blk > 1:
+            s_blk -= 1
+        else:
+            break
+
+    while (m_blk + s_blk + c_blk) < 10:
+        if m_val >= c_val and m_val >= s_val:
+            m_blk += 1
+        elif c_val >= m_val and c_val >= s_val:
+            c_blk += 1
+        else:
+            s_blk += 1
+
+    gauge_bar = ("🟦" * m_blk) + ("🟨" * s_blk) + ("🟩" * c_blk)
+    return gauge_bar, main_pct, sub_pct, stock_pct, cash_pct
+
+
 def summarize_stratum_portfolio(
     state_dict: Dict[str, Any],
     live_price: float = 0.0,
     now_est: Optional[datetime] = None,
 ) -> Dict[str, Any]:
     """
-    # MODIFIED [🎯 1 ~ 🎯 5 & Case 59 ~ 88 & 본/서브 최고 도달 회차 단차 잠금 · Default-ON 3층 서브 그리드(4% 정량·0.5회분 보호·최대 4회분 캡) 통합 요약기]:
+    # MODIFIED [🎯 1 ~ 🎯 5 & Case 59 ~ 89 & 본/서브 최고 도달 회차 단차 잠금 · Default-ON 3층 서브 그리드 · 층별 자산 비중(%) · 10칸 유니코드 배분 게이지(🟦🟨🟩) · 현재 사이클 단위 수익 · 전량졸업 예정자산(🎓) 통합 요약기]:
     """
     st = state_dict if isinstance(state_dict, dict) else {}
     dt_now = now_est.astimezone(EST_TZ) if now_est else datetime.now(EST_TZ)
@@ -1458,6 +1513,9 @@ def summarize_stratum_portfolio(
     upper_tier_count = safe_int(wma_info.get("upper_tier_count"), 0)
     upper_qty = safe_int(wma_info.get("upper_qty"), 0)
     upper_lots = safe_int(wma_info.get("upper_lots"), 0)
+    upper_actual_cost_usd = round(
+        safe_float(wma_info.get("upper_actual_cost_usd"), 0.0), 4
+    )
     upper_wma_price = safe_float(wma_info.get("upper_wma_price"), 0.0)
     upper_wma_target_price = safe_float(
         wma_info.get("upper_wma_target_price"), 0.0
@@ -1671,6 +1729,9 @@ def summarize_stratum_portfolio(
     sub_upper_tier_count = safe_int(sub_wma_info.get("upper_tier_count"), 0)
     sub_upper_qty = safe_int(sub_wma_info.get("upper_qty"), 0)
     sub_upper_lots = safe_int(sub_wma_info.get("upper_lots"), 0)
+    sub_upper_actual_cost_usd = round(
+        safe_float(sub_wma_info.get("upper_actual_cost_usd"), 0.0), 4
+    )
     sub_upper_wma_price = safe_float(sub_wma_info.get("upper_wma_price"), 0.0)
     sub_upper_wma_target_price = safe_float(
         sub_wma_info.get("upper_wma_target_price"), 0.0
@@ -1885,6 +1946,112 @@ def summarize_stratum_portfolio(
     total_net_pnl_usd = round(cum_realized + unrealized_pnl_usd, 4)
     total_roi_pct = round((total_net_pnl_usd / init_seed) * 100.0, 2)
 
+    # NEW [시드 배분 10칸 유니코드 블록 게이지(🟦🟨🟩) 및 비중(%) 산출]
+    (
+        allocation_gauge_bar,
+        main_alloc_pct,
+        sub_alloc_pct,
+        stock_alloc_pct,
+        cash_alloc_pct,
+    ) = _build_10block_allocation_gauge(
+        main_and_pocket_cost=actual_invested_buckets + gp_cost,
+        sub_cost=actual_invested_sub,
+        free_cash=free_cash,
+    )
+
+    # NEW [🎓 전량 졸업 시 확정 예정 총자산(projected_graduation_equity_usd) 산출]
+    # 현재 보유 중인 본 그리드(1층 + 상단 2~7층), 서브 그리드(서브 1층 + 서브 2~3층), 독립 골든포켓이
+    # 각각의 목표 익절가에 전량 매도될 때 발생하는 세후 실현수익을 합산하여 졸업 시 확정 예정 총자산을 계산한다.
+    proj_main_l1_net = 0.0
+    if active_l1 and buckets and l1_target_price > 0.0:
+        proj_main_l1_net = calc_sell_realized_pnl(
+            sold_qty=buckets[0].qty,
+            sell_exec_price=l1_target_price,
+            sold_actual_cost_usd=buckets[0].actual_cost_usd,
+            round_trip_fee_rate_pct=eff_rt_fee_pct,
+        )["net_pnl_usd"]
+
+    proj_main_upper_net = 0.0
+    if upper_qty > 0 and upper_wma_target_price > 0.0:
+        proj_main_upper_net = calc_sell_realized_pnl(
+            sold_qty=upper_qty,
+            sell_exec_price=upper_wma_target_price,
+            sold_actual_cost_usd=upper_actual_cost_usd,
+            round_trip_fee_rate_pct=eff_rt_fee_pct,
+        )["net_pnl_usd"]
+
+    proj_sub_l1_net = 0.0
+    if sub_active_l1 and sub_buckets and sub_l1_target_price > 0.0:
+        proj_sub_l1_net = calc_sell_realized_pnl(
+            sold_qty=sub_buckets[0].qty,
+            sell_exec_price=sub_l1_target_price,
+            sold_actual_cost_usd=sub_buckets[0].actual_cost_usd,
+            round_trip_fee_rate_pct=eff_rt_fee_pct,
+        )["net_pnl_usd"]
+
+    proj_sub_upper_net = 0.0
+    if sub_upper_qty > 0 and sub_upper_wma_target_price > 0.0:
+        proj_sub_upper_net = calc_sell_realized_pnl(
+            sold_qty=sub_upper_qty,
+            sell_exec_price=sub_upper_wma_target_price,
+            sold_actual_cost_usd=sub_upper_actual_cost_usd,
+            round_trip_fee_rate_pct=eff_rt_fee_pct,
+        )["net_pnl_usd"]
+
+    proj_gp_net = 0.0
+    if gp.is_active and gp_target_price > 0.0:
+        proj_gp_net = calc_sell_realized_pnl(
+            sold_qty=gp.qty,
+            sell_exec_price=gp_target_price,
+            sold_actual_cost_usd=gp.actual_cost_usd,
+            round_trip_fee_rate_pct=eff_rt_fee_pct,
+        )["net_pnl_usd"]
+
+    projected_graduation_pending_net_usd = round(
+        proj_main_l1_net
+        + proj_main_upper_net
+        + proj_sub_l1_net
+        + proj_sub_upper_net
+        + proj_gp_net,
+        4,
+    )
+    projected_graduation_equity_usd = round(
+        realized_equity_usd + projected_graduation_pending_net_usd, 4
+    )
+    projected_graduation_net_pnl_usd = round(
+        cum_realized + projected_graduation_pending_net_usd, 4
+    )
+    projected_graduation_roi_pct = round(
+        (projected_graduation_net_pnl_usd / init_seed) * 100.0, 2
+    )
+
+    # NEW [현재 진행 사이클 단위 수익 및 완료 사이클 통계 추출]
+    cycle_realized_gross_usd = round(
+        safe_float(st.get("cycle_realized_gross_usd"), 0.0), 4
+    )
+    cycle_realized_fee_usd = round(
+        safe_float(st.get("cycle_realized_fee_usd"), 0.0), 4
+    )
+    cycle_realized_net_usd = round(
+        safe_float(st.get("cycle_realized_net_usd"), 0.0), 4
+    )
+    cycle_sub_realized_net_usd = round(
+        safe_float(st.get("cycle_sub_realized_net_usd"), 0.0), 4
+    )
+    cycle_sell_events = max(0, safe_int(st.get("cycle_sell_events"), 0))
+    cycle_leftover_saved_usd = round(
+        safe_float(st.get("cycle_leftover_saved_usd"), 0.0), 4
+    )
+    last_cycle_realized_net_usd = round(
+        safe_float(st.get("last_cycle_realized_net_usd"), 0.0), 4
+    )
+    last_cycle_sell_events = max(
+        0, safe_int(st.get("last_cycle_sell_events"), 0)
+    )
+    completed_main_cycles = max(
+        0, safe_int(st.get("completed_main_cycles"), 0)
+    )
+
     reanchor_cnt = safe_int(st.get("reanchor_cnt"), 0)
     cum_reanchor_drop = round(
         safe_float(st.get("cumulative_reanchor_drop_usd"), 0.0), 4
@@ -1992,6 +2159,7 @@ def summarize_stratum_portfolio(
         "sub_upper_tier_count": sub_upper_tier_count,
         "sub_upper_qty": sub_upper_qty,
         "sub_upper_lots": sub_upper_lots,
+        "sub_upper_actual_cost_usd": sub_upper_actual_cost_usd,
         "sub_upper_wma_price": sub_upper_wma_price,
         "sub_upper_wma_target_price": sub_upper_wma_target_price,
         "sub_min_indiv_upper_price": sub_min_indiv_upper_price,
@@ -2079,6 +2247,7 @@ def summarize_stratum_portfolio(
         "upper_tier_count": upper_tier_count,
         "upper_qty": upper_qty,
         "upper_lots": upper_lots,
+        "upper_actual_cost_usd": upper_actual_cost_usd,
         "upper_wma_price": upper_wma_price,
         "upper_wma_target_price": upper_wma_target_price,
         "min_indiv_upper_price": min_indiv_upper_price,
@@ -2110,6 +2279,25 @@ def summarize_stratum_portfolio(
         "total_net_pnl_usd": total_net_pnl_usd,
         "total_roi_pct": total_roi_pct,
         "mark_roi_pct": total_roi_pct,
+        # NEW: 시드 배분 게이지 및 비중(%) · 현재 사이클 수익 · 전량졸업 예정자산(🎓) 요약 필드
+        "allocation_gauge_bar": allocation_gauge_bar,
+        "main_alloc_pct": main_alloc_pct,
+        "sub_alloc_pct": sub_alloc_pct,
+        "stock_alloc_pct": stock_alloc_pct,
+        "cash_alloc_pct": cash_alloc_pct,
+        "projected_graduation_pending_net_usd": projected_graduation_pending_net_usd,
+        "projected_graduation_equity_usd": projected_graduation_equity_usd,
+        "projected_graduation_net_pnl_usd": projected_graduation_net_pnl_usd,
+        "projected_graduation_roi_pct": projected_graduation_roi_pct,
+        "cycle_realized_gross_usd": cycle_realized_gross_usd,
+        "cycle_realized_fee_usd": cycle_realized_fee_usd,
+        "cycle_realized_net_usd": cycle_realized_net_usd,
+        "cycle_sub_realized_net_usd": cycle_sub_realized_net_usd,
+        "cycle_sell_events": cycle_sell_events,
+        "cycle_leftover_saved_usd": cycle_leftover_saved_usd,
+        "last_cycle_realized_net_usd": last_cycle_realized_net_usd,
+        "last_cycle_sell_events": last_cycle_sell_events,
+        "completed_main_cycles": completed_main_cycles,
         "drop_buy_pct": drop_buy_pct,
         "rise_sell_l1_pct": rise_l1_pct,
         "rise_sell_l2_pct": rise_l2_pct,
@@ -2169,7 +2357,7 @@ def summarize_stratum_portfolio(
 
 
 # ---------------------------------------------------------------------------
-# [핵심 6] TDD 사전 무결성 자동 검증 슈트 (Case 25 ~ 88 전수 검증)
+# [핵심 6] TDD 사전 무결성 자동 검증 슈트 (Case 25 ~ 89 전수 검증)
 # ---------------------------------------------------------------------------
 def run_quant_engine_tdd() -> bool:
     """
@@ -2184,10 +2372,11 @@ def run_quant_engine_tdd() -> bool:
     🛡️ Case 84: 정규장 마감 30분 전(is_late_new_cycle_cutoff=True, 15:30 ~ 16:00 EST) 구간에서 상단 지층 보유 중 1층 공석 시
     +1.0% 상승돌파(BREAKOUT_RELOAD)를 HOLD_LATE_SESSION_BREAKOUT_CUTOFF 로 원천 차단하고 2층 단가 이하 -1.0% 눌림목(PULLBACK_RELOAD)만 정상 승인,
     정적 기억저가 잠금 및 🔓 06_STEP2X_15PCT_C20 3중 안전문 스텝업 저가 해금(Case 60, 72, 76),
-    💉 05_RESV_6P_GUARD30 30% 자투리 승격 방지 가드 · 토스 계좌 여유자금 감지 자동 수혈 · 0주 졸업 자동 상환(Case 77),
+    💉 05_RESV_6P_GUARD30 30% 자투리 승격 방지 가드 · 토스 계좌 여유자금 감지 자동 수혈(Case 89 포함) · 0주 졸업 자동 상환(Case 77),
     🎯 Case 78 지정가 부분 체결 후 미체결 잔량(TOPUP_1FL / SUB_TOPUP_1FL) 기존 1층 무승격 원자적 합산,
     🌟 Case 80 황금시간대(07:00 ~ 07:50 EST & RSI <= 19.0) 기본값 OFF("NONE") 및 POCKET_ALLIN / GRID_L1_ALLIN 판정 검증,
-    💰 Case 86 계좌별 동적 왕복 수수료율(0.14% vs 0.20%) 및 실측 수수료(actual_sell_fee_usd) 정산 검증을 전수 수행한다.
+    💰 Case 86 계좌별 동적 왕복 수수료율(0.14% vs 0.20%) 및 실측 수수료(actual_sell_fee_usd) 정산 검증,
+    📊 시드 배분 10칸 유니코드 블록 게이지 · 현재 사이클 단위 수익(cycle_realized_net_usd) · 전량졸업 예정자산(projected_graduation_equity_usd) 검증을 전수 수행한다.
     """
     prev_rt = get_runtime_round_trip_fee_rate_pct()
     prev_one = get_runtime_us_commission_rate()
@@ -2236,6 +2425,8 @@ def run_quant_engine_tdd() -> bool:
             and zero_sum["golden_allin_mode"] == "NONE"
             and zero_sum["cycle_ratchet_max_lots"] == 0
             and zero_sum["sub_grid_enabled"] is True
+            and zero_sum["allocation_gauge_bar"] == "🟩" * 10
+            and abs(zero_sum["projected_graduation_equity_usd"] - 10000.0) < 1e-4
         ), f"TDD 실패(Case 67/80/87/88 0주 정량/기본모드 일치): {zero_sum}"
 
         # 2) 4단 와이드 활주로 단차 및 Case 87 최고 도달 회차(cycle_ratchet_max_lots) 잠금 검증
@@ -2453,7 +2644,7 @@ def run_quant_engine_tdd() -> bool:
             and res_grad["hit_wma_grad"]
         ), f"TDD 실패(Case 71/72 2~7층 이동평균 일괄졸업): {res_grad}"
 
-        # 6) Case 60, Case 72, Case 74 & Case 87: 정적 기억 최저가($80.00) 잠금 및 최고 도달 회차(cycle_ratchet_max_lots=9) 단차 잠금 요약 검증
+        # 6) Case 60, Case 72, Case 74 & Case 87: 정적 기억 최저가($80.00) 잠금 · 최고 도달 회차(cycle_ratchet_max_lots=9) 단차 잠금 · 사이클 수익 · 졸업예정자산 요약 검증
         mock_st = {
             "buckets": buckets_to_dicts(reloaded_grid),
             "initial_seed_usd": 10000.0,
@@ -2461,6 +2652,9 @@ def run_quant_engine_tdd() -> bool:
             "cycle_min_buy_price": 80.00,
             "cycle_ratchet_max_lots": 9,
             "cumulative_realized_net_usd": 25.0,
+            "cycle_realized_net_usd": 12.50,
+            "cycle_sell_events": 2,
+            "completed_main_cycles": 5,
             "seed_protect_pass_cnt": 120,
             "daily_seed_protect_pass_cnt": 7,
         }
@@ -2478,7 +2672,13 @@ def run_quant_engine_tdd() -> bool:
             and abs(sum_info["upper_wma_price"] - 87.50) < 1e-4
             and abs(sum_info["l2_ceiling_price"] - 85.00) < 1e-4
             and sum_info["seed_protect_pass_cnt"] == 7
-        ), f"TDD 실패(Case 72/73/74/87): 상단 이동평균 또는 최고도달회차 단차 잠금 요약 오류 {sum_info}"
+            and abs(sum_info["cycle_realized_net_usd"] - 12.50) < 1e-4
+            and sum_info["cycle_sell_events"] == 2
+            and sum_info["completed_main_cycles"] == 5
+            and sum_info["projected_graduation_equity_usd"]
+            > sum_info["realized_equity_usd"]
+            and len(sum_info["allocation_gauge_bar"]) == 10
+        ), f"TDD 실패(Case 72/73/74/87): 상단 이동평균 또는 최고도달회차/졸업예정자산 요약 오류 {sum_info}"
 
         # 7) [Case 76 : 🔓 06_STEP2X_15PCT_C20 3중 안전문 스텝업 저가 해금 검증]
         mock_2022_deadcat = [
@@ -2827,6 +3027,6 @@ def run_quant_engine_tdd() -> bool:
         set_runtime_round_trip_fee_rate_pct(prev_rt, us_commission_rate=prev_one)
 
     logger.info(
-        "✅ [QuantEngine TDD 사전 무결성 검증 통과] 챔피언 👑 06_L2L7_RATCHET_8PCT × 🛡️ 13_SUB_L1L3_RESV05_CAP4L(Default ON) × 🌟 POCKET_ALLIN / 🔥 GRID_L1_ALLIN × 💉 05_RESV_6P_GUARD30 × 🔓 06_STEP2X_15PCT_C20 & 방안 C · Case 84 ~ 88 전수 검증 완료"
+        "✅ [QuantEngine TDD 사전 무결성 검증 통과] 챔피언 👑 06_L2L7_RATCHET_8PCT × 🛡️ 13_SUB_L1L3_RESV05_CAP4L(Default ON) × 🌟 POCKET_ALLIN / 🔥 GRID_L1_ALLIN × 💉 05_RESV_6P_GUARD30 × 🔓 06_STEP2X_15PCT_C20 & 방안 C · 사이클 수익 · 졸업예정자산 · Case 84 ~ 89 전수 검증 완료"
     )
     return True

@@ -8,7 +8,7 @@
 (👑 06_L2L7_RATCHET_8PCT : 구 1층 보존 + 구 2층 + 구 7층 통합 후 평단 오름차순 중간층 재배치 & 사이클 최고 도달 회차 단차 잠금 · Case 87) +
 🛡️ 스위치 없는 100% 기본 상시 적용(Default ON) 3층 서브 그리드
 (13_SUB_L1L3_RESV05_CAP4L : 본 그리드 5일 무매매 시 4.0% 정량 · 0.5회분 보호예수 · 최대 4회분[16%] 상한 캡 · 3층 초과 시 구 1층 + 구 3층 양끝 합병 · 10일/-10% 저가해금 · Case 88) 지층관리 스나이퍼
-텔레그램 관제탑 모바일 가로폭(36자) 칼맞춤 초슬림 UI 렌더러(4버튼 메뉴 단일화 & 제어반 /reset_profit 탑재) · 계좌별 수수료율(편도/왕복) 실시간 표출 · 불사조 롱폴링(Immortal Telegram Polling) 및 명령어·콜백 비동기 컨트롤러 코어 모듈 (Step 10 / 13)
+텔레그램 관제탑 모바일 가로폭(36자) 칼맞춤 초슬림 UI 렌더러(층별 투입자산 $ · 10칸 시드 배분 게이지 🟦🟨🟩 · 현재 사이클 단위 실현수익 vs 전체 누적 수익 · 재고 평가착시 3단 해부 · 전량졸업 예정자산 🎓 탑재) · 계좌별 수수료율(편도/왕복) 실시간 표출 · 불사조 롱폴링(Immortal Telegram Polling) 및 명령어·콜백 비동기 컨트롤러 코어 모듈 (Step 10 / 13)
 """
 
 from __future__ import annotations
@@ -305,9 +305,9 @@ def _format_multi_grid_stratum_lines(
     is_late_cutoff: bool = False,
 ) -> List[str]:
     """
-    # MODIFIED [모바일 36자 가로폭 1줄 칼맞춤 지층 렌더러 · Case 71 ~ 88]:
-    2~7층 통합이평 라인('📦 [2~7층: 219주·6회] $93.93 ➔ 졸업 $94.88 (-14.29%)')을
-    1층 라인과 동일한 가로폭으로 정렬하여 스마트폰에서 줄바꿈이 절대 발생하지 않게 한다.
+    # MODIFIED [📌 ① 모바일 36자 가로폭 1줄 칼맞춤 층별 투입자산($) 시각화 지층 렌더러 · Case 71 ~ 88]:
+    모든 지층(골든포켓 · 1층 공격수 · 2~7층 통합이평 · 2~7층 개별/합병층)에
+    주수뿐만 아니라 실제 투입된 달러 자산 규모($)를 함께 표출하여 층별 자산 분포를 직관적으로 시각화한다.
     """
     held_sh = safe_int(summary.get("held_shares"), 0)
     gp_qty = safe_int(summary.get("golden_pocket_qty"), 0)
@@ -316,12 +316,13 @@ def _format_multi_grid_stratum_lines(
 
     if gp_qty > 0:
         gp_p = safe_float(summary.get("golden_pocket_price"), 0.0)
+        gp_cost = safe_float(summary.get("golden_pocket_cost_usd"), 0.0)
         gp_t = safe_float(summary.get("golden_pocket_target_price"), 0.0)
         gp_g = safe_float(summary.get("golden_pocket_gain_pct"), 0.0)
         gp_sign = "+" if gp_g >= 0.0 else ""
         lines.append(
-            f"🌟 <b>[포켓: {gp_qty}주]</b> <b>${gp_p:.2f}</b> ➔ "
-            f"익절 <b>${gp_t:.2f}</b> ({gp_sign}{gp_g:.2f}%)"
+            f"🌟 <b>[포켓: {gp_qty}주·${gp_cost:,.0f}]</b> <b>${gp_p:.2f}</b> ➔ "
+            f"<b>${gp_t:.2f}</b> ({gp_sign}{gp_g:.2f}%)"
         )
 
     if held_sh <= 0 or not buckets:
@@ -331,7 +332,7 @@ def _format_multi_grid_stratum_lines(
             )
         elif is_late_cutoff:
             lines.append(
-                "⚪ <b>[본그리드: 0주]</b> 🔒15:30~16:00 신규진입 차단"
+                "⚪ <b>[본그리드: 0주]</b> 🔒15:30 ~ 16:00 신규진입 차단"
             )
         else:
             lines.append(
@@ -360,8 +361,8 @@ def _format_multi_grid_stratum_lines(
             "·🔒" if (is_ext_sell_only and has_upper_tiers) else ""
         )
         lines.append(
-            f"⚡ <b>[1층: {l1_qty_label}]</b> 단가 <b>${b1.book_price:.2f}</b> ➔ "
-            f"익절 <b>${l1_t:.2f}</b> ({g1_sign}{l1_g:.2f}%{l1_ov_lock_note})"
+            f"⚡ <b>[1층: {l1_qty_label}·${b1.actual_cost_usd:,.0f}]</b> "
+            f"<b>${b1.book_price:.2f}</b> ➔ <b>${l1_t:.2f}</b> ({g1_sign}{l1_g:.2f}%{l1_ov_lock_note})"
         )
     else:
         l2_cap = safe_float(
@@ -387,8 +388,9 @@ def _format_multi_grid_stratum_lines(
         u_qty = safe_int(
             summary.get("upper_qty"), sum(b.qty for b in upper_buckets)
         )
-        u_lots = safe_int(
-            summary.get("upper_lots"), sum(b.lot_count for b in upper_buckets)
+        u_cost = safe_float(
+            summary.get("upper_actual_cost_usd"),
+            sum(b.actual_cost_usd for b in upper_buckets),
         )
         u_wma_p = safe_float(summary.get("upper_wma_price"), 0.0)
         u_wma_t = safe_float(summary.get("upper_wma_target_price"), 0.0)
@@ -396,7 +398,7 @@ def _format_multi_grid_stratum_lines(
         ug_sign = "+" if u_gain >= 0.0 else ""
         tier_range_label = "2층" if u_cnt == 1 else f"2~{u_cnt + 1}층"
         lines.append(
-            f"📦 <b>[{tier_range_label}: {u_qty}주·{u_lots}회]</b> "
+            f"📦 <b>[{tier_range_label}: {u_qty}주·${u_cost:,.0f}]</b> "
             f"<b>${u_wma_p:.2f}</b> ➔ 졸업 <b>${u_wma_t:.2f}</b> ({ug_sign}{u_gain:.2f}%)"
         )
 
@@ -417,12 +419,14 @@ def _format_multi_grid_stratum_lines(
             )
             bg_s = "+" if bu_g >= 0.0 else ""
             if bu.lot_count > 1:
-                tier_tag = f"{t_no}층(👑{bu.lot_count}회)"
+                tier_tag = (
+                    f"{t_no}층(👑{bu.lot_count}회·${bu.actual_cost_usd:,.0f})"
+                )
             else:
-                tier_tag = f"{t_no}층"
+                tier_tag = f"{t_no}층({bu.qty}주·${bu.actual_cost_usd:,.0f})"
             lines.append(
-                f"  ▫️ <b>{tier_tag}</b>: {bu.qty}주 @ ${bu.book_price:.2f} "
-                f"➔ 익절 <b>${bu_t:.2f}</b> ({bg_s}{bu_g:.2f}%{indiv_ov_lock_note})"
+                f"  ▫️ <b>{tier_tag}</b>: ${bu.book_price:.2f} "
+                f"➔ <b>${bu_t:.2f}</b> ({bg_s}{bu_g:.2f}%{indiv_ov_lock_note})"
             )
 
     return lines
@@ -435,10 +439,11 @@ def _format_sub_grid_stratum_lines(
     is_late_cutoff: bool = False,
 ) -> List[str]:
     """
-    # MODIFIED [Case 88 : 3층 서브그리드 36자 가로폭 1줄 칼맞춤 렌더러]:
+    # MODIFIED [📌 ① & Case 88 : 3층 서브그리드 층별 투입자산($) 및 36자 가로폭 1줄 칼맞춤 렌더러]:
     """
     held_sh_main = safe_int(summary.get("held_shares"), 0)
     sub_sh = safe_int(summary.get("sub_held_shares"), 0)
+    sub_inv_usd = safe_float(summary.get("actual_invested_sub_usd"), 0.0)
     sub_buckets = summary.get("sub_buckets", [])
     sub_lots = safe_int(summary.get("sub_held_lots"), 0)
     sub_ratchet_lots = safe_int(
@@ -474,14 +479,14 @@ def _format_sub_grid_stratum_lines(
             )
         return lines
 
-    cap_badge = "·🔒4회캡" if sub_lots >= sub_max_lots else ""
+    cap_badge = "·🔒캡" if sub_lots >= sub_max_lots else ""
     lot_str = (
         f"{sub_lots}/{sub_ratchet_lots}회{cap_badge}"
         if sub_ratchet_lots > sub_lots
         else f"{sub_lots}/{sub_max_lots}회{cap_badge}"
     )
     lines.append(
-        f"🛡️ <b>[서브그리드: 총 {sub_sh}주]</b> ({sub_tiers}층 · {lot_str})"
+        f"🛡️ <b>[서브그리드: 총 {sub_sh}주·${sub_inv_usd:,.0f}]</b> ({sub_tiers}층 · {lot_str})"
     )
 
     sub_active_l1 = bool(summary.get("has_sub_active_l1", True))
@@ -504,8 +509,8 @@ def _format_sub_grid_stratum_lines(
             "·🔒" if (is_ext_sell_only and has_sub_uppers) else ""
         )
         lines.append(
-            f"  ⚡ <b>[서브1층: {sl1_label}]</b> 단가 <b>${sb1.book_price:.2f}</b> ➔ "
-            f"익절 <b>${sl1_t:.2f}</b> ({sg1_s}{sl1_g:.2f}%{sl1_ov_note})"
+            f"  ⚡ <b>[서브1층: {sl1_label}·${sb1.actual_cost_usd:,.0f}]</b> "
+            f"<b>${sb1.book_price:.2f}</b> ➔ <b>${sl1_t:.2f}</b> ({sg1_s}{sl1_g:.2f}%{sl1_ov_note})"
         )
     else:
         sub_l2_cap = safe_float(
@@ -531,9 +536,9 @@ def _format_sub_grid_stratum_lines(
         su_qty = safe_int(
             summary.get("sub_upper_qty"), sum(sb.qty for sb in sub_upper_buckets)
         )
-        su_lots = safe_int(
-            summary.get("sub_upper_lots"),
-            sum(sb.lot_count for sb in sub_upper_buckets),
+        su_cost = safe_float(
+            summary.get("sub_upper_actual_cost_usd"),
+            sum(sb.actual_cost_usd for sb in sub_upper_buckets),
         )
         su_wma_p = safe_float(summary.get("sub_upper_wma_price"), 0.0)
         su_wma_t = safe_float(summary.get("sub_upper_wma_target_price"), 0.0)
@@ -541,7 +546,7 @@ def _format_sub_grid_stratum_lines(
         sug_s = "+" if su_gain >= 0.0 else ""
         s_range_lbl = "서브2층" if su_cnt == 1 else f"서브2~{su_cnt + 1}층"
         lines.append(
-            f"  📦 <b>[{s_range_lbl}: {su_qty}주·{su_lots}회]</b> "
+            f"  📦 <b>[{s_range_lbl}: {su_qty}주·${su_cost:,.0f}]</b> "
             f"<b>${su_wma_p:.2f}</b> ➔ 졸업 <b>${su_wma_t:.2f}</b> ({sug_s}{su_gain:.2f}%)"
         )
 
@@ -562,12 +567,16 @@ def _format_sub_grid_stratum_lines(
             )
             sbg_s = "+" if sbu_g >= 0.0 else ""
             if sbu.lot_count > 1:
-                stier_tag = f"서브{st_no}층(🔄{sbu.lot_count}회)"
+                stier_tag = (
+                    f"서브{st_no}층(🔄{sbu.lot_count}회·${sbu.actual_cost_usd:,.0f})"
+                )
             else:
-                stier_tag = f"서브{st_no}층"
+                stier_tag = (
+                    f"서브{st_no}층({sbu.qty}주·${sbu.actual_cost_usd:,.0f})"
+                )
             lines.append(
-                f"    ▫️ <b>{stier_tag}</b>: {sbu.qty}주 @ ${sbu.book_price:.2f} "
-                f"➔ 익절 <b>${sbu_t:.2f}</b> ({sbg_s}{sbu_g:.2f}%{s_indiv_ov_note})"
+                f"    ▫️ <b>{stier_tag}</b>: ${sbu.book_price:.2f} "
+                f"➔ <b>${sbu_t:.2f}</b> ({sbg_s}{sbu_g:.2f}%{s_indiv_ov_note})"
             )
 
     return lines
@@ -581,9 +590,7 @@ def build_avwap_radar_message(
     now_est: Optional[datetime] = None,
 ) -> str:
     """
-    # MODIFIED [모바일 36자 가로폭 1줄 칼맞춤 스나이퍼 레이더 (/avwap) · Case 65, Case 70 ~ 88]:
-    모든 라인을 36자 이내로 정렬하고, 추매 조건과 현재 위치를 의도적 2줄로 분리하여
-    스마트폰 화면에서 비정상 줄바꿈이 단 한 줄도 발생하지 않게 한다.
+    # MODIFIED [📌 ① 모바일 36자 가로폭 1줄 칼맞춤 스나이퍼 레이더 (/avwap) · 층별 자산($)·10칸 배분 게이지(🟦🟨🟩)·이번사이클 수익·전량졸업 예정자산(🎓) 탑재 · Case 65, Case 70 ~ 89]:
     """
     dt_now = now_est.astimezone(EST_TZ) if now_est else datetime.now(EST_TZ)
     hm_now = dt_now.hour * 100 + dt_now.minute
@@ -624,7 +631,6 @@ def build_avwap_radar_message(
     eff_lots = safe_int(
         summary.get("eff_lots"), max(1, held_lots, ratchet_lots)
     )
-    held_tiers = safe_int(summary.get("held_tiers"), 0)
     upper_tier_cnt = safe_int(summary.get("upper_tier_count"), 0)
     sub_upper_tier_cnt = safe_int(summary.get("sub_upper_tier_count"), 0)
     upper_wma_t = safe_float(summary.get("upper_wma_target_price"), 0.0)
@@ -636,6 +642,13 @@ def build_avwap_radar_message(
         summary.get("golden_allin_mode") or DEFAULT_GOLDEN_ALLIN_MODE
     ).upper()
     g_mode_short = _format_short_golden_mode(g_mode)
+
+    actual_inv = safe_float(summary.get("actual_invested_usd"), 0.0)
+    gauge_bar = str(summary.get("allocation_gauge_bar") or ("🟩" * 10))
+    main_alloc_pct = safe_float(summary.get("main_alloc_pct"), 0.0)
+    sub_alloc_pct = safe_float(summary.get("sub_alloc_pct"), 0.0)
+    stock_alloc_pct = safe_float(summary.get("stock_alloc_pct"), 0.0)
+    cash_alloc_pct = safe_float(summary.get("cash_alloc_pct"), 100.0)
 
     in_buy_shield, rem_buy_sec = is_within_post_buy_time_shield(
         context, st, TARGET_SYMBOL
@@ -678,7 +691,7 @@ def build_avwap_radar_message(
             )
     elif held_sh <= 0 and is_late_cutoff:
         shield_line = (
-            "🛡️ <b>[15:30~16:00 신규차단]</b> 익일 04:07 첫 1층 진입 대기"
+            "🛡️ <b>[15:30 ~ 16:00 신규차단]</b> 익일 04:07 첫 1층 진입 대기"
         )
     elif in_golden_win and g_mode != "NONE":
         shield_line = (
@@ -726,7 +739,7 @@ def build_avwap_radar_message(
         gate_header_line = "🎯 <b>[다음 매수 타점 · 0주 첫 진입]</b>"
         if is_late_cutoff:
             gate_cond_lines.append(
-                "▫️ 15:30~16:00 고점방어 (익일 04:07 진입)"
+                "▫️ 15:30 ~ 16:00 고점방어 (익일 04:07 진입)"
             )
         else:
             gate_cond_lines.append(
@@ -794,23 +807,59 @@ def build_avwap_radar_message(
 
     if g_mode != "NONE":
         gate_cond_lines.append(
-            f"▫️ 황금시간(07:00~07:50): <b>{escape_html(g_mode_short)}</b>"
+            f"▫️ 황금시간(07:00 ~ 07:50): <b>{escape_html(g_mode_short)}</b>"
         )
 
+    cyc_net = safe_float(summary.get("cycle_realized_net_usd"), 0.0)
+    cyc_ev = safe_int(summary.get("cycle_sell_events"), 0)
+    last_cyc_net = safe_float(summary.get("last_cycle_realized_net_usd"), 0.0)
+    comp_cycles = safe_int(summary.get("completed_main_cycles"), 0)
+
     cum_net = safe_float(summary.get("cumulative_realized_net_usd"), 0.0)
+    real_roi = safe_float(summary.get("realized_roi_pct"), 0.0)
     free_cash = safe_float(summary.get("free_cash_usd"), 0.0)
     mark_eq = safe_float(summary.get("mark_equity_usd"), 0.0)
     mark_roi = safe_float(summary.get("mark_roi_pct"), 0.0)
+    proj_grad_eq = safe_float(
+        summary.get("projected_graduation_equity_usd"), mark_eq
+    )
+    proj_grad_roi = safe_float(
+        summary.get("projected_graduation_roi_pct"), real_roi
+    )
+
+    cyc_sign = "+" if cyc_net >= 0.0 else "-"
+    last_c_sign = "+" if last_cyc_net >= 0.0 else "-"
     n_sign = "+" if cum_net >= 0.0 else "-"
     m_sign = "+" if mark_roi >= 0.0 else ""
+    pg_sign = "+" if proj_grad_roi >= 0.0 else ""
 
-    sub_header_note = f"+서브{sub_sh}주" if sub_sh > 0 else ""
-    gp_header_note = f"+포켓{gp_qty}주" if gp_qty > 0 else ""
-    lot_header_str = (
-        f"{held_lots}/{ratchet_lots}회"
-        if ratchet_lots > held_lots
-        else f"{held_lots}회차"
-    )
+    if total_held_sh > 0:
+        stratum_header = (
+            f"🏛️ <b>[보유 지층 : 총 {total_held_sh}주]</b> "
+            f"(${actual_inv:,.0f} · 비중 {stock_alloc_pct:.0f}%)"
+        )
+        if sub_sh > 0:
+            gauge_line = (
+                f"{gauge_bar} (본{main_alloc_pct:.0f}%·서브{sub_alloc_pct:.0f}%·현금{cash_alloc_pct:.0f}%)"
+            )
+        else:
+            gauge_line = (
+                f"{gauge_bar} (주식{stock_alloc_pct:.0f}%·현금{cash_alloc_pct:.0f}%)"
+            )
+    else:
+        stratum_header = "🏛️ <b>[보유 지층 : 총 0주]</b> ($0 · 현금 100%)"
+        gauge_line = f"{gauge_bar} (현금 100%)"
+
+    if total_held_sh > 0 or cyc_ev > 0 or abs(cyc_net) > 1e-6:
+        cycle_profit_line = (
+            f"🔄 이번사이클 수익: <b>{cyc_sign}${abs(cyc_net):,.2f}</b> "
+            f"(익절 {cyc_ev}회 · 진행중)"
+        )
+    else:
+        cycle_profit_line = (
+            f"🔄 이번사이클 수익: <b>$0.00</b> "
+            f"(직전졸업 {last_c_sign}${abs(last_cyc_net):,.2f} · 대기중)"
+        )
 
     lines = [
         f"📡 <b>[스나이퍼 레이더]</b> ({active_badge} · {mode_badge})",
@@ -822,7 +871,8 @@ def build_avwap_radar_message(
     lines.extend(
         [
             "──────────────",
-            f"🏛️ <b>[보유 지층 : 총 {total_held_sh}주]</b> (본 {held_sh}주[{held_tiers}층·{lot_header_str}]{sub_header_note}{gp_header_note})",
+            stratum_header,
+            gauge_line,
             *stratum_lines,
             *sub_stratum_lines,
             "──────────────",
@@ -837,8 +887,10 @@ def build_avwap_radar_message(
         )
     lines.extend(
         [
-            f"💵 가용현금: <b>${free_cash:,.2f}</b> · 세후실현익: <b>{n_sign}${abs(cum_net):,.2f}</b>",
-            f"💼 평가총자산: <b>${mark_eq:,.2f}</b> ({m_sign}{mark_roi:.2f}%)",
+            cycle_profit_line,
+            f"💰 전체누적 실현익: <b>{n_sign}${abs(cum_net):,.2f}</b> (졸업 {comp_cycles}회 · {n_sign}{abs(real_roi):.1f}%)",
+            f"💵 가용현금: <b>${free_cash:,.2f}</b> · 현재평가: <b>${mark_eq:,.0f}</b> ({m_sign}{mark_roi:.1f}%)",
+            f"🎓 전량졸업예정: <b>${proj_grad_eq:,.2f}</b> ({pg_sign}{proj_grad_roi:.2f}% 확정예정)",
             f"🕒 {dt_now.strftime('%m-%d %H:%M:%S EST')}",
         ]
     )
@@ -855,7 +907,7 @@ def build_sync_instruction_message(
     context: Optional[Any] = None,
 ) -> str:
     """
-    # MODIFIED [모바일 36자 가로폭 1줄 칼맞춤 잔고 동기화 (/sync) 보드 · Case 77, 78, 80, 86, 87, 88]:
+    # MODIFIED [📌 ② 모바일 36자 가로폭 1줄 칼맞춤 잔고 동기화 (/sync) 보드 · 시드 배분 게이지(🟦🟨🟩) · 현재 사이클 vs 전체 누적 수익 · 재고 평가착시 3단 해부 · 전량졸업 예정자산(🎓) 탑재 · Case 77, 78, 80, 86, 87, 88]:
     """
     dt_now = now_est.astimezone(EST_TZ) if now_est else datetime.now(EST_TZ)
     h_info = (holdings or {}).get(TARGET_SYMBOL, {})
@@ -870,34 +922,44 @@ def build_sync_instruction_message(
     init_seed = safe_float(summary.get("initial_seed_usd"), 10000.0)
     cum_net = safe_float(summary.get("cumulative_realized_net_usd"), 0.0)
     real_roi = safe_float(summary.get("realized_roi_pct"), 0.0)
+    real_eq = safe_float(summary.get("realized_equity_usd"), init_seed + cum_net)
+    unreal_pnl = safe_float(summary.get("unrealized_pnl_usd"), 0.0)
     mark_eq = safe_float(summary.get("mark_equity_usd"), 0.0)
     mark_roi = safe_float(summary.get("mark_roi_pct"), 0.0)
+    proj_grad_eq = safe_float(
+        summary.get("projected_graduation_equity_usd"), real_eq
+    )
+    proj_grad_roi = safe_float(
+        summary.get("projected_graduation_roi_pct"), real_roi
+    )
+
     free_cash = safe_float(summary.get("free_cash_usd"), 0.0)
     avail_idle = safe_float(summary.get("avail_idle_cash_usd"), 0.0)
-    actual_inv = safe_float(summary.get("actual_invested_usd"), 0.0)
+    inv_main = safe_float(summary.get("actual_invested_buckets_usd"), 0.0)
+    inv_sub = safe_float(summary.get("actual_invested_sub_usd"), 0.0)
+    inv_gp = safe_float(summary.get("golden_pocket_cost_usd"), 0.0)
+    inv_main_and_gp = round(inv_main + inv_gp, 4)
+
+    gauge_bar = str(summary.get("allocation_gauge_bar") or ("🟩" * 10))
+    main_alloc_pct = safe_float(summary.get("main_alloc_pct"), 0.0)
+    sub_alloc_pct = safe_float(summary.get("sub_alloc_pct"), 0.0)
+    stock_alloc_pct = safe_float(summary.get("stock_alloc_pct"), 0.0)
+    cash_alloc_pct = safe_float(summary.get("cash_alloc_pct"), 100.0)
+
+    cyc_net = safe_float(summary.get("cycle_realized_net_usd"), 0.0)
+    cyc_sub_net = safe_float(summary.get("cycle_sub_realized_net_usd"), 0.0)
+    cyc_ev = safe_int(summary.get("cycle_sell_events"), 0)
+    last_cyc_net = safe_float(summary.get("last_cycle_realized_net_usd"), 0.0)
+    comp_cycles = safe_int(summary.get("completed_main_cycles"), 0)
+
     us_comm_pct = safe_float(summary.get("us_commission_rate"), 0.0007) * 100.0
     rt_fee_pct = safe_float(summary.get("round_trip_fee_rate_pct"), 0.14)
 
     held_sh = safe_int(summary.get("held_shares"), 0)
     sub_sh = safe_int(summary.get("sub_held_shares"), 0)
-    sub_lots = safe_int(summary.get("sub_held_lots"), 0)
-    sub_max_lots = safe_int(
-        summary.get("sub_max_total_lots"), SUB_MAX_TOTAL_LOTS_4
-    )
-    sub_comp = safe_int(summary.get("sub_completed_cycles"), 0)
-    main_frozen = safe_int(summary.get("main_consec_frozen_days"), 0)
+    sub_tiers = safe_int(summary.get("sub_held_tiers"), 0)
     gp_qty = safe_int(summary.get("golden_pocket_qty"), 0)
-    total_held_sh = safe_int(
-        summary.get("total_held_shares"), held_sh + sub_sh + gp_qty
-    )
     held_tiers = safe_int(summary.get("held_tiers"), 0)
-    held_lots = safe_int(summary.get("held_lots"), 0)
-    ratchet_lots = safe_int(
-        summary.get("cycle_ratchet_max_lots"), held_lots
-    )
-    actual_avg = safe_float(summary.get("actual_avg_price"), 0.0)
-    upper_wma = safe_float(summary.get("upper_wma_price"), 0.0)
-    locked_min_p = safe_float(summary.get("cycle_min_buy_price"), 0.0)
 
     used_res_cnt = safe_int(summary.get("used_reserve_portions_cnt"), 0)
     max_res_cnt = safe_int(
@@ -906,36 +968,57 @@ def build_sync_instruction_message(
     inj_res_usd = safe_float(summary.get("injected_reserve_usd"), 0.0)
     unalloc_dep_usd = max(0.0, safe_float(broker_bp_usd, 0.0) - free_cash)
 
-    sub_sync_note = f"+서브{sub_sh}주" if sub_sh > 0 else ""
-    gp_sync_note = f"+포켓{gp_qty}주" if gp_qty > 0 else ""
-    lot_sync_str = (
-        f"{held_lots}/{ratchet_lots}회"
-        if ratchet_lots > held_lots
-        else f"{held_lots}회차"
-    )
+    cyc_sign = "+" if cyc_net >= 0.0 else "-"
+    cyc_sub_sign = "+" if cyc_sub_net >= 0.0 else "-"
+    last_c_sign = "+" if last_cyc_net >= 0.0 else "-"
     n_sign = "+" if cum_net >= 0.0 else "-"
+    u_sign = "+" if unreal_pnl >= 0.0 else "-"
     m_sign = "+" if mark_roi >= 0.0 else ""
+    pg_sign = "+" if proj_grad_roi >= 0.0 else ""
+
+    gp_label_note = f"+포켓 {gp_qty}주" if gp_qty > 0 else ""
+    if mark_roi < 0.0:
+        anatomy_header = (
+            f"💰 <b>[왜 평가자산이 {m_sign}{mark_roi:.1f}%인가? (재고해부)]</b>"
+        )
+        anatomy_tip_1 = "💡 현재 마이너스는 보유주식의 일시 평가감이며"
+        anatomy_tip_2 = (
+            f"   반등 졸업시 <b>${proj_grad_eq:,.0f}({pg_sign}{proj_grad_roi:.2f}%)</b>로 수익 확정!"
+        )
+    else:
+        anatomy_header = "💰 <b>[현재 자산 및 재고 평가 3단 해부]</b>"
+        anatomy_tip_1 = "💡 확정 원리금에 보유주식 수익이 더해진 상태이며"
+        anatomy_tip_2 = (
+            f"   전량 졸업시 <b>${proj_grad_eq:,.0f}({pg_sign}{proj_grad_roi:.2f}%)</b>로 수익 확정!"
+        )
 
     lines = [
         "🔄 <b>[잔고 동기화 · 내 계좌 현황]</b>",
         "──────────────",
-        "💰 <b>[자산 및 수익 요약]</b>",
+        "📊 <b>[시드 배분 및 층별 자산 시각화]</b>",
+        f"{gauge_bar} (주식 {stock_alloc_pct:.0f}% : 현금 {cash_alloc_pct:.0f}%)",
+        f"▫️ 🟦본그리드: <b>${inv_main_and_gp:,.0f}</b> ({main_alloc_pct:.0f}% · {held_tiers}개층 {held_sh}주{gp_label_note})",
+        f"▫️ 🟨서브그리드: <b>${inv_sub:,.0f}</b> ({sub_alloc_pct:.0f}% · {sub_tiers}개층 {sub_sh}주)",
+        f"▫️ 🟩가용현금: <b>${free_cash:,.0f}</b> ({cash_alloc_pct:.0f}% · 서브가용 ${avail_idle:,.0f})",
+        "──────────────",
+        "🔄 <b>[현재 사이클 vs 전체 누적 수익]</b>",
         f"▫️ 설정 기준시드: <b>${init_seed:,.2f}</b>",
-        f"▫️ 누적 실현수익: <b>{n_sign}${abs(cum_net):,.2f}</b> ({n_sign}{abs(real_roi):.2f}%)",
-        f"▫️ 현재 평가자산: <b>${mark_eq:,.2f}</b> ({m_sign}{mark_roi:.2f}%)",
+        f"▫️ 이번사이클익: <b>{cyc_sign}${abs(cyc_net):,.2f}</b> ({cyc_ev}회 익절 · 서브 {cyc_sub_sign}${abs(cyc_sub_net):,.2f})",
+        f"▫️ 직전졸업수익: <b>{last_c_sign}${abs(last_cyc_net):,.2f}</b> (총 {comp_cycles}회 사이클 졸업)",
+        f"▫️ 전체누적수익: <b>{n_sign}${abs(cum_net):,.2f}</b> ({n_sign}{abs(real_roi):.2f}% 현금확정!)",
         "──────────────",
-        "🏦 <b>[현금 및 예비시드 현황]</b>",
-        f"▫️ 봇 가용현금: <b>${free_cash:,.2f}</b> (서브가용 ${avail_idle:,.2f})",
-        f"▫️ 토스 주문가능: <b>${broker_bp_usd:,.2f}</b> (여력 +${unalloc_dep_usd:,.2f})",
+        anatomy_header,
+        f"▫️ 확정 원리금계: <b>${real_eq:,.2f}</b> (시드 + 전체누적익)",
+        f"▫️ 일시 재고평가: <b>{u_sign}${abs(unreal_pnl):,.2f}</b> (보유주식 일시평가)",
+        f"▫️ 현재 평가자산: <b>${mark_eq:,.2f}</b> ({m_sign}{mark_roi:.2f}% · 재고반영)",
+        f"🎓 전량졸업 예정: <b>${proj_grad_eq:,.2f}</b> ({pg_sign}{proj_grad_roi:.2f}% 확정예정!)",
+        anatomy_tip_1,
+        anatomy_tip_2,
+        "──────────────",
+        "🏦 <b>[예비시드 및 수수료 현황]</b>",
+        f"▫️ 토스 주문가능: <b>${broker_bp_usd:,.2f}</b> (미할당 +${unalloc_dep_usd:,.2f})",
         f"▫️ 예비시드 탄창: <b>{used_res_cnt}/{max_res_cnt}회분</b> 사용 (${inj_res_usd:,.2f})",
-        "──────────────",
-        "📦 <b>[보유 주식 요약]</b>",
-        f"▫️ 총 보유수량: <b>{total_held_sh}주</b> (본 {held_sh}주[{held_tiers}층·{lot_sync_str}]{sub_sync_note}{gp_sync_note})",
-        f"▫️ 총 매수원금: <b>${actual_inv:,.2f}</b> (전체평단 <b>${actual_avg:.2f}</b>)",
-        f"▫️ 상단/기억저가: 2~7층이평 <b>${upper_wma:.2f}</b> · 저가 ${locked_min_p:.2f}",
-        f"▫️ 서브그리드: <b>{sub_sh}주</b> ({sub_lots}/{sub_max_lots}회 · 동결 {main_frozen}/{SUB_FROZEN_DAYS_TRIGGER}일 · 졸업 {sub_comp}회)",
         f"▫️ 적용 수수료: 편도 {us_comm_pct:.3g}% / 왕복 <b>{rt_fee_pct:.2f}%</b>",
-        "──────────────",
         f"🕒 동기화: {dt_now.strftime('%m-%d %H:%M:%S EST')}",
     ]
     return "\n".join(lines)
@@ -958,6 +1041,9 @@ def build_settlement_control_message(
     power_str = "🟢 가동 중 (ON)" if is_active else "🔴 일시정지 (OFF)"
     init_seed = safe_float(summary.get("initial_seed_usd"), 10000.0)
     real_eq = safe_float(summary.get("realized_equity_usd"), init_seed)
+    cyc_net = safe_float(summary.get("cycle_realized_net_usd"), 0.0)
+    cyc_ev = safe_int(summary.get("cycle_sell_events"), 0)
+    comp_cycles = safe_int(summary.get("completed_main_cycles"), 0)
     rt_fee_pct = safe_float(summary.get("round_trip_fee_rate_pct"), 0.14)
     next_bud = safe_float(
         summary.get("next_portion_budget"), init_seed * 0.08
@@ -997,16 +1083,18 @@ def build_settlement_control_message(
         if ratchet_lots > held_lots
         else f"{held_lots}회"
     )
+    cyc_sign = "+" if cyc_net >= 0.0 else "-"
 
     lines = [
         "⚙️ <b>[전술 제어반]</b>",
         "──────────────",
         f"1️⃣ 스나이퍼 전원: <b>{power_str}</b> (수수료 {rt_fee_pct:.2f}%)",
-        f"2️⃣ 기준 시드: <b>${init_seed:,.2f}</b> (총자산 ${real_eq:,.2f})",
+        f"2️⃣ 기준 시드: <b>${init_seed:,.2f}</b> (확정자산 ${real_eq:,.2f})",
+        f"   ▫️ 이번사이클익: <b>{cyc_sign}${abs(cyc_net):,.2f}</b> ({cyc_ev}회 익절 · 졸업 {comp_cycles}회)",
         f"   ▫️ 1회 정량: 본 ${next_bud:,.0f}({quota_badge_str}) · 서브 ${sub_bud:,.0f}({sub_quota_badge})",
         f"3️⃣ 보유/탄창: 본 <b>{held_sh}주</b>({held_tiers}층·{lot_ctrl_str}) · 예비 <b>{used_res_cnt}/{max_res_cnt}회</b>(${inj_res_usd:,.0f})",
         f"   ▫️ 서브(상시): <b>{sub_sh}주</b>({sub_lots}/{sub_max_lots}회) · 동결 {main_frozen}/{SUB_FROZEN_DAYS_TRIGGER}일 · 졸업 {sub_comp}회",
-        f"4️⃣ 황금시간(07:00~07:50·RSI≤19): <b>{escape_html(g_mode_short)}</b>",
+        f"4️⃣ 황금시간(07:00 ~ 07:50·RSI≤19): <b>{escape_html(g_mode_short)}</b>",
         "──────────────",
         "🧹 /reset_profit : 수익 0점 초기화 (주식·시드 보존)",
         "💡 아래 버튼으로 전원 · 황금시간 · 시드를 설정하세요.",
@@ -1014,7 +1102,7 @@ def build_settlement_control_message(
     ]
     return "\n".join(lines)
 # ---------------------------------------------------------------------------
-# [핵심 2] 텔레그램 명령어 및 콜백 비동기 컨트롤러 (TelegramCommandController — Case 81 불사조 폴링 & Case 88 서브그리드 탑재)
+# [핵심 2] 텔레그램 명령어 및 콜백 비동기 컨트롤러 (TelegramCommandController — Case 81 불사조 폴링 & Case 88 서브그리드 & 사이클 수익 연동 탑재)
 # ---------------------------------------------------------------------------
 class TelegramCommandController:
     """
@@ -1576,7 +1664,8 @@ class TelegramCommandController:
         보유 중인 본 그리드 지층(buckets · cycle_ratchet_max_lots 포함), Default-ON 3층 서브 그리드(sub_buckets · sub_ratchet_max_lots 포함) 및
         독립 골든포켓(golden_pocket), 당일 무매매 동결 판정용 매매 횟수(daily_main_buy_cnt, daily_main_sell_cnt, daily_sub_buy_cnt, daily_sub_sell_cnt),
         설정된 기준 시드머니(initial_seed_usd), 계좌별 수수료율(us_commission_rate, round_trip_fee_rate_pct)은 100% 보존하고,
-        오직 누적/당일 세후 실현수익금 및 자투리 절약금·스텝업 해금 횟수·서브 그리드 누적 통계·황금시간 매매 통계·예비시드 통계·입금 알림 래치만
+        오직 누적/당일 세후 실현수익금, 사이클 단위 수익금(cycle_realized_net_usd 등), 자투리 절약금·스텝업 해금 횟수·
+        서브 그리드 누적 통계·황금시간 매매 통계·예비시드 통계·입금 알림 래치만
         0점으로 초기화하여 설정된 기준 시드머니의 8%(서브 4%) 정량 투입으로 복귀시킨다.
         """
         mark_reserve_deposit_check_shield(
@@ -1594,6 +1683,15 @@ class TelegramCommandController:
             "cumulative_realized_fee_usd": 0.0,
             "cumulative_realized_net_usd": 0.0,
             "daily_realized_net_usd": 0.0,
+            "cycle_realized_gross_usd": 0.0,
+            "cycle_realized_fee_usd": 0.0,
+            "cycle_realized_net_usd": 0.0,
+            "cycle_sub_realized_net_usd": 0.0,
+            "cycle_sell_events": 0,
+            "cycle_leftover_saved_usd": 0.0,
+            "last_cycle_realized_net_usd": 0.0,
+            "last_cycle_sell_events": 0,
+            "completed_main_cycles": 0,
             "cumulative_leftover_saved_usd": 0.0,
             "daily_leftover_saved_usd": 0.0,
             "seed_protect_pass_cnt": 0,
@@ -1698,7 +1796,7 @@ class TelegramCommandController:
             chat_id=chat_id,
             text=(
                 "🧹 <b>[실현수익 0점 초기화 완료]</b>\n"
-                "▫️ 누적 실현수익: <b>$0.00</b>\n"
+                "▫️ 이번사이클 / 누적 실현익: <b>$0.00</b>\n"
                 f"▫️ 복귀 기준시드: <b>${init_seed:,.2f}</b>\n"
                 f"▫️ 현재 가용현금: <b>${free_cash:,.2f}</b>\n"
                 f"▫️ 차기 1회(8%): <b>${next_bud:,.0f}</b> ({quota_badge_str})\n"

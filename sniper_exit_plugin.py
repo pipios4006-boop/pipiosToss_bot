@@ -10,6 +10,10 @@
 2층 ~ 7층(서브 2층 ~ 3층) 순수 이동평균(1층 매수 가격 100% 배제) 대비 +1.00% 목표가 도달 시에는
 1층 매수 가격과 무관하게 1층 물량까지 동일한 가격에 조건 없이 전량 포함 매도(SELL_ALL_GRAD / SELL_SUB_ALL_GRAD)하여 즉시 0주 사이클을 종료시키며,
 04:07:00 EST 프리장 개장(is_ext_sell_only == False) 즉시 프리장 시초가로 본·서브·골든포켓 다중 익절을 전면 개방하여 시초가 갭상승 수익 극대화! ·
+🔄 [현재 사이클 단위 실현수익(cycle_realized_net_usd) 자동 추적 및 0주 졸업 시 직전 사이클 수익(last_cycle_realized_net_usd) 박제 후 $0.00 리셋]
+부분 익절 시에는 현재 진행 사이클의 실현순익(cycle_realized_net_usd)과 익절 횟수(cycle_sell_events)를 누적하고,
+전 지층 0주 졸업(is_graduated_zero == True) 순간 이번 사이클 총 확정수익을 졸업 알림에 브리핑한 뒤 last_cycle_realized_net_usd 에 박제하고
+새 사이클을 위해 cycle_realized_net_usd = 0.0 으로 자동 리셋! ·
 🛡️ [Case 84 : 정규장 마감 30분 전(15:30 ~ 16:00 EST) 0주 새 사이클 첫 1층 진입 및 1층 공석 +1.0% 돌파 추격 동시 차단 알림 연동]
 15:29:01 ~ 16:00:00 EST 구간에 0주 전량 졸업 달성 시 60초 타임쉴드 직후 15:30 EST 이상이 되어 새 사이클 1층 진입이 자동 차단되므로
 익일 04:07 EST 프리장 진입 대기 안내를 표출하고, 1층 익절 후 상단층 잔존(1층 공석) 시에는 +1.0% 돌파 차단 및 2층 상한 이하 -1.0% 눌림목 재장전 감시 안내를 표출! ·
@@ -31,7 +35,7 @@ l1_target_quota_qty / sub_l1_target_quota_qty = 0 자동 클리어 및 1층 부�
 매도 체결 즉시 기정산 주문 ID(last_settled_order_ids) 등록 및
 60초 매도타임쉴드(last_sell_fill_ts / last_cycle_end_ts) & 1층 공석 재장전 타임쉴드 클리어(last_reentry_eval_ts / last_sub_reentry_eval_ts = 0.0) &
 15초 잔고 인덱싱 그레이스 쉴드(last_auto_fill_ts) 동시 각인' 코어 플러그인 (Step 08 / 13)
-- 제1헌법 ~ 제6헌법 및 Case 01 ~ 88 완벽 준수
+- 제1헌법 ~ 제6헌법 및 Case 01 ~ 89 완벽 준수
 """
 
 from __future__ import annotations
@@ -946,7 +950,7 @@ async def execute_bulletproof_sell_sweep(
             )
             return {"status": "SWEEP_FAILED", "symbol": sym, "error": str(exc)}
 # ---------------------------------------------------------------------------
-# [핵심 2] 실물 매도 FILLED 정산 · 골든포켓/서브그리드/본그리드 분리 정산(Case 80, 88) · 최고도달회차 잠금 유지(Case 87, 88) · 실측/동적 수수료 차감 세후 순익 복리 산입 · 0주 졸업 시 예비시드 자동 상환
+# [핵심 2] 실물 매도 FILLED 정산 · 골든포켓/서브그리드/본그리드 분리 정산(Case 80, 88) · 최고도달회차 잠금 유지(Case 87, 88) · 현재 사이클 단위 실현수익 누적 및 0주 졸업 시 자동 리셋(📌 ③) · 실측/동적 수수료 차감 세후 순익 복리 산입 · 0주 졸업 시 예비시드 자동 상환
 # ---------------------------------------------------------------------------
 async def _commit_filled_sell_and_reanchor_ledger(
     context: Any,
@@ -957,7 +961,7 @@ async def _commit_filled_sell_and_reanchor_ledger(
     actual_sell_fee_usd: Optional[float] = None,
 ) -> Dict[str, Any]:
     """
-    # MODIFIED [🎯 1 ~ 🎯 4 & Case 19, 59 ~ 88 & 본/서브 최고 도달 회차 잠금 유지 · Default-ON 3층 서브 그리드 분리 정산 · 상단 순수 통합이평 +1.00% 도달 시 1층 포함 전량 매도 사이클 종료 · 본+서브/서브+포켓 동시익절 통계/알림 보강 · Case 84 알림 연동]:
+    # MODIFIED [🎯 1 ~ 🎯 4 & Case 19, 59 ~ 89 & 본/서브 최고 도달 회차 잠금 유지 · Default-ON 3층 서브 그리드 분리 정산 · 현재 사이클 단위 실현수익(cycle_realized_net_usd) 누적 및 0주 전량 졸업 시 직전 사이클 수익(last_cycle_realized_net_usd) 박제 후 $0.00 자동 리셋(📌 ③) · 상단 순수 통합이평 +1.00% 도달 시 1층 포함 전량 매도 사이클 종료 · 본+서브/서브+포켓 동시익절 통계/알림 보강 · Case 84 알림 연동]:
     7층 골디락스 본 그리드, Default-ON 3층 서브 그리드 및 독립 골든포켓 스나이퍼 매도 주문이 체결(FILLED 또는 부분 체결 후 취소 종료)되었을 때:
     1) pending_sell_pocket_qty, pending_sub_sell_indices, pending_sell_indices 에 해당하는 순수 매수 원금과 실제 매도 체결가(avg_fill_price)에 대해,
        토스 execution.commission + tax 실측값(actual_sell_fee_usd) 및 계좌별 왕복 수수료율(eff_rt_pct : 0.14% 또는 0.20%)을 적용하여
@@ -967,8 +971,8 @@ async def _commit_filled_sell_and_reanchor_ledger(
        해당 그리드가 0주 졸업했을 때만 0으로 리셋!]
     4) 🚨 [Case 78 : 본·서브 1층 부분 익절 시 l1_target_quota_qty / sub_l1_target_quota_qty 잔여 수량 동기화로 허위 TOPUP_1FL 재매수 원천 차단]
     5) 🚨 [Case 77, Case 80 & Case 88 : 본·서브·골든포켓 모두 0주 전량 졸업 시 예비시드 자동 상환]
-    6) 🛡️ [Case 84 : 15:29:01 ~ 16:00:00 EST 구간에 0주 전량 졸업 시 새 사이클 진입 차단 안내를 표출하고,
-       1층 익절 후 상단층 잔존(1층 공석) 시에는 +1.0% 돌파 차단 및 2층 상한 이하 -1.0% 눌림목 재장전 감시 안내를 표출!]
+    6) 🔄 [📌 ③ 현재 사이클 단위 수익 추적 및 0주 졸업 시 자동 리셋 : 부분 익절 시에는 cycle_realized_net_usd 에 누적하고,
+       is_graduated_zero == True 순간 이번 사이클 최종 확정수익을 last_cycle_realized_net_usd 에 박제한 뒤 cycle_realized_net_usd = 0.0 으로 자동 리셋!]
     """
     st = context.ledger.get_state(TARGET_SYMBOL)
     buckets = buckets_from_dicts(st.get("buckets", []))
@@ -1008,6 +1012,12 @@ async def _commit_filled_sell_and_reanchor_ledger(
             sub_ratchet_max_lots=0,
             l1_target_quota_qty=0,
             sub_l1_target_quota_qty=0,
+            cycle_realized_gross_usd=0.0,
+            cycle_realized_fee_usd=0.0,
+            cycle_realized_net_usd=0.0,
+            cycle_sub_realized_net_usd=0.0,
+            cycle_sell_events=0,
+            cycle_leftover_saved_usd=0.0,
             last_sell_fill_ts=now_empty_epoch,
             last_cycle_end_ts=now_empty_epoch,
             last_sub_sell_fill_ts=now_empty_epoch,
@@ -1638,6 +1648,52 @@ async def _commit_filled_sell_and_reanchor_ledger(
         safe_float(st.get("daily_realized_net_usd"), 0.0) + net_pnl, 4
     )
 
+    # NEW [📌 ③ 현재 사이클 단위 실현수익 누적 및 0주 졸업(is_graduated_zero) 시 직전 사이클 박제 후 $0.00 자동 리셋]
+    cur_cyc_gross = round(
+        safe_float(st.get("cycle_realized_gross_usd"), 0.0) + gross_pnl, 4
+    )
+    cur_cyc_fee = round(
+        safe_float(st.get("cycle_realized_fee_usd"), 0.0) + fee_usd, 4
+    )
+    cur_cyc_net = round(
+        safe_float(st.get("cycle_realized_net_usd"), 0.0) + net_pnl, 4
+    )
+    cur_cyc_sub_net = round(
+        safe_float(st.get("cycle_sub_realized_net_usd"), 0.0) + sub_net_pnl, 4
+    )
+    cur_cyc_ev = max(0, safe_int(st.get("cycle_sell_events"), 0)) + 1
+    prev_cyc_saved = round(
+        safe_float(st.get("cycle_leftover_saved_usd"), 0.0), 4
+    )
+    prev_last_cyc_net = round(
+        safe_float(st.get("last_cycle_realized_net_usd"), 0.0), 4
+    )
+    prev_last_cyc_ev = max(0, safe_int(st.get("last_cycle_sell_events"), 0))
+    prev_comp_main_cycles = max(
+        0, safe_int(st.get("completed_main_cycles"), 0)
+    )
+
+    if is_graduated_zero:
+        next_last_cyc_net = cur_cyc_net
+        next_last_cyc_ev = cur_cyc_ev
+        next_comp_main_cycles = prev_comp_main_cycles + 1
+        next_cyc_gross = 0.0
+        next_cyc_fee = 0.0
+        next_cyc_net = 0.0
+        next_cyc_sub_net = 0.0
+        next_cyc_ev = 0
+        next_cyc_saved = 0.0
+    else:
+        next_last_cyc_net = prev_last_cyc_net
+        next_last_cyc_ev = prev_last_cyc_ev
+        next_comp_main_cycles = prev_comp_main_cycles
+        next_cyc_gross = cur_cyc_gross
+        next_cyc_fee = cur_cyc_fee
+        next_cyc_net = cur_cyc_net
+        next_cyc_sub_net = cur_cyc_sub_net
+        next_cyc_ev = cur_cyc_ev
+        next_cyc_saved = prev_cyc_saved
+
     init_seed = max(
         100.0, safe_float(st.get("initial_seed_usd"), DEFAULT_INITIAL_SEED_USD)
     )
@@ -1755,6 +1811,15 @@ async def _commit_filled_sell_and_reanchor_ledger(
         "cumulative_realized_fee_usd": cum_fee,
         "cumulative_realized_net_usd": cum_net,
         "daily_realized_net_usd": day_net,
+        "cycle_realized_gross_usd": next_cyc_gross,
+        "cycle_realized_fee_usd": next_cyc_fee,
+        "cycle_realized_net_usd": next_cyc_net,
+        "cycle_sub_realized_net_usd": next_cyc_sub_net,
+        "cycle_sell_events": next_cyc_ev,
+        "cycle_leftover_saved_usd": next_cyc_saved,
+        "last_cycle_realized_net_usd": next_last_cyc_net,
+        "last_cycle_sell_events": next_last_cyc_ev,
+        "completed_main_cycles": next_comp_main_cycles,
     }
     if sold_sub_q > 0:
         update_kwargs["last_sub_sell_fill_ts"] = now_sell_epoch
@@ -1793,6 +1858,8 @@ async def _commit_filled_sell_and_reanchor_ledger(
     if hasattr(context, "send_slim_alert"):
         sign = "+" if net_pnl >= 0.0 else "-"
         r_sign = "+" if net_rate >= 0.0 else ""
+        cyc_sign = "+" if cur_cyc_net >= 0.0 else "-"
+        cum_sign = "+" if cum_net >= 0.0 else "-"
         sess_tag = " · 🌃장외익절" if is_ext_sell else ""
         if is_pocket_only_sell:
             grid_sh = sum(b.qty for b in rem_buckets)
@@ -1803,7 +1870,8 @@ async def _commit_filled_sell_and_reanchor_ledger(
                 f"{sold_q}주 @ ${fill_p:.2f} ({r_sign}{net_rate:.2f}%)"
             )
             body_msg = (
-                f"세후순익 {sign}${abs(net_pnl):,.2f} 시드 복리산입 및 원리금 금고 환원 완료! · "
+                f"세후순익 {sign}${abs(net_pnl):,.2f} 시드 복리산입! · "
+                f"🔄이번사이클 누적: {cyc_sign}${abs(cur_cyc_net):,.2f}({cur_cyc_ev}회) · "
                 f"기존 본그리드({len(rem_buckets)}개층·{grid_sh}주{sub_p_note} · 기억저가 ${next_cycle_min_p:.2f}{ratchet_lock_note}) 무결성 유지 · "
                 f"가용현금 ${free_cash_now:,.2f}"
             )
@@ -1829,6 +1897,7 @@ async def _commit_filled_sell_and_reanchor_ledger(
             )
             body_msg = (
                 f"세후순익 {sign}${abs(net_pnl):,.2f} 시드 복리산입! · "
+                f"🔄이번사이클 누적: {cyc_sign}${abs(cur_cyc_net):,.2f}({cur_cyc_ev}회) · "
                 f"{sub_state_note} · 본그리드({len(rem_buckets)}개층·{grid_sh}주) 무결성 유지 · "
                 f"가용현금 ${free_cash_now:,.2f}"
             )
@@ -1856,7 +1925,7 @@ async def _commit_filled_sell_and_reanchor_ledger(
                     next_entry_guide = "🔒장외 매수잠금 · 04:07 EST 프리장 개시 후 첫 1층 진입 대기!"
                 elif will_hit_late_cutoff_after_shield:
                     next_entry_guide = (
-                        "🔒장마감 30분전(15:30~16:00) 새 사이클 진입 차단(고점 오버나이트 방어) · "
+                        "🔒장마감 30분전(15:30 ~ 16:00) 새 사이클 진입 차단(고점 오버나이트 방어) · "
                         "익일 04:07 EST 프리장 첫 1층 진입 대기!"
                     )
                 else:
@@ -1864,12 +1933,15 @@ async def _commit_filled_sell_and_reanchor_ledger(
                         "🛡️60초 타임쉴드 경과 후 현재가 조회 및 첫 1층 진입!"
                     )
                 note_str = (
-                    f"{co_sold_note}🎓 전 지층 흑자 졸업 완료(0주 싸이클 종료{repay_note} "
+                    f"🏆이번 사이클 최종 확정수익: {cyc_sign}${abs(cur_cyc_net):,.2f} (총 {cur_cyc_ev}회 익절 완수 ➔ 새 사이클 $0.00 리셋!) · "
+                    f"💰전체 누적실현익: {cum_sign}${abs(cum_net):,.2f} (누적 {next_comp_main_cycles}회 졸업) · "
+                    f"{co_sold_note}🎓전 지층 흑자 졸업 완료(0주 싸이클 종료{repay_note} "
                     f"➔ {next_entry_guide})"
                 )
             elif is_grid_empty and (rem_gp.is_active or not is_sub_empty):
                 rem_sub_sh = sum(sb.qty for sb in rem_sub_buckets)
                 note_str = (
+                    f"🔄이번사이클 누적: {cyc_sign}${abs(cur_cyc_net):,.2f}({cur_cyc_ev}회) · "
                     f"{co_sold_note}🌟 본그리드 전량 졸업 완료 · 잔여 서브({rem_sub_sh}주)/골든포켓({rem_gp.qty}주) 익절 감시 지속"
                 )
             else:
@@ -1891,7 +1963,7 @@ async def _commit_filled_sell_and_reanchor_ledger(
                         )
                     elif will_hit_late_cutoff_after_shield:
                         reload_guide = (
-                            f"🛡️60초 타임쉴드 후 장마감 30분전(15:30~16:00) +1.0% 돌파차단 · "
+                            f"🛡️60초 타임쉴드 후 장마감 30분전(15:30 ~ 16:00) +1.0% 돌파차단 · "
                             f"2층상한 ${l2_cap_p:.2f} 이하 -1.0% 눌림목만 1분 주기 재장전 감시(기억저가 ${next_cycle_min_p:.2f}{ratchet_lock_note} 잠금)"
                         )
                     else:
@@ -1899,11 +1971,13 @@ async def _commit_filled_sell_and_reanchor_ledger(
                             f"🛡️60초 타임쉴드 후 1분 주기 1층재장전(2층상한 ${l2_cap_p:.2f} 이하 · 기억저가 ${next_cycle_min_p:.2f}{ratchet_lock_note} 잠금)"
                         )
                     note_str = (
+                        f"🔄이번사이클 누적: {cyc_sign}${abs(cur_cyc_net):,.2f}({cur_cyc_ev}회) · "
                         f"{co_sold_note}📦 잔여 2~{u_cnt + 1}층({u_cnt}개층·{u_qty}주) 순수이평 ${u_wma_p:.2f}(목표 ${u_wma_t:.2f}) 1.5초 실시간 익절감시 "
                         f"· {reload_guide}"
                     )
                 elif u_cnt > 0:
                     note_str = (
+                        f"🔄이번사이클 누적: {cyc_sign}${abs(cur_cyc_net):,.2f}({cur_cyc_ev}회) · "
                         f"{co_sold_note}📦 잔여 1층+상단({len(rem_buckets)}개층) 순수이평 ${u_wma_p:.2f}(목표 ${u_wma_t:.2f}) 1.5초 실시간 익절감시 "
                         f"· 10분게이트 대기(기억저가 ${next_cycle_min_p:.2f}{ratchet_lock_note} 잠금)"
                     )
@@ -1914,6 +1988,7 @@ async def _commit_filled_sell_and_reanchor_ledger(
                         / 100.0
                     )
                     note_str = (
+                        f"🔄이번사이클 누적: {cyc_sign}${abs(cur_cyc_net):,.2f}({cur_cyc_ev}회) · "
                         f"{co_sold_note}📦 잔여 1층 단독({b1_rem.qty}주 · 단가 ${b1_rem.book_price:.2f} ➔ 목표 ${b1_rem_target:.2f}) 1.5초 실시간 익절감시 "
                         f"· 10분게이트 대기(기억저가 ${next_cycle_min_p:.2f}{ratchet_lock_note} 잠금)"
                     )
@@ -1936,6 +2011,9 @@ async def _commit_filled_sell_and_reanchor_ledger(
         "fill_price": fill_p,
         "net_pnl_usd": net_pnl,
         "sub_net_pnl_usd": sub_net_pnl,
+        "cycle_realized_net_usd": next_cyc_net,
+        "last_cycle_realized_net_usd": next_last_cyc_net,
+        "completed_main_cycles": next_comp_main_cycles,
         "repaid_reserve_usd": repaid_this_time,
         "reanchor_drop_usd": 0.0,
         "remaining_tiers": len(rem_buckets),
