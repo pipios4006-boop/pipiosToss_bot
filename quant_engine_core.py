@@ -1,18 +1,17 @@
 # -*- coding: utf-8 -*-
 """
-# MODIFIED: quant_engine_core.py
+# MODIFIED: quant_engine_core.py (황금시간 07:00~07:50 RSI<=19 올인 클래스·함수·상수 전면 영구 소각)
 인피니트 스노우볼 (Infinite Snowball) v3.0 — 퀀트 엔진 코어 Part 1 / 2 (Step 04 / 13)
 역할:
 1) 전역 퀀트 상수 락온 (본 그리드 8% 황금비율 · 7-Layer 골디락스 그리드 · DEFAULT_GRID_MERGE_MODE = "L2_L7_MERGE_SORT" [Case 87] ·
    🛡️ 스위치 없는 100% 기본 상시 적용[Default ON] 3-Layer 서브 그리드 4% 정량 · 0.5회분 보호예수 · 최대 4회분[16%] 상한 캡 · SUB_L1_L3_MERGE [Case 88] ·
-   STEP2X_15PCT_C20 · GUARD30 예비수혈[실계좌 30% 가드 이상 시 미할당 여유달러 즉시 수혈 Case 89] · 황금시간 전액매수 기본값 NONE[OFF] · Case 84 15:30 0주 신규진입 및 1층 공석 돌파추격 차단)
+   STEP2X_15PCT_C20 · GUARD30 예비수혈[실계좌 30% 가드 이상 시 미할당 여유달러 즉시 수혈 Case 89] · Case 84 15:30 0주 신규진입 및 1층 공석 돌파추격 차단)
 2) 계좌별 미국 주식 매매 수수료율(GET /api/v1/commissions : 편도 0.07% -> 왕복 0.14% / 편도 0.10% -> 왕복 0.20%) 런타임 동적 동기화 브릿지 탑재 (Case 86)
-3) 순수 실물 매수 원가(book_price == actual_avg_price) 구조체 (StratumBucket, GoldenAllInPocket) ·
+3) 순수 실물 매수 원가(book_price == actual_avg_price) 구조체 (StratumBucket) ·
    본 그리드 상단(7층 초과 시 구 1층[새 2층 후보] 보존 + 구 2층 + 구 7층 가중평균 통합 후 평단 오름차순 중간층 재배치 L2_L7_MERGE_SORT · Case 87) 번호 정규화·합병기(relabel_upper_grid_tiers) 및
    서브 그리드 상단(3층 초과 시 서브 구 1층 + 구 3층 양끝 가중평균 통합 후 오름차순 재배치 SUB_L1_L3_MERGE · Case 88) 번호 정규화·합병기(relabel_sub_upper_grid_tiers)
-4) 본 그리드 8%(12.5분할) & 서브 그리드 4%(25분할) 황금비율 정액 기반 정량 산출기(min(1회분 예산 상한 주수, 기준가 고정 정량) 이중 캡핑 Case 67, Case 88) ·
-   본 그리드 0.5회분(4.0%) 보호예수금 차감 서브 가용 유휴 현금 산출기(compute_sub_grid_available_idle_cash · Case 88) 및
-   황금시간대(07:00 ~ 07:50 EST & 1분봉 Wilder RSI(14) <= 19.0) 가용현금 100% 전액매수 판정기(Case 80)
+4) 본 그리드 8%(12.5분할) & 서브 그리드 4%(25분할) 황금비율 정액 기반 정량 산출기(min(1회분 예산 상한 주수, 기준가 고정 정량) 이중 캡핑 Case 67, Case 88) 및
+   본 그리드 0.5회분(4.0%) 보호예수금 차감 서브 가용 유휴 현금 산출기(compute_sub_grid_available_idle_cash · Case 88)
 5) 30% 자투리 1주 승격 방지 가드(GUARD30) & 토스 실계좌 주문가능금액이 30% 가드 이상일 때 미할당 여유자금 즉시 온디맨드 예비시드 자동 수혈 판정기(Case 77, Case 89) 및
    0주 전량 졸업 시 예비시드 원금 자동 상환 연산기(Case 77)
 6) 사이클 최고 도달 회차(eff_lots = max(held_lots, cycle_ratchet_max_lots)) 잠금 기반 4단 와이드 점진 활주로(1~4회 -1.0% / 5~8회 -2.0% / 9~10회 -3.5% / 11회+ -5.5% · Case 87, Case 88) ·
@@ -64,7 +63,7 @@ DEFAULT_GRID_MERGE_MODE: str = str(
     getattr(toss_api, "DEFAULT_GRID_MERGE_MODE", "L2_L7_MERGE_SORT")
 )
 
-# NEW [Case 88 : 🛡️ 13_SUB_L1L3_RESV05_CAP4L — 스위치 없는 100% 기본 상시 적용(Default ON) 3층 서브 그리드 상수 락온]
+# [Case 88 : 🛡️ 13_SUB_L1L3_RESV05_CAP4L — 스위치 없는 100% 기본 상시 적용(Default ON) 3층 서브 그리드 상수 락온]
 SUB_GRID_DEFAULT_ENABLED: bool = bool(
     getattr(toss_api, "SUB_GRID_DEFAULT_ENABLED", True)
 )
@@ -134,31 +133,6 @@ RESERVE_DEPOSIT_TOLERANCE_RATIO: float = float(
     getattr(toss_api, "RESERVE_DEPOSIT_TOLERANCE_RATIO", 0.95)
 )
 
-# [Case 80]: 미동부 프리장 황금시간대(07:00 ~ 07:50 EST & RSI(14) <= 19.0) 가용현금 100% 전액 추가매수 상수
-# 사용자 지시에 따라 기본값은 반드시 "NONE" (OFF) 으로 고정!
-GOLDEN_ALLIN_MODES: Tuple[str, ...] = tuple(
-    getattr(
-        toss_api,
-        "GOLDEN_ALLIN_MODES",
-        ("NONE", "POCKET_ALLIN", "GRID_L1_ALLIN"),
-    )
-)
-DEFAULT_GOLDEN_ALLIN_MODE: str = str(
-    getattr(toss_api, "DEFAULT_GOLDEN_ALLIN_MODE", "NONE")
-)
-GOLDEN_WINDOW_START_HM: int = int(
-    getattr(toss_api, "GOLDEN_WINDOW_START_HM", 700)
-)
-GOLDEN_WINDOW_END_HM: int = int(
-    getattr(toss_api, "GOLDEN_WINDOW_END_HM", 750)
-)
-GOLDEN_RSI_MAX_THRESHOLD: float = float(
-    getattr(toss_api, "GOLDEN_RSI_MAX_THRESHOLD", 19.0)
-)
-GOLDEN_POCKET_RISE_PCT: float = float(
-    getattr(toss_api, "GOLDEN_POCKET_RISE_PCT", 1.50)
-)
-
 
 # ---------------------------------------------------------------------------
 # [핵심 0 · Case 86] 계좌별 미국 주식 수수료율 런타임 조회/갱신 브릿지
@@ -223,21 +197,8 @@ def resolve_effective_round_trip_fee_rate_pct(
     return get_runtime_round_trip_fee_rate_pct()
 
 
-def get_golden_allin_mode_label(mode: str) -> str:
-    """
-    # [Case 80 : 황금시간대(07:00 ~ 07:50 EST & RSI <= 19.0) 전액매수 모드 한글 상태 라벨]:
-    전술 제어반(/settlement), 레이더(/avwap), 지시서(/sync)에서 표출할 직관적인 모드명을 반환한다.
-    """
-    m = str(mode or DEFAULT_GOLDEN_ALLIN_MODE).upper().strip()
-    if m == "POCKET_ALLIN":
-        return "🌟 독립 골든포켓 100% (ON·권장)"
-    if m == "GRID_L1_ALLIN":
-        return "🔥 7층 그리드 1층편입 100% (ON)"
-    return "⚪ 사용 안 함 (OFF·기본챔피언)"
-
-
 # ---------------------------------------------------------------------------
-# [핵심 1] StratumBucket & GoldenAllInPocket : 순수 실물 매수 원가(book_price == actual_avg_price) 구조체 (Case 46 ~ 88)
+# [핵심 1] StratumBucket : 순수 실물 매수 원가(book_price == actual_avg_price) 구조체 (Case 46 ~ 88)
 # ---------------------------------------------------------------------------
 @dataclass
 class StratumBucket:
@@ -316,126 +277,6 @@ class StratumBucket:
             lot_count=l_cnt,
             lot_type=l_type,
         )
-
-
-@dataclass
-class GoldenAllInPocket:
-    """
-    # [Case 80 : 미동부 프리장 황금시간대(07:00 ~ 07:50 EST & RSI <= 19.0) 독립 골든포켓 분리회계 구조체]:
-    7층 본 그리드(buckets) 및 3층 서브 그리드(sub_buckets)의 층수·회차·기억저가를 전혀 오염시키지 않고 독립 관리되는
-    가용시드 100% 전액매수 전용 포켓 (목표 익절률 +1.50% 고정).
-    """
-
-    qty: int = 0
-    book_price: float = 0.0
-    book_invested_usd: float = 0.0
-    actual_cost_usd: float = 0.0
-    entry_ts: float = 0.0
-    order_date: str = ""
-
-    @property
-    def is_active(self) -> bool:
-        return bool(self.qty > 0 and self.actual_cost_usd > 0.0)
-
-    @property
-    def actual_avg_price(self) -> float:
-        if self.qty <= 0:
-            return 0.0
-        return round(self.actual_cost_usd / float(self.qty), 4)
-
-    def target_sell_price(
-        self, rise_pct: float = GOLDEN_POCKET_RISE_PCT
-    ) -> float:
-        if not self.is_active:
-            return 0.0
-        pure_p = self.actual_avg_price
-        return round(
-            math.ceil((pure_p * (1.0 + rise_pct / 100.0) - 1e-9) * 100.0)
-            / 100.0,
-            2,
-        )
-
-    def to_dict(self) -> Dict[str, Any]:
-        if self.qty <= 0:
-            return {
-                "qty": 0,
-                "book_price": 0.0,
-                "book_invested_usd": 0.0,
-                "actual_cost_usd": 0.0,
-                "entry_ts": 0.0,
-                "order_date": "",
-            }
-        q_int = max(1, safe_int(self.qty, 1))
-        a_cost = round(
-            max(
-                0.01 * float(q_int),
-                safe_float(
-                    self.actual_cost_usd,
-                    float(q_int) * safe_float(self.book_price, 0.01),
-                ),
-            ),
-            4,
-        )
-        pure_p = round(max(0.01, a_cost / float(q_int)), 4)
-        return {
-            "qty": q_int,
-            "book_price": pure_p,
-            "book_invested_usd": a_cost,
-            "actual_cost_usd": a_cost,
-            "entry_ts": round(max(0.0, safe_float(self.entry_ts, 0.0)), 4),
-            "order_date": str(self.order_date or "").strip(),
-        }
-
-    @classmethod
-    def from_dict(cls, data: Any) -> "GoldenAllInPocket":
-        if isinstance(data, GoldenAllInPocket):
-            return cls.from_dict(data.to_dict())
-        if not isinstance(data, dict):
-            return cls()
-        q_int = safe_int(data.get("qty"), 0)
-        if q_int <= 0:
-            return cls()
-        raw_p = safe_float(
-            data.get("book_price"), safe_float(data.get("buy_price"), 0.0)
-        )
-        raw_bi = safe_float(
-            data.get("book_invested_usd"), float(q_int) * max(0.0, raw_p)
-        )
-        a_cost = safe_float(data.get("actual_cost_usd"), raw_bi)
-        if a_cost <= 0.0 and raw_p > 0.0:
-            a_cost = float(q_int) * raw_p
-        if a_cost <= 0.0:
-            return cls()
-        clean_cost = round(max(0.01 * float(q_int), a_cost), 4)
-        pure_p = round(max(0.01, clean_cost / float(q_int)), 4)
-        return cls(
-            qty=q_int,
-            book_price=pure_p,
-            book_invested_usd=clean_cost,
-            actual_cost_usd=clean_cost,
-            entry_ts=round(max(0.0, safe_float(data.get("entry_ts"), 0.0)), 4),
-            order_date=str(data.get("order_date") or "").strip(),
-        )
-
-
-def pocket_from_dict(raw_data: Any) -> GoldenAllInPocket:
-    return GoldenAllInPocket.from_dict(raw_data)
-
-
-def pocket_to_dict(pocket: Any) -> Dict[str, Any]:
-    if isinstance(pocket, GoldenAllInPocket):
-        return pocket.to_dict()
-    return GoldenAllInPocket.from_dict(pocket).to_dict()
-
-
-def has_active_golden_pocket(pocket_or_state: Any) -> bool:
-    if isinstance(pocket_or_state, GoldenAllInPocket):
-        return pocket_or_state.is_active
-    if isinstance(pocket_or_state, dict) and "golden_pocket" in pocket_or_state:
-        return GoldenAllInPocket.from_dict(
-            pocket_or_state.get("golden_pocket")
-        ).is_active
-    return GoldenAllInPocket.from_dict(pocket_or_state).is_active
 
 
 def buckets_from_dicts(
@@ -598,7 +439,7 @@ def relabel_sub_upper_grid_tiers_with_flag(
     merge_mode: str = SUB_MERGE_MODE_L1_L3,
 ) -> Tuple[List[StratumBucket], bool]:
     """
-    # NEW [Case 88 : 🛡️ 13_SUB_L1L3_RESV05_CAP4L — 3층 서브 그리드 초과(4층 발생) 시 서브 구 1층 + 구 3층 양끝 합병(SUB_L1_L3_MERGE) 및 오름차순 재배치]:
+    # [Case 88 : 🛡️ 13_SUB_L1L3_RESV05_CAP4L — 3층 서브 그리드 초과(4층 발생) 시 서브 구 1층 + 구 3층 양끝 합병(SUB_L1_L3_MERGE) 및 오름차순 재배치]:
     """
     valid = [
         b
@@ -724,7 +565,7 @@ def enforce_true_breakeven_floor_on_buckets(
 
 
 # ---------------------------------------------------------------------------
-# [핵심 2] 본 그리드 8%(12.5분할) & 서브 그리드 4%(25분할) 정량 주수 · 유휴현금(0.5회분 보호예수) · 100% 전액매수 주수 · GUARD30 판정 · 온디맨드 수혈/상환기 (🎯 1 & Case 25 ~ 35, 67, 77, 80, 86, 88, 89)
+# [핵심 2] 본 그리드 8%(12.5분할) & 서브 그리드 4%(25분할) 정량 주수 · 유휴현금(0.5회분 보호예수) · GUARD30 판정 · 온디맨드 수혈/상환기 (🎯 1 & Case 25 ~ 35, 67, 77, 86, 88, 89)
 # ---------------------------------------------------------------------------
 def compute_golden8_quota_qty(
     anchor_price: float,
@@ -781,7 +622,7 @@ def compute_sub4_quota_qty(
     exec_price: Optional[float] = None,
 ) -> Tuple[int, float]:
     """
-    # NEW [Case 88 : 🛡️ 13_SUB_L1L3_RESV05_CAP4L — 3층 서브 그리드 전용 4.0%(25분할) 정량 주수 산출기]:
+    # [Case 88 : 🛡️ 13_SUB_L1L3_RESV05_CAP4L — 3층 서브 그리드 전용 4.0%(25분할) 정량 주수 산출기]:
     순수 코어 총자산(current_core_equity)의 4.0%를 서브 1회분 예산(sub_portion_budget)으로 산출하고
     min(서브 1회분 예산 상한 주수, 서브 기준가 고정 정량) 이중 캡핑(Case 67)을 적용하여 반환한다.
     """
@@ -802,7 +643,7 @@ def compute_sub_grid_available_idle_cash(
     reserve_main_portions: float = SUB_RESERVE_MAIN_PORTIONS,
 ) -> Dict[str, Any]:
     """
-    # NEW [Case 88 : 본 그리드 보호예수금 0.5회분(4.0%) 차감 후 서브 그리드 가용 유휴 현금(avail_idle_cash_usd) 산출기]:
+    # [Case 88 : 본 그리드 보호예수금 0.5회분(4.0%) 차감 후 서브 그리드 가용 유휴 현금(avail_idle_cash_usd) 산출기]:
     """
     f_cash = max(0.0, safe_float(free_cash_usd, 0.0))
     c_eq = max(
@@ -883,146 +724,6 @@ def resolve_affordable_buy_qty(
         round(float(buy_qty) * exec_p, 4) if buy_qty > 0 else 0.0
     )
     return buy_qty, actual_spent_usd
-
-
-def resolve_allin_affordable_buy_qty(
-    price_t: float,
-    free_cash_usd: float,
-    broker_buying_power_usd: Optional[float] = None,
-    round_trip_fee_rate_pct: Optional[float] = None,
-) -> Tuple[int, float]:
-    """
-    # [Case 80 & Case 86 : 황금시간대(07:00 ~ 07:50 EST & RSI <= 19.0) 가용 현금 시드 100% 전액 매수 주수 산출기]:
-    """
-    exec_p = safe_float(price_t, 0.0)
-    if exec_p <= 0.0:
-        return 0, 0.0
-
-    avail_cash = max(0.0, safe_float(free_cash_usd, 0.0))
-    if broker_buying_power_usd is not None:
-        bp_val = safe_float(broker_buying_power_usd, 0.0)
-        if bp_val > 0.0:
-            avail_cash = min(avail_cash, bp_val)
-
-    eff_rt_pct = resolve_effective_round_trip_fee_rate_pct(
-        round_trip_fee_rate_pct
-    )
-    fee_mult = 1.0 + (eff_rt_pct / 100.0)
-    unit_cost_with_fee = exec_p * fee_mult
-    if avail_cash < unit_cost_with_fee:
-        return 0, 0.0
-
-    allin_qty = max(
-        0, int(math.floor((avail_cash + 1e-9) / unit_cost_with_fee))
-    )
-    actual_spent_usd = (
-        round(float(allin_qty) * exec_p, 4) if allin_qty > 0 else 0.0
-    )
-    return allin_qty, actual_spent_usd
-
-
-def evaluate_golden_allin_signal(
-    hm: int,
-    rsi_14: float,
-    live_price: float,
-    golden_allin_mode: str = DEFAULT_GOLDEN_ALLIN_MODE,
-    today_str: str = "",
-    last_golden_allin_date: str = "",
-    golden_pocket: Optional[Any] = None,
-    rsi_ready: bool = True,
-) -> Dict[str, Any]:
-    """
-    # [Case 80 : 미동부 프리장 황금시간대(07:00 ~ 07:50 EST) & RSI(14) <= 19.0 가용시드 100% 전액 추가매수 판정기]:
-    """
-    mode = str(golden_allin_mode or DEFAULT_GOLDEN_ALLIN_MODE).upper().strip()
-    if mode not in GOLDEN_ALLIN_MODES:
-        mode = DEFAULT_GOLDEN_ALLIN_MODE
-
-    hm_int = safe_int(hm, 0)
-    rsi_val = round(safe_float(rsi_14, 50.0), 2)
-    lp = safe_float(live_price, 0.0)
-    in_window = bool(GOLDEN_WINDOW_START_HM <= hm_int <= GOLDEN_WINDOW_END_HM)
-    gp = pocket_from_dict(golden_pocket)
-    lot_tag = "GOLDEN_POCKET" if mode == "POCKET_ALLIN" else "GOLDEN_L1"
-
-    if mode == "NONE":
-        return {
-            "should_buy": False,
-            "mode": mode,
-            "lot_type": "",
-            "reason": "MODE_OFF",
-            "in_window": in_window,
-            "rsi_14": rsi_val,
-            "rsi_threshold": GOLDEN_RSI_MAX_THRESHOLD,
-        }
-
-    if not in_window:
-        return {
-            "should_buy": False,
-            "mode": mode,
-            "lot_type": lot_tag,
-            "reason": "OUTSIDE_GOLDEN_WINDOW",
-            "in_window": False,
-            "rsi_14": rsi_val,
-            "rsi_threshold": GOLDEN_RSI_MAX_THRESHOLD,
-        }
-
-    if (
-        today_str
-        and str(last_golden_allin_date or "").strip() == str(today_str).strip()
-    ):
-        return {
-            "should_buy": False,
-            "mode": mode,
-            "lot_type": lot_tag,
-            "reason": "ALREADY_EXECUTED_TODAY",
-            "in_window": True,
-            "rsi_14": rsi_val,
-            "rsi_threshold": GOLDEN_RSI_MAX_THRESHOLD,
-        }
-
-    if mode == "POCKET_ALLIN" and gp.is_active:
-        return {
-            "should_buy": False,
-            "mode": mode,
-            "lot_type": lot_tag,
-            "reason": "GOLDEN_POCKET_ALREADY_HELD",
-            "in_window": True,
-            "rsi_14": rsi_val,
-            "rsi_threshold": GOLDEN_RSI_MAX_THRESHOLD,
-        }
-
-    if lp <= 0.0 or not rsi_ready or rsi_val <= 0.0:
-        return {
-            "should_buy": False,
-            "mode": mode,
-            "lot_type": lot_tag,
-            "reason": "RSI_OR_PRICE_NOT_READY",
-            "in_window": True,
-            "rsi_14": rsi_val,
-            "rsi_threshold": GOLDEN_RSI_MAX_THRESHOLD,
-        }
-
-    if rsi_val <= GOLDEN_RSI_MAX_THRESHOLD:
-        return {
-            "should_buy": True,
-            "mode": mode,
-            "lot_type": lot_tag,
-            "reason": f"GOLDEN_{mode}_RSI_{rsi_val:.1f}",
-            "in_window": True,
-            "rsi_14": rsi_val,
-            "rsi_threshold": GOLDEN_RSI_MAX_THRESHOLD,
-        }
-
-    return {
-        "should_buy": False,
-        "mode": mode,
-        "lot_type": lot_tag,
-        "reason": "HOLD_RSI_ABOVE_19",
-        "in_window": True,
-        "rsi_14": rsi_val,
-        "rsi_threshold": GOLDEN_RSI_MAX_THRESHOLD,
-    }
 def evaluate_guard30_and_reserve_injection(
     free_cash_usd: float,
     broker_bp_usd: Optional[float],
@@ -1111,7 +812,7 @@ def evaluate_guard30_and_reserve_injection(
     )
     required_inj_usd = round(float(needed_portions) * p_bud, 4)
 
-    # MODIFIED [Case 89 : 토스 실계좌 주문가능금액(eff_bp)이 30% 가드(min_req_cash) 이상이고 미할당 여유 달러로 가드 충족 시 즉시 수혈 승인]
+    # [Case 89 : 토스 실계좌 주문가능금액(eff_bp)이 30% 가드(min_req_cash) 이상이고 미할당 여유 달러로 가드 충족 시 즉시 수혈 승인]
     if (
         rem_portions >= needed_portions
         and eff_bp >= min_req_cash
@@ -1590,7 +1291,7 @@ def evaluate_sub_grid_dip_signal(
     unlock_drop_pct: float = SUB_UNLOCK_DROP_FROM_L1_PCT,
 ) -> Dict[str, Any]:
     """
-    # NEW [Case 88 : 🛡️ 13_SUB_L1L3_RESV05_CAP4L — 3층 서브 그리드 10분 게이트 추매 & 최대 4회분(16%) 상한 캡 & 10영업일/-10% 저가 해금 판정기]:
+    # [Case 88 : 🛡️ 13_SUB_L1L3_RESV05_CAP4L — 3층 서브 그리드 10분 게이트 추매 & 최대 4회분(16%) 상한 캡 & 10영업일/-10% 저가 해금 판정기]:
     """
     valid = [
         sb

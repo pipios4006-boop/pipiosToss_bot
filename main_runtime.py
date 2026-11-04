@@ -1,18 +1,17 @@
 # -*- coding: utf-8 -*-
 """
-# MODIFIED: main_runtime.py
+# MODIFIED: main_runtime.py (황금시간 07:00~07:50 RSI<=19 올인 임포트·메서드·버튼·명령어 전면 영구 소각)
 인피니트 스노우볼 (Infinite Snowball) v3.0 — 메인 런타임 서포트 브릿지 (메인 코드 2분할 리팩토링 Part 1 / 2 · Step 12 / 13)
 - 역할:
   1) 적응형 비동기 플러그인 호출기(_call_plugin_adaptive) 및 동적 심볼 리졸버(_resolve_module_attr) (Case 13)
   2) TossApiClient 런타임 메서드 호환성 폴리필 어댑터(_install_toss_api_compatibility_patches · get_commissions / ensure_us_commission_rate 런타임 수수료 폴백 보존 포함 · Case 86)
   3) 폴더별 3중 원장 인스턴스 팩토리(_instantiate_stratum_ledger · Case 68, Case 87, Case 88) 및 주말 휴장 판별(_check_weekend_nyse_closed_dynamic · Case 01, 79, 83)
-  4) 100% 벡터화 1분봉/일봉 지표 및 실시간 틱 Wilder's RSI(14) 무손실 직결(_compute_candle_metrics_dynamic · Case 80 RSI 50.0 고정 버그 영구 소각)
+  4) 100% 벡터화 1분봉/일봉 지표 및 실시간 틱 Wilder's RSI(14) 무손실 직결(_compute_candle_metrics_dynamic)
   5) 폴더 위치(base_dir) 전용 텔레그램 토큰·채팅방 ID 자동 탐색기(_discover_telegram_credentials · Case 68)
   6) 내장형 사용자 중심 초슬림 텔레그램 불사조 롱폴링/관제탑 브릿지(_AdaptiveTelegramBridge · tg_ui_plugin 4버튼 단일 렌더러 직결 ·
      층별 자산($)·10칸 배분 게이지(🟦🟨🟩)·현재 사이클 단위 실현수익 vs 전체 누적 수익·재고 평가착시 3단 해부·전량졸업 예정자산(🎓) 표출 ·
      전술 제어반 /reset_profit 명령어 탑재 · 13대 코어 모듈 프리플라이트 안내 동기화 · /avwap 조회 시 1분봉 미확보 상태면 즉시 온디맨드 프리워밍 수행 ·
-     /sync 조회 시 계좌별 미국 주식 수수료율 자동 확인[Case 86] · /reset_profit 실행 시 본 그리드 + Default-ON 3층 서브 그리드 + 골든포켓 및 당일 무매매 동결 판정 카운터 100% 보존 초기화[Case 88] ·
-     전술 제어반 황금시간[07:00 ~ 07:50 EST & RSI <= 19.0] 전액매수 모드 선택기 완벽 지원 ·
+     /sync 조회 시 계좌별 미국 주식 수수료율 자동 확인[Case 86] · /reset_profit 실행 시 본 그리드 + Default-ON 3층 서브 그리드 및 당일 무매매 동결 판정 카운터 100% 보존 초기화[Case 88] ·
      Case 75 httpx/httpcore INFO 로그 묵음화 & Case 81 전용 httpx.AsyncClient 자동 재생성 불사조 폴링 · 오프셋 파일 선행 영속화 · os.execv 인플레이스 자가 교체 · Case 84/85/86/87/88/89 완벽 준수)
 - 제1헌법 ~ 제6헌법 및 Case 01 ~ 89 전수 락온
 """
@@ -60,8 +59,6 @@ from plugin_updater import (
     write_persisted_tg_offset_sync,
 )
 from quant_engine import (
-    DEFAULT_GOLDEN_ALLIN_MODE,
-    GOLDEN_ALLIN_MODES,
     get_runtime_round_trip_fee_rate_pct,
     get_runtime_us_commission_rate,
     set_runtime_round_trip_fee_rate_pct,
@@ -229,7 +226,7 @@ def _normalize_single_holding_item(
     )
     pl_obj = (
         item.get("profitLoss")
-        if isinstance(item.get("profitLoss"), dict)
+        if isinstance(it_pl := item.get("profitLoss"), dict)
         else {}
     )
 
@@ -422,7 +419,6 @@ def _extract_candles_list(
     raw_res: Any,
 ) -> Tuple[List[Dict[str, Any]], Optional[str]]:
     """
-    # [Case 80]:
     result.candles 표준 스키마뿐만 아니라 result 직접 리스트, items, data 키 응답을 모두 파싱한다.
     """
     if isinstance(raw_res, list):
@@ -914,7 +910,7 @@ def _check_weekend_nyse_closed_dynamic(now_est: datetime) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# [핵심 3] 자체 벡터화 1분봉/일봉 지표 및 Wilder's RSI(14) 산출 폴백 (Case 80 완벽 호환)
+# [핵심 3] 자체 벡터화 1분봉/일봉 지표 및 Wilder's RSI(14) 산출 폴백
 # ---------------------------------------------------------------------------
 def _compute_vectorized_metrics_fallback(
     candles_1m: List[Dict[str, Any]],
@@ -923,7 +919,6 @@ def _compute_vectorized_metrics_fallback(
     candles_1d: List[Dict[str, Any]],
 ) -> Dict[str, Any]:
     """
-    # [Case 80]:
     quant_indicators_plugin.compute_soxl_quant_metrics_1m() 를 최우선 호출하여
     인메모리 1분봉(_LIVE_1M_BAR_STORE) 병합 및 Wilder's RSI(14) 산출을 수행하고,
     예외 발생 시에만 ISO8601 + np.diff 기반 자체 벡터화 폴백을 수행한다.
@@ -1164,7 +1159,7 @@ async def _compute_candle_metrics_dynamic(
     candles_1d: List[Dict[str, Any]],
 ) -> Dict[str, Any]:
     """
-    # [Case 80 : compute_soxl_quant_metrics_1m 결과 무손실 직결]:
+    compute_soxl_quant_metrics_1m 결과 무손실 직결:
     quant_indicators_plugin.compute_soxl_quant_metrics_1m() 가 반환한 딕셔너리를
     조건부 누락 없이 즉시 채택하여 인메모리 1분봉 합성 기저값(prev_bar_close 등)이 100% 유지되도록 보장한다.
     """
@@ -1328,7 +1323,7 @@ def _discover_telegram_credentials(
 
     return bot_token, chat_id
 # ---------------------------------------------------------------------------
-# [핵심 5] 내장형 텔레그램 브릿지 (_AdaptiveTelegramBridge — tg_ui_plugin 렌더러 직결 & 사이클 수익 초기화 연동 & Case 80/81/83/84/85/86/87/88/89 완벽 통합)
+# [핵심 5] 내장형 텔레그램 브릿지 (_AdaptiveTelegramBridge — tg_ui_plugin 렌더러 직결 & 사이클 수익 초기화 연동 & Case 81/83/84/85/86/87/88/89 완벽 통합)
 # ---------------------------------------------------------------------------
 class _AdaptiveTelegramBridge:
     """
@@ -1659,7 +1654,7 @@ class _AdaptiveTelegramBridge:
         self,
     ) -> Tuple[float, Dict[str, Any]]:
         """
-        # [Case 80 : /avwap 조회 시 1분봉 미확보 상태면 즉시 온디맨드 프리워밍 수행]:
+        /avwap 조회 시 1분봉 미확보 상태면 즉시 온디맨드 프리워밍 수행:
         """
         now_est = datetime.now(EST_TZ)
         live_p = safe_float(
@@ -1821,9 +1816,6 @@ class _AdaptiveTelegramBridge:
             text=msg,
             reply_markup=_build_settlement_inline_keyboard(
                 bool(st.get("is_active", True)),
-                str(
-                    st.get("golden_allin_mode") or DEFAULT_GOLDEN_ALLIN_MODE
-                ),
             ),
         )
 
@@ -1882,21 +1874,17 @@ class _AdaptiveTelegramBridge:
             ),
             reply_markup=_build_settlement_inline_keyboard(
                 bool(updated_st.get("is_active", True)),
-                str(
-                    updated_st.get("golden_allin_mode")
-                    or DEFAULT_GOLDEN_ALLIN_MODE
-                ),
             ),
         )
 
     async def _reset_realized_profit_only(self, chat_id: str) -> None:
         """
-        # MODIFIED [Case 02, Case 74, Case 76, Case 77, Case 80, Case 86, Case 87 & Case 88]:
-        보유 중인 본 그리드 지층(buckets · cycle_ratchet_max_lots 포함), Default-ON 3층 서브 그리드(sub_buckets · sub_ratchet_max_lots 포함) 및
-        독립 골든포켓(golden_pocket), 당일 무매매 동결 판정용 매매 횟수(daily_main_buy_cnt, daily_main_sell_cnt, daily_sub_buy_cnt, daily_sub_sell_cnt),
+        # MODIFIED [Case 02, Case 74, Case 76, Case 77, Case 86, Case 87 & Case 88]:
+        보유 중인 본 그리드 지층(buckets · cycle_ratchet_max_lots 포함), Default-ON 3층 서브 그리드(sub_buckets · sub_ratchet_max_lots 포함),
+        당일 무매매 동결 판정용 매매 횟수(daily_main_buy_cnt, daily_main_sell_cnt, daily_sub_buy_cnt, daily_sub_sell_cnt),
         기준 시드머니(initial_seed_usd), 계좌별 수수료율(us_commission_rate, round_trip_fee_rate_pct)은 100% 보존하고,
         오직 누적/당일 세후 실현수익금, 사이클 단위 수익금(cycle_realized_net_usd 등), 자투리 절약금·스텝업 해금·
-        서브 그리드 누적 통계·황금시간 통계·예비시드 통계만 0점으로 초기화한다.
+        서브 그리드 누적 통계·예비시드 통계만 0점으로 초기화한다.
         """
         mark_reserve_deposit_check_shield(
             self.context, TARGET_SYMBOL, clear_shield=True
@@ -1904,10 +1892,6 @@ class _AdaptiveTelegramBridge:
         st_cur = self.context.ledger.get_state(TARGET_SYMBOL)
         has_buckets = bool(st_cur.get("buckets"))
         has_sub_buckets = bool(st_cur.get("sub_buckets"))
-        gp_cur = st_cur.get("golden_pocket") or {}
-        has_gp = bool(
-            isinstance(gp_cur, dict) and safe_int(gp_cur.get("qty"), 0) > 0
-        )
         reset_kw: Dict[str, Any] = {
             "cumulative_realized_gross_usd": 0.0,
             "cumulative_realized_fee_usd": 0.0,
@@ -1943,12 +1927,6 @@ class _AdaptiveTelegramBridge:
             "sub_realized_fee_usd": 0.0,
             "sub_realized_net_usd": 0.0,
             "daily_sub_realized_net_usd": 0.0,
-            "golden_allin_buy_events": 0,
-            "daily_golden_allin_buy_events": 0,
-            "golden_pocket_sell_cnt": 0,
-            "daily_golden_pocket_sell_cnt": 0,
-            "golden_realized_net_usd": 0.0,
-            "daily_golden_realized_net_usd": 0.0,
             "total_reserve_injected_cnt": 0,
             "daily_reserve_injected_cnt": 0,
             "cumulative_reserve_repaid_usd": 0.0,
@@ -1979,7 +1957,7 @@ class _AdaptiveTelegramBridge:
         if not has_sub_buckets:
             reset_kw["daily_sub_buy_cnt"] = 0
             reset_kw["daily_sub_sell_cnt"] = 0
-        if not has_buckets and not has_sub_buckets and not has_gp:
+        if not has_buckets and not has_sub_buckets:
             reset_kw["used_reserve_portions_cnt"] = 0
             reset_kw["injected_reserve_usd"] = 0.0
             reset_kw["cycle_ratchet_max_lots"] = 0
@@ -2011,14 +1989,12 @@ class _AdaptiveTelegramBridge:
         held_sh = safe_int(summary.get("held_shares"), 0)
         sub_sh = safe_int(summary.get("sub_held_shares"), 0)
         sub_tiers = safe_int(summary.get("sub_held_tiers"), 0)
-        gp_sh = safe_int(summary.get("golden_pocket_qty"), 0)
         held_tiers = safe_int(summary.get("held_tiers"), 0)
         held_lots = safe_int(summary.get("held_lots"), 0)
         ratchet_lots = safe_int(
             summary.get("cycle_ratchet_max_lots"), held_lots
         )
         sub_note = f"+서브 {sub_sh}주({sub_tiers}층)" if sub_sh > 0 else ""
-        gp_note = f"+골든포켓 {gp_sh}주" if gp_sh > 0 else ""
         lot_keep_str = (
             f"보유 {held_lots}회차/단차잠금 {ratchet_lots}회차"
             if ratchet_lots > held_lots
@@ -2032,7 +2008,7 @@ class _AdaptiveTelegramBridge:
                 "🔸 이번사이클 / 누적 세후실현익: <b>$0.00</b>\n"
                 f"🔸 복귀 기준시드: <b>${init_seed:,.2f}</b> (가용현금 <b>${free_cash:,.2f}</b>)\n"
                 f"🔸 차기 1회(8%) 정량: 예산 <b>${next_bud:,.2f}</b> ➔ {quota_badge_str}\n"
-                f"🔸 보유 지층 보존: 본 <b>{held_sh}주</b> ({held_tiers}개층 · {lot_keep_str}{sub_note}{gp_note} 유지)"
+                f"🔸 보유 지층 보존: 본 <b>{held_sh}주</b> ({held_tiers}개층 · {lot_keep_str}{sub_note} 유지)"
             ),
             reply_markup=_build_main_reply_keyboard(),
         )
@@ -2117,39 +2093,6 @@ class _AdaptiveTelegramBridge:
         await asyncio.sleep(0.3)
         perform_self_restart_execv(reason="MANUAL_TELEGRAM_UPDATE")
 
-    async def _cycle_golden_mode_and_render(
-        self,
-        chat_id: str,
-        target_mode: Optional[str] = None,
-        edit_msg_id: Optional[int] = None,
-    ) -> None:
-        if hasattr(self.context.ledger, "cycle_golden_allin_mode"):
-            await self.context.ledger.cycle_golden_allin_mode(
-                target_mode=target_mode
-            )
-        else:
-            st_cur = self.context.ledger.get_state(TARGET_SYMBOL)
-            cur_m = (
-                str(
-                    st_cur.get("golden_allin_mode")
-                    or DEFAULT_GOLDEN_ALLIN_MODE
-                )
-                .upper()
-                .strip()
-            )
-            try:
-                idx = GOLDEN_ALLIN_MODES.index(cur_m)
-                nxt_m = GOLDEN_ALLIN_MODES[(idx + 1) % len(GOLDEN_ALLIN_MODES)]
-            except ValueError:
-                nxt_m = "POCKET_ALLIN"
-            await self.context.ledger.update_state(
-                TARGET_SYMBOL, golden_allin_mode=nxt_m
-            )
-        self.context.wakeup_event.set()
-        await self._render_and_send_settlement(
-            chat_id=chat_id, edit_msg_id=edit_msg_id
-        )
-
     async def _handle_command_or_text(
         self, chat_id: str, raw_text: str
     ) -> None:
@@ -2224,14 +2167,6 @@ class _AdaptiveTelegramBridge:
             or text == "⚙️ 전술 제어반"
         ):
             await self._render_and_send_settlement(chat_id=chat_id)
-            return
-
-        if first_token == "/golden":
-            parts = text.split(maxsplit=1)
-            arg_mode = parts[1].strip() if len(parts) >= 2 else None
-            await self._cycle_golden_mode_and_render(
-                chat_id=chat_id, target_mode=arg_mode
-            )
             return
 
         if first_token == "/seed":
@@ -2339,10 +2274,6 @@ class _AdaptiveTelegramBridge:
                     )
             self.context.wakeup_event.set()
             await self._render_and_send_settlement(
-                chat_id=chat_id, edit_msg_id=msg_id
-            )
-        elif data == "toggle_golden_allin_mode":
-            await self._cycle_golden_mode_and_render(
                 chat_id=chat_id, edit_msg_id=msg_id
             )
         elif data == "prompt_seed_input":

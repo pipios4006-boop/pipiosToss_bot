@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-# MODIFIED: toss_api.py
+# MODIFIED: toss_api.py (황금시간 07:00~07:50 RSI<=19 올인 관련 상수 재익스포트 및 주석 전면 소각)
 인피니트 스노우볼 (Infinite Snowball) v3.0 — 토스증권 Open API (v1.2.14) 방탄 통신 통제소 (Part 2 / 2 · Step 02 / 13)
 - 역할:
   1) toss_api_core.py (Part 1 / 2) 의 모든 상수(DEFAULT_GRID_MERGE_MODE · Case 88 서브 그리드 상수 포함)·유틸리티·폴더격리·디스크치유·
@@ -33,18 +33,12 @@ from toss_api_core import (
     ALLOWED_SYMBOLS,
     AssassinLedger,
     BASE_MAX_LOTS_8PCT,
-    DEFAULT_GOLDEN_ALLIN_MODE,
     DEFAULT_GRID_MERGE_MODE,
     DEFAULT_INITIAL_SEED_USD,
     DEFAULT_SUB_MERGE_MODE,
     DEFAULT_UNLOCK_MODE,
     DEFAULT_US_COMMISSION_RATE,
     EST_TZ,
-    GOLDEN_ALLIN_MODES,
-    GOLDEN_POCKET_RISE_PCT,
-    GOLDEN_RSI_MAX_THRESHOLD,
-    GOLDEN_WINDOW_END_HM,
-    GOLDEN_WINDOW_START_HM,
     GlobalThrottle,
     KRW_PER_USD_DEFAULT,
     KST_TZ,
@@ -577,7 +571,7 @@ class TossApiClient:
         self, symbol: str = TARGET_SYMBOL, count: int = 50
     ) -> List[Dict[str, Any]]:
         """
-        # [API.txt v1.2.14 & Case 80, Case 82]:
+        # [API.txt v1.2.14 & Case 82]:
         GET /api/v1/trades?symbol=SOXL&count=50
         """
         q_cnt = max(1, min(50, safe_int(count, 50)))

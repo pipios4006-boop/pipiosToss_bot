@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-# MODIFIED: plugin_updater.py
+# MODIFIED: plugin_updater.py (황금시간 07:00~07:50 RSI<=19 올인 관련 주석 전면 소각 및 13대 코어 모듈 프리플라이트 유지)
 인피니트 스노우볼 (Infinite Snowball) v3.0 — 순수 롱(🐂 SOXL 단독) 매수 04:07 ~ 16:00 EST 제한
 (정규장 마감 30분 전 15:30 ~ 16:00 EST 본·서브 0주 새 사이클 첫 1층 진입 및 상단층 보유 중 1층 공석 +1.0% 돌파 추격 동시 차단 ·
 2층 단가 이하 -1.0% 눌림목 재장전 및 10분 게이트 추매/잔량보충 100% 허용 · Case 84, Case 88) &
@@ -9,7 +9,7 @@
 13대 코어 모듈(toss_api_core.py + toss_api.py 2분할 · quant_engine_core.py + quant_engine.py 2분할 ·
 sniper_plugin_core.py + sniper_plugin.py 2분할 · main_runtime.py + main.py 2분할 포함)
 무디스크 인메모리 프리플라이트 컴파일 · AST 심볼 교차 검증 · Case 85 f-string 중괄호 정규식 자동 치유 및 4배수 선제 스냅 치유기 ·
-텔레그램 잔류 큐 소각 · 폴더별 원장(본 그리드 + 서브 그리드 + 골든포켓 + 동적 수수료율)/환경변수/오프셋 스냅샷 Dirty-Check 철벽 보존 · 무인 Git 업데이트 및
+텔레그램 잔류 큐 소각 · 폴더별 원장(본 그리드 + 서브 그리드 + 동적 수수료율)/환경변수/오프셋 스냅샷 Dirty-Check 철벽 보존 · 무인 Git 업데이트 및
 Case 81 커널 레벨 인플레이스 프로세스 자가 교체(os.execv + 3.5초 하드 워치독) 코어 모듈 (Step 11 / 13)
 - 제1헌법: 모든 파일 I/O 및 git/python 서브프로세스 실행을 asyncio.to_thread 로 비동기 격리 및 타임아웃 적용
 - 제3헌법: 구버전 폐기 파일(daymarket_sim_plugin.py, whipsaw_plugin.py, state_SOXS.json 등) 디스크 영구 소각
@@ -24,7 +24,7 @@ Case 81 커널 레벨 인플레이스 프로세스 자가 교체(os.execv + 3.5�
   4) 부팅(ExecStartPre) 및 실제 원격 신규 커밋(remote_ahead > 0) 감지 시점에만 텔레그램 서버의 미확인 적체 큐를
      소각(_flush_telegram_pending_updates_sync)하고, --verify-only 및 remote_ahead == 0 평시 점검 시에는
      getUpdates 호출과 원장 재초기화를 스킵하여 살아있는 폴링 루프와의 HTTP 409 Conflict 경합을 0%로 원천 차단!
-- 🚨 [Case 68, Case 80, Case 86, Case 87 & Case 88 폴더 위치(base_dir) 기반 격리 & git reset --hard 원장(본 그리드·서브 그리드·골든포켓·모드·수수료율 설정 포함)/환경변수 증발 100% 차단 쉴드]
+- 🚨 [Case 68, Case 86, Case 87 & Case 88 폴더 위치(base_dir) 기반 격리 & git reset --hard 원장(본 그리드·서브 그리드·수수료율 설정 포함)/환경변수 증발 100% 차단 쉴드]
 - 🚨 [Case 75 클라우드 VM 디스크 고갈([Errno 28] No space left on device) 원천 차단 및 디스크 Write 90% 감축]
 - 🚨 [Case 81 장외 무인 자동 업데이트(run_auto_update_loop) 및 수동 /update 직후 텔레그램 먹통(Deaf Zombie Process) ·
   asyncio.to_thread 종료 데드락 · systemd Exit Code 0 재기동 거부 원천 차단]
@@ -488,13 +488,13 @@ def _flush_telegram_pending_updates_sync(
 
 
 # ---------------------------------------------------------------------------
-# [핵심 0-C · Case 68, Case 75, Case 80, Case 81, Case 86, Case 87 & Case 88] git reset --hard 실행 전후 폴더별 원장 · .env · 오프셋 철벽 보호기
+# [핵심 0-C · Case 68, Case 75, Case 81, Case 86, Case 87 & Case 88] git reset --hard 실행 전후 폴더별 원장 · .env · 오프셋 철벽 보호기
 # ---------------------------------------------------------------------------
 def _snapshot_protected_local_files_sync(target_dir: str) -> Dict[str, bytes]:
     """
-    🚨 Case 68, Case 75, Case 80, Case 81, Case 86, Case 87 & Case 88:
+    🚨 Case 68, Case 75, Case 81, Case 86, Case 87 & Case 88:
     git reset --hard 가 실행되기 직전(remote_ahead > 0 확인 후)에 현재 폴더(target_dir) 내의
-    모든 원장(본 그리드·3층 서브 그리드·골든포켓·수수료율 포함), 백업, .env, .tg_update_offset 파일을 메모리에 스냅샷 보존한다.
+    모든 원장(본 그리드·3층 서브 그리드·수수료율 포함), 백업, .env, .tg_update_offset 파일을 메모리에 스냅샷 보존한다.
     """
     abs_dir = get_bot_base_dir(target_dir)
     emergency_free_disk_space_sync(
@@ -541,7 +541,7 @@ def _restore_protected_local_files_sync(
     target_dir: str, snapshots: Dict[str, bytes]
 ) -> int:
     """
-    🚨 Case 68, Case 75, Case 80, Case 87 & Case 88:
+    🚨 Case 68, Case 75, Case 87 & Case 88:
     git reset --hard 실행 직후 메모리에 보존해 둔 스냅샷 바이트를 Dirty-Check 후 원자적으로 복원한다.
     """
     abs_dir = get_bot_base_dir(target_dir)
@@ -928,7 +928,7 @@ def _execute_git_pull_and_preflight_sync(
     base_dir: Optional[str] = None,
 ) -> Tuple[bool, str, bool]:
     """
-    🚨 Case 62, Case 68, Case 75, Case 80, Case 81, Case 85, Case 86, Case 87 & Case 88:
+    🚨 Case 62, Case 68, Case 75, Case 81, Case 85, Case 86, Case 87 & Case 88:
     원격 신규 커밋이 없을 때(remote_ahead == 0)는 getUpdates 호출(HTTP 409 유발)이나
     SoxlStratumLedger 재초기화 없이 즉시 인메모리 검증만 수행한다.
     """

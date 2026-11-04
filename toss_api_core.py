@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 """
-# MODIFIED: toss_api_core.py
+# MODIFIED: toss_api_core.py (황금시간 07:00~07:50 RSI<=19 올인 뇌동매매 상수·포켓·원장 필드 전면 영구 소각)
 인피니트 스노우볼 (Infinite Snowball) v3.0 — 토스증권 코어 상수 · 폴더 격리 · 디스크 자가 치유 ·
 GlobalThrottle 동시성 통제 및 SOXL 7-Tier 골디락스 본 그리드(구 2층 + 구 7층 통합 중간층 재배치 & 최고 도달 회차 단차 잠금 · Case 87) /
 스위치 없는 100% 기본 상시 적용(Default ON) 3-Tier 서브 그리드(4.0% 정량 · 구 1층 + 구 3층 양끝 합병 & 최대 4회분[16%] 상한 캡 & 0.5회분 보호예수 · Case 88) /
-현재 사이클 단위 실현수익(cycle_realized_net_usd) 자동 추적·리셋 및 독립 골든포켓 3중 원장(SoxlStratumLedger) 코어 모듈 (Part 1 / 2 · Step 01 / 13)
+현재 사이클 단위 실현수익(cycle_realized_net_usd) 자동 추적·리셋 및 폴더별 3중 원장(SoxlStratumLedger) 코어 모듈 (Part 1 / 2 · Step 01 / 13)
 - 역할:
   1) 제4헌법 EST 단일 타임존 및 최종 확정 챔피언(Case 01 ~ Case 89 · 👑 06_L2L7_RATCHET_8PCT × 🛡️ 13_SUB_L1L3_RESV05_CAP4L[Default ON]) 전역 상수 락온
   2) 안전한 수치 형변환(safe_float, safe_int), 36자 멱등성 키 생성기(generate_client_order_id),
@@ -13,9 +13,8 @@ GlobalThrottle 동시성 통제 및 SOXL 7-Tier 골디락스 본 그리드(구 2
      격리 환경변수 로더(_load_env_files_into_environ) 및 클라우드 VM 디스크 고갈(Errno 28) 자가 치유기(emergency_free_disk_space_sync · Case 68, Case 75, Case 85)
   4) 제1헌법 동기/비동기 양방향 호환 _HybridFileLock 및 GlobalThrottle 중앙 통제소(Case 06, Case 20)
   5) SOXL 단일 롱 7-Tier 본 그리드(L2_L7_MERGE_SORT & cycle_ratchet_max_lots 단차 잠금 · Case 87) ·
-     Default-ON 3-Tier 서브 그리드(SUB_L1_L3_MERGE & sub_ratchet_max_lots & SUB_MAX_TOTAL_LOTS_4 캡 · Case 88) ·
-     현재 사이클 단위 실현수익(cycle_realized_net_usd · 0주 전량 졸업 시 last_cycle_realized_net_usd 박제 후 0.0 자동 리셋) 및
-     독립 골든포켓(GoldenAllInPocket) 폴더별 3중 안전 지층 원장(SoxlStratumLedger · Case 58 ~ Case 89)
+     Default-ON 3-Tier 서브 그리드(SUB_L1_L3_MERGE & sub_ratchet_max_lots & SUB_MAX_TOTAL_LOTS_4 캡 · Case 88) 및
+     현재 사이클 단위 실현수익(cycle_realized_net_usd · 0주 전량 졸업 시 last_cycle_realized_net_usd 박제 후 0.0 자동 리셋) 폴더별 3중 안전 지층 원장(SoxlStratumLedger · Case 58 ~ Case 89)
 """
 
 from __future__ import annotations
@@ -61,7 +60,7 @@ MAX_GRID_TIERS_12: int = 7
 # [Case 87 : 👑 06_L2L7_RATCHET_8PCT — 7층 만석 초과(8층 발생) 시 구 1층 보존 + 구 2층 + 구 7층 통합 후 평단 오름차순 중간층 재배치 모드]
 DEFAULT_GRID_MERGE_MODE: str = "L2_L7_MERGE_SORT"
 
-# NEW [Case 88 : 🛡️ 13_SUB_L1L3_RESV05_CAP4L — 스위치 없는 100% 기본 상시 적용(Default ON) 3층 서브 그리드 상수 락온]
+# [Case 88 : 🛡️ 13_SUB_L1L3_RESV05_CAP4L — 스위치 없는 100% 기본 상시 적용(Default ON) 3층 서브 그리드 상수 락온]
 SUB_GRID_DEFAULT_ENABLED: bool = True
 SUB_FROZEN_DAYS_TRIGGER: int = 5
 SUB_PORTION_RATIO_4PCT: float = 0.04
@@ -87,19 +86,6 @@ MAX_RESERVE_PORTIONS: int = 6
 MIN_DIP_BUDGET_RATIO: float = 0.30
 MIN_DIP_VS_L1_RATIO: float = 0.30
 RESERVE_DEPOSIT_TOLERANCE_RATIO: float = 0.95
-
-# [Case 80 : 미동부 프리장 황금시간대(07:00 ~ 07:50 EST & RSI(14) <= 19.0) 가용시드 100% 전액 추가매수 상수]
-# 기본값은 "NONE" (OFF) 으로 락온하여 QuantEngine TDD 정합성 100% 보장
-GOLDEN_ALLIN_MODES: Tuple[str, ...] = (
-    "NONE",
-    "POCKET_ALLIN",
-    "GRID_L1_ALLIN",
-)
-DEFAULT_GOLDEN_ALLIN_MODE: str = "NONE"
-GOLDEN_WINDOW_START_HM: int = 700
-GOLDEN_WINDOW_END_HM: int = 750
-GOLDEN_RSI_MAX_THRESHOLD: float = 19.0
-GOLDEN_POCKET_RISE_PCT: float = 1.50
 
 # [Case 84 : 정규장 마감 30분 전(15:30 ~ 16:00 EST) 본·서브 0주 새 사이클 첫 1층 진입 및 상단층 보유 중 1층 공석 +1.0% 돌파 추격 동시 차단 기준 시각(HHMM)]
 NEW_CYCLE_BUY_CUTOFF_HM: int = 1530
@@ -533,7 +519,7 @@ class GlobalThrottle:
 
 
 # ---------------------------------------------------------------------------
-# [핵심 2] SOXL 단일 롱 7-Tier 본 그리드(L2_L7_MERGE_SORT) · Default-ON 3-Tier 서브 그리드(SUB_L1_L3_MERGE & CAP4L) · 사이클 수익 추적 · 골든포켓 폴더별 3중 안전 지층 원장 (SoxlStratumLedger — Case 68 ~ 89)
+# [핵심 2] SOXL 단일 롱 7-Tier 본 그리드(L2_L7_MERGE_SORT) · Default-ON 3-Tier 서브 그리드(SUB_L1_L3_MERGE & CAP4L) · 사이클 수익 추적 폴더별 3중 안전 지층 원장 (SoxlStratumLedger — Case 68 ~ 89)
 # ---------------------------------------------------------------------------
 class SoxlStratumLedger:
     """
@@ -546,12 +532,11 @@ class SoxlStratumLedger:
     본 그리드 사이클 최고 도달 회차 잠금(`cycle_ratchet_max_lots` · Case 87),
     🛡️ 스위치 없는 100% 기본 상시 적용(Default ON) 1 ~ 3층 서브 그리드(`sub_buckets` · `sub_merge_mode = "SUB_L1_L3_MERGE"` ·
     최대 누적 4회분 상한 캡 · 본/서브 연속 무매매 동결일 `main_consec_frozen_days` / `sub_consec_frozen_days` · Case 88),
-    황금시간대 선택 모드(`golden_allin_mode`, 기본값 `"NONE"` [OFF]) 및
-    독립 골든포켓(`golden_pocket`), 가용 현금 시드(`free_cash_usd`), 계좌별 미국 주식 수수료율(`us_commission_rate`, `round_trip_fee_rate_pct`),
+    가용 현금 시드(`free_cash_usd`), 계좌별 미국 주식 수수료율(`us_commission_rate`, `round_trip_fee_rate_pct`),
     정적 잠금/조건부 스텝업 사이클 최저 매수가(`cycle_min_buy_price` / `sub_cycle_min_buy_price`),
     💉 05_RESV_6P_GUARD30 예비시드 수혈 잔액 · 사용 회분 · 시드고갈 입금 대기 플래그 · 단 1회 입금 알림 영구 래치,
     🎯 Case 78 현재 본/서브 1층 목표 정량 주수(`l1_target_quota_qty` / `sub_l1_target_quota_qty`), 양방향·주기 60초 타임쉴드 시각,
-    다중 그리드(본+서브) 및 골든포켓 매도 대기 정보, 기정산 주문 ID 링버퍼,
+    다중 그리드(본+서브) 매도 대기 정보, 기정산 주문 ID 링버퍼,
     누적 세후 실현수익금(`cumulative_realized_net_usd`) 및 현재 진행 사이클 단위 실현수익(`cycle_realized_net_usd` · 0주 졸업 시 `last_cycle_realized_net_usd` 박제 후 0.0 리셋)을
     Dirty-Check 적용 후 원자적(.tmp -> os.replace)으로 동시 영속화한다.
     """
@@ -604,17 +589,6 @@ class SoxlStratumLedger:
             if val > 100.0:
                 return round(val, 4)
         return DEFAULT_INITIAL_SEED_USD
-
-    @staticmethod
-    def _empty_golden_pocket_dict() -> Dict[str, Any]:
-        return {
-            "qty": 0,
-            "book_price": 0.0,
-            "book_invested_usd": 0.0,
-            "actual_cost_usd": 0.0,
-            "entry_ts": 0.0,
-            "order_date": "",
-        }
 
     @classmethod
     def _resolve_safe_initial_seed(
@@ -682,7 +656,7 @@ class SoxlStratumLedger:
             "reentry_mode": "HYBRID_PULL_OR_BRK",
             # [Case 87 : 👑 06_L2L7_RATCHET_8PCT — 구 2층 + 구 7층 통합 후 평단 오름차순 중간층 재배치 모드 락온]
             "grid_merge_mode": DEFAULT_GRID_MERGE_MODE,
-            # NEW [Case 88 : 🛡️ 13_SUB_L1L3_RESV05_CAP4L — 스위치 없는 100% 기본 상시 적용(Default ON) 3층 서브 그리드 상태 필드]
+            # [Case 88 : 🛡️ 13_SUB_L1L3_RESV05_CAP4L — 스위치 없는 100% 기본 상시 적용(Default ON) 3층 서브 그리드 상태 필드]
             "sub_grid_enabled": SUB_GRID_DEFAULT_ENABLED,
             "sub_merge_mode": SUB_MERGE_MODE_L1_L3,
             "sub_max_tiers": SUB_MAX_TIERS_3,
@@ -724,10 +698,6 @@ class SoxlStratumLedger:
             "daily_main_sell_cnt": 0,
             # Case 76: 🔓 06_STEP2X_15PCT_C20 조건부 스텝업 저가 해금 모드 락온
             "unlock_mode": DEFAULT_UNLOCK_MODE,
-            # [Case 80]: 황금시간대(07:00 ~ 07:50 EST & RSI <= 19.0) 전액매수 모드 (기본값 "NONE" [OFF])
-            "golden_allin_mode": DEFAULT_GOLDEN_ALLIN_MODE,
-            "golden_pocket": cls._empty_golden_pocket_dict(),
-            "last_golden_allin_date": "",
             "buy_interval_min": LOCKED_BUY_INTERVAL_MIN,
             "sell_interval_min": LOCKED_SELL_INTERVAL_MIN,
             # Case 72: 7-Layer 골디락스 멀티 그리드 기본값 락온
@@ -753,8 +723,6 @@ class SoxlStratumLedger:
             "pending_step_up_min_price": 0.0,
             "pending_sell_mode": "",
             "pending_sell_indices": [],
-            # [Case 80]: 매도 주문 발주 중 포함된 독립 골든포켓 수량
-            "pending_sell_pocket_qty": 0,
             # 봇 자동 정산 완료된 orderId 링버퍼(최근 50개) — 수동 체결 역추적 시 중복 정산 방지
             "last_settled_order_ids": [],
             "last_modify_mono": 0.0,
@@ -788,13 +756,6 @@ class SoxlStratumLedger:
             # Case 76: STEP2X_15PCT_C20 조건부 스텝업 해금 매수 누적/당일 카운터
             "cond_unlock_buy_events": 0,
             "daily_unlock_buy_events": 0,
-            # [Case 80]: 황금시간대(07:00 ~ 07:50 EST & RSI <= 19.0) 전액매수 및 골든포켓 익절/수익 통계
-            "golden_allin_buy_events": 0,
-            "daily_golden_allin_buy_events": 0,
-            "golden_pocket_sell_cnt": 0,
-            "daily_golden_pocket_sell_cnt": 0,
-            "golden_realized_net_usd": 0.0,
-            "daily_golden_realized_net_usd": 0.0,
             "extra_13plus_buy_events": 0,
             "seed_protect_pass_cnt": 0,
             "daily_seed_protect_pass_cnt": 0,
@@ -815,7 +776,7 @@ class SoxlStratumLedger:
             "cumulative_realized_fee_usd": 0.0,
             "cumulative_realized_net_usd": 0.0,
             "daily_realized_net_usd": 0.0,
-            # NEW: 현재 진행 사이클 단위 실현수익 및 0주 졸업 사이클 기록 영속화 필드
+            # 현재 진행 사이클 단위 실현수익 및 0주 졸업 사이클 기록 영속화 필드
             "cycle_realized_gross_usd": 0.0,
             "cycle_realized_fee_usd": 0.0,
             "cycle_realized_net_usd": 0.0,
@@ -952,7 +913,7 @@ class SoxlStratumLedger:
         merge_mode: str = SUB_MERGE_MODE_L1_L3,
     ) -> List[Dict[str, Any]]:
         """
-        # NEW [Case 88 : 🛡️ 13_SUB_L1L3_RESV05_CAP4L — 3층 서브 그리드 만석 초과(4층 발생) 시 서브 구 1층 + 구 3층 양끝 합병(SUB_L1_L3_MERGE) 및 오름차순 재배치]:
+        # [Case 88 : 🛡️ 13_SUB_L1L3_RESV05_CAP4L — 3층 서브 그리드 만석 초과(4층 발생) 시 서브 구 1층 + 구 3층 양끝 합병(SUB_L1_L3_MERGE) 및 오름차순 재배치]:
         서브 그리드 원장에 3개 층 초과(상단 2개 초과) 버킷이 존재할 경우:
         1) merge_mode == "SUB_L1_L3_MERGE" 이고 상단 지층 후보가 3개 이상일 때:
            - 최하단 상단층 후보인 low_b = uppers[0] (서브 구 1층)과 최상단층 후보인 high_b = uppers[-1] (서브 구 3층)을
@@ -1049,61 +1010,21 @@ class SoxlStratumLedger:
             relabeled_uppers.append(b_copy)
 
         return l1_list + relabeled_uppers
-
-    @classmethod
-    def _sanitize_golden_pocket_dict(
-        cls, raw_pocket: Any
-    ) -> Dict[str, Any]:
-        """
-        # [Case 69, Case 71 & Case 80 : 독립 골든포켓(golden_pocket) 순수 실물 원가 정규화기]:
-        golden_pocket 의 qty > 0 일 때 book_price == actual_avg_price 및
-        book_invested_usd == actual_cost_usd 를 100% 일치시켜 원가 훼손을 원천 차단한다.
-        """
-        if not isinstance(raw_pocket, dict):
-            return cls._empty_golden_pocket_dict()
-        q = safe_int(raw_pocket.get("qty"), 0)
-        if q <= 0:
-            return cls._empty_golden_pocket_dict()
-        raw_p = safe_float(
-            raw_pocket.get("book_price"),
-            safe_float(raw_pocket.get("buy_price"), 0.0),
-        )
-        raw_bi = safe_float(
-            raw_pocket.get("book_invested_usd"), float(q) * max(0.0, raw_p)
-        )
-        ac = safe_float(raw_pocket.get("actual_cost_usd"), raw_bi)
-        if ac <= 0.0 and raw_p > 0.0:
-            ac = float(q) * raw_p
-        if ac <= 0.0:
-            return cls._empty_golden_pocket_dict()
-        clean_cost = round(max(0.01 * float(q), ac), 4)
-        pure_p = round(max(0.01, clean_cost / float(q)), 4)
-        return {
-            "qty": q,
-            "book_price": pure_p,
-            "book_invested_usd": clean_cost,
-            "actual_cost_usd": clean_cost,
-            "entry_ts": round(
-                max(0.0, safe_float(raw_pocket.get("entry_ts"), 0.0)), 4
-            ),
-            "order_date": str(raw_pocket.get("order_date") or "").strip(),
-        }
     def _sanitize_and_enforce_identity(
         self, raw_st: Dict[str, Any]
     ) -> Dict[str, Any]:
         """
-        🚨 Case 63, Case 64, Case 67, Case 68, Case 69, Case 70, Case 71, Case 72, Case 73, Case 74, Case 76, Case 77, Case 78, Case 80, Case 86, Case 87, Case 88 & Case 89:
+        🚨 Case 63, Case 64, Case 67, Case 68, Case 69, Case 70, Case 71, Case 72, Case 73, Case 74, Case 76, Case 77, Case 78, Case 86, Case 87, Case 88 & Case 89:
         1) buy_interval_min = 10, sell_interval_min = 1, max_grid_tiers = 7 (MAX_GRID_TIERS_7),
            portion_mode = "COMP_08PCT", threshold_mode = "WIDE_RUNWAY",
            grid_merge_mode = "L2_L7_MERGE_SORT", unlock_mode = "STEP2X_15PCT_C20",
            sub_grid_enabled = True (Default ON), sub_merge_mode = "SUB_L1_L3_MERGE",
-           sub_max_tiers = 3, sub_max_total_lots = 4 를 강제 동기화하고,
-           golden_allin_mode 는 GOLDEN_ALLIN_MODES ("NONE", "POCKET_ALLIN", "GRID_L1_ALLIN") 중 하나로 검증한다(기본값 "NONE").
+           sub_max_tiers = 3, sub_max_total_lots = 4 를 강제 동기화한다.
         2) 계좌별 미국 주식 수수료율(us_commission_rate, round_trip_fee_rate_pct)을 유효 범위(왕복 0.01% ~ 2.00%)로 정규화하고
            런타임 메모리 캐시에 동기화한다.
         3) 시드머니 결측 또는 0.0 유입 시 $100.0 으로 변조되지 않도록 _resolve_safe_initial_seed() 를 적용한다.
-        4) 🛡️ [Case 69, Case 71, Case 72, Case 80, Case 87 & Case 88 순수 실물 원가 100% 보존 및 본/서브 최고 도달 회차(cycle_ratchet_max_lots / sub_ratchet_max_lots) 잠금 강제]
-        5) 💉 [Case 77, Case 80 & Case 88 온디맨드 예비시드 수혈 잔액(injected_reserve_usd) · 본 그리드 · 서브 그리드 · 골든포켓 투입원금 통합 회계 항등식]
+        4) 🛡️ [Case 69, Case 71, Case 72, Case 87 & Case 88 순수 실물 원가 100% 보존 및 본/서브 최고 도달 회차(cycle_ratchet_max_lots / sub_ratchet_max_lots) 잠금 강제]
+        5) 💉 [Case 77 & Case 88 온디맨드 예비시드 수혈 잔액(injected_reserve_usd) · 본 그리드 · 서브 그리드 투입원금 통합 회계 항등식]
         6) 🔄 [현재 진행 사이클 단위 실현수익(cycle_realized_net_usd) 및 직전 졸업 사이클 기록(last_cycle_realized_net_usd, completed_main_cycles) 정합성 강제]
         """
         st = self._default_symbol_state(
@@ -1112,6 +1033,21 @@ class SoxlStratumLedger:
         )
         if isinstance(raw_st, dict):
             st.update(raw_st)
+
+        # 폐기된 황금시간(07:00~07:50 RSI<=19) 관련 잔류 키가 기존 원장 JSON 에 남아 있을 경우 즉시 영구 소각
+        for obsolete_k in (
+            "golden_allin_mode",
+            "golden_pocket",
+            "last_golden_allin_date",
+            "pending_sell_pocket_qty",
+            "golden_allin_buy_events",
+            "daily_golden_allin_buy_events",
+            "golden_pocket_sell_cnt",
+            "daily_golden_pocket_sell_cnt",
+            "golden_realized_net_usd",
+            "daily_golden_realized_net_usd",
+        ):
+            st.pop(obsolete_k, None)
 
         st["symbol"] = TARGET_SYMBOL
         st["folder_slug"] = self.folder_slug
@@ -1155,46 +1091,6 @@ class SoxlStratumLedger:
         set_runtime_round_trip_fee_rate_pct(
             st["round_trip_fee_rate_pct"],
             us_commission_rate=st["us_commission_rate"],
-        )
-
-        # [Case 80]: 황금시간대 전액매수 모드 검증 (기본값 "NONE" [OFF]) 및 통계 정규화
-        raw_g_mode = (
-            str(st.get("golden_allin_mode") or DEFAULT_GOLDEN_ALLIN_MODE)
-            .upper()
-            .strip()
-        )
-        if raw_g_mode not in GOLDEN_ALLIN_MODES:
-            raw_g_mode = DEFAULT_GOLDEN_ALLIN_MODE
-        st["golden_allin_mode"] = raw_g_mode
-        st["last_golden_allin_date"] = str(
-            st.get("last_golden_allin_date") or ""
-        ).strip()
-        st["golden_allin_buy_events"] = max(
-            0, safe_int(st.get("golden_allin_buy_events"), 0)
-        )
-        st["daily_golden_allin_buy_events"] = max(
-            0, safe_int(st.get("daily_golden_allin_buy_events"), 0)
-        )
-        st["golden_pocket_sell_cnt"] = max(
-            0, safe_int(st.get("golden_pocket_sell_cnt"), 0)
-        )
-        st["daily_golden_pocket_sell_cnt"] = max(
-            0, safe_int(st.get("daily_golden_pocket_sell_cnt"), 0)
-        )
-        st["golden_realized_net_usd"] = round(
-            safe_float(st.get("golden_realized_net_usd"), 0.0), 4
-        )
-        st["daily_golden_realized_net_usd"] = round(
-            safe_float(st.get("daily_golden_realized_net_usd"), 0.0), 4
-        )
-
-        clean_pocket = self._sanitize_golden_pocket_dict(
-            st.get("golden_pocket")
-        )
-        st["golden_pocket"] = clean_pocket
-        pocket_qty = safe_int(clean_pocket.get("qty"), 0)
-        pocket_cost = round(
-            safe_float(clean_pocket.get("actual_cost_usd"), 0.0), 4
         )
 
         # Case 77: 예비시드 수혈·상환·자투리차단 카운터 및 단 1회 입금 알림 래치 정규화
@@ -1297,7 +1193,7 @@ class SoxlStratumLedger:
         st["buckets"] = clean_buckets
         st["cycle_reanchor_credit_usd"] = 0.0
 
-        # NEW [Case 88 : 3층 서브 그리드(sub_buckets) 순수 원가 정규화 및 3층 SUB_L1_L3_MERGE 캡 강제]
+        # [Case 88 : 3층 서브 그리드(sub_buckets) 순수 원가 정규화 및 3층 SUB_L1_L3_MERGE 캡 강제]
         raw_sub_buckets = st.get("sub_buckets")
         clean_sub_buckets: List[Dict[str, Any]] = []
         if isinstance(raw_sub_buckets, list):
@@ -1374,7 +1270,6 @@ class SoxlStratumLedger:
             st["last_settled_order_ids"] = []
 
         has_pending_buy = bool(str(st.get("buy_order_id") or "").strip())
-        has_pending_sell = bool(str(st.get("sell_order_id") or "").strip())
         raw_target_q = max(0, safe_int(st.get("l1_target_quota_qty"), 0))
         raw_sub_target_q = max(
             0, safe_int(st.get("sub_l1_target_quota_qty"), 0)
@@ -1384,18 +1279,7 @@ class SoxlStratumLedger:
         )
         is_pending_sub_buy = pending_lot_tag.startswith("SUB_")
 
-        if pocket_qty > 0 and has_pending_sell:
-            st["pending_sell_pocket_qty"] = max(
-                0,
-                min(
-                    pocket_qty,
-                    safe_int(st.get("pending_sell_pocket_qty"), 0),
-                ),
-            )
-        else:
-            st["pending_sell_pocket_qty"] = 0
-
-        # MODIFIED [Case 60, Case 87 & Case 88 : 본 그리드 0주 시 cycle_min_buy_price 및 cycle_ratchet_max_lots 동시 초기화 강제]
+        # [Case 60, Case 87 & Case 88 : 본 그리드 0주 시 cycle_min_buy_price 및 cycle_ratchet_max_lots 동시 초기화 강제]
         if not clean_buckets:
             st["cycle_ratchet_max_lots"] = 0
             st["cycle_min_buy_price"] = 0.0
@@ -1406,11 +1290,7 @@ class SoxlStratumLedger:
             st["pending_step_up_min_price"] = 0.0
             st["l1_target_quota_qty"] = (
                 raw_target_q
-                if (
-                    has_pending_buy
-                    and not is_pending_sub_buy
-                    and pending_lot_tag != "GOLDEN_POCKET"
-                )
+                if (has_pending_buy and not is_pending_sub_buy)
                 else 0
             )
         else:
@@ -1430,7 +1310,7 @@ class SoxlStratumLedger:
                 if (
                     has_pending_buy
                     and not is_pending_sub_buy
-                    and pending_lot_tag not in ("", "TOPUP_1FL", "GOLDEN_POCKET")
+                    and pending_lot_tag not in ("", "TOPUP_1FL")
                 ):
                     ord_q_pending = max(0, safe_int(st.get("ordered_qty"), 0))
                     st["l1_target_quota_qty"] = (
@@ -1449,11 +1329,7 @@ class SoxlStratumLedger:
                 )
                 st["l1_target_quota_qty"] = (
                     raw_target_q
-                    if (
-                        has_pending_buy
-                        and not is_pending_sub_buy
-                        and pending_lot_tag != "GOLDEN_POCKET"
-                    )
+                    if (has_pending_buy and not is_pending_sub_buy)
                     else 0
                 )
 
@@ -1481,7 +1357,7 @@ class SoxlStratumLedger:
             else:
                 st["pending_sell_indices"] = []
 
-        # NEW [Case 88 : 서브 그리드 상태 정합성 강제]
+        # [Case 88 : 서브 그리드 상태 정합성 강제]
         if not clean_sub_buckets:
             st["sub_ratchet_max_lots"] = 0
             st["sub_cycle_min_buy_price"] = 0.0
@@ -1617,7 +1493,7 @@ class SoxlStratumLedger:
             0, safe_int(st.get("daily_main_sell_cnt"), 0)
         )
 
-        # NEW: 현재 진행 사이클 단위 실현수익 및 0주 졸업 사이클 기록 정규화
+        # 현재 진행 사이클 단위 실현수익 및 0주 졸업 사이클 기록 정규화
         st["last_cycle_realized_net_usd"] = round(
             safe_float(st.get("last_cycle_realized_net_usd"), 0.0), 4
         )
@@ -1628,7 +1504,7 @@ class SoxlStratumLedger:
             0, safe_int(st.get("completed_main_cycles"), 0)
         )
 
-        if not clean_buckets and not clean_sub_buckets and pocket_qty <= 0:
+        if not clean_buckets and not clean_sub_buckets:
             st["cycle_realized_gross_usd"] = 0.0
             st["cycle_realized_fee_usd"] = 0.0
             st["cycle_realized_net_usd"] = 0.0
@@ -1655,7 +1531,7 @@ class SoxlStratumLedger:
                 safe_float(st.get("cycle_leftover_saved_usd"), 0.0), 4
             )
 
-        # 🚨 [Case 77, Case 80 & Case 88 통합 회계 항등식(Accounting Identity) 강제]
+        # 🚨 [Case 77 & Case 88 통합 회계 항등식(Accounting Identity) 강제]
         actual_inv_buckets = round(
             sum(safe_float(b["actual_cost_usd"], 0.0) for b in clean_buckets),
             4,
@@ -1667,9 +1543,7 @@ class SoxlStratumLedger:
             ),
             4,
         )
-        actual_inv_total = round(
-            actual_inv_buckets + actual_inv_sub + pocket_cost, 4
-        )
+        actual_inv_total = round(actual_inv_buckets + actual_inv_sub, 4)
         realized_equity = max(0.0, init_seed + cum_net)
         total_pool_equity = realized_equity + inj_res_usd
         st["free_cash_usd"] = round(
@@ -1717,8 +1591,8 @@ class SoxlStratumLedger:
         st: Dict[str, Any],
     ) -> Tuple[int, int, int, float, str]:
         """
-        🚨 Case 68, Case 77, Case 80 & Case 88 [다중 원장 상태 비교 자가 치유 스코어링]:
-        폴더 내 3개 원장 후보 중 실제 매매 데이터(본 그리드 + 서브 그리드 + 골든포켓)를 보유한 최적 원장을 선택하기 위한 우선순위 튜플.
+        🚨 Case 68, Case 77 & Case 88 [다중 원장 상태 비교 자가 치유 스코어링]:
+        폴더 내 3개 원장 후보 중 실제 매매 데이터(본 그리드 + 서브 그리드)를 보유한 최적 원장을 선택하기 위한 우선순위 튜플.
         """
         buckets = (
             st.get("buckets") if isinstance(st.get("buckets"), list) else []
@@ -1728,23 +1602,14 @@ class SoxlStratumLedger:
             if isinstance(st.get("sub_buckets"), list)
             else []
         )
-        gp = (
-            st.get("golden_pocket")
-            if isinstance(st.get("golden_pocket"), dict)
-            else {}
-        )
-        total_qty = (
-            sum(
-                safe_int(b.get("qty"), 0)
-                for b in buckets
-                if isinstance(b, dict)
-            )
-            + sum(
-                safe_int(sb.get("qty"), 0)
-                for sb in sub_buckets
-                if isinstance(sb, dict)
-            )
-            + max(0, safe_int(gp.get("qty"), 0))
+        total_qty = sum(
+            safe_int(b.get("qty"), 0)
+            for b in buckets
+            if isinstance(b, dict)
+        ) + sum(
+            safe_int(sb.get("qty"), 0)
+            for sb in sub_buckets
+            if isinstance(sb, dict)
         )
         has_pending_ord = bool(
             str(st.get("buy_order_id") or "").strip()
@@ -1758,7 +1623,6 @@ class SoxlStratumLedger:
             + safe_int(st.get("sub_buy_events"), 0)
             + safe_int(st.get("sub_sell_events"), 0)
             + safe_int(st.get("cond_unlock_buy_events"), 0)
-            + safe_int(st.get("golden_allin_buy_events"), 0)
             + safe_int(st.get("total_reserve_injected_cnt"), 0)
             + safe_int(st.get("reanchor_cnt"), 0)
         )
@@ -1795,7 +1659,7 @@ class SoxlStratumLedger:
 
     def _load_sync(self) -> None:
         """
-        🚨 Case 68, Case 75, Case 80, Case 85, Case 86, Case 87 & Case 88 [기존 soxl_stratum_ledger.json 100% 무손실 자동 이관 & 3중 금고 Dirty-Check 자가 치유]:
+        🚨 Case 68, Case 75, Case 85, Case 86, Case 87 & Case 88 [기존 soxl_stratum_ledger.json 100% 무손실 자동 이관 & 3중 금고 Dirty-Check 자가 치유]:
         """
         with GlobalThrottle.get_file_lock(self.primary_filepath):
             with GlobalThrottle.get_file_lock(self.legacy_filepath):
@@ -1857,11 +1721,8 @@ class SoxlStratumLedger:
                         max(1, safe_int(sb.get("lot_count"), 1))
                         for sb in sanitized.get("sub_buckets", [])
                     )
-                    gp_q = safe_int(
-                        (sanitized.get("golden_pocket") or {}).get("qty"), 0
-                    )
                     logger.info(
-                        "📂 [Case 68~89 폴더별 3중 7층 본그리드 + Default-ON 3층 서브그리드 원장 락온 완료] 폴더=[%s] · 채택소스=%s · 시드=$%.2f · 왕복수수료=%.2f%% · 본그리드=%d주(%d개층·보유%d/잠금%d회차) · 서브그리드=%d주(%d개층·%d/%d회분) · 골든포켓=%d주(모드=%s) · 이번사이클순익=$%.2f · 예비수혈=%d/%d회분($%.2f) · 고유원장=%s",
+                        "📂 [Case 68~89 폴더별 3중 7층 본그리드 + Default-ON 3층 서브그리드 원장 락온 완료] 폴더=[%s] · 채택소스=%s · 시드=$%.2f · 왕복수수료=%.2f%% · 본그리드=%d주(%d개층·보유%d/잠금%d회차) · 서브그리드=%d주(%d개층·%d/%d회분) · 이번사이클순익=$%.2f · 예비수혈=%d/%d회분($%.2f) · 고유원장=%s",
                         self.folder_slug,
                         best_label,
                         safe_float(sanitized.get("initial_seed_usd"), 10000.0),
@@ -1877,11 +1738,6 @@ class SoxlStratumLedger:
                         len(sanitized.get("sub_buckets", [])),
                         sub_l,
                         SUB_MAX_TOTAL_LOTS_4,
-                        gp_q,
-                        str(
-                            sanitized.get("golden_allin_mode")
-                            or DEFAULT_GOLDEN_ALLIN_MODE
-                        ),
                         safe_float(
                             sanitized.get("cycle_realized_net_usd"), 0.0
                         ),
@@ -2050,11 +1906,6 @@ class SoxlStratumLedger:
             if isinstance(raw_d, dict):
                 b_list = raw_d.get("buckets")
                 sub_list = raw_d.get("sub_buckets")
-                gp_obj = (
-                    raw_d.get("golden_pocket")
-                    if isinstance(raw_d.get("golden_pocket"), dict)
-                    else {}
-                )
                 b_qty = (
                     sum(
                         safe_int(b.get("qty"), 0)
@@ -2073,8 +1924,7 @@ class SoxlStratumLedger:
                     if isinstance(sub_list, list)
                     else 0
                 )
-                gp_qty = max(0, safe_int(gp_obj.get("qty"), 0))
-                if (b_qty + sub_qty + gp_qty) > 0:
+                if (b_qty + sub_qty) > 0:
                     return self._sanitize_and_enforce_identity(raw_d)
         return None
 
@@ -2133,39 +1983,6 @@ class SoxlStratumLedger:
             self.update_state_sync, symbol, **kwargs
         )
 
-    async def cycle_golden_allin_mode(
-        self, target_mode: Optional[str] = None
-    ) -> Dict[str, Any]:
-        st = self.get_state(TARGET_SYMBOL)
-        cur_m = (
-            str(st.get("golden_allin_mode") or DEFAULT_GOLDEN_ALLIN_MODE)
-            .upper()
-            .strip()
-        )
-        if target_mode is not None:
-            req_m = str(target_mode).upper().strip()
-            if req_m in ("OFF", "NONE", "0", "FALSE"):
-                next_m = "NONE"
-            elif req_m in ("POCKET", "POCKET_ALLIN", "1"):
-                next_m = "POCKET_ALLIN"
-            elif req_m in ("GRID", "GRID_L1", "GRID_L1_ALLIN", "2"):
-                next_m = "GRID_L1_ALLIN"
-            elif req_m in GOLDEN_ALLIN_MODES:
-                next_m = req_m
-            else:
-                next_m = DEFAULT_GOLDEN_ALLIN_MODE
-        else:
-            try:
-                cur_idx = GOLDEN_ALLIN_MODES.index(cur_m)
-                next_m = GOLDEN_ALLIN_MODES[
-                    (cur_idx + 1) % len(GOLDEN_ALLIN_MODES)
-                ]
-            except ValueError:
-                next_m = "POCKET_ALLIN"
-        return await self.update_state(
-            TARGET_SYMBOL, golden_allin_mode=next_m
-        )
-
     async def reset_stratum_only(
         self,
         symbol: str = TARGET_SYMBOL,
@@ -2198,7 +2015,6 @@ class SoxlStratumLedger:
             cycle_leftover_saved_usd=0.0,
             buckets=[],
             sub_buckets=[],
-            golden_pocket=self._empty_golden_pocket_dict(),
             anchor_price=0.0,
             cycle_min_buy_price=0.0,
             cycle_ratchet_max_lots=0,
@@ -2237,7 +2053,6 @@ class SoxlStratumLedger:
             pending_sell_mode="",
             pending_sell_indices=[],
             pending_sub_sell_indices=[],
-            pending_sell_pocket_qty=0,
             last_evaluated_buy_bucket_id=-1,
             sub_last_evaluated_buy_bucket_id=-1,
         )
@@ -2296,9 +2111,6 @@ class SoxlStratumLedger:
             daily_sub_realized_net_usd=0.0,
             daily_main_buy_cnt=0,
             daily_main_sell_cnt=0,
-            daily_golden_allin_buy_events=0,
-            daily_golden_pocket_sell_cnt=0,
-            daily_golden_realized_net_usd=0.0,
             daily_reserve_injected_cnt=0,
             daily_dust_guard_blocked_cnt=0,
             daily_sell_events=0,

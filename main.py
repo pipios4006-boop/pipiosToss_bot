@@ -1,34 +1,32 @@
 # -*- coding: utf-8 -*-
 """
-# MODIFIED: main.py
+# MODIFIED: main.py (황금시간 07:00~07:50 RSI<=19 올인 임포트·롤오버키·포켓참조·주석 전면 영구 소각)
 인피니트 스노우볼 (Infinite Snowball) v3.0 — 순수 롱(🐂 SOXL 단독) 매수 04:07 ~ 16:00 EST 제한
 (정규장 마감 30분 전 15:30 ~ 16:00 EST 본·서브 0주 새 사이클 1층 진입 및 1층 공석 +1.0% 돌파 추격 차단 · Case 84, Case 88) &
 익절 매도 24시간 전 세션(프리마켓 + 정규장 + 애프터마켓 + 데이마켓 · 방안 C 오버나이트 통합이평 사수 · Case 83) 확장
 오버나이트 7층 골디락스 본 그리드(👑 06_L2L7_RATCHET_8PCT · Case 87) +
 🛡️ 스위치 없는 100% 기본 상시 적용(Default ON) 3층 서브 그리드(13_SUB_L1L3_RESV05_CAP4L · 최대 4회분[16%] 상한 캡 · Case 88) 지층관리 스나이퍼
 경량화 메인 오케스트레이터 코어 모듈 (메인 코드 2분할 리팩토링 Part 2 / 2 · Step 13 / 13)
-- 최종 확정 진화 챔피언 (👑 06_L2L7_RATCHET_8PCT × 🛡️ 13_SUB_L1L3_RESV05_CAP4L[Default ON] × 🌟 POCKET_ALLIN / 🔥 GRID_L1_ALLIN × 💉 05_RESV_6P_GUARD30 × 🔓 06_STEP2X_15PCT_C20 × 🌃 OVERNIGHT_WMA_GRAD_LOCK × 🛡️ LATE_1530_CUTOFF · 황금시간 기본값 NONE[OFF] · Case 70 ~ Case 88) 100% 결속:
+- 최종 확정 진화 챔피언 (👑 06_L2L7_RATCHET_8PCT × 🛡️ 13_SUB_L1L3_RESV05_CAP4L[Default ON] × 💉 05_RESV_6P_GUARD30 × 🔓 06_STEP2X_15PCT_C20 × 🌃 OVERNIGHT_WMA_GRAD_LOCK × 🛡️ LATE_1530_CUTOFF · Case 70 ~ Case 89) 100% 결속:
   1) main_runtime.py 와 역할 분리를 통해 모바일 편집기 및 유지보수에 최적화된 경량 오케스트레이터 구현
   2) 기동 시 GET /api/v1/commissions (ensure_us_commission_rate) 를 호출하여 계좌별 미국 주식 실제 수수료율
      (예: pipiosToss 편도 0.07% -> 왕복 0.14% / wonToss 편도 0.10% -> 왕복 0.20%) 자동 락온 및 원장 영속화 (Case 86)
   3) 본 그리드 8%(12.5분할) & 서브 그리드 4%(25분할) 황금비율 정액 기반 정량제 & 온디맨드 예비시드 수혈금(injected_reserve_usd)을 제외한
      순수 코어 총자산(core_equity) 기반 정량 산출 & min(1회분 예산 상한 주수, 기준가 고정 정량) 이중 캡핑(Case 67, Case 77, Case 88) &
      자투리 절약금(부분 체결 시 비례 정산 Case 78) · 세후 실현수익금 실시간 시드 풀 복리 산입
-  4) 🌟 [Case 80] 미동부 프리장 황금시간대(07:00 ~ 07:50 EST & 1분봉 Wilder RSI(14) <= 19.0) 도달 시 전술 제어반(/settlement) 선택 모드
-     (기본값 NONE[OFF] ↔ POCKET_ALLIN[독립 골든포켓 100%] ↔ GRID_L1_ALLIN[7층 그리드 1층편입 100%])에 따라 가용 현금 시드 100% 전액 추가매수 집행!
-  5) 🎯 [Case 78 & Case 88] 본·서브 활성 1층 지정가 부분 체결 시 04:07 ~ 16:00 EST 구간에서 매수 후 60.0초 타임쉴드 경과 시점부터
+  4) 🎯 [Case 78 & Case 88] 본·서브 활성 1층 지정가 부분 체결 시 04:07 ~ 16:00 EST 구간에서 매수 후 60.0초 타임쉴드 경과 시점부터
      매 1.5초 실시간 모니터에서 현재가 <= 1층 단가 재도래 시 미체결 잔량(TOPUP_1FL / SUB_TOPUP_1FL) 지정가 60초 재대기 및 기존 1층 무승격 원자적 합산!
-  6) 🛡️ [Case 73, Case 84 & Case 88] 15:30 ~ 16:00 EST 정규장 마감 30분 전 구간에서는 본·서브 0주 새 사이클 첫 1층(REENTRY_1FL / SUB_REENTRY_1FL) 진입과
+  5) 🛡️ [Case 73, Case 84 & Case 88] 15:30 ~ 16:00 EST 정규장 마감 30분 전 구간에서는 본·서브 0주 새 사이클 첫 1층(REENTRY_1FL / SUB_REENTRY_1FL) 진입과
      상단층 보유 · 1층 공석 상태의 +1.00% 상승돌파(BREAKOUT_RELOAD) 추격을 원천 차단하고,
      2층 단가 상한 가드(HOLD_PREVENT_INVERSION · Case 73) 하의 -1.00% 눌림목(PULLBACK_RELOAD) 재장전은 정상 허용!
-  7) 본 그리드 활성 1층 보유 중 정적 기억 사이클 최저 매수가(cycle_min_buy_price) 및 최고 도달 회차(cycle_ratchet_max_lots · Case 87) 잠금 기반
-     10분 고정 4단 와이드 활주로 및 STEP2X_15PCT_C20 3중 안전문(-15.0% 스텝업 해금 · Case 76) & GUARD30 / 최대 +6회분 온디맨드 예비시드 수혈 및 0주 졸업 자동 상환(Case 77) &
+  6) 본 그리드 활성 1층 보유 중 정적 기억 사이클 최저 매수가(cycle_min_buy_price) 및 최고 도달 회차(cycle_ratchet_max_lots · Case 87) 잠금 기반
+     10분 고정 4단 와이드 활주로 및 STEP2X_15PCT_C20 3중 안전문(-15.0% 스텝업 해금 · Case 76) & GUARD30 / 최대 +6회분 온디맨드 예비시드 수혈 및 0주 졸업 자동 상환(Case 77, Case 89) &
      본 그리드 5영업일 이상 무매매 동결 시 100% 기본 상시 가동(Default ON)되는 3층 서브 그리드 엔진(4% 정량 · 0.5회분 보호예수 · 최대 4회분[16%] 캡 · SUB_L1_L3_MERGE · 10일/-10% 저가해금 · Case 88)
-  8) ⚡ [Case 65, Case 70, Case 71, Case 72, Case 79, Case 80, Case 82, Case 83, Case 87 & Case 88] 매수 직후 최초 60.0초 타임쉴드 유지 & 이후 보유 중 프리·정규·애프터·데이마켓
-     24시간 전 세션(is_active_sell_window)에서 매 1.5초 실시간 다중 익절(본 그리드 + 서브 그리드 + 골든포켓) + 최근 5.0초 체결틱 윗꼬리 병행 감지 + 방안 C 오버나이트 통합이평 사수 스나이퍼 매도 모니터 가동!
-  9) 🚨 [Case 66 미결 매수/매도 선행 정산 및 16:00 마감 72번 버킷 보호 후 일일 결산 실행], [Case 11 SIGTERM 0.1초 고속 안전 종료 가드],
+  7) ⚡ [Case 65, Case 70, Case 71, Case 72, Case 79, Case 82, Case 83, Case 87 & Case 88] 매수 직후 최초 60.0초 타임쉴드 유지 & 이후 보유 중 프리·정규·애프터·데이마켓
+     24시간 전 세션(is_active_sell_window)에서 매 1.5초 실시간 다중 익절(본 그리드 + 서브 그리드) + 최근 5.0초 체결틱 윗꼬리 병행 감지 + 방안 C 오버나이트 통합이평 사수 스나이퍼 매도 모니터 가동!
+  8) 🚨 [Case 66 미결 매수/매도 선행 정산 및 16:00 마감 72번 버킷 보호 후 일일 결산 실행], [Case 11 SIGTERM 0.1초 고속 안전 종료 가드],
      [Case 75 httpx/httpcore 로그 묵음화] 및 [Case 81 장외 자동 업데이트 / 수동 업데이트 직후 2.0초 태스크 타임아웃 취소 · 텔레그램 소켓 즉시 반납 · os.execv 인플레이스 무중단 자가 교체 결속]
-- 제1헌법 ~ 제6헌법 및 Case 01 ~ 88 전수 락온
+- 제1헌법 ~ 제6헌법 및 Case 01 ~ 89 전수 락온
 """
 
 from __future__ import annotations
@@ -68,7 +66,6 @@ from quant_engine import (
     SUB_MAX_TOTAL_LOTS_4,
     buckets_from_dicts,
     has_active_l1_bucket,
-    pocket_from_dict,
     run_quant_engine_tdd,
     set_runtime_round_trip_fee_rate_pct,
 )
@@ -228,7 +225,7 @@ class SniperAppContext:
 # ---------------------------------------------------------------------------
 async def candle_radar_loop(context: SniperAppContext) -> None:
     """
-    # [Case 79 & Case 80 : 주말 휴장 폴링 차단 및 장외 트래픽 최적화]:
+    # [Case 79 : 주말 휴장 폴링 차단 및 장외 트래픽 최적화]:
     1분봉 및 일봉을 주기적으로 수집하여 VWAP, 5MA 진폭, Heikin-Ashi 추세, Wilder's RSI(14) 기저값을 산출한다.
     """
     while not context.shutdown_event.is_set():
@@ -299,7 +296,7 @@ def _evaluate_fast_shield_mode(
     live_p: float,
 ) -> bool:
     """
-    # MODIFIED [Case 70, Case 78, Case 79, Case 80 & Case 88]:
+    # MODIFIED [Case 70, Case 78, Case 79 & Case 88]:
     미체결 주문(buy_order_id / sell_order_id) 대기 중이거나 본 그리드 / 서브 그리드 10분 매수 게이트 정각 경계일 때만 0.4초 부스터를 가동한다.
     """
     hm = now_est.hour * 100 + now_est.minute
@@ -371,7 +368,7 @@ def _evaluate_fast_shield_mode(
 
 async def main_sniper_loop(context: SniperAppContext) -> None:
     """
-    # MODIFIED [Case 01, Case 65, Case 66, Case 70 ~ Case 88 (방안 C 오버나이트 통합이평 사수 · Default-ON 3층 서브 그리드 · 16:00 마감 72번 버킷 보호)]:
+    # MODIFIED [Case 01, Case 65, Case 66, Case 70 ~ Case 89 (방안 C 오버나이트 통합이평 사수 · Default-ON 3층 서브 그리드 · 16:00 마감 72번 버킷 보호)]:
     """
     while not context.shutdown_event.is_set():
         now_est = datetime.now(EST_TZ)
@@ -463,9 +460,6 @@ async def main_sniper_loop(context: SniperAppContext) -> None:
                         daily_sub_realized_net_usd=0.0,
                         daily_main_buy_cnt=0,
                         daily_main_sell_cnt=0,
-                        daily_golden_allin_buy_events=0,
-                        daily_golden_pocket_sell_cnt=0,
-                        daily_golden_realized_net_usd=0.0,
                         daily_reserve_injected_cnt=0,
                         daily_dust_guard_blocked_cnt=0,
                         pending_step_up_min_price=0.0,
@@ -499,7 +493,7 @@ async def main_sniper_loop(context: SniperAppContext) -> None:
                         now_est=now_est,
                     )
 
-                # [Step 3-1] 로컬 7층 본 그리드 + 3층 서브 그리드 + 독립 골든포켓 원장 ↔ 토스 실보유 잔고 무결성 화해 (24시간 전 세션 작동)
+                # [Step 3-1] 로컬 7층 본 그리드 + 3층 서브 그리드 원장 ↔ 토스 실보유 잔고 무결성 화해 (24시간 전 세션 작동)
                 await _call_plugin_adaptive(
                     reconcile_stratum_with_broker_holdings_plugin,
                     context=context,
@@ -508,7 +502,7 @@ async def main_sniper_loop(context: SniperAppContext) -> None:
                     now_est=now_est,
                 )
 
-                # ⚡ [Step 3-2 · Case 70, 71, 72, 79, 80, 82, 83, 87, 88] 프리·정규·애프터·데이마켓 24시간 전 세션 매 1.5초 실시간 다중 익절(본+서브+포켓) + 방안 C 매도 모니터
+                # ⚡ [Step 3-2 · Case 70, 71, 72, 79, 82, 83, 87, 88] 프리·정규·애프터·데이마켓 24시간 전 세션 매 1.5초 실시간 다중 익절(본+서브) + 방안 C 매도 모니터
                 sell_res = await _call_plugin_adaptive(
                     execute_1m_sniper_sell_and_reanchor_plugin,
                     context=context,
@@ -521,7 +515,7 @@ async def main_sniper_loop(context: SniperAppContext) -> None:
                     and sell_res.get("did_sell_or_ratchet")
                 )
 
-                # 🔵 [Step 3-3 · Case 44, 78, 79, 80, 84, 87, 88] 매수 게이트/모니터(본 그리드 + Default-ON 3층 서브 그리드)는 오직 04:07 ~ 16:00 EST (is_active_buy_window) 구간에서만 가동!
+                # 🔵 [Step 3-3 · Case 44, 78, 79, 84, 87, 88] 매수 게이트/모니터(본 그리드 + Default-ON 3층 서브 그리드)는 오직 04:07 ~ 16:00 EST (is_active_buy_window) 구간에서만 가동!
                 if not did_sell and is_active_buy_window(hm, now_est=now_est):
                     await _call_plugin_adaptive(
                         execute_seed_protected_buy_gate_plugin,
@@ -598,14 +592,12 @@ async def main_sniper_loop(context: SniperAppContext) -> None:
             st_after = context.ledger.get_state(TARGET_SYMBOL)
             b_after = st_after.get("buckets") or []
             sub_after = st_after.get("sub_buckets") or []
-            gp_after = pocket_from_dict(st_after.get("golden_pocket"))
             h_qty_after = safe_int(
                 context.latest_holdings.get(TARGET_SYMBOL, {}).get("qty"), 0
             )
             has_pos_or_ord = bool(
                 len(b_after) > 0
                 or len(sub_after) > 0
-                or gp_after.is_active
                 or h_qty_after > 0
                 or str(st_after.get("buy_order_id") or "").strip()
                 or str(st_after.get("sell_order_id") or "").strip()
@@ -628,7 +620,7 @@ async def main_sniper_loop(context: SniperAppContext) -> None:
 
 
 # ---------------------------------------------------------------------------
-# [핵심 4] 백그라운드 태스크 3 : 17:00 EST 일일 GC · 날짜별 금고 백업 및 롤오버 루프 (Case 74, 76, 77, 79, 80, 88)
+# [핵심 4] 백그라운드 태스크 3 : 17:00 EST 일일 GC · 날짜별 금고 백업 및 롤오버 루프 (Case 74, 76, 77, 79, 88)
 # ---------------------------------------------------------------------------
 async def daily_gc_and_rollover_loop(context: SniperAppContext) -> None:
     last_gc_date = ""
@@ -661,9 +653,6 @@ async def daily_gc_and_rollover_loop(context: SniperAppContext) -> None:
                     daily_sub_realized_net_usd=0.0,
                     daily_main_buy_cnt=0,
                     daily_main_sell_cnt=0,
-                    daily_golden_allin_buy_events=0,
-                    daily_golden_pocket_sell_cnt=0,
-                    daily_golden_realized_net_usd=0.0,
                     daily_reserve_injected_cnt=0,
                     daily_dust_guard_blocked_cnt=0,
                     pending_step_up_min_price=0.0,
@@ -742,7 +731,7 @@ async def async_main() -> None:
 
     run_quant_engine_tdd()
     logger.info(
-        "✅ [QuantEngine TDD 사전 무결성 검증 통과] 챔피언 👑 06_L2L7_RATCHET_8PCT × 🛡️ 13_SUB_L1L3_RESV05_CAP4L(Default ON) × 🌟 POCKET_ALLIN / 🔥 GRID_L1_ALLIN × 💉 05_RESV_6P_GUARD30 × 🔓 06_STEP2X_15PCT_C20 & 방안 C · Case 84 ~ 88 전수 검증 완료"
+        "✅ [QuantEngine TDD 사전 무결성 검증 통과] 챔피언 👑 06_L2L7_RATCHET_8PCT × 🛡️ 13_SUB_L1L3_RESV05_CAP4L(Default ON) × 💉 05_RESV_6P_GUARD30 × 🔓 06_STEP2X_15PCT_C20 & 방안 C · Case 84 ~ 89 전수 검증 완료"
     )
 
     context = SniperAppContext(base_dir=base_dir)
@@ -883,7 +872,7 @@ async def async_main() -> None:
     ]
 
     logger.info(
-        "🚀 [SOXL 7층 본그리드 + Default-ON 3층 서브그리드 스나이퍼 가동 완료 · 폴더=%s] 매수 04:07~16:00 EST(15:30~16:00 0주신규/돌파차단 · 서브 5일동결 4%%·4회캡 상시가동) & 익절 매도 24시간(프리·정규·애프터·데이장 · 방안 C 통합이평 사수 & 윗꼬리 즉시 체결 & 계좌별 수수료 자동정산) 확장(Case 65~88)",
+        "🚀 [SOXL 7층 본그리드 + Default-ON 3층 서브그리드 스나이퍼 가동 완료 · 폴더=%s] 매수 04:07~16:00 EST(15:30~16:00 0주신규/돌파차단 · 서브 5일동결 4%%·4회캡 상시가동) & 익절 매도 24시간(프리·정규·애프터·데이장 · 방안 C 통합이평 사수 & 윗꼬리 즉시 체결 & 계좌별 수수료 자동정산) 확장(Case 65~89)",
         context.folder_slug,
     )
 
