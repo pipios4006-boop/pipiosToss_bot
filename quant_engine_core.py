@@ -1,25 +1,27 @@
 # -*- coding: utf-8 -*-
 """
-# MODIFIED: quant_engine_core.py (황금시간 07:00~07:50 RSI<=19 올인 클래스·함수·상수 전면 영구 소각)
+# MODIFIED: quant_engine_core.py (황금시간 07:00~07:50 RSI<=19 올인 클래스·함수·상수 전면 영구 소각 & Case 91 무제한 예비수혈 카운트 및 인출형[단리]/자산증식형[복리] 정량 산출기 탑재)
 인피니트 스노우볼 (Infinite Snowball) v3.0 — 퀀트 엔진 코어 Part 1 / 2 (Step 04 / 13)
 역할:
 1) 전역 퀀트 상수 락온 (본 그리드 8% 황금비율 · 7-Layer 골디락스 그리드 · DEFAULT_GRID_MERGE_MODE = "L2_L7_MERGE_SORT" [Case 87] ·
    🛡️ 스위치 없는 100% 기본 상시 적용[Default ON] 3-Layer 서브 그리드 4% 정량 · 0.5회분 보호예수 · 최대 4회분[16%] 상한 캡 · SUB_L1_L3_MERGE [Case 88] ·
-   STEP2X_15PCT_C20 · GUARD30 예비수혈[실계좌 30% 가드 이상 시 미할당 여유달러 즉시 수혈 Case 89] · Case 84 15:30 0주 신규진입 및 1층 공석 돌파추격 차단)
+   📈 자산증식형[복리 · COMP_08PCT] ⇄ 💵 인출형[단리 · SIMPLE_08PCT] 운용 모드 [Case 91] ·
+   STEP2X_15PCT_C20 · GUARD30 무제한 예비수혈[실계좌 30% 가드 이상 시 횟수 제한 없이 미할당 여유달러 즉시 수혈 및 횟수 카운트 Case 89, Case 91] ·
+   Case 84 15:30 0주 신규진입 및 1층 공석 돌파추격 차단)
 2) 계좌별 미국 주식 매매 수수료율(GET /api/v1/commissions : 편도 0.07% -> 왕복 0.14% / 편도 0.10% -> 왕복 0.20%) 런타임 동적 동기화 브릿지 탑재 (Case 86)
 3) 순수 실물 매수 원가(book_price == actual_avg_price) 구조체 (StratumBucket) ·
    본 그리드 상단(7층 초과 시 구 1층[새 2층 후보] 보존 + 구 2층 + 구 7층 가중평균 통합 후 평단 오름차순 중간층 재배치 L2_L7_MERGE_SORT · Case 87) 번호 정규화·합병기(relabel_upper_grid_tiers) 및
    서브 그리드 상단(3층 초과 시 서브 구 1층 + 구 3층 양끝 가중평균 통합 후 오름차순 재배치 SUB_L1_L3_MERGE · Case 88) 번호 정규화·합병기(relabel_sub_upper_grid_tiers)
-4) 본 그리드 8%(12.5분할) & 서브 그리드 4%(25분할) 황금비율 정액 기반 정량 산출기(min(1회분 예산 상한 주수, 기준가 고정 정량) 이중 캡핑 Case 67, Case 88) 및
-   본 그리드 0.5회분(4.0%) 보호예수금 차감 서브 가용 유휴 현금 산출기(compute_sub_grid_available_idle_cash · Case 88)
-5) 30% 자투리 1주 승격 방지 가드(GUARD30) & 토스 실계좌 주문가능금액이 30% 가드 이상일 때 미할당 여유자금 즉시 온디맨드 예비시드 자동 수혈 판정기(Case 77, Case 89) 및
-   0주 전량 졸업 시 예비시드 원금 자동 상환 연산기(Case 77)
+4) 본 그리드 8%(12.5분할) & 서브 그리드 4%(25분할) 황금비율 정액 기반 정량 산출기(복리 COMP_08PCT vs 단리 SIMPLE_08PCT 연동 & min(1회분 예산 상한 주수, 기준가 고정 정량) 이중 캡핑 Case 67, Case 88, Case 91) 및
+   본 그리드 0.5회분(4.0%) 보호예수금 차감 서브 가용 유휴 현금 산출기(compute_sub_grid_available_idle_cash · Case 88, Case 91)
+5) 30% 자투리 1주 승격 방지 가드(GUARD30) & 토스 실계좌 주문가능금액이 30% 가드 이상일 때 횟수 제한 없이 미할당 여유자금 즉시 온디맨드 예비시드 자동 수혈 판정기(Case 77, Case 89, Case 91) 및
+   0주 전량 졸업 시 예비시드 원금 자동 상환 연산기(Case 77, Case 91)
 6) 사이클 최고 도달 회차(eff_lots = max(held_lots, cycle_ratchet_max_lots)) 잠금 기반 4단 와이드 점진 활주로(1~4회 -1.0% / 5~8회 -2.0% / 9~10회 -3.5% / 11회+ -5.5% · Case 87, Case 88) ·
    1층 공석 시 2층 단가 상한 역전 차단(HOLD_PREVENT_INVERSION · Case 73) 기반 눌림목(-1.00%)/상승돌파(+1.00%) 하이브리드 재장전 판정기
    (Case 84: 15:30 ~ 16:00 EST 구간에서는 1층 공석 +1.00% 상승돌파 추격을 HOLD_LATE_SESSION_BREAKOUT_CUTOFF 로 원천 차단하고 2층 단가 이하 -1.00% 눌림목만 허용!) ·
    본 그리드 3중 안전문(보유 2층 이하 & 현금비중 20%+ & 저점대비 2.0배+ 반등) 통과 시 -15.0% 스텝업 저가 해금 판정기(Case 76) 및
    서브 그리드 최대 4회분(16%) 상한 캡 검문 & 10영업일 무매매·서브 1층 대비 -10.0% 저가 해금 판정기(evaluate_sub_grid_dip_signal · Case 88)
-- 제1헌법 ~ 제6헌법 및 Case 01 ~ 89 완벽 준수
+- 제1헌법 ~ 제6헌법 및 Case 01 ~ 91 완벽 준수
 """
 
 from __future__ import annotations
@@ -49,6 +51,15 @@ DEFAULT_US_COMMISSION_RATE: float = float(
 )
 ROUND_TRIP_FEE_RATE_PCT: float = float(
     getattr(toss_api, "ROUND_TRIP_FEE_RATE_PCT", 0.14)
+)
+
+# NEW [Case 91 : 📈 자산증식형(복리 · COMP_08PCT) vs 💵 인출형(단리 · SIMPLE_08PCT) 운용 모드 상수]
+PORTION_MODE_COMPOUND: str = "COMP_08PCT"
+PORTION_MODE_SIMPLE: str = "SIMPLE_08PCT"
+VALID_PORTION_MODES: Tuple[str, ...] = (
+    "COMP_08PCT",
+    "SIMPLE_08PCT",
+    "FIXED_800",
 )
 
 # 8%(12.5분할) 황금비율 기준 기본 분할 회차 및 1~7층 골디락스 멀티 그리드 최대 층수 상수 (Case 72 & Case 87)
@@ -119,9 +130,9 @@ STEP_UP_2X_DROP_PCT: float = float(
     getattr(toss_api, "STEP_UP_2X_DROP_PCT", 15.0)
 )
 
-# Case 77: 💉 05_RESV_6P_GUARD30 (30% 자투리 승격 방지 가드 & 최대 +6회분 온디맨드 예비시드 자동 수혈) 상수
+# MODIFIED [Case 77 & Case 91 : 30% 자투리 승격 방지 가드(GUARD30) & 횟수 제한 없는 무제한 온디맨드 예비시드 자동 수혈 상수]
 MAX_RESERVE_PORTIONS: int = int(
-    getattr(toss_api, "MAX_RESERVE_PORTIONS", 6)
+    getattr(toss_api, "MAX_RESERVE_PORTIONS", 999999)
 )
 MIN_DIP_BUDGET_RATIO: float = float(
     getattr(toss_api, "MIN_DIP_BUDGET_RATIO", 0.30)
@@ -135,8 +146,41 @@ RESERVE_DEPOSIT_TOLERANCE_RATIO: float = float(
 
 
 # ---------------------------------------------------------------------------
-# [핵심 0 · Case 86] 계좌별 미국 주식 수수료율 런타임 조회/갱신 브릿지
+# [핵심 0 · Case 86 & Case 91] 계좌별 미국 주식 수수료율 런타임 브릿지 및 운용 모드(복리/단리) 예산 기준자산 리졸버
 # ---------------------------------------------------------------------------
+def is_simple_income_mode(portion_mode: Any) -> bool:
+    """
+    # NEW [Case 91]:
+    현재 운용 모드가 💵 인출형(단리 · 설정 기준시드의 8% / 서브 4% 고정 · 채굴 수익 현금 적립 및 일일 인출)인지 판별한다.
+    """
+    return str(portion_mode or PORTION_MODE_COMPOUND).upper().strip() in (
+        "SIMPLE_08PCT",
+        "FIXED_800",
+        "SIMPLE",
+        "INCOME",
+    )
+
+
+def resolve_portion_budget_base_equity(
+    initial_seed_usd: float,
+    core_equity_usd: float,
+    portion_mode: str = PORTION_MODE_COMPOUND,
+) -> float:
+    """
+    # NEW [Case 91]:
+    - 💵 인출형(단리 · SIMPLE_08PCT / FIXED_800) 모드일 때는 누적 수익과 무관하게 항상 설정 기준 시드(initial_seed_usd)를 반환하여
+      1회분 예산(본 8% / 서브 4% / 보호예수 4%)을 고정하고, 채굴된 수익금은 현금 금고(자체 수혈 탄창 및 일일 인출 재원)로 보존한다.
+    - 📈 자산증식형(복리 · COMP_08PCT) 모드일 때는 순수 코어 총자산(core_equity_usd)을 반환하여 1회분 예산을 복리 증액한다.
+    """
+    init_s = max(
+        100.0, safe_float(initial_seed_usd, DEFAULT_INITIAL_SEED_USD)
+    )
+    core_eq = max(init_s, safe_float(core_equity_usd, init_s))
+    if is_simple_income_mode(portion_mode):
+        return round(init_s, 4)
+    return round(core_eq, 4)
+
+
 def get_runtime_us_commission_rate() -> float:
     """
     현재 프로세스에 락온된 미국 주식 편도 수수료율(소수 비율, 기본 0.0007)을 반환한다.
@@ -565,40 +609,50 @@ def enforce_true_breakeven_floor_on_buckets(
 
 
 # ---------------------------------------------------------------------------
-# [핵심 2] 본 그리드 8%(12.5분할) & 서브 그리드 4%(25분할) 정량 주수 · 유휴현금(0.5회분 보호예수) · GUARD30 판정 · 온디맨드 수혈/상환기 (🎯 1 & Case 25 ~ 35, 67, 77, 86, 88, 89)
+# [핵심 2] 본 그리드 8%(12.5분할) & 서브 그리드 4%(25분할) 정량 주수(복리/단리 연동) · 유휴현금(0.5회분 보호예수) · GUARD30 판정 · 무제한 온디맨드 수혈/상환기 (🎯 1 & Case 25 ~ 35, 67, 77, 86, 88, 89, 91)
 # ---------------------------------------------------------------------------
 def compute_golden8_quota_qty(
     anchor_price: float,
     current_total_equity: float,
     initial_seed_usd: float = DEFAULT_INITIAL_SEED_USD,
-    portion_mode: str = "COMP_08PCT",
+    portion_mode: str = PORTION_MODE_COMPOUND,
     exec_price: Optional[float] = None,
     portion_ratio: Optional[float] = None,
 ) -> Tuple[int, float]:
     """
-    🎯 1 & Case 25 ~ 35, Case 67, Case 77 & Case 88:
+    # MODIFIED [🎯 1 & Case 25 ~ 35, Case 67, Case 77, Case 88 & Case 91]:
     직전 매매 기준가(anchor_price)를 기반으로 황금비율(본 그리드 8% / 서브 그리드 4%) 1회분 예산(portion_budget)과
-    고정 목표 매수 주수(anchor_quota_qty)를 산출하되, 실제 매수 지정가(exec_price)가 제공된 경우
-    상승 돌파 등으로 인해 1회분 예산을 초과하지 않도록 min(budget_cap_qty, anchor_quota_qty)로 캡핑한다.
+    고정 목표 매수 주수(anchor_quota_qty)를 산출한다.
+    - 💵 인출형(단리 · SIMPLE_08PCT / FIXED_800) 모드일 때는 누적 수익과 무관하게 항상 설정 기준 시드(init_seed)의 8%(서브 4%)로
+      1회분 예산(portion_budget)을 고정한다.
+    - 📈 자산증식형(복리 · COMP_08PCT) 모드일 때는 순수 코어 총자산(tot_eq)의 8%(서브 4%)로 1회분 예산을 동적 복리 증액한다.
+    - 실제 매수 지정가(exec_price)가 제공된 경우 상승 돌파 등으로 인해 1회분 예산을 초과하지 않도록
+      min(budget_cap_qty, anchor_quota_qty)로 캡핑한다.
     반환값: (target_qty, portion_budget)
     """
     init_seed = max(
         100.0, safe_float(initial_seed_usd, DEFAULT_INITIAL_SEED_USD)
     )
     tot_eq = max(init_seed, safe_float(current_total_equity, init_seed))
-    mode = str(portion_mode or "COMP_08PCT").upper().strip()
+    mode = str(portion_mode or PORTION_MODE_COMPOUND).upper().strip()
 
     if portion_ratio is not None and safe_float(portion_ratio, 0.0) > 0.0:
         eff_ratio = safe_float(portion_ratio, PORTION_RATIO_LOCKED)
-    elif mode in ("SUB_04PCT", "COMP_04PCT"):
+    elif mode in ("SUB_04PCT", "COMP_04PCT", "SIMPLE_04PCT"):
         eff_ratio = SUB_PORTION_RATIO_4PCT
     else:
         eff_ratio = PORTION_RATIO_LOCKED
 
-    if mode == "FIXED_800":
-        portion_budget = round(init_seed * eff_ratio, 4)
-    else:
-        portion_budget = round(tot_eq * eff_ratio, 4)
+    base_eq = resolve_portion_budget_base_equity(
+        initial_seed_usd=init_seed,
+        core_equity_usd=tot_eq,
+        portion_mode=(
+            PORTION_MODE_SIMPLE
+            if (is_simple_income_mode(mode) or mode == "SIMPLE_04PCT")
+            else PORTION_MODE_COMPOUND
+        ),
+    )
+    portion_budget = round(base_eq * eff_ratio, 4)
 
     ref_p = max(0.01, safe_float(anchor_price, 0.01))
     anchor_quota_qty = max(1, int(math.floor((portion_budget + 1e-9) / ref_p)))
@@ -620,17 +674,23 @@ def compute_sub4_quota_qty(
     current_core_equity: float,
     initial_seed_usd: float = DEFAULT_INITIAL_SEED_USD,
     exec_price: Optional[float] = None,
+    portion_mode: str = PORTION_MODE_COMPOUND,
 ) -> Tuple[int, float]:
     """
-    # [Case 88 : 🛡️ 13_SUB_L1L3_RESV05_CAP4L — 3층 서브 그리드 전용 4.0%(25분할) 정량 주수 산출기]:
-    순수 코어 총자산(current_core_equity)의 4.0%를 서브 1회분 예산(sub_portion_budget)으로 산출하고
-    min(서브 1회분 예산 상한 주수, 서브 기준가 고정 정량) 이중 캡핑(Case 67)을 적용하여 반환한다.
+    # MODIFIED [Case 88 & Case 91 : 🛡️ 13_SUB_L1L3_RESV05_CAP4L — 3층 서브 그리드 전용 4.0%(25분할) 정량 주수 산출기 (복리/단리 모드 연동)]:
+    - 📈 자산증식형(복리 · COMP_08PCT): 순수 코어 총자산(current_core_equity)의 4.0%를 서브 1회분 예산으로 산출한다.
+    - 💵 인출형(단리 · SIMPLE_08PCT): 설정 기준 시드(initial_seed_usd)의 4.0%를 서브 1회분 예산으로 고정 산출한다.
     """
+    sub_mode = (
+        "SIMPLE_04PCT"
+        if is_simple_income_mode(portion_mode)
+        else "SUB_04PCT"
+    )
     return compute_golden8_quota_qty(
         anchor_price=sub_anchor_price,
         current_total_equity=current_core_equity,
         initial_seed_usd=initial_seed_usd,
-        portion_mode="SUB_04PCT",
+        portion_mode=sub_mode,
         exec_price=exec_price,
         portion_ratio=SUB_PORTION_RATIO_4PCT,
     )
@@ -641,21 +701,35 @@ def compute_sub_grid_available_idle_cash(
     core_equity_usd: float,
     broker_buying_power_usd: Optional[float] = None,
     reserve_main_portions: float = SUB_RESERVE_MAIN_PORTIONS,
+    initial_seed_usd: Optional[float] = None,
+    portion_mode: str = PORTION_MODE_COMPOUND,
 ) -> Dict[str, Any]:
     """
-    # [Case 88 : 본 그리드 보호예수금 0.5회분(4.0%) 차감 후 서브 그리드 가용 유휴 현금(avail_idle_cash_usd) 산출기]:
+    # MODIFIED [Case 88 & Case 91 : 본 그리드 보호예수금 0.5회분(4.0%) 차감 후 서브 그리드 가용 유휴 현금(avail_idle_cash_usd) 산출기 (복리/단리 연동)]:
     """
     f_cash = max(0.0, safe_float(free_cash_usd, 0.0))
     c_eq = max(
         DEFAULT_INITIAL_SEED_USD,
         safe_float(core_equity_usd, DEFAULT_INITIAL_SEED_USD),
     )
+    init_s = max(
+        100.0,
+        safe_float(
+            initial_seed_usd if initial_seed_usd is not None else c_eq,
+            DEFAULT_INITIAL_SEED_USD,
+        ),
+    )
     res_mult = max(
         0.0, safe_float(reserve_main_portions, SUB_RESERVE_MAIN_PORTIONS)
     )
 
-    main_portion_budget = round(c_eq * PORTION_RATIO_LOCKED, 4)
-    sub_portion_budget = round(c_eq * SUB_PORTION_RATIO_4PCT, 4)
+    budget_base_eq = resolve_portion_budget_base_equity(
+        initial_seed_usd=init_s,
+        core_equity_usd=c_eq,
+        portion_mode=portion_mode,
+    )
+    main_portion_budget = round(budget_base_eq * PORTION_RATIO_LOCKED, 4)
+    sub_portion_budget = round(budget_base_eq * SUB_PORTION_RATIO_4PCT, 4)
     reserved_for_main_usd = round(main_portion_budget * res_mult, 4)
 
     eff_cash = f_cash
@@ -689,7 +763,7 @@ def resolve_affordable_buy_qty(
     round_trip_fee_rate_pct: Optional[float] = None,
 ) -> Tuple[int, float]:
     """
-    # [Case 25 ~ 35, Case 67, Case 86 & Case 88 계좌별 동적 왕복 수수료율 연동]:
+    # [Case 25 ~ 35, Case 67, Case 86, Case 88 & Case 91 계좌별 동적 왕복 수수료율 및 실계좌 예수금 캡핑 연동]:
     """
     t_qty = max(0, safe_int(target_qty, 0))
     exec_p = safe_float(price_t, 0.0)
@@ -739,20 +813,20 @@ def evaluate_guard30_and_reserve_injection(
     round_trip_fee_rate_pct: Optional[float] = None,
 ) -> Dict[str, Any]:
     """
-    # MODIFIED [Case 77, Case 86 & Case 89 : 💉 05_RESV_6P_GUARD30 — 30% 자투리 1주 승격 방지 가드 & 실계좌 30% 가드 이상 보유 시 미할당 여유자금 즉시 온디맨드 자동 수혈 판정기]:
+    # MODIFIED [Case 77, Case 86, Case 89 & Case 91 : 💉 GUARD30 — 30% 자투리 1주 승격 방지 가드 & 6회 수혈 제한 전면 해제(실계좌 30% 가드 이상 보유 시 횟수 제한 없이 미할당 여유자금 즉시 온디맨드 자동 수혈 및 수혈 횟수 카운트)]:
     - 장부 가용현금(f_cash)이 30% 가드(min_req_cash) 미만이더라도,
       토스 실계좌 주문가능금액(eff_bp)이 30% 가드(min_req_cash) 이상이고
       미할당 여유 달러(unallocated_deposit_usd = eff_bp - f_cash > 0)가 존재하여
       (f_cash + unallocated_deposit_usd) >= min_req_cash 를 충족하면,
-      1회분 전액(95%) 입금 조건에 가로막히지 않고 현재 계좌의 미할당 여유 달러를 즉시 수혈(INJECT_AND_PROCEED)하여
-      1회분의 30% 이상 자금 보유 시 매수가 누락되지 않도록 보장한다!
+      수혈 횟수 상한(구 6회 제한)에 가로막히지 않고 현재 계좌의 미할당 여유 달러를 즉시 무제한 자동 수혈(INJECT_AND_PROCEED)하고
+      누적/현재 수혈 횟수만 카운트하여 1회분의 30% 이상 자금 보유 시 매수가 절대 누락되지 않도록 보장한다!
     """
     f_cash = max(0.0, safe_float(free_cash_usd, 0.0))
     ex_p = max(0.01, safe_float(exec_price, 0.01))
     p_bud = max(0.01, safe_float(portion_budget, 800.0))
     l1_cost = max(0.0, safe_float(l1_actual_cost_usd, 0.0))
     used_cnt = max(0, safe_int(used_reserve_portions_cnt, 0))
-    max_res = max(0, safe_int(max_reserve_portions, MAX_RESERVE_PORTIONS))
+    max_res = max(used_cnt + 1, safe_int(max_reserve_portions, MAX_RESERVE_PORTIONS))
     rem_portions = max(0, max_res - used_cnt)
 
     eff_rt_pct = resolve_effective_round_trip_fee_rate_pct(
@@ -794,6 +868,8 @@ def evaluate_guard30_and_reserve_injection(
             "inject_portions": 0,
             "inject_usd": 0.0,
             "min_req_cash": round(min_req_cash, 4),
+            "used_portions_before": used_cnt,
+            "used_portions_after": used_cnt,
             "rem_portions_before": rem_portions,
             "rem_portions_after": rem_portions,
             "unallocated_deposit_usd": round(
@@ -812,10 +888,9 @@ def evaluate_guard30_and_reserve_injection(
     )
     required_inj_usd = round(float(needed_portions) * p_bud, 4)
 
-    # [Case 89 : 토스 실계좌 주문가능금액(eff_bp)이 30% 가드(min_req_cash) 이상이고 미할당 여유 달러로 가드 충족 시 즉시 수혈 승인]
+    # MODIFIED [Case 89 & Case 91 : 6회 한도 제한 제거 — 토스 실계좌 주문가능금액(eff_bp)이 30% 가드 이상이고 미할당 여유 달러로 가드 충족 시 횟수 제한 없이 즉시 수혈 승인]
     if (
-        rem_portions >= needed_portions
-        and eff_bp >= min_req_cash
+        eff_bp >= min_req_cash
         and unallocated_deposit_usd > 0.0
         and (f_cash + unallocated_deposit_usd) >= min_req_cash
     ):
@@ -834,6 +909,8 @@ def evaluate_guard30_and_reserve_injection(
                 "inject_portions": needed_portions,
                 "inject_usd": actual_inj_usd,
                 "min_req_cash": round(min_req_cash, 4),
+                "used_portions_before": used_cnt,
+                "used_portions_after": used_cnt + needed_portions,
                 "rem_portions_before": rem_portions,
                 "rem_portions_after": max(0, rem_portions - needed_portions),
                 "unallocated_deposit_usd": round(unallocated_deposit_usd, 4),
@@ -856,6 +933,8 @@ def evaluate_guard30_and_reserve_injection(
         "inject_usd": 0.0,
         "needed_portions": needed_portions,
         "min_req_cash": round(min_req_cash, 4),
+        "used_portions_before": used_cnt,
+        "used_portions_after": used_cnt,
         "rem_portions_before": rem_portions,
         "rem_portions_after": rem_portions,
         "unallocated_deposit_usd": round(unallocated_deposit_usd, 4),
@@ -870,9 +949,10 @@ def compute_reserve_repayment_on_zero(
     injected_reserve_usd: float,
     used_reserve_portions_cnt: int,
     max_reserve_portions: int = MAX_RESERVE_PORTIONS,
+    portion_mode: str = PORTION_MODE_COMPOUND,
 ) -> Dict[str, Any]:
     """
-    # [Case 77 & Case 88 : 0주 전량 졸업 시 온디맨드 예비시드 원금 자동 상환 및 6회분 한도 복구 연산기]:
+    # MODIFIED [Case 77, Case 88 & Case 91 : 0주 전량 졸업 시 온디맨드 예비시드 원금 자동 상환 및 잔여 수혈 횟수 정산기 (무제한 수혈 카운트 호환)]:
     """
     init_seed = max(
         100.0, safe_float(initial_seed_usd, DEFAULT_INITIAL_SEED_USD)
@@ -901,13 +981,15 @@ def compute_reserve_repayment_on_zero(
         rem_inj_usd = 0.0
         rem_used_cnt = 0
     else:
-        est_portion_unit = max(1.0, (init_seed + max(0.0, cum_net)) * 0.08)
-        rem_used_cnt = max(
-            1,
-            min(
-                used_cnt if used_cnt > 0 else max_res,
-                int(math.ceil(rem_inj_usd / est_portion_unit)),
-            ),
+        base_eq = resolve_portion_budget_base_equity(
+            initial_seed_usd=init_seed,
+            core_equity_usd=(init_seed + max(0.0, cum_net)),
+            portion_mode=portion_mode,
+        )
+        est_portion_unit = max(1.0, base_eq * PORTION_RATIO_LOCKED)
+        est_cnt = max(1, int(math.ceil(rem_inj_usd / est_portion_unit)))
+        rem_used_cnt = (
+            min(used_cnt, est_cnt) if used_cnt > 0 else est_cnt
         )
 
     free_cash_after = round(max(0.0, init_seed + cum_net + rem_inj_usd), 4)

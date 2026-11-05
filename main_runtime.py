@@ -1,19 +1,20 @@
 # -*- coding: utf-8 -*-
 """
-# MODIFIED: main_runtime.py (황금시간 07:00~07:50 RSI<=19 올인 임포트·메서드·버튼·명령어 전면 영구 소각)
+# MODIFIED: main_runtime.py (황금시간 07:00~07:50 RSI<=19 올인 임포트·메서드·버튼·명령어 전면 영구 소각 & Case 91 무제한 예비수혈 카운트 및 인출형[단리]/자산증식형[복리] 전환 동기화)
 인피니트 스노우볼 (Infinite Snowball) v3.0 — 메인 런타임 서포트 브릿지 (메인 코드 2분할 리팩토링 Part 1 / 2 · Step 12 / 13)
 - 역할:
   1) 적응형 비동기 플러그인 호출기(_call_plugin_adaptive) 및 동적 심볼 리졸버(_resolve_module_attr) (Case 13)
   2) TossApiClient 런타임 메서드 호환성 폴리필 어댑터(_install_toss_api_compatibility_patches · get_commissions / ensure_us_commission_rate 런타임 수수료 폴백 보존 포함 · Case 86)
-  3) 폴더별 3중 원장 인스턴스 팩토리(_instantiate_stratum_ledger · Case 68, Case 87, Case 88) 및 주말 휴장 판별(_check_weekend_nyse_closed_dynamic · Case 01, 79, 83)
+  3) 폴더별 3중 원장 인스턴스 팩토리(_instantiate_stratum_ledger · Case 68, Case 87, Case 88, Case 91) 및 주말 휴장 판별(_check_weekend_nyse_closed_dynamic · Case 01, 79, 83)
   4) 100% 벡터화 1분봉/일봉 지표 및 실시간 틱 Wilder's RSI(14) 무손실 직결(_compute_candle_metrics_dynamic)
   5) 폴더 위치(base_dir) 전용 텔레그램 토큰·채팅방 ID 자동 탐색기(_discover_telegram_credentials · Case 68)
   6) 내장형 사용자 중심 초슬림 텔레그램 불사조 롱폴링/관제탑 브릿지(_AdaptiveTelegramBridge · tg_ui_plugin 4버튼 단일 렌더러 직결 ·
      층별 자산($)·10칸 배분 게이지(🟦🟨🟩)·현재 사이클 단위 실현수익 vs 전체 누적 수익·재고 평가착시 3단 해부·전량졸업 예정자산(🎓) 표출 ·
-     전술 제어반 /reset_profit 명령어 탑재 · 13대 코어 모듈 프리플라이트 안내 동기화 · /avwap 조회 시 1분봉 미확보 상태면 즉시 온디맨드 프리워밍 수행 ·
-     /sync 조회 시 계좌별 미국 주식 수수료율 자동 확인[Case 86] · /reset_profit 실행 시 본 그리드 + Default-ON 3층 서브 그리드 및 당일 무매매 동결 판정 카운터 100% 보존 초기화[Case 88] ·
-     Case 75 httpx/httpcore INFO 로그 묵음화 & Case 81 전용 httpx.AsyncClient 자동 재생성 불사조 폴링 · 오프셋 파일 선행 영속화 · os.execv 인플레이스 자가 교체 · Case 84/85/86/87/88/89 완벽 준수)
-- 제1헌법 ~ 제6헌법 및 Case 01 ~ 89 전수 락온
+     전술 제어반 [📈 자산증식형(복리) ⇄ 💵 인출형(단리)] 원클릭 전환 버튼(toggle_portion_mode) 및 /mode · /reset_profit 명령어 탑재[Case 91] ·
+     13대 코어 모듈 프리플라이트 안내 동기화 · /avwap 조회 시 1분봉 미확보 상태면 즉시 온디맨드 프리워밍 수행 ·
+     /sync 조회 시 계좌별 미국 주식 수수료율 자동 확인[Case 86] · /reset_profit 실행 시 본 그리드 + Default-ON 3층 서브 그리드 및 당일 무매매 동결 판정 카운터 100% 보존 초기화[Case 88, Case 91] ·
+     Case 75 httpx/httpcore INFO 로그 묵음화 & Case 81 전용 httpx.AsyncClient 자동 재생성 불사조 폴링 · 오프셋 파일 선행 영속화 · os.execv 인플레이스 자가 교체 · Case 84 ~ 91 완벽 준수)
+- 제1헌법 ~ 제6헌법 및 Case 01 ~ 91 전수 락온
 """
 
 from __future__ import annotations
@@ -59,8 +60,11 @@ from plugin_updater import (
     write_persisted_tg_offset_sync,
 )
 from quant_engine import (
+    PORTION_MODE_COMPOUND,
+    PORTION_MODE_SIMPLE,
     get_runtime_round_trip_fee_rate_pct,
     get_runtime_us_commission_rate,
+    is_simple_income_mode,
     set_runtime_round_trip_fee_rate_pct,
     summarize_stratum_portfolio,
 )
@@ -1323,11 +1327,11 @@ def _discover_telegram_credentials(
 
     return bot_token, chat_id
 # ---------------------------------------------------------------------------
-# [핵심 5] 내장형 텔레그램 브릿지 (_AdaptiveTelegramBridge — tg_ui_plugin 렌더러 직결 & 사이클 수익 초기화 연동 & Case 81/83/84/85/86/87/88/89 완벽 통합)
+# [핵심 5] 내장형 텔레그램 브릿지 (_AdaptiveTelegramBridge — tg_ui_plugin 렌더러 직결 & 복리/단리 모드 전환 & 무제한 수혈 카운트 & 사이클 수익 초기화 연동 & Case 81 ~ 91 완벽 통합)
 # ---------------------------------------------------------------------------
 class _AdaptiveTelegramBridge:
     """
-    # MODIFIED [Case 62 ~ 89 & 사용자 중심 4버튼 초슬림 UI · 층별 자산($) · 10칸 배분 게이지(🟦🟨🟩) · 사이클 수익 · 전량졸업 예정자산(🎓) 통합]:
+    # MODIFIED [Case 62 ~ 91 & 사용자 중심 4버튼 초슬림 UI · 층별 자산($) · 10칸 배분 게이지(🟦🟨🟩) · 복리/단리 전환 · 무제한 수혈 카운트 · 당일 수익 인출 안내 · 사이클 수익 · 전량졸업 예정자산(🎓) 통합]:
     tg_ui_plugin 의 관제 보드 렌더러(build_start_schedule_message, build_avwap_radar_message,
     build_sync_instruction_message, build_settlement_control_message)를 단일 소스로 재사용하여
     코드 중복을 제거하고,
@@ -1336,8 +1340,8 @@ class _AdaptiveTelegramBridge:
     - [Case 81] 폴더별 오프셋 파일(.tg_update_offset_<folder_slug>.dat) + 3중 원장 + 서버 3중 선행 영속화
     - [Case 81] /update 완료 후 구버전 os._exit(0) 대신 3.5초 하드 워치독 및 perform_self_restart_execv(os.execv)로
       100% 무중단 자가 교체 수행 (13대 코어 모듈 프리플라이트 안내 동기화 포함)!
-    - [Case 87 & Case 88] /seed 및 /reset_profit 실행 시 본 그리드(cycle_ratchet_max_lots) 및
-      Default-ON 3층 서브 그리드(sub_buckets · sub_ratchet_max_lots), 당일 무매매 동결 판정 카운터 100% 보존 및
+    - [Case 87, Case 88 & Case 91] /mode (toggle_portion_mode) 복리/단리 전환 및 /seed · /reset_profit 실행 시 본 그리드(cycle_ratchet_max_lots) 및
+      Default-ON 3층 서브 그리드(sub_buckets · sub_ratchet_max_lots), 당일 무매매 동결 판정 카운터, 운용 모드(portion_mode) 100% 보존 및
       사이클 단위 수익(cycle_realized_net_usd 등) 동시 0점 초기화 정합성 보장!
     """
 
@@ -1816,6 +1820,86 @@ class _AdaptiveTelegramBridge:
             text=msg,
             reply_markup=_build_settlement_inline_keyboard(
                 bool(st.get("is_active", True)),
+                st.get("portion_mode", PORTION_MODE_COMPOUND),
+            ),
+        )
+
+    async def _toggle_portion_mode_and_notify(
+        self,
+        chat_id: str,
+        target_mode: Optional[str] = None,
+        edit_msg_id: Optional[int] = None,
+    ) -> None:
+        """
+        # NEW [Case 91 : 📈 자산증식형(복리 · COMP_08PCT) ⇄ 💵 인출형(단리 · SIMPLE_08PCT) 원클릭 전환 처리기]:
+        """
+        toggle_fn = getattr(self.context.ledger, "toggle_portion_mode", None)
+        if callable(toggle_fn):
+            updated_st = await toggle_fn(target_mode=target_mode)
+        else:
+            st_cur = self.context.ledger.get_state(TARGET_SYMBOL)
+            cur_m = str(st_cur.get("portion_mode") or PORTION_MODE_COMPOUND)
+            next_m = (
+                PORTION_MODE_SIMPLE
+                if (
+                    target_mode is not None
+                    and is_simple_income_mode(target_mode)
+                )
+                else (
+                    PORTION_MODE_COMPOUND
+                    if (
+                        target_mode is not None
+                        and not is_simple_income_mode(target_mode)
+                    )
+                    else (
+                        PORTION_MODE_COMPOUND
+                        if is_simple_income_mode(cur_m)
+                        else PORTION_MODE_SIMPLE
+                    )
+                )
+            )
+            updated_st = await self.context.ledger.update_state(
+                TARGET_SYMBOL, portion_mode=next_m
+            )
+
+        self.context.wakeup_event.set()
+        if edit_msg_id is not None and edit_msg_id > 0:
+            await self._render_and_send_settlement(
+                chat_id=chat_id, edit_msg_id=edit_msg_id
+            )
+            return
+
+        live_p, _ = await self._refresh_live_price_and_metrics()
+        summary = summarize_stratum_portfolio(updated_st, live_price=live_p)
+        mode_lbl = str(summary.get("portion_mode_label") or "📈자산증식형(복리)")
+        is_simple = bool(summary.get("is_simple_mode", False))
+        next_bud = safe_float(summary.get("next_portion_budget"), 800.0)
+        sub_bud = safe_float(summary.get("sub_next_portion_budget"), 400.0)
+        quota_badge = _format_case67_quota_badge(summary)
+        sub_quota_badge = _format_sub_quota_badge(summary)
+        day_withdrawable = safe_float(
+            summary.get("daily_withdrawable_profit_usd"), 0.0
+        )
+        surplus_usd = safe_float(summary.get("withdrawable_surplus_usd"), 0.0)
+        self_res_p = safe_float(summary.get("self_reserve_portions"), 0.0)
+
+        guide_line = (
+            f"🔸 금일 인출가능익: <b>+${day_withdrawable:,.2f}</b> (잉여금고 ${surplus_usd:,.0f} · 자체탄창 +{self_res_p:.1f}회)\n"
+            "💡 매일 16:00 EST 마감 정산 시 안내되는 당일 실현수익금을 현금으로 인출하여 사용하셔도 됩니다!"
+            if is_simple
+            else "💡 모든 실현수익과 자투리가 코어자산에 합산되어 1회분(8%/4%) 정량이 자동 복리 증액됩니다!"
+        )
+        await self.send_message(
+            chat_id=chat_id,
+            text=(
+                f"🔄 <b>[운용 모드 전환 완료 ➔ {mode_lbl}]</b>\n"
+                f"🔸 본그리드(8%): <b>${next_bud:,.2f}</b> ({quota_badge})\n"
+                f"🔸 서브그리드(4%): <b>${sub_bud:,.2f}</b> ({sub_quota_badge})\n"
+                f"{guide_line}"
+            ),
+            reply_markup=_build_settlement_inline_keyboard(
+                bool(updated_st.get("is_active", True)),
+                updated_st.get("portion_mode", PORTION_MODE_COMPOUND),
             ),
         )
 
@@ -1865,7 +1949,7 @@ class _AdaptiveTelegramBridge:
             chat_id=chat_id,
             text=(
                 "✅ <b>[기준 시드머니 설정 완료]</b>\n"
-                f"🔸 새 기준 시드머니: <b>${val:,.2f}</b>\n"
+                f"🔸 새 기준 시드머니: <b>${val:,.2f}</b> ({summary.get('portion_mode_label')})\n"
                 f"🔸 가용 현금시드: <b>${safe_float(summary.get('free_cash_usd'), 0.0):,.2f}</b>\n"
                 f"🔸 본그리드 1회(8%) 예산: <b>${safe_float(summary.get('next_portion_budget'), 0.0):,.2f}</b> "
                 f"➔ {quota_badge_str}\n"
@@ -1874,15 +1958,16 @@ class _AdaptiveTelegramBridge:
             ),
             reply_markup=_build_settlement_inline_keyboard(
                 bool(updated_st.get("is_active", True)),
+                updated_st.get("portion_mode", PORTION_MODE_COMPOUND),
             ),
         )
 
     async def _reset_realized_profit_only(self, chat_id: str) -> None:
         """
-        # MODIFIED [Case 02, Case 74, Case 76, Case 77, Case 86, Case 87 & Case 88]:
+        # MODIFIED [Case 02, Case 74, Case 76, Case 77, Case 86, Case 87, Case 88 & Case 91]:
         보유 중인 본 그리드 지층(buckets · cycle_ratchet_max_lots 포함), Default-ON 3층 서브 그리드(sub_buckets · sub_ratchet_max_lots 포함),
         당일 무매매 동결 판정용 매매 횟수(daily_main_buy_cnt, daily_main_sell_cnt, daily_sub_buy_cnt, daily_sub_sell_cnt),
-        기준 시드머니(initial_seed_usd), 계좌별 수수료율(us_commission_rate, round_trip_fee_rate_pct)은 100% 보존하고,
+        기준 시드머니(initial_seed_usd), 운용 모드(portion_mode), 계좌별 수수료율(us_commission_rate, round_trip_fee_rate_pct)은 100% 보존하고,
         오직 누적/당일 세후 실현수익금, 사이클 단위 수익금(cycle_realized_net_usd 등), 자투리 절약금·스텝업 해금·
         서브 그리드 누적 통계·예비시드 통계만 0점으로 초기화한다.
         """
@@ -2006,7 +2091,7 @@ class _AdaptiveTelegramBridge:
             text=(
                 "🧹 <b>[실현수익 0점 초기화 완료]</b>\n"
                 "🔸 이번사이클 / 누적 세후실현익: <b>$0.00</b>\n"
-                f"🔸 복귀 기준시드: <b>${init_seed:,.2f}</b> (가용현금 <b>${free_cash:,.2f}</b>)\n"
+                f"🔸 복귀 기준시드: <b>${init_seed:,.2f}</b> ({summary.get('portion_mode_label')} · 가용현금 <b>${free_cash:,.2f}</b>)\n"
                 f"🔸 차기 1회(8%) 정량: 예산 <b>${next_bud:,.2f}</b> ➔ {quota_badge_str}\n"
                 f"🔸 보유 지층 보존: 본 <b>{held_sh}주</b> ({held_tiers}개층 · {lot_keep_str}{sub_note} 유지)"
             ),
@@ -2169,6 +2254,34 @@ class _AdaptiveTelegramBridge:
             await self._render_and_send_settlement(chat_id=chat_id)
             return
 
+        if first_token in ("/mode", "/portion_mode"):
+            parts = text.split(maxsplit=1)
+            arg_mode: Optional[str] = None
+            if len(parts) >= 2:
+                raw_arg = parts[1].strip().upper()
+                if raw_arg in (
+                    "SIMPLE",
+                    "SIMPLE_08PCT",
+                    "INCOME",
+                    "단리",
+                    "인출",
+                    "인출형",
+                ):
+                    arg_mode = PORTION_MODE_SIMPLE
+                elif raw_arg in (
+                    "COMP",
+                    "COMPOUND",
+                    "COMP_08PCT",
+                    "복리",
+                    "증식",
+                    "자산증식형",
+                ):
+                    arg_mode = PORTION_MODE_COMPOUND
+            await self._toggle_portion_mode_and_notify(
+                chat_id=chat_id, target_mode=arg_mode
+            )
+            return
+
         if first_token == "/seed":
             parts = text.split(maxsplit=1)
             if len(parts) >= 2:
@@ -2274,6 +2387,10 @@ class _AdaptiveTelegramBridge:
                     )
             self.context.wakeup_event.set()
             await self._render_and_send_settlement(
+                chat_id=chat_id, edit_msg_id=msg_id
+            )
+        elif data == "toggle_portion_mode":
+            await self._toggle_portion_mode_and_notify(
                 chat_id=chat_id, edit_msg_id=msg_id
             )
         elif data == "prompt_seed_input":

@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 """
-# MODIFIED: quant_engine.py (황금시간 07:00~07:50 RSI<=19 올인 재익스포트·포켓매칭·다중익절·요약·TDD 전면 영구 소각)
+# MODIFIED: quant_engine.py (황금시간 07:00~07:50 RSI<=19 올인 재익스포트·포켓매칭·다중익절·요약·TDD 전면 영구 소각 & Case 91 무제한 예비수혈 카운트 및 인출형[단리]/자산증식형[복리] 요약·TDD 탑재)
 인피니트 스노우볼 (Infinite Snowball) v3.0 — 퀀트 엔진 코어 Part 2 / 2 (Step 05 / 13)
 역할:
-1) quant_engine_core.py (Part 1 / 2) 의 모든 상수(DEFAULT_GRID_MERGE_MODE · Case 88 서브 그리드 상수 포함)·구조체·정량/수혈/스텝업/서브해금/컷오프/동적수수료 판정 심볼
+1) quant_engine_core.py (Part 1 / 2) 의 모든 상수(DEFAULT_GRID_MERGE_MODE · Case 88 서브 그리드 상수 · Case 91 복리/단리 모드 상수 포함)·구조체·정량/무제한수혈/스텝업/서브해금/컷오프/동적수수료 판정 심볼
    명시적 재익스포트(Facade Re-export)로 타 모듈 AST 임포트 호환성 100% 보장
 2) 본 그리드 1층 ~ 7층 골디락스 순수 멀티 그리드 배치 및 병합기(vrev_add_quota_lot_and_merge_2tier :
    REENTRY_1FL 독립 1층 배치 / TOPUP_1FL 기존 1층 무승격 원자적 합산[Case 78] /
@@ -19,9 +19,9 @@
    해당 그리드의 개별 층(1층 및 상단 개별/합병층) 쪼개 팔기를 잠가 통합 이동평균(wma_2_to_7 / sub_wma_2_to_3) 도망을 원천 봉쇄하고,
    2층 ~ 7층(서브 2층 ~ 3층) 순수 이동평균 단가 대비 +1.00% 목표가(wma_target_p / sub_wma_target_p) 도달 시에는
    1층 매수 단가와 무관하게 1층 물량까지 동일한 가격(wma_target_p)에 조건 없이 100% 포함하여 전량 매도(SELL_ALL_GRAD / SELL_SUB_ALL_GRAD)함으로써 즉시 0주 사이클을 완전 종료시키는 하이브리드 매도 판정기(evaluate_multi_grid_sell_targets)
-5) 포트폴리오 통합 요약기(summarize_stratum_portfolio · 층별 자산 금액($)/비중(%) · 10칸 유니코드 배분 게이지(🟦🟨🟩) · 현재 사이클 단위 실현수익(cycle_realized_net_usd) · 전량 졸업 시 확정 예정 총자산(projected_graduation_equity_usd) 산출 포함) 및
-   기동 전 TDD 사전 무결성 검증 슈트(run_quant_engine_tdd · Case 25 ~ 89 전수 검증)
-- 제1헌법 ~ 제6헌법 및 Case 01 ~ 89 완벽 준수
+5) 포트폴리오 통합 요약기(summarize_stratum_portfolio · 자산증식형[복리] vs 인출형[단리] 예산 산출 · 당일 인출가능 실현수익[daily_withdrawable_profit_usd] · 누적 인출가능 잉여현금[withdrawable_surplus_usd] · 자체수혈 탄창[self_reserve_portions] · 무제한 예비시드 수혈 횟수 카운트 · 층별 자산 금액[$]/비중[%] · 10칸 유니코드 배분 게이지[🟦🟨🟩] · 현재 사이클 단위 실현수익[cycle_realized_net_usd] · 전량 졸업 시 확정 예정 총자산[projected_graduation_equity_usd] 산출 포함) 및
+   기동 전 TDD 사전 무결성 검증 슈트(run_quant_engine_tdd · Case 25 ~ 91 전수 검증)
+- 제1헌법 ~ 제6헌법 및 Case 01 ~ 91 완벽 준수
 """
 
 from __future__ import annotations
@@ -45,6 +45,8 @@ from quant_engine_core import (
     MIN_DIP_BUDGET_RATIO,
     MIN_DIP_VS_L1_RATIO,
     NEW_CYCLE_BUY_CUTOFF_HM,
+    PORTION_MODE_COMPOUND,
+    PORTION_MODE_SIMPLE,
     PORTION_RATIO_LOCKED,
     REANCHOR_NET_BUFFER_MULT,
     REENTRY_BREAKOUT_RISE_PCT,
@@ -66,6 +68,7 @@ from quant_engine_core import (
     SUB_RESERVE_MAIN_PORTIONS,
     SUB_UNLOCK_DROP_FROM_L1_PCT,
     SUB_UNLOCK_FROZEN_DAYS_10,
+    VALID_PORTION_MODES,
     StratumBucket,
     buckets_from_dicts,
     buckets_to_dicts,
@@ -82,12 +85,14 @@ from quant_engine_core import (
     get_runtime_round_trip_fee_rate_pct,
     get_runtime_us_commission_rate,
     has_active_l1_bucket,
+    is_simple_income_mode,
     is_upper_grid_tier,
     relabel_sub_upper_grid_tiers,
     relabel_sub_upper_grid_tiers_with_flag,
     relabel_upper_grid_tiers,
     resolve_affordable_buy_qty,
     resolve_effective_round_trip_fee_rate_pct,
+    resolve_portion_budget_base_equity,
     set_runtime_round_trip_fee_rate_pct,
 )
 from toss_api import EST_TZ, safe_float, safe_int
@@ -1140,7 +1145,7 @@ def calc_sell_realized_pnl(
         "net_rate_pct": net_rate_pct,
     }
 # ---------------------------------------------------------------------------
-# [핵심 5] 포트폴리오 · 1~7층 골디락스 본 그리드(L2_L7_MERGE_SORT & 최고도달회차 잠금) · Default-ON 1~3층 서브 그리드(SUB_L1_L3_MERGE & 최대4회분 캡) · 시드 배분 게이지(🟦🟨🟩) · 현재 사이클 단위 수익 · 전량졸업 예정자산(🎓) 통합 요약기 (Case 59 ~ 89)
+# [핵심 5] 포트폴리오 · 1~7층 골디락스 본 그리드(L2_L7_MERGE_SORT & 최고도달회차 잠금) · Default-ON 1~3층 서브 그리드(SUB_L1_L3_MERGE & 최대4회분 캡) · 복리/단리(일일 인출가능 수익 & 자체수혈 탄창) · 무제한 예비수혈 카운트 · 시드 배분 게이지(🟦🟨🟩) · 현재 사이클 단위 수익 · 전량졸업 예정자산(🎓) 통합 요약기 (Case 59 ~ 91)
 # ---------------------------------------------------------------------------
 def _build_10block_allocation_gauge(
     main_cost: float,
@@ -1204,7 +1209,7 @@ def summarize_stratum_portfolio(
     now_est: Optional[datetime] = None,
 ) -> Dict[str, Any]:
     """
-    # MODIFIED [🎯 1 ~ 🎯 5 & Case 59 ~ 89 & 본/서브 최고 도달 회차 단차 잠금 · Default-ON 3층 서브 그리드 · 층별 자산 비중(%) · 10칸 유니코드 배분 게이지(🟦🟨🟩) · 현재 사이클 단위 수익 · 전량졸업 예정자산(🎓) 통합 요약기]:
+    # MODIFIED [🎯 1 ~ 🎯 5 & Case 59 ~ 91 & 본/서브 최고 도달 회차 단차 잠금 · Default-ON 3층 서브 그리드 · 자산증식형(복리) ⇄ 인출형(단리 · 당일 인출가능 실현수익 & 누적 잉여현금 자체수혈 탄창) · 무제한 예비시드 수혈 횟수 카운트 · 층별 자산 비중(%) · 10칸 유니코드 배분 게이지(🟦🟨🟩) · 현재 사이클 단위 수익 · 전량졸업 예정자산(🎓) 통합 요약기]:
     """
     st = state_dict if isinstance(state_dict, dict) else {}
     dt_now = now_est.astimezone(EST_TZ) if now_est else datetime.now(EST_TZ)
@@ -1232,19 +1237,17 @@ def summarize_stratum_portfolio(
     cum_realized = round(
         safe_float(st.get("cumulative_realized_net_usd"), 0.0), 4
     )
+    daily_realized_net_usd = round(
+        safe_float(st.get("daily_realized_net_usd"), 0.0), 4
+    )
     injected_reserve_usd = round(
         max(0.0, safe_float(st.get("injected_reserve_usd"), 0.0)), 4
     )
+    # MODIFIED [Case 91 : 예비시드 6회 상한 제한 제거 — 실제 수혈된 횟수만 카운트]
     used_reserve_portions_cnt = (
         0
         if injected_reserve_usd <= 0.0
-        else max(
-            1,
-            min(
-                MAX_RESERVE_PORTIONS,
-                safe_int(st.get("used_reserve_portions_cnt"), 1),
-            ),
-        )
+        else max(1, safe_int(st.get("used_reserve_portions_cnt"), 1))
     )
     avail_reserve_portions = max(
         0, MAX_RESERVE_PORTIONS - used_reserve_portions_cnt
@@ -1334,7 +1337,17 @@ def summarize_stratum_portfolio(
     )
 
     threshold_mode = str(st.get("threshold_mode") or "WIDE_RUNWAY").upper()
-    portion_mode = str(st.get("portion_mode") or "COMP_08PCT").upper()
+    raw_portion_mode = (
+        str(st.get("portion_mode") or PORTION_MODE_COMPOUND).upper().strip()
+    )
+    is_simple_mode = is_simple_income_mode(raw_portion_mode)
+    portion_mode = (
+        PORTION_MODE_SIMPLE if is_simple_mode else PORTION_MODE_COMPOUND
+    )
+    portion_mode_label = (
+        "💵인출형(단리)" if is_simple_mode else "📈자산증식형(복리)"
+    )
+
     grid_merge_mode = str(
         st.get("grid_merge_mode") or DEFAULT_GRID_MERGE_MODE
     ).upper()
@@ -1440,6 +1453,11 @@ def summarize_stratum_portfolio(
     core_equity_for_quota = max(
         init_seed, (free_cash + actual_invested) - injected_reserve_usd
     )
+    budget_base_equity_usd = resolve_portion_budget_base_equity(
+        initial_seed_usd=init_seed,
+        core_equity_usd=core_equity_for_quota,
+        portion_mode=portion_mode,
+    )
 
     reentry_sig = evaluate_l2_only_hybrid_reentry_signal(
         live_price=lp,
@@ -1500,7 +1518,7 @@ def summarize_stratum_portfolio(
         cycle_min_buy_price=cycle_min_p,
         drop_buy_pct=drop_buy_pct,
         free_cash_usd=free_cash,
-        realized_equity_usd=core_equity_for_quota,
+        realized_equity_usd=budget_base_equity_usd,
         step_up_drop_pct=eff_step_drop,
         min_cash_ratio=STEP_UP_2X_MIN_CASH_RATIO,
         min_rebound_mult=STEP_UP_2X_MIN_REBOUND_MULT,
@@ -1557,8 +1575,21 @@ def summarize_stratum_portfolio(
     )
     next_target_qty = min(budget_cap_qty, anchor_quota_qty)
 
+    # NEW [Case 91 : 💵 인출형(단리) 및 자체수혈 보유 탄창 지표 산출]
+    daily_withdrawable_profit_usd = round(
+        max(0.0, daily_realized_net_usd), 4
+    )
+    withdrawable_surplus_usd = round(
+        max(0.0, free_cash - init_seed - injected_reserve_usd), 4
+    )
+    self_reserve_portions = (
+        round(withdrawable_surplus_usd / max(0.01, next_portion_budget), 1)
+        if next_portion_budget > 0.0
+        else 0.0
+    )
+
     # -----------------------------------------------------------------------
-    # [Case 88 : 🛡️ 13_SUB_L1L3_RESV05_CAP4L — Default-ON 3층 서브 그리드 상태 및 지표 산출]
+    # [Case 88 & Case 91 : 🛡️ 13_SUB_L1L3_RESV05_CAP4L — Default-ON 3층 서브 그리드 상태 및 지표 산출]
     # -----------------------------------------------------------------------
     main_consec_frozen_days = max(
         0, safe_int(st.get("main_consec_frozen_days"), 0)
@@ -1758,6 +1789,7 @@ def summarize_stratum_portfolio(
         current_core_equity=core_equity_for_quota,
         initial_seed_usd=init_seed,
         exec_price=None,
+        portion_mode=portion_mode,
     )
     sub_eff_exec_for_cap = lp if lp > 0.0 else max(0.01, sub_ref_for_quota)
     sub_budget_cap_qty = max(
@@ -1775,6 +1807,8 @@ def summarize_stratum_portfolio(
         core_equity_usd=core_equity_for_quota,
         broker_buying_power_usd=None,
         reserve_main_portions=SUB_RESERVE_MAIN_PORTIONS,
+        initial_seed_usd=init_seed,
+        portion_mode=portion_mode,
     )
     reserved_for_main_usd = safe_float(
         idle_cash_info.get("reserved_for_main_usd"), 0.0
@@ -1986,6 +2020,15 @@ def summarize_stratum_portfolio(
     return {
         "buckets": buckets,
         "grid_merge_mode": grid_merge_mode,
+        # NEW [Case 91 : 운용 모드(복리/단리) · 당일 인출가능 실현수익 · 누적 잉여현금 · 자체수혈 탄창 요약 필드]
+        "portion_mode": portion_mode,
+        "is_simple_mode": is_simple_mode,
+        "portion_mode_label": portion_mode_label,
+        "budget_base_equity_usd": budget_base_equity_usd,
+        "daily_realized_net_usd": daily_realized_net_usd,
+        "daily_withdrawable_profit_usd": daily_withdrawable_profit_usd,
+        "withdrawable_surplus_usd": withdrawable_surplus_usd,
+        "self_reserve_portions": self_reserve_portions,
         # [Case 88 : Default-ON 3층 서브 그리드 요약 필드]
         "sub_grid_enabled": True,
         "sub_merge_mode": sub_merge_mode,
@@ -2188,11 +2231,12 @@ def summarize_stratum_portfolio(
 
 
 # ---------------------------------------------------------------------------
-# [핵심 6] TDD 사전 무결성 자동 검증 슈트 (Case 25 ~ 89 전수 검증)
+# [핵심 6] TDD 사전 무결성 자동 검증 슈트 (Case 25 ~ 91 전수 검증)
 # ---------------------------------------------------------------------------
 def run_quant_engine_tdd() -> bool:
     """
-    기동 직전 8%(본 그리드) 및 4%(서브 그리드) 황금정량 산출, Case 67 min(1회분 예산 상한 주수, 기준가 고정 정량) 이중 캡핑,
+    기동 직전 8%(본 그리드) 및 4%(서브 그리드) 황금정량 산출(복리 COMP_08PCT vs 단리 SIMPLE_08PCT 연동 · Case 91),
+    Case 67 min(1회분 예산 상한 주수, 기준가 고정 정량) 이중 캡핑,
     4단 와이드 활주로(-1.0% / -2.0% / -3.5% / -5.5%) 및 사이클 최고 도달 회차(cycle_ratchet_max_lots / sub_ratchet_max_lots) 단차 잠금(Case 87, 88),
     👑 Case 87: 본 그리드 7층 초과(8회차 유입) 시 구 1층(새 2층 후보) 보존 + 구 2층 + 구 7층 가중평균 통합 후 평단 오름차순 중간층 재배치(L2_L7_MERGE_SORT),
     🛡️ Case 88: Default-ON 3층 서브 그리드(4.0% 정량 · 0.5회분 보호예수금 · 최대 4회분[16%] 상한 캡 · 3층 초과 시 구 1층+구 3층 양끝합병 SUB_L1_L3_MERGE · 10일/-10% 저가해금),
@@ -2203,10 +2247,10 @@ def run_quant_engine_tdd() -> bool:
     🛡️ Case 84: 정규장 마감 30분 전(is_late_new_cycle_cutoff=True, 15:30 ~ 16:00 EST) 구간에서 상단 지층 보유 중 1층 공석 시
     +1.0% 상승돌파(BREAKOUT_RELOAD)를 HOLD_LATE_SESSION_BREAKOUT_CUTOFF 로 원천 차단하고 2층 단가 이하 -1.0% 눌림목(PULLBACK_RELOAD)만 정상 승인,
     정적 기억저가 잠금 및 🔓 06_STEP2X_15PCT_C20 3중 안전문 스텝업 저가 해금(Case 60, 72, 76),
-    💉 05_RESV_6P_GUARD30 30% 자투리 승격 방지 가드 · 토스 계좌 여유자금 감지 자동 수혈(Case 89 포함) · 0주 졸업 자동 상환(Case 77),
+    💉 Case 77, Case 89 & Case 91: 30% 자투리 승격 방지 가드(GUARD30) · 6회 수혈 제한 해제(7회차+ 무제한 온디맨드 수혈 카운트) · 0주 졸업 자동 상환,
     🎯 Case 78 지정가 부분 체결 후 미체결 잔량(TOPUP_1FL / SUB_TOPUP_1FL) 기존 1층 무승격 원자적 합산,
     💰 Case 86 계좌별 동적 왕복 수수료율(0.14% vs 0.20%) 및 실측 수수료(actual_sell_fee_usd) 정산 검증,
-    📊 시드 배분 10칸 유니코드 블록 게이지 · 현재 사이클 단위 수익(cycle_realized_net_usd) · 전량졸업 예정자산(projected_graduation_equity_usd) 검증을 전수 수행한다.
+    📊 시드 배분 10칸 유니코드 블록 게이지 · 현재 사이클 단위 수익(cycle_realized_net_usd) · 당일 인출가능 수익(daily_withdrawable_profit_usd) · 전량졸업 예정자산(projected_graduation_equity_usd) 검증을 전수 수행한다.
     """
     prev_rt = get_runtime_round_trip_fee_rate_pct()
     prev_one = get_runtime_us_commission_rate()
@@ -2570,7 +2614,7 @@ def run_quant_engine_tdd() -> bool:
             and len(cross_match["rem_sub_buckets"]) == 0
         ), f"TDD 실패(Case 88 본+서브 교차 저가 매칭 오류): {cross_match}"
 
-        # 9) [Case 77 : 💉 05_RESV_6P_GUARD30 검증]
+        # 9) [Case 77 & Case 91 : 💉 GUARD30 및 6회 제한 없는 무제한 온디맨드 예비수혈 검증]
         g30_block = evaluate_guard30_and_reserve_injection(
             free_cash_usd=180.0,
             broker_bp_usd=180.0,
@@ -2588,37 +2632,37 @@ def run_quant_engine_tdd() -> bool:
             and abs(g30_block["recommended_deposit_usd"] - 1440.0) < 1e-4
         ), f"TDD 실패(Case 77 미입금 시 자투리 차단 오류): {g30_block}"
 
-        g30_inj = evaluate_guard30_and_reserve_injection(
+        # 이미 8회 수혈된 상태에서도 실계좌에 여유자금이 있으면 9회차 무제한 수혈 승인 검증 (Case 91)
+        g30_inj_unlim = evaluate_guard30_and_reserve_injection(
             free_cash_usd=180.0,
             broker_bp_usd=1680.0,
             exec_price=29.0,
             portion_budget=1440.0,
             l1_actual_cost_usd=1426.0,
             is_dip_promotion=True,
-            used_reserve_portions_cnt=0,
+            used_reserve_portions_cnt=8,
         )
         assert (
-            g30_inj["action"] == "INJECT_AND_PROCEED"
-            and g30_inj["should_proceed"] is True
-            and g30_inj["inject_portions"] == 1
-            and abs(g30_inj["inject_usd"] - 1440.0) < 1e-4
-            and g30_inj["rem_portions_after"] == 5
-        ), f"TDD 실패(Case 77 입금 감지 자동 수혈 오류): {g30_inj}"
+            g30_inj_unlim["action"] == "INJECT_AND_PROCEED"
+            and g30_inj_unlim["should_proceed"] is True
+            and g30_inj_unlim["inject_portions"] == 1
+            and abs(g30_inj_unlim["inject_usd"] - 1440.0) < 1e-4
+            and g30_inj_unlim["used_portions_after"] == 9
+        ), f"TDD 실패(Case 91 무제한 9회차 예비수혈 오류): {g30_inj_unlim}"
 
         repay_res = compute_reserve_repayment_on_zero(
             initial_seed_usd=10000.0,
             cumulative_realized_net_usd=11418.55,
             injected_reserve_usd=13242.27,
-            used_reserve_portions_cnt=6,
+            used_reserve_portions_cnt=9,
         )
         assert (
             repay_res["did_repay"] is True
             and abs(repay_res["repaid_usd"] - 13242.27) < 1e-4
             and repay_res["rem_injected_reserve_usd"] == 0.0
             and repay_res["rem_used_reserve_portions_cnt"] == 0
-            and repay_res["avail_reserve_portions"] == 6
             and abs(repay_res["free_cash_after_repay_usd"] - 21418.55) < 1e-4
-        ), f"TDD 실패(Case 77 0주 졸업 예비시드 상환 오류): {repay_res}"
+        ), f"TDD 실패(Case 77/91 0주 졸업 예비시드 상환 오류): {repay_res}"
 
         # 10) [Case 78 : 지정가 부분 체결 후 잔량(TOPUP_1FL) 체결 시 무승격 단일 1층 합산 검증]
         partial_q = vrev_add_quota_lot_and_merge_2tier(
@@ -2668,7 +2712,33 @@ def run_quant_engine_tdd() -> bool:
             and pnl_014["net_pnl_usd"] > pnl_020["net_pnl_usd"]
         ), f"TDD 실패(계좌별 0.14% vs 0.20% 수수료 정산 불일치): {pnl_014} vs {pnl_020}"
 
-        # 12) [Case 88 : 🛡️ 13_SUB_L1L3_RESV05_CAP4L — Default-ON 3층 서브 그리드 4% 정량 · 0.5회분 보호예수 · SUB_L1_L3_MERGE 합병 · 4회분 상한 캡 · 10일/-10% 저가해금 검증]
+        # 12) [Case 88 & Case 91 : Default-ON 3층 서브 그리드 및 자산증식형(복리) ⇄ 인출형(단리 · 당일 인출가능 수익 & 자체수혈 탄창) 검증]
+        mock_simple_st = {
+            "buckets": [],
+            "sub_buckets": [],
+            "initial_seed_usd": 10000.0,
+            "portion_mode": "SIMPLE_08PCT",
+            "anchor_price": 50.0,
+            "cumulative_realized_net_usd": 15000.0,
+            "daily_realized_net_usd": 125.50,
+            "free_cash_usd": 25000.0,
+        }
+        simple_sum = summarize_stratum_portfolio(
+            mock_simple_st, live_price=50.0
+        )
+        assert (
+            simple_sum["is_simple_mode"] is True
+            and simple_sum["portion_mode"] == "SIMPLE_08PCT"
+            and abs(simple_sum["next_portion_budget"] - 800.0) < 1e-4
+            and simple_sum["next_target_qty"] == 16
+            and abs(simple_sum["sub_next_portion_budget"] - 400.0) < 1e-4
+            and simple_sum["sub_next_target_qty"] == 8
+            and abs(simple_sum["reserved_for_main_usd"] - 400.0) < 1e-4
+            and abs(simple_sum["withdrawable_surplus_usd"] - 15000.0) < 1e-4
+            and abs(simple_sum["self_reserve_portions"] - 18.8) < 1e-2
+            and abs(simple_sum["daily_withdrawable_profit_usd"] - 125.50) < 1e-4
+        ), f"TDD 실패(Case 91 인출형[단리] 정량/잉여현금/당일인출수익 오류): {simple_sum}"
+
         sub_q_qty, sub_q_bud = compute_sub4_quota_qty(
             sub_anchor_price=50.0,
             current_core_equity=10000.0,
@@ -2761,6 +2831,6 @@ def run_quant_engine_tdd() -> bool:
         set_runtime_round_trip_fee_rate_pct(prev_rt, us_commission_rate=prev_one)
 
     logger.info(
-        "✅ [QuantEngine TDD 사전 무결성 검증 통과] 챔피언 👑 06_L2L7_RATCHET_8PCT × 🛡️ 13_SUB_L1L3_RESV05_CAP4L(Default ON) × 💉 05_RESV_6P_GUARD30 × 🔓 06_STEP2X_15PCT_C20 & 방안 C · 사이클 수익 · 졸업예정자산 · Case 84 ~ 89 전수 검증 완료"
+        "✅ [QuantEngine TDD 사전 무결성 검증 통과] 챔피언 👑 06_L2L7_RATCHET_8PCT × 🛡️ 13_SUB_L1L3_RESV05_CAP4L(Default ON) × 💉 무제한 예비수혈 × 🔓 06_STEP2X_15PCT_C20 × 💵 인출형(단리)/자산증식형(복리) & Case 84 ~ 91 전수 검증 완료"
     )
     return True

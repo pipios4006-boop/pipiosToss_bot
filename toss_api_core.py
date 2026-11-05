@@ -1,20 +1,23 @@
 # -*- coding: utf-8 -*-
 """
-# MODIFIED: toss_api_core.py (황금시간 07:00~07:50 RSI<=19 올인 뇌동매매 상수·포켓·원장 필드 전면 영구 소각)
+# MODIFIED: toss_api_core.py (황금시간 07:00~07:50 RSI<=19 올인 뇌동매매 상수·포켓·원장 필드 전면 영구 소각 & Case 91 무제한 예비수혈 카운트 및 인출형[단리]/자산증식형[복리] 모드 전환 탑재)
 인피니트 스노우볼 (Infinite Snowball) v3.0 — 토스증권 코어 상수 · 폴더 격리 · 디스크 자가 치유 ·
 GlobalThrottle 동시성 통제 및 SOXL 7-Tier 골디락스 본 그리드(구 2층 + 구 7층 통합 중간층 재배치 & 최고 도달 회차 단차 잠금 · Case 87) /
 스위치 없는 100% 기본 상시 적용(Default ON) 3-Tier 서브 그리드(4.0% 정량 · 구 1층 + 구 3층 양끝 합병 & 최대 4회분[16%] 상한 캡 & 0.5회분 보호예수 · Case 88) /
-현재 사이클 단위 실현수익(cycle_realized_net_usd) 자동 추적·리셋 및 폴더별 3중 원장(SoxlStratumLedger) 코어 모듈 (Part 1 / 2 · Step 01 / 13)
+현재 사이클 단위 실현수익(cycle_realized_net_usd) 자동 추적·리셋 · 무제한 예비시드 수혈 횟수 카운트 및
+자산증식형(복리 · COMP_08PCT) ⇄ 인출형(단리 · SIMPLE_08PCT) 폴더별 3중 원장(SoxlStratumLedger) 코어 모듈 (Part 1 / 2 · Step 01 / 13)
 - 역할:
-  1) 제4헌법 EST 단일 타임존 및 최종 확정 챔피언(Case 01 ~ Case 89 · 👑 06_L2L7_RATCHET_8PCT × 🛡️ 13_SUB_L1L3_RESV05_CAP4L[Default ON]) 전역 상수 락온
+  1) 제4헌법 EST 단일 타임존 및 최종 확정 챔피언(Case 01 ~ Case 91 · 👑 06_L2L7_RATCHET_8PCT × 🛡️ 13_SUB_L1L3_RESV05_CAP4L[Default ON]) 전역 상수 락온
   2) 안전한 수치 형변환(safe_float, safe_int), 36자 멱등성 키 생성기(generate_client_order_id),
      4xx 비재시도 예외(_NonRetryableApiError) 및 계좌별 미국 주식 수수료율 런타임 캐시 동기화기(Case 86)
   3) 폴더 위치(base_dir) 기반 자동 식별기(get_bot_base_dir, get_folder_slug, resolve_folder_isolated_ledger_paths),
      격리 환경변수 로더(_load_env_files_into_environ) 및 클라우드 VM 디스크 고갈(Errno 28) 자가 치유기(emergency_free_disk_space_sync · Case 68, Case 75, Case 85)
   4) 제1헌법 동기/비동기 양방향 호환 _HybridFileLock 및 GlobalThrottle 중앙 통제소(Case 06, Case 20)
   5) SOXL 단일 롱 7-Tier 본 그리드(L2_L7_MERGE_SORT & cycle_ratchet_max_lots 단차 잠금 · Case 87) ·
-     Default-ON 3-Tier 서브 그리드(SUB_L1_L3_MERGE & sub_ratchet_max_lots & SUB_MAX_TOTAL_LOTS_4 캡 · Case 88) 및
-     현재 사이클 단위 실현수익(cycle_realized_net_usd · 0주 전량 졸업 시 last_cycle_realized_net_usd 박제 후 0.0 자동 리셋) 폴더별 3중 안전 지층 원장(SoxlStratumLedger · Case 58 ~ Case 89)
+     Default-ON 3-Tier 서브 그리드(SUB_L1_L3_MERGE & sub_ratchet_max_lots & SUB_MAX_TOTAL_LOTS_4 캡 · Case 88) ·
+     무제한 예비시드 수혈 카운트(used_reserve_portions_cnt · total_reserve_injected_cnt) ·
+     자산증식형(복리 · COMP_08PCT) ⇄ 인출형(단리 · SIMPLE_08PCT) 모드 전환(toggle_portion_mode · Case 91) 및
+     현재 사이클 단위 실현수익(cycle_realized_net_usd · 0주 전량 졸업 시 last_cycle_realized_net_usd 박제 후 0.0 자동 리셋) 폴더별 3중 안전 지층 원장(SoxlStratumLedger · Case 58 ~ Case 91)
 """
 
 from __future__ import annotations
@@ -38,7 +41,7 @@ from zoneinfo import ZoneInfo
 logger = logging.getLogger("toss_sniper.toss_api_core")
 
 # ---------------------------------------------------------------------------
-# [핵심 상수] 제4헌법 EST 단일 타임존 & 최종 확정 진화 챔피언 (Case 72 ~ 89) 전역 상수
+# [핵심 상수] 제4헌법 EST 단일 타임존 & 최종 확정 진화 챔피언 (Case 72 ~ 91) 전역 상수
 # ---------------------------------------------------------------------------
 EST_TZ = ZoneInfo("America/New_York")
 KST_TZ = ZoneInfo("Asia/Seoul")
@@ -50,6 +53,15 @@ ALLOWED_SYMBOLS: Tuple[str, ...] = ("SOXL",)
 DEFAULT_INITIAL_SEED_USD: float = 10000.0
 PORTION_RATIO_LOCKED: float = 0.08
 BASE_MAX_LOTS_8PCT: int = 12
+
+# NEW [Case 91 : 📈 자산증식형(복리 · COMP_08PCT) vs 💵 인출형(단리 · SIMPLE_08PCT) 운용 모드 상수]
+PORTION_MODE_COMPOUND: str = "COMP_08PCT"
+PORTION_MODE_SIMPLE: str = "SIMPLE_08PCT"
+VALID_PORTION_MODES: Tuple[str, ...] = (
+    "COMP_08PCT",
+    "SIMPLE_08PCT",
+    "FIXED_800",
+)
 
 # Case 72 & Case 87: 골디락스 7-Layer (1층 공격수 + 2 ~ 7층 완충/중간합병 그리드) 상수 락온
 # (타 모듈 AST 임포트 무결성 100% 호환을 위해 MAX_GRID_TIERS_12 도 7 로 동시 매핑)
@@ -81,8 +93,9 @@ STEP_UP_2X_MAX_TIERS: int = 2
 STEP_UP_2X_MIN_CASH_RATIO: float = 0.20
 STEP_UP_2X_DROP_PCT: float = 15.0
 
-# Case 77: 💉 05_RESV_6P_GUARD30 (30% 자투리 1주 승격 방지 가드 & 최대 +6회분 온디맨드 예비시드 자동 수혈) 상수 락온
-MAX_RESERVE_PORTIONS: int = 6
+# MODIFIED [Case 77 & Case 91 : 30% 자투리 1주 승격 방지 가드(GUARD30) & 횟수 제한 없는 무제한 온디맨드 예비시드 자동 수혈 상수]
+# (타 모듈 AST 심볼 임포트 호환을 위해 MAX_RESERVE_PORTIONS 심볼은 유지하되 실질 상한 제한은 해제)
+MAX_RESERVE_PORTIONS: int = 999999
 MIN_DIP_BUDGET_RATIO: float = 0.30
 MIN_DIP_VS_L1_RATIO: float = 0.30
 RESERVE_DEPOSIT_TOLERANCE_RATIO: float = 0.95
@@ -107,7 +120,7 @@ _RUNTIME_ROUND_TRIP_FEE_RATE_PCT: float = ROUND_TRIP_FEE_RATE_PCT
 
 
 # ---------------------------------------------------------------------------
-# [유틸리티] 안전한 수치 형변환 및 런타임 수수료율 동기화기 (Case 03, 23, 86)
+# [유틸리티] 안전한 수치 형변환 · 운용 모드 판별기 및 런타임 수수료율 동기화기 (Case 03, 23, 86, 91)
 # ---------------------------------------------------------------------------
 def safe_float(val: Any, default: float = 0.0) -> float:
     if val is None or isinstance(val, bool):
@@ -141,6 +154,19 @@ def safe_int(val: Any, default: int = 0) -> int:
         )
     except Exception:
         return int(default)
+
+
+def is_simple_income_mode(portion_mode: Any) -> bool:
+    """
+    # NEW [Case 91]:
+    현재 운용 모드가 💵 인출형(단리 · 설정 기준시드의 8% / 서브 4% 고정 · 채굴 수익 현금 적립 및 인출)인지 판별한다.
+    """
+    return str(portion_mode or PORTION_MODE_COMPOUND).upper().strip() in (
+        "SIMPLE_08PCT",
+        "FIXED_800",
+        "SIMPLE",
+        "INCOME",
+    )
 
 
 def _read_env_us_commission_rates() -> Tuple[float, float]:
@@ -519,11 +545,11 @@ class GlobalThrottle:
 
 
 # ---------------------------------------------------------------------------
-# [핵심 2] SOXL 단일 롱 7-Tier 본 그리드(L2_L7_MERGE_SORT) · Default-ON 3-Tier 서브 그리드(SUB_L1_L3_MERGE & CAP4L) · 사이클 수익 추적 폴더별 3중 안전 지층 원장 (SoxlStratumLedger — Case 68 ~ 89)
+# [핵심 2] SOXL 단일 롱 7-Tier 본 그리드(L2_L7_MERGE_SORT) · Default-ON 3-Tier 서브 그리드(SUB_L1_L3_MERGE & CAP4L) · 무제한 예비수혈 카운트 · 복리/단리 모드 전환 폴더별 3중 안전 지층 원장 (SoxlStratumLedger — Case 68 ~ 91)
 # ---------------------------------------------------------------------------
 class SoxlStratumLedger:
     """
-    🎯 1 ~ 🎯 5 & Case 02, 05, 06, 58 ~ 89:
+    🎯 1 ~ 🎯 5 & Case 02, 05, 06, 58 ~ 91:
     현재 봇이 위치한 폴더(`base_dir`)를 기준으로:
     ① 폴더 고유 원장(`soxl_stratum_ledger_<folder_slug>.json` — Git 덮어쓰기 100% 면역)
     ② 표준 호환 원장(`soxl_stratum_ledger.json` — 기존 코드 및 외부 도구 호환 미러)
@@ -532,9 +558,11 @@ class SoxlStratumLedger:
     본 그리드 사이클 최고 도달 회차 잠금(`cycle_ratchet_max_lots` · Case 87),
     🛡️ 스위치 없는 100% 기본 상시 적용(Default ON) 1 ~ 3층 서브 그리드(`sub_buckets` · `sub_merge_mode = "SUB_L1_L3_MERGE"` ·
     최대 누적 4회분 상한 캡 · 본/서브 연속 무매매 동결일 `main_consec_frozen_days` / `sub_consec_frozen_days` · Case 88),
+    📈 자산증식형(복리 · `COMP_08PCT`) ⇄ 💵 인출형(단리 · `SIMPLE_08PCT`) 운용 모드(`portion_mode` · Case 91),
     가용 현금 시드(`free_cash_usd`), 계좌별 미국 주식 수수료율(`us_commission_rate`, `round_trip_fee_rate_pct`),
     정적 잠금/조건부 스텝업 사이클 최저 매수가(`cycle_min_buy_price` / `sub_cycle_min_buy_price`),
-    💉 05_RESV_6P_GUARD30 예비시드 수혈 잔액 · 사용 회분 · 시드고갈 입금 대기 플래그 · 단 1회 입금 알림 영구 래치,
+    💉 GUARD30 및 횟수 제한 없는 무제한 예비시드 수혈 잔액 · 수혈 횟수 카운트(`used_reserve_portions_cnt`, `total_reserve_injected_cnt`, `daily_reserve_injected_cnt`) ·
+    시드고갈 입금 대기 플래그 · 단 1회 입금 알림 영구 래치,
     🎯 Case 78 현재 본/서브 1층 목표 정량 주수(`l1_target_quota_qty` / `sub_l1_target_quota_qty`), 양방향·주기 60초 타임쉴드 시각,
     다중 그리드(본+서브) 매도 대기 정보, 기정산 주문 ID 링버퍼,
     누적 세후 실현수익금(`cumulative_realized_net_usd`) 및 현재 진행 사이클 단위 실현수익(`cycle_realized_net_usd` · 0주 졸업 시 `last_cycle_realized_net_usd` 박제 후 0.0 리셋)을
@@ -651,7 +679,8 @@ class SoxlStratumLedger:
             # [Case 86]: 계좌별 미국 주식 편도 수수료율(소수) 및 왕복 수수료율(%) 영속화 필드 (.env 폴백 지원)
             "us_commission_rate": env_one_rate,
             "round_trip_fee_rate_pct": env_rt_pct,
-            "portion_mode": "COMP_08PCT",
+            # [Case 91]: 📈 자산증식형(복리 · COMP_08PCT) / 💵 인출형(단리 · SIMPLE_08PCT) 운용 모드 필드
+            "portion_mode": PORTION_MODE_COMPOUND,
             "threshold_mode": "WIDE_RUNWAY",
             "reentry_mode": "HYBRID_PULL_OR_BRK",
             # [Case 87 : 👑 06_L2L7_RATCHET_8PCT — 구 2층 + 구 7층 통합 후 평단 오름차순 중간층 재배치 모드 락온]
@@ -733,7 +762,7 @@ class SoxlStratumLedger:
             "last_sell_gate_eval_ts": 0.0,
             # Case 73: 상단 2~7층 보유 중 1층 공석 전용 60초(1분) 주기 재장전 타임쉴드 시각 영속화
             "last_reentry_eval_ts": 0.0,
-            # Case 77: 💉 05_RESV_6P_GUARD30 온디맨드 예비시드 수혈 · 상환 · 단 1회 입금 알림 영구 래치 필드
+            # Case 77 & Case 91: 무제한 온디맨드 예비시드 수혈 횟수 카운트 · 수혈 잔액 · 상환 · 단 1회 입금 알림 영구 래치 필드
             "used_reserve_portions_cnt": 0,
             "injected_reserve_usd": 0.0,
             "total_reserve_injected_cnt": 0,
@@ -1014,9 +1043,10 @@ class SoxlStratumLedger:
         self, raw_st: Dict[str, Any]
     ) -> Dict[str, Any]:
         """
-        🚨 Case 63, Case 64, Case 67, Case 68, Case 69, Case 70, Case 71, Case 72, Case 73, Case 74, Case 76, Case 77, Case 78, Case 86, Case 87, Case 88 & Case 89:
+        🚨 Case 63, Case 64, Case 67, Case 68, Case 69, Case 70, Case 71, Case 72, Case 73, Case 74, Case 76, Case 77, Case 78, Case 86, Case 87, Case 88, Case 89 & Case 91:
         1) buy_interval_min = 10, sell_interval_min = 1, max_grid_tiers = 7 (MAX_GRID_TIERS_7),
-           portion_mode = "COMP_08PCT", threshold_mode = "WIDE_RUNWAY",
+           portion_mode = "COMP_08PCT" (자산증식형·복리) 또는 "SIMPLE_08PCT" (인출형·단리) 보존,
+           threshold_mode = "WIDE_RUNWAY",
            grid_merge_mode = "L2_L7_MERGE_SORT", unlock_mode = "STEP2X_15PCT_C20",
            sub_grid_enabled = True (Default ON), sub_merge_mode = "SUB_L1_L3_MERGE",
            sub_max_tiers = 3, sub_max_total_lots = 4 를 강제 동기화한다.
@@ -1024,7 +1054,7 @@ class SoxlStratumLedger:
            런타임 메모리 캐시에 동기화한다.
         3) 시드머니 결측 또는 0.0 유입 시 $100.0 으로 변조되지 않도록 _resolve_safe_initial_seed() 를 적용한다.
         4) 🛡️ [Case 69, Case 71, Case 72, Case 87 & Case 88 순수 실물 원가 100% 보존 및 본/서브 최고 도달 회차(cycle_ratchet_max_lots / sub_ratchet_max_lots) 잠금 강제]
-        5) 💉 [Case 77 & Case 88 온디맨드 예비시드 수혈 잔액(injected_reserve_usd) · 본 그리드 · 서브 그리드 투입원금 통합 회계 항등식]
+        5) 💉 [Case 77, Case 88 & Case 91 무제한 온디맨드 예비시드 수혈 잔액(injected_reserve_usd) 및 수혈 횟수 카운트 · 본 그리드 · 서브 그리드 투입원금 통합 회계 항등식]
         6) 🔄 [현재 진행 사이클 단위 실현수익(cycle_realized_net_usd) 및 직전 졸업 사이클 기록(last_cycle_realized_net_usd, completed_main_cycles) 정합성 강제]
         """
         st = self._default_symbol_state(
@@ -1054,7 +1084,18 @@ class SoxlStratumLedger:
         st["buy_interval_min"] = LOCKED_BUY_INTERVAL_MIN
         st["sell_interval_min"] = LOCKED_SELL_INTERVAL_MIN
         st["max_grid_tiers"] = MAX_GRID_TIERS_7
-        st["portion_mode"] = "COMP_08PCT"
+
+        # MODIFIED [Case 91 : 자산증식형(복리 · COMP_08PCT) vs 인출형(단리 · SIMPLE_08PCT) 운용 모드 보존]
+        raw_p_mode = (
+            str(st.get("portion_mode") or PORTION_MODE_COMPOUND)
+            .upper()
+            .strip()
+        )
+        if is_simple_income_mode(raw_p_mode):
+            st["portion_mode"] = PORTION_MODE_SIMPLE
+        else:
+            st["portion_mode"] = PORTION_MODE_COMPOUND
+
         st["threshold_mode"] = "WIDE_RUNWAY"
         st["reentry_mode"] = "HYBRID_PULL_OR_BRK"
         st["grid_merge_mode"] = DEFAULT_GRID_MERGE_MODE
@@ -1093,7 +1134,7 @@ class SoxlStratumLedger:
             us_commission_rate=st["us_commission_rate"],
         )
 
-        # Case 77: 예비시드 수혈·상환·자투리차단 카운터 및 단 1회 입금 알림 래치 정규화
+        # MODIFIED [Case 77 & Case 91 : 예비시드 6회 상한 캡 영구 해제 — 수혈 횟수만 무제한 카운트]
         inj_res_usd = round(
             max(0.0, safe_float(st.get("injected_reserve_usd"), 0.0)), 4
         )
@@ -1102,9 +1143,7 @@ class SoxlStratumLedger:
             inj_res_usd = 0.0
             used_res_p = 0
         else:
-            used_res_p = max(
-                1, min(MAX_RESERVE_PORTIONS, raw_used_p if raw_used_p > 0 else 1)
-            )
+            used_res_p = max(1, raw_used_p if raw_used_p > 0 else 1)
         st["injected_reserve_usd"] = inj_res_usd
         st["used_reserve_portions_cnt"] = used_res_p
         st["total_reserve_injected_cnt"] = max(
@@ -1531,7 +1570,7 @@ class SoxlStratumLedger:
                 safe_float(st.get("cycle_leftover_saved_usd"), 0.0), 4
             )
 
-        # 🚨 [Case 77 & Case 88 통합 회계 항등식(Accounting Identity) 강제]
+        # 🚨 [Case 77, Case 88 & Case 91 통합 회계 항등식(Accounting Identity) 강제]
         actual_inv_buckets = round(
             sum(safe_float(b["actual_cost_usd"], 0.0) for b in clean_buckets),
             4,
@@ -1659,7 +1698,7 @@ class SoxlStratumLedger:
 
     def _load_sync(self) -> None:
         """
-        🚨 Case 68, Case 75, Case 85, Case 86, Case 87 & Case 88 [기존 soxl_stratum_ledger.json 100% 무손실 자동 이관 & 3중 금고 Dirty-Check 자가 치유]:
+        🚨 Case 68, Case 75, Case 85, Case 86, Case 87, Case 88 & Case 91 [기존 soxl_stratum_ledger.json 100% 무손실 자동 이관 & 3중 금고 Dirty-Check 자가 치유]:
         """
         with GlobalThrottle.get_file_lock(self.primary_filepath):
             with GlobalThrottle.get_file_lock(self.legacy_filepath):
@@ -1721,11 +1760,17 @@ class SoxlStratumLedger:
                         max(1, safe_int(sb.get("lot_count"), 1))
                         for sb in sanitized.get("sub_buckets", [])
                     )
+                    p_mode_lbl = (
+                        "💵인출형(단리)"
+                        if is_simple_income_mode(sanitized.get("portion_mode"))
+                        else "📈자산증식형(복리)"
+                    )
                     logger.info(
-                        "📂 [Case 68~89 폴더별 3중 7층 본그리드 + Default-ON 3층 서브그리드 원장 락온 완료] 폴더=[%s] · 채택소스=%s · 시드=$%.2f · 왕복수수료=%.2f%% · 본그리드=%d주(%d개층·보유%d/잠금%d회차) · 서브그리드=%d주(%d개층·%d/%d회분) · 이번사이클순익=$%.2f · 예비수혈=%d/%d회분($%.2f) · 고유원장=%s",
+                        "📂 [Case 68~91 폴더별 3중 7층 본그리드 + Default-ON 3층 서브그리드 원장 락온 완료] 폴더=[%s] · 채택소스=%s · 시드=$%.2f · 모드=%s · 왕복수수료=%.2f%% · 본그리드=%d주(%d개층·보유%d/잠금%d회차) · 서브그리드=%d주(%d개층·%d/%d회분) · 이번사이클순익=$%.2f · 예비수혈=%d회(누적%d회·$%.2f) · 고유원장=%s",
                         self.folder_slug,
                         best_label,
                         safe_float(sanitized.get("initial_seed_usd"), 10000.0),
+                        p_mode_lbl,
                         safe_float(
                             sanitized.get("round_trip_fee_rate_pct"),
                             ROUND_TRIP_FEE_RATE_PCT,
@@ -1742,7 +1787,9 @@ class SoxlStratumLedger:
                             sanitized.get("cycle_realized_net_usd"), 0.0
                         ),
                         safe_int(sanitized.get("used_reserve_portions_cnt"), 0),
-                        MAX_RESERVE_PORTIONS,
+                        safe_int(
+                            sanitized.get("total_reserve_injected_cnt"), 0
+                        ),
                         safe_float(sanitized.get("injected_reserve_usd"), 0.0),
                         os.path.basename(self.primary_filepath),
                     )
@@ -2090,6 +2137,32 @@ class SoxlStratumLedger:
             else (not bool(st.get("is_active", True)))
         )
         return await self.update_state(TARGET_SYMBOL, is_active=next_active)
+
+    async def toggle_portion_mode(
+        self, target_mode: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        # NEW [Case 91 : 📈 자산증식형(복리 · COMP_08PCT) ⇄ 💵 인출형(단리 · SIMPLE_08PCT) 비동기 모드 전환기]:
+        """
+        st = self.get_state(TARGET_SYMBOL)
+        cur_mode = (
+            str(st.get("portion_mode") or PORTION_MODE_COMPOUND)
+            .upper()
+            .strip()
+        )
+        if target_mode is not None and str(target_mode).strip():
+            next_mode = (
+                PORTION_MODE_SIMPLE
+                if is_simple_income_mode(target_mode)
+                else PORTION_MODE_COMPOUND
+            )
+        else:
+            next_mode = (
+                PORTION_MODE_COMPOUND
+                if is_simple_income_mode(cur_mode)
+                else PORTION_MODE_SIMPLE
+            )
+        return await self.update_state(TARGET_SYMBOL, portion_mode=next_mode)
 
     async def rollover_daily_counters_if_needed(
         self, logical_date: str

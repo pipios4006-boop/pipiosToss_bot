@@ -1,10 +1,11 @@
 # -*- coding: utf-8 -*-
 """
-# MODIFIED: sniper_plugin_core.py (황금시간 07:00~07:50 RSI<=19 올인 골든포켓·GOLDEN_L1 정산/가드/주석 전면 영구 소각)
+# MODIFIED: sniper_plugin_core.py (황금시간 07:00~07:50 RSI<=19 올인 골든포켓·GOLDEN_L1 정산/가드/주석 전면 영구 소각 & Case 91 무제한 예비시드 수혈 횟수 카운트 및 복리/단리 모드 연동)
 인피니트 스노우볼 (Infinite Snowball) v3.0 — 스나이퍼 매수 코어 Part 1 / 2 (Step 06 / 13)
 역할:
 1) 스나이퍼 매수 전역 상수 락온 (DEFAULT_GRID_MERGE_MODE = "L2_L7_MERGE_SORT" [Case 87] ·
    SUB_MERGE_MODE_L1_L3 = "SUB_L1_L3_MERGE" / SUB_MAX_TIERS_3 = 3 / SUB_MAX_TOTAL_LOTS_4 = 4 [Case 88] ·
+   PORTION_MODE_COMPOUND / PORTION_MODE_SIMPLE [Case 91] ·
    STEP2X_15PCT_C20 · BUY_ORDER_MAX_WAIT_SEC = 60.0 · AUTO_FILL_GRACE_SHIELD_SEC = 15.0 ·
    REENTRY_MONITOR_TIME_SHIELD_SEC = 60.0 · RESERVE_DEPOSIT_CHECK_INTERVAL_SEC = 60.0)
 2) 매수·매도 체결 직후 토스 잔고 API 인덱싱 시차(0.1 ~ 0.4초) 보호 양방향 15.0초 그레이스 쉴드 및
@@ -17,10 +18,10 @@
    (mark_reserve_deposit_check_shield, is_within_reserve_deposit_check_shield · Case 77)
 5) 실시간 SOXL 현재가 추출 및 60초 타임쉴드 경과 직후 최신 현재가 직접 재조회기
    (_get_live_soxl_price, _fetch_fresh_current_soxl_price · Case 65, 73)
-6) 💉 05_RESV_6P_GUARD30 (30% 자투리 1주 승격 방지 가드 · 계좌별 동적 왕복 수수료율 연동[Case 86] ·
+6) 💉 GUARD30 & 무제한 예비수혈 (30% 자투리 1주 승격 방지 가드 · 계좌별 동적 왕복 수수료율 연동[Case 86] ·
    예수금 API 0.0 반환 시 0.25초 재시도 · 시드고갈 단 1회 입금 요청 알림 영구 래치 waiting_reserve_deposit_alert_sent 및 중복 디스크 쓰기 스킵 ·
-   토스 실계좌 여유자금 감지 기반 최대 +6회분 온디맨드 예비시드 자동 수혈) 실행 엔진
-   (_check_and_execute_guard30_or_reserve_injection · Case 75, 77, 86, 89)
+   토스 실계좌 여유자금 감지 기반 횟수 제한 없는 무제한 온디맨드 예비시드 자동 수혈 및 수혈 횟수 카운트) 실행 엔진
+   (_check_and_execute_guard30_or_reserve_injection · Case 75, 77, 86, 89, 91)
 7) 매수 체결(FILLED / 부분 체결 후 60초 취소 종료 / 세션 경계 force_settle 강제 정산) 원장 커밋 ·
    🛡️ Default-ON 3층 서브 그리드(SUB_REENTRY_1FL / SUB_TOPUP_1FL / SUB_DIP_1FL : 3층 초과 시 구 1층+구 3층 양끝 합병 SUB_L1_L3_MERGE ·
    서브 최고 도달 회차 sub_ratchet_max_lots 잠금 · 10일/-10% 저가해금 · sub_consec_frozen_days = 0 리셋 · Case 88) 분리 정산 ·
@@ -29,8 +30,8 @@
    7층 초과 시 구 1층 보존 + 구 2층 + 구 7층 통합 중간층 재배치(L2_L7_MERGE_SORT) 및 사이클 최고 도달 회차(cycle_ratchet_max_lots) 단차 잠금 갱신(Case 87) ·
    STEP2X_15PCT_C20 스텝업 잠금 저가/회차 갱신(Case 76, 87) ·
    15:30 EST 경계 미체결 취소 시 본·서브 0주 신규 진입 및 1층 공석 +1.0% 돌파 추격 동시 안전 취소(Case 84, Case 88) 및
-   미체결 매수 주문 60.0초 동기화/안전 취소기 (_commit_filled_buy_to_stratum_ledger, sync_pending_buy_order_plugin · Case 19, 24, 59 ~ 89)
-- 제1헌법 ~ 제6헌법 및 Case 01 ~ 89 완벽 준수
+   미체결 매수 주문 60.0초 동기화/안전 취소기 (_commit_filled_buy_to_stratum_ledger, sync_pending_buy_order_plugin · Case 19, 24, 59 ~ 91)
+- 제1헌법 ~ 제6헌법 및 Case 01 ~ 91 완벽 준수
 """
 
 from __future__ import annotations
@@ -48,6 +49,8 @@ from quant_engine import (
     MAX_RESERVE_PORTIONS,
     MIN_DIP_BUDGET_RATIO,
     MIN_DIP_VS_L1_RATIO,
+    PORTION_MODE_COMPOUND,
+    PORTION_MODE_SIMPLE,
     REENTRY_BREAKOUT_RISE_PCT,
     ROUND_TRIP_FEE_RATE_PCT,
     SUB_FROZEN_DAYS_TRIGGER,
@@ -65,7 +68,9 @@ from quant_engine import (
     buckets_to_dicts,
     evaluate_guard30_and_reserve_injection,
     has_active_l1_bucket,
+    is_simple_income_mode,
     resolve_effective_round_trip_fee_rate_pct,
+    resolve_portion_budget_base_equity,
     summarize_stratum_portfolio,
     vrev_add_quota_lot_and_merge_2tier,
 )
@@ -618,7 +623,7 @@ def min_req_cash_str(val: float) -> str:
 
 
 # ---------------------------------------------------------------------------
-# [핵심 0-B · Case 75, Case 77, Case 86 & Case 89] GUARD30 자투리 차단 · 계좌별 동적 수수료율 연동 · 예수금 API 일시 오류 방어 · 토스 계좌 여유자금 감지 자동 수혈 · 단 1회 입금 요청 알림 실행기
+# [핵심 0-B · Case 75, Case 77, Case 86, Case 89 & Case 91] GUARD30 자투리 차단 · 계좌별 동적 수수료율 연동 · 예수금 API 일시 오류 방어 · 횟수 제한 없는 무제한 온디맨드 예비수혈 카운트 · 단 1회 입금 요청 알림 실행기
 # ---------------------------------------------------------------------------
 async def _check_and_execute_guard30_or_reserve_injection(
     context: Any,
@@ -631,7 +636,7 @@ async def _check_and_execute_guard30_or_reserve_injection(
     trigger_desc: str,
 ) -> Tuple[bool, float, float, Dict[str, Any]]:
     """
-    # [Case 75, Case 77, Case 86 & Case 89 계좌별 동적 왕복 수수료율 연동]:
+    # MODIFIED [Case 75, Case 77, Case 86, Case 89 & Case 91 : 예비시드 6회 상한 제한 전면 해제 — 무제한 수혈 및 수혈 횟수 카운트]:
     본 그리드 주문 발주 직전(뮤텍스 내부)에 호출되어:
     1) 토스 실계좌 주문가능 달러(`raw_bp_usd = await context.api.get_buying_power_usd(safety_buffer_pct=0.0)`)를 조회하되,
        원장 가용현금이 충분함에도(`now_free_cash >= est_min_req`) 일시 네트워크 타임아웃으로 `0.0` 이 반환되면
@@ -639,7 +644,7 @@ async def _check_and_execute_guard30_or_reserve_injection(
        해당 틱만 조용히 보류(`HOLD_TRANSIENT_BP_API_ERROR`)한다!
     2) `evaluate_guard30_and_reserve_injection(..., round_trip_fee_rate_pct=eff_rt_pct)` 으로
        계좌 고유 수수료율이 반영된 30% 자투리 가드(`min_req_cash`) 통과 여부 및 예비시드 수혈 가능 여부를 판정한다.
-    3) [PROCEED_NORMAL] / [INJECT_AND_PROCEED] / [BLOCK_AND_ALERT_DEPOSIT] 분기 처리
+    3) [PROCEED_NORMAL] / [INJECT_AND_PROCEED] (횟수 제한 없이 자동 수혈 및 `used_reserve_portions_cnt`, `total_reserve_injected_cnt` 카운트) / [BLOCK_AND_ALERT_DEPOSIT] 분기 처리
     """
     now_free_cash = max(0.0, safe_float(st_now.get("free_cash_usd"), 0.0))
     cur_used_res = max(0, safe_int(st_now.get("used_reserve_portions_cnt"), 0))
@@ -712,11 +717,11 @@ async def _check_and_execute_guard30_or_reserve_injection(
             )
         return True, now_free_cash, eff_bp_for_order, guard_eval
 
-    # [케이스 2] 토스 계좌에 여유자금이 입금되어 있어 온디맨드 예비시드 자동 수혈 실행!
+    # [케이스 2] 토스 계좌에 여유자금이 입금되어 있어 온디맨드 예비시드 무제한 자동 수혈 및 횟수 카운트 실행! (Case 91)
     if action == "INJECT_AND_PROCEED":
         inj_portions = max(1, safe_int(guard_eval.get("inject_portions"), 1))
         inj_usd = round(max(0.01, safe_float(guard_eval.get("inject_usd"), 0.0)), 4)
-        new_used_cnt = min(MAX_RESERVE_PORTIONS, cur_used_res + inj_portions)
+        new_used_cnt = cur_used_res + inj_portions
         new_inj_usd = round(cur_inj_usd + inj_usd, 4)
         new_tot_inj_cnt = (
             safe_int(st_now.get("total_reserve_injected_cnt"), 0) + inj_portions
@@ -724,7 +729,6 @@ async def _check_and_execute_guard30_or_reserve_injection(
         new_day_inj_cnt = (
             safe_int(st_now.get("daily_reserve_injected_cnt"), 0) + inj_portions
         )
-        rem_after = max(0, MAX_RESERVE_PORTIONS - new_used_cnt)
 
         mark_reserve_deposit_check_shield(
             context, TARGET_SYMBOL, clear_shield=True
@@ -745,13 +749,13 @@ async def _check_and_execute_guard30_or_reserve_injection(
             safe_float(updated_st.get("free_cash_usd"), now_free_cash + inj_usd),
         )
         logger.info(
-            "💉 [Case 77/89 SOXL 온디맨드 예비시드 자동 수혈 완료] +%d회분(+%.2f$) 수혈 -> 가용현금 $%.2f (사용 %d/%d회분 · 잔여한도 %d회분 · 타점=%s)",
+            "💉 [Case 77/89/91 SOXL 온디맨드 예비시드 자동 수혈 완료] +%d회분(+%.2f$) 수혈 -> 가용현금 $%.2f (현재수혈 %d회분 · 누적총 %d회 · 수혈잔액 $%.2f · 타점=%s)",
             inj_portions,
             inj_usd,
             updated_free_cash,
             new_used_cnt,
-            MAX_RESERVE_PORTIONS,
-            rem_after,
+            new_tot_inj_cnt,
+            new_inj_usd,
             trigger_desc,
         )
         if hasattr(context, "send_slim_alert"):
@@ -760,13 +764,13 @@ async def _check_and_execute_guard30_or_reserve_injection(
                 body=(
                     f"시드고갈(30% 가드) 감지 즉시 토스 계좌 여유자금에서 +{inj_portions}회분(${inj_usd:,.2f}) 자동 수혈 완료! · "
                     f"수혈 후 가용현금 ${updated_free_cash:,.2f} · "
-                    f"예비시드 사용 {new_used_cnt}/{MAX_RESERVE_PORTIONS}회분(잔여 {rem_after}회분 · 누적수혈 ${new_inj_usd:,.2f} / 0주 졸업 시 자동 상환) · "
+                    f"현재 수혈 {new_used_cnt}회분(누적 총 {new_tot_inj_cnt}회 · 수혈잔액 ${new_inj_usd:,.2f} / 0주 졸업 시 원금 자동 상환) · "
                     f"즉시 {trigger_desc} 정량 매수를 집행합니다!"
                 ),
             )
         return True, updated_free_cash, eff_bp_for_order, guard_eval
 
-    # [케이스 3] 계좌 미입금 또는 6회분 한도 소진 -> 자투리 1주 매수 차단 & 단 1회 입금 요청 알림(영구 래치)
+    # [케이스 3] 계좌 미입금 상태 -> 자투리 1주 매수 차단 & 단 1회 입금 요청 알림(영구 래치 · 6회 제한 없이 입금 시 즉시 자동 수혈)
     already_waiting_dep = bool(st_now.get("waiting_reserve_deposit", False))
     alert_already_sent = bool(
         st_now.get("waiting_reserve_deposit_alert_sent", False)
@@ -779,8 +783,8 @@ async def _check_and_execute_guard30_or_reserve_injection(
         2,
     )
     min_req_c = safe_float(guard_eval.get("min_req_cash"), portion_budget * 0.30)
-    rem_portions = safe_int(guard_eval.get("rem_portions_before"), 0)
     needed_p = max(1, safe_int(guard_eval.get("needed_portions"), 1))
+    tot_inj_cnt_now = safe_int(st_now.get("total_reserve_injected_cnt"), 0)
 
     now_rc_epoch = mark_reserve_deposit_check_shield(
         context, TARGET_SYMBOL, clear_shield=False
@@ -826,36 +830,25 @@ async def _check_and_execute_guard30_or_reserve_injection(
     )
 
     if not alert_already_sent and hasattr(context, "send_slim_alert"):
-        if rem_portions >= needed_p:
-            title_msg = (
-                f"🚨 [💉 SOXL 시드고갈 감지 · 예비시드 {needed_p}회분(${rec_dep_usd:,.2f}) 입금 요청]"
-            )
-            body_msg = (
-                f"타점({trigger_desc} @ ${exec_order_p:.2f}) 도달 · "
-                f"현재 가용현금(${now_free_cash:,.2f}) 및 토스 주문가능금액(${raw_bp_usd:,.2f})이 "
-                f"30% 자투리 승격 방지 가드(${min_req_cash_str(min_req_c)}) 미만이어서 자투리 매수를 차단했습니다. · "
-                f"토스 달러 계좌에 1회분 이상(권장 ${rec_dep_usd:,.2f} · 잔여 예비한도 {rem_portions}/{MAX_RESERVE_PORTIONS}회분) 입금해 주시면 "
-                f"60초 내 자동 감지하여 즉시 수혈 매수합니다! (※ 스팸 방지를 위해 입금 요청 알림은 1회만 발송됩니다)"
-            )
-        else:
-            title_msg = (
-                "🚨 [🛑 SOXL 시드고갈 및 예비시드 6회분 한도 소진 안내]"
-            )
-            body_msg = (
-                f"타점({trigger_desc} @ ${exec_order_p:.2f}) 도달했으나 "
-                f"가용현금(${now_free_cash:,.2f})이 30% 가드(${min_req_cash_str(min_req_c)}) 미만이고 "
-                f"온디맨드 예비시드 한도({MAX_RESERVE_PORTIONS}/{MAX_RESERVE_PORTIONS}회분)를 모두 사용하여 추매를 보류하고 반등 익절을 대기합니다. "
-                f"(※ 스팸 방지를 위해 본 알림은 1회만 발송됩니다)"
-            )
+        title_msg = (
+            f"🚨 [💉 SOXL 시드고갈 감지 · 예비시드 {needed_p}회분(${rec_dep_usd:,.2f}) 입금 요청]"
+        )
+        body_msg = (
+            f"타점({trigger_desc} @ ${exec_order_p:.2f}) 도달 · "
+            f"현재 가용현금(${now_free_cash:,.2f}) 및 토스 주문가능금액(${raw_bp_usd:,.2f})이 "
+            f"30% 자투리 승격 방지 가드(${min_req_cash_str(min_req_c)}) 미만이어서 자투리 매수를 차단했습니다. · "
+            f"토스 달러 계좌에 예비시드(권장 ${rec_dep_usd:,.2f} · 최소 30% 가드 이상 · 현재수혈 {cur_used_res}회/누적 {tot_inj_cnt_now}회)를 입금해 주시면 "
+            f"60초 내 자동 감지하여 횟수 제한 없이 즉시 수혈 매수합니다! (※ 스팸 방지를 위해 입금 요청 알림은 1회만 발송됩니다)"
+        )
         await context.send_slim_alert(title=title_msg, body=body_msg)
         logger.warning(
-            "🚨 [Case 77 시드고갈 단 1회 입금 요청 알림 발송 완료 & 래치 잠금] 가용=$%.2f · 토스예수금=$%.2f · 30%%가드=$%.2f · 권장입금=$%.2f · 잔여한도=%d/%d회분",
+            "🚨 [Case 77/91 시드고갈 단 1회 입금 요청 알림 발송 완료 & 래치 잠금] 가용=$%.2f · 토스예수금=$%.2f · 30%%가드=$%.2f · 권장입금=$%.2f · 현재수혈=%d회(누적%d회)",
             now_free_cash,
             raw_bp_usd,
             min_req_c,
             rec_dep_usd,
-            rem_portions,
-            MAX_RESERVE_PORTIONS,
+            cur_used_res,
+            tot_inj_cnt_now,
         )
 
     return False, now_free_cash, eff_bp_for_order, guard_eval
@@ -872,7 +865,7 @@ async def _commit_filled_buy_to_stratum_ledger(
     ordered_qty: Optional[int] = None,
 ) -> Dict[str, Any]:
     """
-    # MODIFIED [🎯 1, 🎯 3, 🎯 4 & Case 25, 46, 53, 59, 60, 61, 65, 67, 69, 71, 72, 73, 74, 76, 77, 78, Case 87 & Case 88]:
+    # MODIFIED [🎯 1, 🎯 3, 🎯 4 & Case 25, 46, 53, 59, 60, 61, 65, 67, 69, 71, 72, 73, 74, 76, 77, 78, Case 87, Case 88 & Case 91]:
     매수 주문 체결(FILLED 또는 부분 체결 후 60초 타임아웃/세션 경계 취소 종료)이 확인된 즉시:
     1) 🛡️ [Case 88 : Default-ON 3층 서브 그리드(lot_type 이 "SUB_" 로 시작) 체결 분리 정산 · SUB_L1_L3_MERGE 양끝 합병 · sub_consec_frozen_days = 0 리셋 · cycle_leftover_saved_usd 동시 누적]
     2) 👑 [Case 78 & Case 87 : 본 그리드 부분 체결 비례 자투리 정산 · cycle_leftover_saved_usd 동시 누적 · L2_L7_MERGE_SORT 중간층 재배치 · cycle_ratchet_max_lots 잠금 갱신 · main_consec_frozen_days = 0 리셋]

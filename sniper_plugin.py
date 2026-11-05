@@ -1,26 +1,26 @@
 # -*- coding: utf-8 -*-
 """
-# MODIFIED: sniper_plugin.py (황금시간 07:00~07:50 RSI<=19 올인 분기 G · 골든포켓 참조 · 임포트 전면 영구 소각)
+# MODIFIED: sniper_plugin.py (황금시간 07:00~07:50 RSI<=19 올인 분기 G · 골든포켓 참조 · 임포트 전면 영구 소각 & Case 91 무제한 예비수혈 및 인출형[단리]/자산증식형[복리] 매수 정량 연동)
 인피니트 스노우볼 (Infinite Snowball) v3.0 — 스나이퍼 매수 코어 Part 2 / 2 (Step 07 / 13)
 역할:
-1) sniper_plugin_core.py (Part 1 / 2) 의 모든 상수·타임쉴드·GUARD30 예비수혈·체결커밋·미체결 동기화 심볼 명시적 재익스포트(Facade Re-export)로
+1) sniper_plugin_core.py (Part 1 / 2) 의 모든 상수·타임쉴드·GUARD30 무제한 예비수혈·체결커밋·미체결 동기화 심볼 명시적 재익스포트(Facade Re-export)로
    타 모듈(defense_plugin.py, tg_ui_plugin.py, main_runtime.py, main.py, plugin_updater.py) AST 임포트 호환성 100% 보장
-2) 🛡️ [Case 88 : 13_SUB_L1L3_RESV05_CAP4L] 스위치 없는 100% 기본 상시 적용(Default ON) 3층 서브 그리드 매수 엔진(_execute_sub_grid_buy_engine_plugin):
+2) 🛡️ [Case 88 & Case 91 : 13_SUB_L1L3_RESV05_CAP4L] 스위치 없는 100% 기본 상시 적용(Default ON) 3층 서브 그리드 매수 엔진(_execute_sub_grid_buy_engine_plugin):
    - 본 그리드 1개 층 이상 보유 중(len(buckets) > 0) 본 그리드 5영업일 이상 연속 무매매(main_consec_frozen_days >= 5) 도달 시 또는 서브 그리드 기가동 중(len(sub_buckets) > 0) 상시 작동
-   - 본 그리드 0.5회분(4.0%) 보호예수금(reserved_for_main_usd) 차감 가용 유휴 현금(avail_idle_cash_usd) 및 서브 최대 누적 4회분(16.0%) 상한 캡(SUB_MAX_TOTAL_LOTS_4 = 4) 엄격 적용
+   - 자산증식형(복리 · COMP_08PCT) / 인출형(단리 · SIMPLE_08PCT) 운용 모드에 연동된 본 그리드 0.5회분(4.0%) 보호예수금(reserved_for_main_usd) 차감 가용 유휴 현금(avail_idle_cash_usd) 및 서브 최대 누적 4회분(16.0%) 상한 캡(SUB_MAX_TOTAL_LOTS_4 = 4) 엄격 적용
    - 분기 S-A (서브 0주 첫 진입 SUB_REENTRY_1FL : 15:30 ~ 16:00 EST 차단 Case 84 & 유휴현금 부족 시 60초 쉴드 & 뮤텍스 2차 타임쉴드 검문) ·
      분기 S-B1 (서브 1층 공석 60초 주기 눌림/돌파 재장전 SUB_REENTRY_1FL : 서브 2층 단가 상한 가드 Case 73 & 15:30 ~ 16:00 EST 돌파 차단 Case 84 & 뮤텍스 2차 타임쉴드 검문) ·
      분기 S-B0 (서브 1층 부분체결 잔량 SUB_TOPUP_1FL 1.5초 모니터 재대기 Case 78 & 유휴현금 부족 시 60초 쉴드 & 뮤텍스 2차 타임쉴드 검문) ·
      분기 S-B2 (서브 활성 1층 보유 중 10분 게이트 : 서브 최고도달회차 4단 와이드 신저가 OR 서브 10영업일 무매매 & -10.0% 저가해금 SUB_UNLOCK_10D_D10 추매 SUB_DIP_1FL & 유휴현금 부족 시 해당 10분 버킷 즉시 소모 처리로 무한 API 폴링 차단)
 3) 04:07 ~ 16:00 EST 비대칭 매수 타격 게이트 실행기 (execute_seed_protected_buy_gate_plugin):
-   - 🛡️ [분기 A · Case 65, 67, 77, 84] : 본 그리드 0주 상태(is_zero_shares)에서 0주 종료 후 60.0초 타임쉴드 경과 뒤 현재가 지정가 첫 1층(REENTRY_1FL) 산입하되,
+   - 🛡️ [분기 A · Case 65, 67, 77, 84, 91] : 본 그리드 0주 상태(is_zero_shares)에서 0주 종료 후 60.0초 타임쉴드 경과 뒤 현재가 지정가 첫 1층(REENTRY_1FL) 산입하되,
      정규장 마감 30분 전(15:30 ~ 16:00 EST, is_late_regular_new_cycle_cutoff_window) 구간에서는 0주 새 사이클 첫 1층 진입을 100% 원천 차단(HOLD_LATE_SESSION_NEW_CYCLE_CUTOFF)!
-   - 🔥 [분기 B-1 · Case 67, 73, 77, 84, 88] : 본 그리드 상단 2층 ~ 7층(GRID_L2 ~ GRID_L7) 보유 중 1층 공석 시 매 60.0초 주기 재장전 모니터
+   - 🔥 [분기 B-1 · Case 67, 73, 77, 84, 88, 91] : 본 그리드 상단 2층 ~ 7층(GRID_L2 ~ GRID_L7) 보유 중 1층 공석 시 매 60.0초 주기 재장전 모니터
      (본 그리드 패스/대기 시 즉시 Default-ON 3층 서브 그리드 엔진으로 제어권 인계)
    - 🎯 [분기 B-0 · Case 78, 88] : 본 그리드 활성 1층 지정가 부분 체결 미체결 잔량(TOPUP_1FL) 1.5초 모니터 (원장 가용현금 1주 비용 선행 가드 및 부족 시 60초 쿨다운 쉴드 적용)
-   - 🔵 [분기 B-2 · Case 60, 72, 76, 77, 87, 88] : 본 그리드 활성 1층 보유 중 10분 고정 매수 게이트(4단 와이드 신저가 OR STEP2X_15PCT_C20 스텝업 해금) 및
+   - 🔵 [분기 B-2 · Case 60, 72, 76, 77, 87, 88, 91] : 본 그리드 활성 1층 보유 중 10분 고정 매수 게이트(4단 와이드 신저가 OR STEP2X_15PCT_C20 스텝업 해금) 및
      본 그리드 대기/패스 틱에서 Default-ON 3층 서브 그리드 매수 엔진 연속 가동
-- 제1헌법 ~ 제6헌법 및 Case 01 ~ 89 완벽 준수
+- 제1헌법 ~ 제6헌법 및 Case 01 ~ 91 완벽 준수
 """
 
 from __future__ import annotations
@@ -37,6 +37,8 @@ from quant_engine import (
     MAX_RESERVE_PORTIONS,
     MIN_DIP_BUDGET_RATIO,
     MIN_DIP_VS_L1_RATIO,
+    PORTION_MODE_COMPOUND,
+    PORTION_MODE_SIMPLE,
     PORTION_RATIO_LOCKED,
     ROUND_TRIP_FEE_RATE_PCT,
     SUB_FROZEN_DAYS_TRIGGER,
@@ -59,8 +61,10 @@ from quant_engine import (
     evaluate_sub_grid_dip_signal,
     get_golden8_prog_thresholds,
     has_active_l1_bucket,
+    is_simple_income_mode,
     resolve_affordable_buy_qty,
     resolve_effective_round_trip_fee_rate_pct,
+    resolve_portion_budget_base_equity,
 )
 from quant_indicators_plugin import (
     NEW_CYCLE_BUY_CUTOFF_HM,
@@ -115,7 +119,7 @@ logger = logging.getLogger("toss_sniper.sniper_plugin")
 
 
 # ---------------------------------------------------------------------------
-# [핵심 1 · Case 88] 스위치 없는 100% 기본 상시 적용(Default ON) 3층 서브 그리드 매수 엔진 (_execute_sub_grid_buy_engine_plugin)
+# [핵심 1 · Case 88 & Case 91] 스위치 없는 100% 기본 상시 적용(Default ON) 3층 서브 그리드 매수 엔진 (_execute_sub_grid_buy_engine_plugin)
 # ---------------------------------------------------------------------------
 async def _execute_sub_grid_buy_engine_plugin(
     context: Any,
@@ -125,13 +129,13 @@ async def _execute_sub_grid_buy_engine_plugin(
     live_p: float,
 ) -> Optional[Dict[str, Any]]:
     """
-    # MODIFIED [Case 88 : 🛡️ 13_SUB_L1L3_RESV05_CAP4L — Default-ON 3층 서브 그리드 매수 엔진 (유휴현금 부족 시 10분 버킷 즉시 소모 & 60초 쉴드 & 뮤텍스 2차 타임쉴드 검문 강화)]:
+    # MODIFIED [Case 88 & Case 91 : 🛡️ 13_SUB_L1L3_RESV05_CAP4L — Default-ON 3층 서브 그리드 매수 엔진 (자산증식형[복리] ⇄ 인출형[단리] 연동 & 유휴현금 부족 시 10분 버킷 즉시 소모 & 60초 쉴드 & 뮤텍스 2차 타임쉴드 검문 강화)]:
     본 그리드가 대기/패스한 틱에서 호출되어:
     1) 본 그리드가 최소 1개 층 이상 보유 중(len(buckets) > 0)이고,
        본 그리드 연속 무매매일(main_consec_frozen_days >= 5)이 5영업일 이상이거나 이미 서브 그리드가 가동 중(len(sub_buckets) > 0)일 때 작동한다.
-    2) 본 그리드 보호예수금 0.5회분(reserved_for_main_usd = round(core_equity * 0.08 * 0.5, 4), 코어자산의 4.0%)을 차감한
+    2) 운용 모드(portion_mode : COMP_08PCT 복리 vs SIMPLE_08PCT 단리)에 따라 산출된 본 그리드 보호예수금 0.5회분(reserved_for_main_usd, 기준자산의 4.0%)을 차감한
        순수 유휴 현금(avail_idle_cash_usd) 범위 내에서만 매수하며, 온디맨드 예비시드 차입이나 시드고갈 알림을 절대 발동하지 않는다.
-    3) 서브 누적 합병 회차가 최대 상한 4회분(SUB_MAX_TOTAL_LOTS_4 = 4, 코어시드의 16.0%)에 도달하면
+    3) 서브 누적 합병 회차가 최대 상한 4회분(SUB_MAX_TOTAL_LOTS_4 = 4, 기준자산의 16.0%)에 도달하면
        미체결 잔량 보충(SUB_TOPUP_1FL) 외의 모든 신규/추가 서브 매수를 차단(HOLD_SUB_CAP_4_LOTS_REACHED)하여 본 그리드 탄약을 보전한다.
     4) 서브 10분 게이트(S-B2)에서 유휴현금 부족 시 해당 10분 버킷(sub_last_evaluated_buy_bucket_id)을 즉시 소모 처리하고,
        서브 0주(S-A) 및 서브 잔량 보충(S-B0)에서 유휴현금 부족 시 60.0초 쿨다운 쉴드를 각인하여 불필요한 반복 API 호출을 원천 차단한다.
@@ -172,12 +176,17 @@ async def _execute_sub_grid_buy_engine_plugin(
         sb.actual_cost_usd for sb in sub_buckets
     )
     core_equity = max(init_seed, (free_cash + actual_inv_total) - inj_res_usd)
+    portion_mode = (
+        str(st.get("portion_mode") or PORTION_MODE_COMPOUND).upper().strip()
+    )
 
     idle_info = compute_sub_grid_available_idle_cash(
         free_cash_usd=free_cash,
         core_equity_usd=core_equity,
         broker_buying_power_usd=None,
         reserve_main_portions=SUB_RESERVE_MAIN_PORTIONS,
+        initial_seed_usd=init_seed,
+        portion_mode=portion_mode,
     )
     avail_idle_ledger = safe_float(idle_info.get("avail_idle_cash_usd"), 0.0)
     sub_portion_budget = safe_float(
@@ -301,6 +310,11 @@ async def _execute_sub_grid_buy_engine_plugin(
                 now_core_eq = max(
                     now_init_seed, (now_free_cash + now_inv_tot) - now_inj_res
                 )
+                now_p_mode = (
+                    str(st_now.get("portion_mode") or PORTION_MODE_COMPOUND)
+                    .upper()
+                    .strip()
+                )
 
                 raw_bp_sub = await context.api.get_buying_power_usd(
                     safety_buffer_pct=0.2
@@ -320,6 +334,8 @@ async def _execute_sub_grid_buy_engine_plugin(
                         raw_bp_sub if raw_bp_sub > 0.0 else 0.0
                     ),
                     reserve_main_portions=SUB_RESERVE_MAIN_PORTIONS,
+                    initial_seed_usd=now_init_seed,
+                    portion_mode=now_p_mode,
                 )
                 avail_idle_m = safe_float(
                     idle_m.get("avail_idle_cash_usd"), 0.0
@@ -333,6 +349,7 @@ async def _execute_sub_grid_buy_engine_plugin(
                     current_core_equity=now_core_eq,
                     initial_seed_usd=now_init_seed,
                     exec_price=exec_order_p,
+                    portion_mode=now_p_mode,
                 )
                 min_req_sub_m = max(
                     exec_order_p * fee_mult_m,
@@ -601,6 +618,11 @@ async def _execute_sub_grid_buy_engine_plugin(
                 now_core_eq = max(
                     now_init_seed, (now_free_cash + now_inv_tot) - now_inj_res
                 )
+                now_p_mode = (
+                    str(st_now.get("portion_mode") or PORTION_MODE_COMPOUND)
+                    .upper()
+                    .strip()
+                )
 
                 raw_bp_re = await context.api.get_buying_power_usd(
                     safety_buffer_pct=0.2
@@ -620,6 +642,8 @@ async def _execute_sub_grid_buy_engine_plugin(
                         raw_bp_re if raw_bp_re > 0.0 else 0.0
                     ),
                     reserve_main_portions=SUB_RESERVE_MAIN_PORTIONS,
+                    initial_seed_usd=now_init_seed,
+                    portion_mode=now_p_mode,
                 )
                 avail_idle_re = safe_float(
                     idle_re.get("avail_idle_cash_usd"), 0.0
@@ -636,6 +660,7 @@ async def _execute_sub_grid_buy_engine_plugin(
                     current_core_equity=now_core_eq,
                     initial_seed_usd=now_init_seed,
                     exec_price=exec_order_p,
+                    portion_mode=now_p_mode,
                 )
                 min_req_sub_re = max(
                     exec_order_p * fee_mult_re,
@@ -844,6 +869,14 @@ async def _execute_sub_grid_buy_engine_plugin(
                                 now_init_seed,
                                 (now_free_cash + now_inv_tot) - now_inj_res,
                             )
+                            now_p_mode = (
+                                str(
+                                    st_now.get("portion_mode")
+                                    or PORTION_MODE_COMPOUND
+                                )
+                                .upper()
+                                .strip()
+                            )
                             raw_bp_top = await context.api.get_buying_power_usd(
                                 safety_buffer_pct=0.2
                             )
@@ -863,6 +896,8 @@ async def _execute_sub_grid_buy_engine_plugin(
                                     raw_bp_top if raw_bp_top > 0.0 else 0.0
                                 ),
                                 reserve_main_portions=SUB_RESERVE_MAIN_PORTIONS,
+                                initial_seed_usd=now_init_seed,
+                                portion_mode=now_p_mode,
                             )
                             avail_idle_top = safe_float(
                                 idle_top.get("avail_idle_cash_usd"), 0.0
@@ -1137,6 +1172,11 @@ async def _execute_sub_grid_buy_engine_plugin(
             now_core_eq = max(
                 now_init_seed, (now_free_cash + now_inv_tot) - now_inj_res
             )
+            now_p_mode = (
+                str(st_now.get("portion_mode") or PORTION_MODE_COMPOUND)
+                .upper()
+                .strip()
+            )
 
             raw_bp_dip = await context.api.get_buying_power_usd(
                 safety_buffer_pct=0.2
@@ -1156,6 +1196,8 @@ async def _execute_sub_grid_buy_engine_plugin(
                     raw_bp_dip if raw_bp_dip > 0.0 else 0.0
                 ),
                 reserve_main_portions=SUB_RESERVE_MAIN_PORTIONS,
+                initial_seed_usd=now_init_seed,
+                portion_mode=now_p_mode,
             )
             avail_idle_dip = safe_float(
                 idle_dip.get("avail_idle_cash_usd"), 0.0
@@ -1165,6 +1207,7 @@ async def _execute_sub_grid_buy_engine_plugin(
                 current_core_equity=now_core_eq,
                 initial_seed_usd=now_init_seed,
                 exec_price=exec_order_p,
+                portion_mode=now_p_mode,
             )
             min_req_sub_dip = max(
                 exec_order_p * fee_mult_dip,
@@ -1268,13 +1311,13 @@ async def _execute_sub_grid_buy_engine_plugin(
                 "sub_cur_total_lots": now_sub_lots,
             }
 # ---------------------------------------------------------------------------
-# [핵심 2] 진화 챔피언 (👑 06_L2L7_RATCHET_8PCT × 🛡️ 13_SUB_L1L3_RESV05_CAP4L[Default ON] × 💉 05_RESV_6P_GUARD30 × 🔓 06_STEP2X_15PCT_C20 × 🛡️ Case 84) : 비대칭 매수 타격 엔진
+# [핵심 2] 진화 챔피언 (👑 06_L2L7_RATCHET_8PCT × 🛡️ 13_SUB_L1L3_RESV05_CAP4L[Default ON] × 💉 무제한 예비수혈 × 🔓 06_STEP2X_15PCT_C20 × 🛡️ Case 84 × 💵 Case 91 복리/단리 연동) : 비대칭 매수 타격 엔진
 #  - 분기 A   : 본 그리드 0주 상태(사이클 종료) -> 15:30 ~ 16:00 EST 구간에서는 새 사이클 첫 1층 진입 100% 차단(Case 84) · 그 외 60초 타임쉴드 후 첫 1층(REENTRY_1FL) 산입
 #  - 분기 B-1 : 본 그리드 상단 2~7층 보유 중 1층 공석 -> 매 60.0초(1분) 주기 재장전 모니터 & 2층 단가 상한(Case 73) 하에서
 #               -1.00% 눌림목(PULLBACK_RELOAD · 04:07 ~ 16:00 EST 전 구간 허용) 및 +1.00% 상승돌파(BREAKOUT_RELOAD · 04:07 ~ 15:29 EST 허용 / 15:30 ~ 16:00 EST 돌파 차단 · Case 84)
 #               (본 그리드 대기/패스 시 Default-ON 3층 서브 그리드 엔진 연속 가동 · Case 88)
 #  - 분기 B-0 : 본 그리드 활성 1층 부분체결 미체결 잔량(rem_quota_qty > 0) -> 60초 타임쉴드 후 매 1.5초 모니터에서 현재가 <= 1층 단가 도래 시 잔량(TOPUP_1FL) 발주(Case 78)
-#  - 분기 B-2 : 본 그리드 활성 1층 보유 중 -> 10분 고정 게이트 & 정적 기억저가 및 최고도달회차(cycle_ratchet_max_lots · Case 87) 잠금 4단 와이드 신저가 OR STEP2X_15PCT_C20 스텝업 추매(Case 76) & GUARD30/예비수혈(Case 77)
+#  - 분기 B-2 : 본 그리드 활성 1층 보유 중 -> 10분 고정 게이트 & 정적 기억저가 및 최고도달회차(cycle_ratchet_max_lots · Case 87) 잠금 4단 와이드 신저가 OR STEP2X_15PCT_C20 스텝업 추매(Case 76) & GUARD30/무제한 예비수혈(Case 77, Case 91)
 #               (본 그리드 대기/패스 시 Default-ON 3층 서브 그리드 엔진 연속 가동 · Case 88)
 # ---------------------------------------------------------------------------
 async def execute_seed_protected_buy_gate_plugin(
@@ -1284,7 +1327,7 @@ async def execute_seed_protected_buy_gate_plugin(
     now_est: Optional[datetime] = None,
 ) -> Dict[str, Any]:
     """
-    🎯 1, 🎯 2, 🎯 4 & Case 25 ~ 89 (챔피언 : 👑 06_L2L7_RATCHET_8PCT × 🛡️ 13_SUB_L1L3_RESV05_CAP4L[Default ON] × 💉 05_RESV_6P_GUARD30 × 🔓 06_STEP2X_15PCT_C20 × 🛡️ Case 84):
+    🎯 1, 🎯 2, 🎯 4 & Case 25 ~ 91 (챔피언 : 👑 06_L2L7_RATCHET_8PCT × 🛡️ 13_SUB_L1L3_RESV05_CAP4L[Default ON] × 💉 무제한 예비수혈 × 🔓 06_STEP2X_15PCT_C20 × 🛡️ Case 84 × 💵 Case 91 복리/단리 모드 연동):
     04:07:00 ~ 16:00:00 EST 운용 구간에서 작동하는 비대칭 매수 타격 엔진.
     """
     dt_now = now_est.astimezone(EST_TZ) if now_est else datetime.now(EST_TZ)
@@ -1376,11 +1419,18 @@ async def execute_seed_protected_buy_gate_plugin(
     actual_invested = sum(b.actual_cost_usd for b in buckets) + sum(
         sb.actual_cost_usd for sb in sub_buckets
     )
-    # Case 77 & Case 88: 온디맨드 예비시드 수혈금(injected_reserve_usd)을 제외한 순수 코어 총자산(core_equity) 산출
+    # Case 77, Case 88 & Case 91: 온디맨드 예비시드 수혈금(injected_reserve_usd)을 제외한 순수 코어 총자산(core_equity) 및 운용 모드 기준자산 산출
     core_equity = max(
         init_seed, (free_cash + actual_invested) - injected_reserve_usd
     )
-    portion_mode = str(st.get("portion_mode") or "COMP_08PCT").upper()
+    portion_mode = (
+        str(st.get("portion_mode") or PORTION_MODE_COMPOUND).upper().strip()
+    )
+    budget_base_eq = resolve_portion_budget_base_equity(
+        initial_seed_usd=init_seed,
+        core_equity_usd=core_equity,
+        portion_mode=portion_mode,
+    )
     threshold_mode = str(st.get("threshold_mode") or "WIDE_RUNWAY").upper()
     unlock_mode = str(
         st.get("unlock_mode") or DEFAULT_UNLOCK_MODE
@@ -1463,7 +1513,7 @@ async def execute_seed_protected_buy_gate_plugin(
                     0.01, math.floor((fresh_live_p + 1e-9) * 100.0) / 100.0
                 )
 
-                # [Case 67, Case 77 & Case 88 : 뮤텍스 내부 st_now 기준 now_core_eq 및 now_init_seed 재산출 통일]
+                # [Case 67, Case 77, Case 88 & Case 91 : 뮤텍스 내부 st_now 기준 now_core_eq, now_init_seed, now_p_mode 재산출 통일]
                 eff_rt_pct_0sh = resolve_effective_round_trip_fee_rate_pct(
                     state_dict=st_now
                 )
@@ -1488,6 +1538,11 @@ async def execute_seed_protected_buy_gate_plugin(
                     now_init_seed_0sh,
                     (now_free_cash_0sh + now_inv_tot_0sh) - now_inj_res_0sh,
                 )
+                now_p_mode_0sh = (
+                    str(st_now.get("portion_mode") or PORTION_MODE_COMPOUND)
+                    .upper()
+                    .strip()
+                )
 
                 prev_anchor_p = safe_float(st_now.get("anchor_price"), 0.0)
                 ref_zero_anchor = (
@@ -1497,7 +1552,7 @@ async def execute_seed_protected_buy_gate_plugin(
                     anchor_price=ref_zero_anchor,
                     current_total_equity=now_core_eq_0sh,
                     initial_seed_usd=now_init_seed_0sh,
-                    portion_mode=portion_mode,
+                    portion_mode=now_p_mode_0sh,
                     exec_price=exec_order_p,
                 )
 
@@ -1599,7 +1654,7 @@ async def execute_seed_protected_buy_gate_plugin(
                 }
 
     # -----------------------------------------------------------------------
-    # [분기 B-1 · Case 73, Case 77, Case 84 & Case 88 : 본 그리드 상단(2층 ~ 7층)만 보유 중 (1층 공석, is_l2_only_vacant_l1 == True)]
+    # [분기 B-1 · Case 73, Case 77, Case 84, Case 88 & Case 91 : 본 그리드 상단(2층 ~ 7층)만 보유 중 (1층 공석, is_l2_only_vacant_l1 == True)]
     # -> 2층 단가 이하(Case 73) 안전 영역 내에서:
     #    - 눌림목(-1.00%, PULLBACK_RELOAD)은 04:07 ~ 16:00 EST 전 구간 허용!
     #    - 상승돌파(+1.00%, BREAKOUT_RELOAD)는 04:07 ~ 15:29 EST 허용하되,
@@ -1838,6 +1893,11 @@ async def execute_seed_protected_buy_gate_plugin(
                     now_init_seed,
                     (now_free_cash + now_inv_tot) - now_inj_res,
                 )
+                now_p_mode_re = (
+                    str(st_now.get("portion_mode") or PORTION_MODE_COMPOUND)
+                    .upper()
+                    .strip()
+                )
 
                 quota_ref_p = max(
                     0.01,
@@ -1850,7 +1910,7 @@ async def execute_seed_protected_buy_gate_plugin(
                     anchor_price=quota_ref_p,
                     current_total_equity=now_core_eq,
                     initial_seed_usd=now_init_seed,
-                    portion_mode=portion_mode,
+                    portion_mode=now_p_mode_re,
                     exec_price=exec_order_p,
                 )
 
@@ -2162,7 +2222,7 @@ async def execute_seed_protected_buy_gate_plugin(
                             )
 
     # -----------------------------------------------------------------------
-    # [분기 B-2 · Case 60, Case 72, Case 76, Case 77, Case 87 & Case 88 : 본 그리드 활성 1층 보유 중 (has_active_l1_bucket(buckets) == True)]
+    # [분기 B-2 · Case 60, Case 72, Case 76, Case 77, Case 87, Case 88 & Case 91 : 본 그리드 활성 1층 보유 중 (has_active_l1_bucket(buckets) == True)]
     # -> 04:07 EST 기점 10분 고정 매수 게이트 신규 버킷 도래 시 정적 기억 최저가 및 최고 도달 회차(cycle_ratchet_max_lots) 잠금 기준
     #    4단 와이드 OR STEP2X_15PCT_C20 스텝업 추매 판정! (본 그리드 대기/패스 시 Default-ON 3층 서브 그리드 엔진 연속 가동)
     # -----------------------------------------------------------------------
@@ -2233,7 +2293,7 @@ async def execute_seed_protected_buy_gate_plugin(
         cycle_min_buy_price=cycle_min_p,
         drop_buy_pct=drop_buy_pct,
         free_cash_usd=free_cash,
-        realized_equity_usd=core_equity,
+        realized_equity_usd=budget_base_eq,
         step_up_drop_pct=eff_step_drop,
         min_cash_ratio=STEP_UP_2X_MIN_CASH_RATIO,
         min_rebound_mult=STEP_UP_2X_MIN_REBOUND_MULT,
@@ -2371,6 +2431,16 @@ async def execute_seed_protected_buy_gate_plugin(
                 now_init_seed,
                 (now_free_cash + now_inv_tot) - now_inj_res,
             )
+            now_p_mode_dip = (
+                str(st_now.get("portion_mode") or PORTION_MODE_COMPOUND)
+                .upper()
+                .strip()
+            )
+            now_budget_base_eq = resolve_portion_budget_base_equity(
+                initial_seed_usd=now_init_seed,
+                core_equity_usd=now_core_eq,
+                portion_mode=now_p_mode_dip,
+            )
 
             now_dip_eval = evaluate_step_up_2x_dip_signal(
                 live_price=fresh_live_p,
@@ -2383,7 +2453,7 @@ async def execute_seed_protected_buy_gate_plugin(
                 ),
                 drop_buy_pct=now_drop_pct,
                 free_cash_usd=now_free_cash,
-                realized_equity_usd=now_core_eq,
+                realized_equity_usd=now_budget_base_eq,
                 step_up_drop_pct=eff_step_drop,
                 min_cash_ratio=STEP_UP_2X_MIN_CASH_RATIO,
                 min_rebound_mult=STEP_UP_2X_MIN_REBOUND_MULT,
@@ -2432,7 +2502,7 @@ async def execute_seed_protected_buy_gate_plugin(
                 anchor_price=quota_ref_p,
                 current_total_equity=now_core_eq,
                 initial_seed_usd=now_init_seed,
-                portion_mode=portion_mode,
+                portion_mode=now_p_mode_dip,
                 exec_price=exec_order_p,
             )
 
