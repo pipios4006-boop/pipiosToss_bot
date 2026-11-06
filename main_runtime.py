@@ -1,20 +1,18 @@
 # -*- coding: utf-8 -*-
 """
-# MODIFIED: main_runtime.py (황금시간 07:00~07:50 RSI<=19 올인 임포트·메서드·버튼·명령어 전면 영구 소각 & Case 91 무제한 예비수혈 카운트 및 인출형[단리]/자산증식형[복리] 전환 동기화)
+# MODIFIED: main_runtime.py (Part 1/2 — 🗡️ [모의] 암살자 플러그인 브릿지 · QQQ 1분봉 안전망 스냅샷 · Case 91 복리/단리 전환 · Case 92 Wilder RSI14 직결)
 인피니트 스노우볼 (Infinite Snowball) v3.0 — 메인 런타임 서포트 브릿지 (메인 코드 2분할 리팩토링 Part 1 / 2 · Step 12 / 13)
 - 역할:
   1) 적응형 비동기 플러그인 호출기(_call_plugin_adaptive) 및 동적 심볼 리졸버(_resolve_module_attr) (Case 13)
   2) TossApiClient 런타임 메서드 호환성 폴리필 어댑터(_install_toss_api_compatibility_patches · get_commissions / ensure_us_commission_rate 런타임 수수료 폴백 보존 포함 · Case 86)
   3) 폴더별 3중 원장 인스턴스 팩토리(_instantiate_stratum_ledger · Case 68, Case 87, Case 88, Case 91) 및 주말 휴장 판별(_check_weekend_nyse_closed_dynamic · Case 01, 79, 83)
-  4) 100% 벡터화 1분봉/일봉 지표 및 실시간 틱 Wilder's RSI(14) 무손실 직결(_compute_candle_metrics_dynamic)
+  4) 100% 벡터화 1분봉/일봉 지표 및 실시간 틱 Wilder's RSI(14) · 암살자 4대 지표(전일종가·04:07프리시가·VWAP) · QQQ 방향성 안전망 지표 무손실 직결(_compute_candle_metrics_dynamic, _compute_qqq_metrics_dynamic)
   5) 폴더 위치(base_dir) 전용 텔레그램 토큰·채팅방 ID 자동 탐색기(_discover_telegram_credentials · Case 68)
   6) 내장형 사용자 중심 초슬림 텔레그램 불사조 롱폴링/관제탑 브릿지(_AdaptiveTelegramBridge · tg_ui_plugin 4버튼 단일 렌더러 직결 ·
-     층별 자산($)·10칸 배분 게이지(🟦🟨🟩)·현재 사이클 단위 실현수익 vs 전체 누적 수익·재고 평가착시 3단 해부·전량졸업 예정자산(🎓) 표출 ·
-     전술 제어반 [📈 자산증식형(복리) ⇄ 💵 인출형(단리)] 원클릭 전환 버튼(toggle_portion_mode) 및 /mode · /reset_profit 명령어 탑재[Case 91] ·
-     13대 코어 모듈 프리플라이트 안내 동기화 · /avwap 조회 시 1분봉 미확보 상태면 즉시 온디맨드 프리워밍 수행 ·
-     /sync 조회 시 계좌별 미국 주식 수수료율 자동 확인[Case 86] · /reset_profit 실행 시 본 그리드 + Default-ON 3층 서브 그리드 및 당일 무매매 동결 판정 카운터 100% 보존 초기화[Case 88, Case 91] ·
-     Case 75 httpx/httpcore INFO 로그 묵음화 & Case 81 전용 httpx.AsyncClient 자동 재생성 불사조 폴링 · 오프셋 파일 선행 영속화 · os.execv 인플레이스 자가 교체 · Case 84 ~ 91 완벽 준수)
-- 제1헌법 ~ 제6헌법 및 Case 01 ~ 91 전수 락온
+     층별 자산($)·10칸 배분 게이지(🟦🟨🟩)·현재 사이클 단위 실현수익 vs 전체 누적 수익·재고 평가착시 3단 해부·전량졸업 예정자산(🎓) ·
+     🗡️ [모의] 암살자 실시간 관제 요약 및 /assassin · /reset_assassin · /mode 명령어 탑재 ·
+     Case 75 httpx/httpcore INFO 로그 묵음화 & Case 81 전용 httpx.AsyncClient 자동 재생성 불사조 폴링 · 오프셋 파일 선행 영속화 · os.execv 인플레이스 자가 교체 · Case 84 ~ 92 완벽 준수)
+- 제1헌법 ~ 제6헌법 및 Case 01 ~ 92 전수 락온
 """
 
 from __future__ import annotations
@@ -44,12 +42,19 @@ except Exception:
     httpx = None  # type: ignore
     _HTTPX_AVAILABLE = False
 
+import assassin_plugin
 import defense_plugin
 import plugin_updater
 import quant_engine
 import quant_indicators_plugin
 import tg_ui_plugin
 import toss_api
+from assassin_plugin import (
+    build_assassin_detail_dashboard_html,
+    ensure_assassin_ledger,
+    format_assassin_slim_radar_block,
+    run_assassin_plugin_tdd,
+)
 from defense_plugin import reconcile_stratum_with_broker_holdings_plugin
 from plugin_updater import (
     execute_git_pull_and_preflight,
@@ -60,25 +65,26 @@ from plugin_updater import (
     write_persisted_tg_offset_sync,
 )
 from quant_engine import (
-    PORTION_MODE_COMPOUND,
-    PORTION_MODE_SIMPLE,
     get_runtime_round_trip_fee_rate_pct,
     get_runtime_us_commission_rate,
-    is_simple_income_mode,
     set_runtime_round_trip_fee_rate_pct,
     summarize_stratum_portfolio,
 )
 from quant_indicators_plugin import (
+    compute_qqq_macro_metrics_1m,
     compute_soxl_quant_metrics_1m,
     refresh_metrics_with_live_tick,
 )
 from sniper_plugin import mark_reserve_deposit_check_shield
 from tg_ui_plugin import (
+    PORTION_MODE_COMPOUND,
+    PORTION_MODE_SIMPLE,
     SEED_INPUT_PROMPT_TIMEOUT_SEC,
     _build_main_reply_keyboard,
     _build_settlement_inline_keyboard,
     _format_case67_quota_badge,
     _format_sub_quota_badge,
+    _is_simple_portion_mode,
     build_avwap_radar_message,
     build_settlement_control_message,
     build_start_schedule_message,
@@ -230,7 +236,7 @@ def _normalize_single_holding_item(
     )
     pl_obj = (
         item.get("profitLoss")
-        if isinstance(it_pl := item.get("profitLoss"), dict)
+        if isinstance(item.get("profitLoss"), dict)
         else {}
     )
 
@@ -450,8 +456,6 @@ def _extract_candles_list(
 def _install_toss_api_compatibility_patches() -> None:
     """
     TossApiClient 에 필수 메서드가 누락된 구버전 환경에서도 런타임 AttributeError 를 0건으로 차단한다.
-    (보조 폴리필: get_commissions, ensure_us_commission_rate, get_open_orders, cancel_all_open_orders,
-     find_latest_open_order_id, get_buying_power_usd, get_usd_krw_rate 및 close 포함)
     """
     if not hasattr(TossApiClient, "get_commissions"):
 
@@ -478,7 +482,6 @@ def _install_toss_api_compatibility_patches() -> None:
         async def _poly_ensure_us_commission_rate(
             self: Any, force_refresh: bool = False
         ) -> Tuple[float, float]:
-            # [Case 86]: API 일시 조회 실패 시에도 런타임(원장/.env)에 보존된 수수료율 유지
             fb_one = get_runtime_us_commission_rate()
             fb_rt = get_runtime_round_trip_fee_rate_pct()
             cur_one = safe_float(
@@ -914,247 +917,8 @@ def _check_weekend_nyse_closed_dynamic(now_est: datetime) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# [핵심 3] 자체 벡터화 1분봉/일봉 지표 및 Wilder's RSI(14) 산출 폴백
+# [핵심 3] 자체 벡터화 1분봉/일봉 지표 및 Wilder's RSI(14) · QQQ 안전망 지표 산출기
 # ---------------------------------------------------------------------------
-def _compute_vectorized_metrics_fallback(
-    candles_1m: List[Dict[str, Any]],
-    live_price: float,
-    now_est: datetime,
-    candles_1d: List[Dict[str, Any]],
-) -> Dict[str, Any]:
-    """
-    quant_indicators_plugin.compute_soxl_quant_metrics_1m() 를 최우선 호출하여
-    인메모리 1분봉(_LIVE_1M_BAR_STORE) 병합 및 Wilder's RSI(14) 산출을 수행하고,
-    예외 발생 시에만 ISO8601 + np.diff 기반 자체 벡터화 폴백을 수행한다.
-    """
-    dt_now = now_est.astimezone(EST_TZ)
-    lp = safe_float(live_price, 0.0)
-
-    try:
-        res_primary = compute_soxl_quant_metrics_1m(
-            candles=candles_1m,
-            live_price=lp,
-            now_est=dt_now,
-            daily_candles=candles_1d,
-        )
-        if isinstance(res_primary, dict):
-            return res_primary
-    except Exception:
-        pass
-
-    today_str = dt_now.strftime("%Y-%m-%d")
-    out: Dict[str, Any] = {
-        "symbol": TARGET_SYMBOL,
-        "live_price": round(lp, 4),
-        "ma5_amp_pct": 6.50,
-        "rsi_14": 50.0,
-        "rsi_ready": False,
-        "prev_bar_close": 0.0,
-        "prev_avg_gain": 0.0,
-        "prev_avg_loss": 0.0,
-        "ha_bull": True,
-        "ha_badge": "🕯️HA양봉",
-        "premarket_vwap": 0.0,
-        "premarket_high": 0.0,
-        "premarket_low": 0.0,
-        "premarket_amp_pct": 0.0,
-        "premarket_est_low": 0.0,
-        "premarket_est_high": 0.0,
-        "regular_vwap": 0.0,
-        "regular_high": 0.0,
-        "regular_low": 0.0,
-        "regular_amp_pct": 0.0,
-        "regular_est_low": 0.0,
-        "regular_est_high": 0.0,
-    }
-
-    if isinstance(candles_1d, list) and len(candles_1d) >= 2:
-        try:
-            df_d = pd.DataFrame(candles_1d)
-            if "highPrice" in df_d.columns and "lowPrice" in df_d.columns:
-                hs = pd.to_numeric(df_d["highPrice"], errors="coerce")
-                ls = pd.to_numeric(df_d["lowPrice"], errors="coerce")
-                valid = (hs > 0) & (ls > 0) & (hs >= ls)
-                hv = (
-                    hs[valid].to_numpy(dtype=float)[-6:-1]
-                    if valid.sum() > 5
-                    else hs[valid].to_numpy(dtype=float)[-5:]
-                )
-                lv = (
-                    ls[valid].to_numpy(dtype=float)[-6:-1]
-                    if valid.sum() > 5
-                    else ls[valid].to_numpy(dtype=float)[-5:]
-                )
-                if len(lv) >= 1:
-                    out["ma5_amp_pct"] = round(
-                        float(
-                            np.mean(((hv - lv) / np.maximum(0.01, lv)) * 100.0)
-                        ),
-                        2,
-                    )
-        except Exception:
-            pass
-
-    if not isinstance(candles_1m, list) or not candles_1m:
-        return refresh_metrics_with_live_tick(out, lp, now_est=dt_now)
-
-    try:
-        df = pd.DataFrame(candles_1m)
-        if df.empty or "timestamp" not in df.columns:
-            return refresh_metrics_with_live_tick(out, lp, now_est=dt_now)
-
-        try:
-            ts_utc = pd.to_datetime(
-                df["timestamp"], format="ISO8601", utc=True, errors="coerce"
-            )
-        except Exception:
-            ts_utc = pd.to_datetime(df["timestamp"], utc=True, errors="coerce")
-
-        df = df.loc[ts_utc.notna()].copy()
-        if df.empty:
-            return refresh_metrics_with_live_tick(out, lp, now_est=dt_now)
-
-        df["dt_est"] = ts_utc[ts_utc.notna()].dt.tz_convert(EST_TZ)
-        df.sort_values("dt_est", ascending=True, inplace=True)
-        df.drop_duplicates(subset=["dt_est"], keep="last", inplace=True)
-
-        df["O"] = pd.to_numeric(
-            df.get("openPrice", df.get("open")), errors="coerce"
-        )
-        df["H"] = pd.to_numeric(
-            df.get("highPrice", df.get("high")), errors="coerce"
-        )
-        df["L"] = pd.to_numeric(
-            df.get("lowPrice", df.get("low")), errors="coerce"
-        )
-        df["C"] = pd.to_numeric(
-            df.get("closePrice", df.get("close")), errors="coerce"
-        )
-        df["V"] = pd.to_numeric(
-            df.get("volume", 0.0), errors="coerce"
-        ).fillna(0.0)
-        df.dropna(subset=["O", "H", "L", "C"], inplace=True)
-        if df.empty:
-            return refresh_metrics_with_live_tick(out, lp, now_est=dt_now)
-
-        if lp <= 0.0:
-            lp = float(df["C"].iloc[-1])
-            out["live_price"] = round(lp, 4)
-
-        opens = df["O"].to_numpy(dtype=float)
-        highs = df["H"].to_numpy(dtype=float)
-        lows = df["L"].to_numpy(dtype=float)
-        closes = df["C"].to_numpy(dtype=float)
-        if lp > 0.0 and len(closes) > 0:
-            closes[-1] = lp
-            highs[-1] = max(highs[-1], lp)
-            lows[-1] = min(lows[-1], lp)
-
-        ha_c = (opens + highs + lows + closes) * 0.25
-        shifted = np.empty(len(ha_c), dtype=float)
-        shifted[0] = (opens[0] + closes[0]) * 0.5
-        if len(ha_c) > 1:
-            shifted[1:] = ha_c[:-1]
-        ha_o = (
-            pd.Series(shifted)
-            .ewm(alpha=0.5, adjust=False)
-            .mean()
-            .to_numpy(dtype=float)
-        )
-        is_bull = bool(ha_c[-1] >= ha_o[-1])
-        out["ha_bull"] = is_bull
-        out["ha_badge"] = "🕯️HA양봉" if is_bull else "🌑HA음봉"
-        out["prev_ha_open"] = round(
-            float(ha_o[-2] if len(ha_o) >= 2 else ha_o[-1]), 4
-        )
-        out["prev_ha_close"] = round(
-            float(ha_c[-2] if len(ha_c) >= 2 else ha_c[-1]), 4
-        )
-        out["cur_bar_open"] = round(float(opens[-1]), 4)
-        out["cur_bar_high"] = round(float(highs[-1]), 4)
-        out["cur_bar_low"] = round(float(lows[-1]), 4)
-
-        n_c = len(closes)
-        if n_c >= 2:
-            deltas = np.diff(closes)
-            gains = np.maximum(0.0, deltas)
-            losses = np.maximum(0.0, -deltas)
-            avg_gain = (
-                pd.Series(gains)
-                .ewm(alpha=1.0 / 14.0, min_periods=1, adjust=False)
-                .mean()
-                .to_numpy(dtype=float)
-            )
-            avg_loss = (
-                pd.Series(losses)
-                .ewm(alpha=1.0 / 14.0, min_periods=1, adjust=False)
-                .mean()
-                .to_numpy(dtype=float)
-            )
-            last_g = float(avg_gain[-1])
-            last_l = float(avg_loss[-1])
-            out["prev_bar_close"] = round(float(closes[-2]), 4)
-            out["prev_avg_gain"] = round(
-                float(avg_gain[-2]) if len(avg_gain) >= 2 else 0.0, 6
-            )
-            out["prev_avg_loss"] = round(
-                float(avg_loss[-2]) if len(avg_loss) >= 2 else 0.0, 6
-            )
-            out["rsi_ready"] = bool(n_c >= 14)
-            if last_g <= 1e-12 and last_l <= 1e-12:
-                out["rsi_14"] = 50.0
-            elif last_l <= 1e-12:
-                out["rsi_14"] = 100.0
-            else:
-                rs = last_g / last_l
-                out["rsi_14"] = round(100.0 - (100.0 / (1.0 + rs)), 2)
-
-        df["Date"] = df["dt_est"].dt.strftime("%Y-%m-%d")
-        df["hm"] = df["dt_est"].dt.hour * 100 + df["dt_est"].dt.minute
-        t_date = (
-            today_str
-            if (df["Date"] == today_str).any()
-            else str(df["Date"].iloc[-1])
-        )
-        df_t = df[df["Date"] == t_date]
-
-        amp_ratio = max(0.01, float(out["ma5_amp_pct"]) / 100.0)
-        for prefix, sub in (
-            ("premarket", df_t[(df_t["hm"] >= 400) & (df_t["hm"] <= 929)]),
-            ("regular", df_t[(df_t["hm"] >= 930) & (df_t["hm"] <= 1600)]),
-        ):
-            if not sub.empty:
-                h_a = sub["H"].to_numpy(dtype=float)
-                l_a = sub["L"].to_numpy(dtype=float)
-                c_a = sub["C"].to_numpy(dtype=float)
-                v_a = np.maximum(0.0, sub["V"].to_numpy(dtype=float))
-                tp = (h_a + l_a + c_a) / 3.0
-                tv = float(np.sum(v_a))
-                vwap_v = (
-                    float(np.sum(tp * v_a) / tv)
-                    if tv > 0
-                    else float(np.mean(tp))
-                )
-                sh = float(np.max(h_a))
-                sl = float(np.min(l_a))
-                out[f"{prefix}_vwap"] = round(vwap_v, 4)
-                out[f"{prefix}_high"] = round(sh, 4)
-                out[f"{prefix}_low"] = round(sl, 4)
-                out[f"{prefix}_amp_pct"] = round(
-                    ((sh - sl) / sl) * 100.0 if sl > 0 else 0.0, 2
-                )
-                out[f"{prefix}_est_high"] = round(
-                    max(sh, sl * (1.0 + amp_ratio)), 2
-                )
-                out[f"{prefix}_est_low"] = round(
-                    min(sl, sh / (1.0 + amp_ratio)), 2
-                )
-    except Exception:
-        pass
-
-    return refresh_metrics_with_live_tick(out, lp, now_est=dt_now)
-
-
 async def _compute_candle_metrics_dynamic(
     context: Any,
     candles_1m: List[Dict[str, Any]],
@@ -1164,195 +928,167 @@ async def _compute_candle_metrics_dynamic(
 ) -> Dict[str, Any]:
     """
     compute_soxl_quant_metrics_1m 결과 무손실 직결:
-    quant_indicators_plugin.compute_soxl_quant_metrics_1m() 가 반환한 딕셔너리를
-    조건부 누락 없이 즉시 채택하여 인메모리 1분봉 합성 기저값(prev_bar_close 등)이 100% 유지되도록 보장한다.
+    SOXL 1분봉(candles_1m) 및 일봉(candles_1d)을 주입하여 Wilder's RSI(14)와
+    암살자 4대 필수 조건(① rsi_14/rsi · ② premarket_vwap/vwap · ③ prev_reg_close · ④ pre_open_price)을 산출한다.
     """
     try:
-        res_direct = compute_soxl_quant_metrics_1m(
-            candles=candles_1m,
-            live_price=live_price,
-            now_est=now_est,
-            daily_candles=candles_1d,
+        res_direct = await asyncio.to_thread(
+            compute_soxl_quant_metrics_1m,
+            candles_1m,
+            live_price,
+            now_est,
+            candles_1d,
         )
         if isinstance(res_direct, dict):
             return refresh_metrics_with_live_tick(
-                res_direct, live_price, now_est=now_est
+                res_direct, live_price, now_est=now_est, symbol=TARGET_SYMBOL
             )
     except Exception as exc:
         logger.debug("compute_soxl_quant_metrics_1m 직접 호출 폴백: %s", exc)
 
-    return _compute_vectorized_metrics_fallback(
-        candles_1m=candles_1m,
-        live_price=live_price,
-        now_est=now_est,
-        candles_1d=candles_1d,
+    return refresh_metrics_with_live_tick(
+        {}, live_price, now_est=now_est, symbol=TARGET_SYMBOL
     )
 
 
-# ---------------------------------------------------------------------------
-# [핵심 4] 폴더 위치(base_dir) 전용 텔레그램 토큰·채팅방 ID 자동 탐색기 (Case 68)
-# ---------------------------------------------------------------------------
-def _extract_valid_tg_token(text: str) -> str:
-    if not text or "://" in text:
-        return ""
-    m = _TG_TOKEN_STRICT_RE.search(str(text).strip())
-    return m.group(1) if m else ""
+async def _compute_qqq_metrics_dynamic(
+    context: Any,
+    candles_1m_qqq: List[Dict[str, Any]],
+    live_price_qqq: float,
+    now_est: datetime,
+) -> Dict[str, Any]:
+    """
+    # NEW: 나스닥 100 추종 QQQ 1분봉 기반 방향성 인지 3단계 안전망(vel_1m_pct, vel_3m_pct, bear_drop_amp_pct) 비동기 산출기
+    """
+    try:
+        res_qqq = await asyncio.to_thread(
+            compute_qqq_macro_metrics_1m,
+            candles_1m_qqq,
+            live_price_qqq,
+            now_est,
+        )
+        if isinstance(res_qqq, dict):
+            return refresh_metrics_with_live_tick(
+                res_qqq, live_price_qqq, now_est=now_est, symbol="QQQ"
+            )
+    except Exception as exc:
+        logger.debug("compute_qqq_macro_metrics_1m 호출 폴백: %s", exc)
+
+    return refresh_metrics_with_live_tick(
+        {}, live_price_qqq, now_est=now_est, symbol="QQQ"
+    )
+# -*- coding: utf-8 -*-
+"""
+# MODIFIED: main_runtime.py (Part 2/2 — 폴더별 텔레그램 자격증명 탐색기 · _AdaptiveTelegramBridge 내 /assassin · /reset_assassin · /mode 결속 및 무인 자동 업데이트 브릿지)
+"""
 
 
+# ---------------------------------------------------------------------------
+# [핵심 4] 폴더 위치(base_dir) 전용 텔레그램 자격증명 탐색기 (Case 68)
+# ---------------------------------------------------------------------------
 def _discover_telegram_credentials(
-    base_dir: str, api_obj: Any = None
+    base_dir: Optional[str] = None,
 ) -> Tuple[str, str]:
     """
     🚨 Case 68:
-    "/home/pipiosToss" 고정 경로 하드코딩을 100% 영구 제거하고, 오직 현재 봇이 위치한
-    물리적 폴더(target_dir = get_bot_base_dir(base_dir))의 .env 와 설정 파일만 참조한다.
+    고정 경로("/home/pipiosToss") 참조를 100% 폐기하고, 오직 현재 봇이 실행 중인 폴더(target_dir)의
+    .env 파일과 프로세스 환경변수에서만 TELEGRAM_BOT_TOKEN 과 TELEGRAM_CHAT_ID 를 탐색한다.
     """
     target_dir = get_bot_base_dir(base_dir)
-    candidate_dirs = [target_dir]
-    for d in candidate_dirs:
-        if not d or not os.path.isdir(d):
-            continue
-        env_fp = os.path.join(d, ".env")
-        if os.path.isfile(env_fp):
-            try:
-                with open(env_fp, "r", encoding="utf-8", errors="ignore") as f:
-                    for raw_line in f:
-                        line = raw_line.strip()
-                        if not line or line.startswith("#") or "=" not in line:
-                            continue
-                        if line.startswith("export "):
-                            line = line[len("export ") :].strip()
-                        k, v = line.split("=", 1)
-                        k = k.strip()
-                        v = v.strip().strip("'").strip('"')
-                        if k and v and k not in os.environ:
-                            os.environ[k] = v
-            except Exception:
-                pass
-
-    token_keys = (
-        "TELEGRAM_BOT_TOKEN",
-        "TG_BOT_TOKEN",
-        "BOT_TOKEN",
-        "TELEGRAM_TOKEN",
-        "TG_TOKEN",
-    )
-    chat_keys = (
-        "TELEGRAM_CHAT_ID",
-        "TG_CHAT_ID",
-        "CHAT_ID",
-        "TELEGRAM_ADMIN_ID",
-        "ADMIN_CHAT_ID",
-        "ALLOWED_CHAT_ID",
-    )
-
     bot_token = ""
     chat_id = ""
 
-    for k in token_keys:
-        cand = _extract_valid_tg_token(str(os.environ.get(k) or ""))
-        if cand:
-            bot_token = cand
-            break
+    env_candidates = (
+        os.path.join(target_dir, ".env"),
+        os.path.join(target_dir, ".env.local"),
+    )
+    for env_fp in env_candidates:
+        if not os.path.isfile(env_fp):
+            continue
+        try:
+            with open(env_fp, "r", encoding="utf-8", errors="ignore") as rf:
+                for raw_line in rf:
+                    line = raw_line.strip()
+                    if not line or line.startswith("#") or "=" not in line:
+                        continue
+                    k, v = line.split("=", 1)
+                    k_clean = k.strip().upper()
+                    v_clean = v.strip().strip("'").strip('"').strip()
+                    if k_clean in (
+                        "TELEGRAM_BOT_TOKEN",
+                        "TG_BOT_TOKEN",
+                        "BOT_TOKEN",
+                        "TELEGRAM_TOKEN",
+                        "TG_TOKEN",
+                    ):
+                        m = _TG_TOKEN_STRICT_RE.search(v_clean)
+                        if m and not bot_token:
+                            bot_token = m.group(1)
+                    elif k_clean in (
+                        "TELEGRAM_CHAT_ID",
+                        "TG_CHAT_ID",
+                        "CHAT_ID",
+                    ):
+                        if v_clean and not chat_id:
+                            chat_id = v_clean
+        except Exception:
+            pass
 
     if not bot_token:
-        for _, v in os.environ.items():
-            cand = _extract_valid_tg_token(str(v or ""))
-            if cand:
-                bot_token = cand
+        for k in (
+            "TELEGRAM_BOT_TOKEN",
+            "TG_BOT_TOKEN",
+            "BOT_TOKEN",
+            "TELEGRAM_TOKEN",
+            "TG_TOKEN",
+        ):
+            val = str(os.environ.get(k) or "").strip()
+            if "://" not in val:
+                m = _TG_TOKEN_STRICT_RE.search(val)
+                if m:
+                    bot_token = m.group(1)
+                    break
+
+    if not chat_id:
+        for k in ("TELEGRAM_CHAT_ID", "TG_CHAT_ID", "CHAT_ID"):
+            val = str(os.environ.get(k) or "").strip()
+            if val:
+                chat_id = val
                 break
 
-    for k in chat_keys:
-        v = str(os.environ.get(k) or "").strip()
-        if v.lstrip("-").isdigit() and len(v.lstrip("-")) >= 5:
-            chat_id = v
-            break
-
-    scan_targets: List[Any] = [tg_ui_plugin, toss_api]
-    if api_obj is not None:
-        scan_targets.insert(0, api_obj)
-
-    for target in scan_targets:
-        try:
-            obj_dict = vars(target)
-        except Exception:
-            continue
-        for attr_name, attr_val in obj_dict.items():
-            if isinstance(attr_val, (str, int)):
-                s_val = str(attr_val).strip()
-                u_name = attr_name.upper()
-                if not bot_token:
-                    cand = _extract_valid_tg_token(s_val)
-                    if cand:
-                        bot_token = cand
-                if not chat_id and (
-                    "CHAT_ID" in u_name or "ADMIN_ID" in u_name
-                ):
-                    if (
-                        s_val.lstrip("-").isdigit()
-                        and len(s_val.lstrip("-")) >= 5
-                    ):
-                        chat_id = s_val
-
-    if not bot_token or not chat_id:
-        chat_re = re.compile(
-            r"(?:CHAT_ID|chat_id)\s*[:=]\s*['\"]?(-?\d{6,15})['\"]?"
-        )
-        for d in candidate_dirs:
-            if not d or not os.path.isdir(d):
-                continue
-            for fn in (
-                ".env",
-                "config.json",
-                "secrets.json",
-                "toss_api.py",
-                "tg_ui_plugin.py",
-            ):
-                fp = os.path.join(d, fn)
-                if not os.path.isfile(fp):
-                    continue
-                try:
-                    with open(fp, "r", encoding="utf-8", errors="ignore") as f:
-                        content = f.read()
-                    if not bot_token:
-                        m_tok = _TG_TOKEN_STRICT_RE.search(content)
-                        if m_tok:
-                            bot_token = m_tok.group(1)
-                    if not chat_id:
-                        m_cid = chat_re.search(content)
-                        if m_cid:
-                            chat_id = m_cid.group(1)
-                except Exception:
-                    pass
+    if bot_token:
+        os.environ["TELEGRAM_BOT_TOKEN"] = bot_token
+    if chat_id:
+        os.environ["TELEGRAM_CHAT_ID"] = chat_id
 
     return bot_token, chat_id
+
+
 # ---------------------------------------------------------------------------
-# [핵심 5] 내장형 텔레그램 브릿지 (_AdaptiveTelegramBridge — tg_ui_plugin 렌더러 직결 & 복리/단리 모드 전환 & 무제한 수혈 카운트 & 사이클 수익 초기화 연동 & Case 81 ~ 91 완벽 통합)
+# [핵심 5] 내장형 적응형 텔레그램 브릿지 (_AdaptiveTelegramBridge — Case 81 불사조 폴링 & 🗡️ 모의 암살자 연동)
 # ---------------------------------------------------------------------------
 class _AdaptiveTelegramBridge:
     """
-    # MODIFIED [Case 62 ~ 91 & 사용자 중심 4버튼 초슬림 UI · 층별 자산($) · 10칸 배분 게이지(🟦🟨🟩) · 복리/단리 전환 · 무제한 수혈 카운트 · 당일 수익 인출 안내 · 사이클 수익 · 전량졸업 예정자산(🎓) 통합]:
-    tg_ui_plugin 의 관제 보드 렌더러(build_start_schedule_message, build_avwap_radar_message,
-    build_sync_instruction_message, build_settlement_control_message)를 단일 소스로 재사용하여
-    코드 중복을 제거하고,
-    - [Case 81] 토스 API 클라이언트와 완전히 독립된 텔레그램 전용 httpx.AsyncClient 세션 운용 및
-      HTTP 409 Conflict / 연속 3회 오류 시 세션 자동 재생성 불사조 롱폴링(Immortal Supervisor Wrapper)
-    - [Case 81] 폴더별 오프셋 파일(.tg_update_offset_<folder_slug>.dat) + 3중 원장 + 서버 3중 선행 영속화
-    - [Case 81] /update 완료 후 구버전 os._exit(0) 대신 3.5초 하드 워치독 및 perform_self_restart_execv(os.execv)로
-      100% 무중단 자가 교체 수행 (13대 코어 모듈 프리플라이트 안내 동기화 포함)!
-    - [Case 87, Case 88 & Case 91] /mode (toggle_portion_mode) 복리/단리 전환 및 /seed · /reset_profit 실행 시 본 그리드(cycle_ratchet_max_lots) 및
-      Default-ON 3층 서브 그리드(sub_buckets · sub_ratchet_max_lots), 당일 무매매 동결 판정 카운터, 운용 모드(portion_mode) 100% 보존 및
-      사이클 단위 수익(cycle_realized_net_usd 등) 동시 0점 초기화 정합성 보장!
+    🚨 Case 02, 15, 16, 62, 64, 65, 66, 67, 68, 70 ~ 92 + 🗡️ [모의] 암살자 완벽 호환:
+    tg_ui_plugin.TelegramCommandController 와 동일한 인터페이스 및 4버튼 단일 메뉴,
+    /avwap · /sync · /settlement · /assassin · /reset_assassin · /mode 명령어와
+    5대 실시간 암살자 알림(send_slim_alert 단일 HTML 문자열 및 제목/본문 쌍 양방향 호환)을 제공한다.
     """
 
-    def __init__(self, context: Any) -> None:
+    def __init__(
+        self,
+        context: Any,
+        bot_token: Optional[str] = None,
+        chat_id: Optional[str] = None,
+    ) -> None:
         self.context: Any = context
         self.base_dir: str = get_bot_base_dir(
             getattr(context, "base_dir", None)
         )
-        self.bot_token, self.chat_id = _discover_telegram_credentials(
-            self.base_dir, getattr(context, "api", None)
-        )
+        disc_token, disc_chat = _discover_telegram_credentials(self.base_dir)
+        self.bot_token: str = str(bot_token or disc_token or "").strip()
+        self.chat_id: str = str(chat_id or disc_chat or "").strip()
+
         self._boot_epoch: float = time.time()
         self._last_update_id: int = 0
         try:
@@ -1362,6 +1098,7 @@ class _AdaptiveTelegramBridge:
             self._last_update_id = max(0, persisted_uid, ledger_uid)
         except Exception:
             self._last_update_id = 0
+
         self._awaiting_seed_input_chats: Dict[str, float] = {}
         self._tg_http_client: Optional[Any] = None
         self._tg_client_lock: asyncio.Lock = asyncio.Lock()
@@ -1371,10 +1108,6 @@ class _AdaptiveTelegramBridge:
         return f"https://api.telegram.org/bot{self.bot_token}/{method}"
 
     async def _ensure_tg_http_client(self) -> Optional[Any]:
-        """
-        # [Case 81]:
-        토스 API 세션과 분리된 텔레그램 전용 httpx.AsyncClient 를 생성/반환한다.
-        """
         if not _HTTPX_AVAILABLE or httpx is None:
             return None
         async with self._tg_client_lock:
@@ -1387,11 +1120,6 @@ class _AdaptiveTelegramBridge:
             return self._tg_http_client
 
     async def _close_tg_http_client(self) -> None:
-        """
-        # [Case 81]:
-        종료/재기동 직전 또는 연속 오류 발생 시 열린 텔레그램 롱폴링 소켓을 즉시 닫아
-        신구 프로세스 간 HTTP 409 Conflict 충돌을 원천 차단한다.
-        """
         async with self._tg_client_lock:
             client = self._tg_http_client
             self._tg_http_client = None
@@ -1402,13 +1130,8 @@ class _AdaptiveTelegramBridge:
                     pass
 
     async def _recreate_tg_http_client(self, reason: str = "ERROR") -> None:
-        """
-        # [Case 81]:
-        HTTP 409 Conflict 또는 연속 3회 이상 폴링 오류 감지 시 기존 소켓 풀을 폐기하고 새 세션을 구축한다.
-        """
         logger.info(
-            "♻️ [Case 81 내장 텔레그램 전용 HTTP 세션 자가 치유 재생성] 사유=%s",
-            reason,
+            "♻️ [Case 81 브릿지 텔레그램 HTTP 세션 재생성] 사유=%s", reason
         )
         await self._close_tg_http_client()
         await self._ensure_tg_http_client()
@@ -1455,11 +1178,6 @@ class _AdaptiveTelegramBridge:
         payload: Dict[str, Any],
         timeout_sec: float = 15.0,
     ) -> Dict[str, Any]:
-        """
-        # [Case 81]:
-        텔레그램 전용 httpx.AsyncClient 가 가용하면 비동기 커넥션 풀로 직접 호출하고,
-        예외 또는 미설치 환경에서는 asyncio.to_thread(_post_tg_sync) 로 안전 폴백한다.
-        """
         if not self.bot_token:
             return {"ok": False, "description": "missing-bot-token"}
 
@@ -1485,12 +1203,8 @@ class _AdaptiveTelegramBridge:
                         return data
             except asyncio.CancelledError:
                 raise
-            except Exception as exc:
-                logger.debug(
-                    "내장 브릿지 httpx(%s) 호출 예외 -> urllib 폴백: %s",
-                    method,
-                    exc,
-                )
+            except Exception:
+                pass
 
         try:
             return await asyncio.wait_for(
@@ -1500,14 +1214,9 @@ class _AdaptiveTelegramBridge:
                 timeout=timeout_sec + 3.0,
             )
         except Exception as exc:
-            logger.debug("텔레그램 API(%s) 호출 예외: %s", method, exc)
             return {"ok": False, "description": str(exc)}
 
     async def _persist_offset_locally(self, target_update_id: int) -> None:
-        """
-        # [Case 81]:
-        최신 update_id 를 로컬 오프셋 파일(.tg_update_offset_<folder_slug>.dat)과 3중 원장에 동시 영속화한다.
-        """
         uid = max(self._last_update_id, safe_int(target_update_id, 0))
         if uid <= 0:
             return
@@ -1551,22 +1260,16 @@ class _AdaptiveTelegramBridge:
             updates = res.get("result")
             if not isinstance(updates, list) or not updates:
                 return
-
             max_stale_uid = self._last_update_id
             for upd in updates:
                 if isinstance(upd, dict):
                     uid = safe_int(upd.get("update_id"), 0)
                     if uid > max_stale_uid:
                         max_stale_uid = uid
-
             if max_stale_uid > 0:
                 await self._ack_telegram_offset(max_stale_uid)
-                logger.info(
-                    "🧹 [텔레그램 부팅 전 적체 큐 전량 소각 완료] last_update_id=%d",
-                    max_stale_uid,
-                )
-        except Exception as exc:
-            logger.debug("부팅 시 텔레그램 큐 플러시 스킵: %s", exc)
+        except Exception:
+            pass
 
     async def send_message(
         self,
@@ -1576,24 +1279,21 @@ class _AdaptiveTelegramBridge:
         parse_mode: str = "HTML",
     ) -> bool:
         target_chat = str(chat_id or self.chat_id or "").strip()
-        if self.bot_token and target_chat:
-            payload: Dict[str, Any] = {
-                "chat_id": target_chat,
-                "text": text,
-                "parse_mode": parse_mode,
-                "disable_web_page_preview": True,
-            }
-            if reply_markup is not None:
-                payload["reply_markup"] = reply_markup
+        if not self.bot_token or not target_chat:
+            return False
+        payload: Dict[str, Any] = {
+            "chat_id": target_chat,
+            "text": text,
+            "parse_mode": parse_mode,
+            "disable_web_page_preview": True,
+        }
+        if reply_markup is not None:
+            payload["reply_markup"] = reply_markup
+        res = await self._call_tg("sendMessage", payload, timeout_sec=10.0)
+        if not bool(res.get("ok")):
+            payload.pop("parse_mode", None)
             res = await self._call_tg("sendMessage", payload, timeout_sec=10.0)
-            if not bool(res.get("ok")):
-                payload.pop("parse_mode", None)
-                res = await self._call_tg(
-                    "sendMessage", payload, timeout_sec=10.0
-                )
-            if bool(res.get("ok")):
-                return True
-        return False
+        return bool(res.get("ok"))
 
     async def edit_or_send_message(
         self,
@@ -1602,7 +1302,7 @@ class _AdaptiveTelegramBridge:
         text: str,
         reply_markup: Optional[Dict[str, Any]] = None,
     ) -> bool:
-        if self.bot_token and chat_id and message_id and message_id > 0:
+        if message_id is not None and message_id > 0:
             payload: Dict[str, Any] = {
                 "chat_id": str(chat_id),
                 "message_id": int(message_id),
@@ -1629,6 +1329,14 @@ class _AdaptiveTelegramBridge:
         body: str = "",
         reply_markup: Optional[Dict[str, Any]] = None,
     ) -> bool:
+        """
+        assassin_plugin.py 의 단일 HTML 전문 알림(body=="")과
+        기존 스나이퍼 코어의 (title, body) 2인자 알림을 모두 완벽하게 지원한다.
+        """
+        if not body:
+            return await self.send_message(
+                text=str(title), reply_markup=reply_markup
+            )
         safe_title = _escape_html(title)
         safe_body = _escape_html(body)
         msg = (
@@ -1636,30 +1344,17 @@ class _AdaptiveTelegramBridge:
             if safe_body
             else f"<b>{safe_title}</b>"
         )
-        return await self.send_message(
-            text=msg, chat_id=self.chat_id, reply_markup=reply_markup
-        )
+        return await self.send_message(text=msg, reply_markup=reply_markup)
 
-    async def send_startup_alive_banner(self) -> None:
-        """
-        # 기동 완료 후 "✅ 서버가 정상 작동 중입니다." 단일 라인 생존 신호 타전 및 4버튼 하단 키보드 활성화 (Case 16)
-        """
-        text = "<b>✅ 서버가 정상 작동 중입니다.</b>"
-        sent = await self.send_message(
-            text=text, reply_markup=_build_main_reply_keyboard()
+    async def send_startup_alive_banner(self) -> bool:
+        return await self.send_message(
+            text="<b>✅ 서버가 정상 작동 중입니다.</b>",
+            reply_markup=_build_main_reply_keyboard(),
         )
-        if not sent:
-            await self.send_slim_alert(
-                title="✅ 서버가 정상 작동 중입니다.",
-                body="",
-            )
 
     async def _refresh_live_price_and_metrics(
         self,
     ) -> Tuple[float, Dict[str, Any]]:
-        """
-        /avwap 조회 시 1분봉 미확보 상태면 즉시 온디맨드 프리워밍 수행:
-        """
         now_est = datetime.now(EST_TZ)
         live_p = safe_float(
             self.context.latest_prices.get(TARGET_SYMBOL), 0.0
@@ -1731,7 +1426,6 @@ class _AdaptiveTelegramBridge:
         now_est = datetime.now(EST_TZ)
         live_p, _ = await self._refresh_live_price_and_metrics()
 
-        # [Case 86]: /sync 호출 시 계좌별 미국 주식 수수료율(GET /api/v1/commissions) 동기화 확인
         ensure_comm_fn = getattr(
             self.context.api, "ensure_us_commission_rate", None
         )
@@ -1756,8 +1450,7 @@ class _AdaptiveTelegramBridge:
         if fetch_ok and isinstance(holdings_map, dict):
             self.context.latest_holdings = holdings_map
             self.context.holdings_fetch_ok = True
-            await _call_plugin_adaptive(
-                reconcile_stratum_with_broker_holdings_plugin,
+            await reconcile_stratum_with_broker_holdings_plugin(
                 context=self.context,
                 holdings=holdings_map,
                 prices={TARGET_SYMBOL: live_p},
@@ -1820,48 +1513,44 @@ class _AdaptiveTelegramBridge:
             text=msg,
             reply_markup=_build_settlement_inline_keyboard(
                 bool(st.get("is_active", True)),
-                st.get("portion_mode", PORTION_MODE_COMPOUND),
+                portion_mode=st.get("portion_mode"),
             ),
         )
 
-    async def _toggle_portion_mode_and_notify(
-        self,
-        chat_id: str,
-        target_mode: Optional[str] = None,
-        edit_msg_id: Optional[int] = None,
+    async def _render_and_send_assassin_dashboard(
+        self, chat_id: str, edit_msg_id: Optional[int] = None
     ) -> None:
-        """
-        # NEW [Case 91 : 📈 자산증식형(복리 · COMP_08PCT) ⇄ 💵 인출형(단리 · SIMPLE_08PCT) 원클릭 전환 처리기]:
-        """
-        toggle_fn = getattr(self.context.ledger, "toggle_portion_mode", None)
-        if callable(toggle_fn):
-            updated_st = await toggle_fn(target_mode=target_mode)
+        live_p, _ = await self._refresh_live_price_and_metrics()
+        msg = await build_assassin_detail_dashboard_html(
+            context=self.context, live_price=live_p
+        )
+        kb = (
+            None
+            if (edit_msg_id is not None and edit_msg_id > 0)
+            else _build_main_reply_keyboard()
+        )
+        await self.edit_or_send_message(
+            chat_id=chat_id,
+            message_id=edit_msg_id,
+            text=msg,
+            reply_markup=kb,
+        )
+
+    async def _toggle_portion_mode_command(
+        self, chat_id: str, edit_msg_id: Optional[int] = None
+    ) -> None:
+        st_cur = self.context.ledger.get_state(TARGET_SYMBOL)
+        if hasattr(self.context.ledger, "toggle_portion_mode"):
+            updated_st = await self.context.ledger.toggle_portion_mode()
         else:
-            st_cur = self.context.ledger.get_state(TARGET_SYMBOL)
-            cur_m = str(st_cur.get("portion_mode") or PORTION_MODE_COMPOUND)
             next_m = (
-                PORTION_MODE_SIMPLE
-                if (
-                    target_mode is not None
-                    and is_simple_income_mode(target_mode)
-                )
-                else (
-                    PORTION_MODE_COMPOUND
-                    if (
-                        target_mode is not None
-                        and not is_simple_income_mode(target_mode)
-                    )
-                    else (
-                        PORTION_MODE_COMPOUND
-                        if is_simple_income_mode(cur_m)
-                        else PORTION_MODE_SIMPLE
-                    )
-                )
+                PORTION_MODE_COMPOUND
+                if _is_simple_portion_mode(st_cur)
+                else PORTION_MODE_SIMPLE
             )
             updated_st = await self.context.ledger.update_state(
                 TARGET_SYMBOL, portion_mode=next_m
             )
-
         self.context.wakeup_event.set()
         if edit_msg_id is not None and edit_msg_id > 0:
             await self._render_and_send_settlement(
@@ -1871,41 +1560,28 @@ class _AdaptiveTelegramBridge:
 
         live_p, _ = await self._refresh_live_price_and_metrics()
         summary = summarize_stratum_portfolio(updated_st, live_price=live_p)
-        mode_lbl = str(summary.get("portion_mode_label") or "📈자산증식형(복리)")
-        is_simple = bool(summary.get("is_simple_mode", False))
+        is_s = _is_simple_portion_mode(updated_st)
+        m_lbl = (
+            "💵 인출형 (단리 · SIMPLE_08PCT)"
+            if is_s
+            else "📈 자산증식형 (복리 · COMP_08PCT)"
+        )
         next_bud = safe_float(summary.get("next_portion_budget"), 800.0)
         sub_bud = safe_float(summary.get("sub_next_portion_budget"), 400.0)
-        quota_badge = _format_case67_quota_badge(summary)
-        sub_quota_badge = _format_sub_quota_badge(summary)
-        day_withdrawable = safe_float(
-            summary.get("daily_withdrawable_profit_usd"), 0.0
-        )
-        surplus_usd = safe_float(summary.get("withdrawable_surplus_usd"), 0.0)
-        self_res_p = safe_float(summary.get("self_reserve_portions"), 0.0)
-
-        guide_line = (
-            f"🔸 금일 인출가능익: <b>+${day_withdrawable:,.2f}</b> (잉여금고 ${surplus_usd:,.0f} · 자체탄창 +{self_res_p:.1f}회)\n"
-            "💡 매일 16:00 EST 마감 정산 시 안내되는 당일 실현수익금을 현금으로 인출하여 사용하셔도 됩니다!"
-            if is_simple
-            else "💡 모든 실현수익과 자투리가 코어자산에 합산되어 1회분(8%/4%) 정량이 자동 복리 증액됩니다!"
-        )
         await self.send_message(
             chat_id=chat_id,
             text=(
-                f"🔄 <b>[운용 모드 전환 완료 ➔ {mode_lbl}]</b>\n"
-                f"🔸 본그리드(8%): <b>${next_bud:,.2f}</b> ({quota_badge})\n"
-                f"🔸 서브그리드(4%): <b>${sub_bud:,.2f}</b> ({sub_quota_badge})\n"
-                f"{guide_line}"
+                f"🔄 <b>[운용 정량모드 전환 완료]</b>\n"
+                f"▫️ 현재 모드: <b>{m_lbl}</b>\n"
+                f"▫️ 본그리드 1회(8%): <b>${next_bud:,.2f}</b> ({_format_case67_quota_badge(summary)})\n"
+                f"▫️ 서브그리드 1회(4%): <b>${sub_bud:,.2f}</b> ({_format_sub_quota_badge(summary)})"
             ),
-            reply_markup=_build_settlement_inline_keyboard(
-                bool(updated_st.get("is_active", True)),
-                updated_st.get("portion_mode", PORTION_MODE_COMPOUND),
-            ),
+            reply_markup=_build_main_reply_keyboard(),
         )
 
     async def _apply_new_seed_value(
         self, chat_id: str, raw_num_str: str
-    ) -> None:
+    ) -> bool:
         cleaned = (
             str(raw_num_str)
             .replace(",", "")
@@ -1917,14 +1593,13 @@ class _AdaptiveTelegramBridge:
         try:
             val = float(cleaned)
         except Exception:
-            return
+            return False
         if val < 100.0 or val > 10000000.0:
             await self.send_message(
                 chat_id=chat_id,
                 text="⚠️ 시드머니는 <b>$100 ~ $10,000,000</b> 사이의 숫자로 입력해 주세요. (예: <code>10000</code>)",
-                reply_markup=_build_main_reply_keyboard(),
             )
-            return
+            return True
 
         mark_reserve_deposit_check_shield(
             self.context, TARGET_SYMBOL, clear_shield=True
@@ -1938,245 +1613,47 @@ class _AdaptiveTelegramBridge:
             required_reserve_deposit_usd=0.0,
             last_reserve_check_ts=0.0,
         )
+        try:
+            assn_ledger = ensure_assassin_ledger(self.context)
+            await assn_ledger.update_state(initial_seed_usd=round(val, 4))
+        except Exception:
+            pass
+
         self.context.wakeup_event.set()
         live_p, _ = await self._refresh_live_price_and_metrics()
-        summary = summarize_stratum_portfolio(
-            updated_st, live_price=live_p, now_est=datetime.now(EST_TZ)
-        )
+        summary = summarize_stratum_portfolio(updated_st, live_price=live_p)
         quota_badge_str = _format_case67_quota_badge(summary)
         sub_quota_badge = _format_sub_quota_badge(summary)
         await self.send_message(
             chat_id=chat_id,
             text=(
                 "✅ <b>[기준 시드머니 설정 완료]</b>\n"
-                f"🔸 새 기준 시드머니: <b>${val:,.2f}</b> ({summary.get('portion_mode_label')})\n"
-                f"🔸 가용 현금시드: <b>${safe_float(summary.get('free_cash_usd'), 0.0):,.2f}</b>\n"
-                f"🔸 본그리드 1회(8%) 예산: <b>${safe_float(summary.get('next_portion_budget'), 0.0):,.2f}</b> "
-                f"➔ {quota_badge_str}\n"
-                f"🔸 서브그리드 1회(4%) 예산: <b>${safe_float(summary.get('sub_next_portion_budget'), 0.0):,.2f}</b> "
-                f"➔ {sub_quota_badge}"
+                f"▫️ 기준 시드: <b>${val:,.2f}</b> (스나이퍼 & 모의암살자 동시 적용)\n"
+                f"▫️ 가용 현금: <b>${safe_float(summary.get('free_cash_usd'), 0.0):,.2f}</b>\n"
+                f"▫️ 본그리드(8%): <b>${safe_float(summary.get('next_portion_budget'), 0.0):,.0f}</b> ({quota_badge_str})\n"
+                f"▫️ 서브그리드(4%): <b>${safe_float(summary.get('sub_next_portion_budget'), 0.0):,.0f}</b> ({sub_quota_badge})"
             ),
             reply_markup=_build_settlement_inline_keyboard(
                 bool(updated_st.get("is_active", True)),
-                updated_st.get("portion_mode", PORTION_MODE_COMPOUND),
+                portion_mode=updated_st.get("portion_mode"),
             ),
         )
+        return True
 
-    async def _reset_realized_profit_only(self, chat_id: str) -> None:
-        """
-        # MODIFIED [Case 02, Case 74, Case 76, Case 77, Case 86, Case 87, Case 88 & Case 91]:
-        보유 중인 본 그리드 지층(buckets · cycle_ratchet_max_lots 포함), Default-ON 3층 서브 그리드(sub_buckets · sub_ratchet_max_lots 포함),
-        당일 무매매 동결 판정용 매매 횟수(daily_main_buy_cnt, daily_main_sell_cnt, daily_sub_buy_cnt, daily_sub_sell_cnt),
-        기준 시드머니(initial_seed_usd), 운용 모드(portion_mode), 계좌별 수수료율(us_commission_rate, round_trip_fee_rate_pct)은 100% 보존하고,
-        오직 누적/당일 세후 실현수익금, 사이클 단위 수익금(cycle_realized_net_usd 등), 자투리 절약금·스텝업 해금·
-        서브 그리드 누적 통계·예비시드 통계만 0점으로 초기화한다.
-        """
-        mark_reserve_deposit_check_shield(
-            self.context, TARGET_SYMBOL, clear_shield=True
-        )
-        st_cur = self.context.ledger.get_state(TARGET_SYMBOL)
-        has_buckets = bool(st_cur.get("buckets"))
-        has_sub_buckets = bool(st_cur.get("sub_buckets"))
-        reset_kw: Dict[str, Any] = {
-            "cumulative_realized_gross_usd": 0.0,
-            "cumulative_realized_fee_usd": 0.0,
-            "cumulative_realized_net_usd": 0.0,
-            "daily_realized_net_usd": 0.0,
-            "cycle_realized_gross_usd": 0.0,
-            "cycle_realized_fee_usd": 0.0,
-            "cycle_realized_net_usd": 0.0,
-            "cycle_sub_realized_net_usd": 0.0,
-            "cycle_sell_events": 0,
-            "cycle_leftover_saved_usd": 0.0,
-            "last_cycle_realized_net_usd": 0.0,
-            "last_cycle_sell_events": 0,
-            "completed_main_cycles": 0,
-            "cumulative_leftover_saved_usd": 0.0,
-            "daily_leftover_saved_usd": 0.0,
-            "seed_protect_pass_cnt": 0,
-            "daily_seed_protect_pass_cnt": 0,
-            "cond_unlock_buy_events": 0,
-            "daily_unlock_buy_events": 0,
-            "sub_buy_events": 0,
-            "sub_buy_shares": 0,
-            "daily_sub_buy_events": 0,
-            "sub_sell_events": 0,
-            "sub_sold_shares": 0,
-            "daily_sub_sell_events": 0,
-            "sub_merge_events": 0,
-            "sub_merged_indiv_escape_cnt": 0,
-            "sub_unlock_events": 0,
-            "daily_sub_unlock_events": 0,
-            "sub_completed_cycles": 0,
-            "sub_realized_gross_usd": 0.0,
-            "sub_realized_fee_usd": 0.0,
-            "sub_realized_net_usd": 0.0,
-            "daily_sub_realized_net_usd": 0.0,
-            "total_reserve_injected_cnt": 0,
-            "daily_reserve_injected_cnt": 0,
-            "cumulative_reserve_repaid_usd": 0.0,
-            "dust_guard_blocked_cnt": 0,
-            "daily_dust_guard_blocked_cnt": 0,
-            "waiting_reserve_deposit": False,
-            "waiting_reserve_deposit_alert_sent": False,
-            "required_reserve_deposit_usd": 0.0,
-            "last_reserve_check_ts": 0.0,
-            "extra_13plus_buy_events": 0,
-            "total_buy_events": 0,
-            "daily_buy_events": 0,
-            "total_sell_events": 0,
-            "total_sold_shares": 0,
-            "win_sell_events": 0,
-            "daily_sell_events": 0,
-            "indiv_grid_sell_cnt": 0,
-            "daily_indiv_grid_sell_cnt": 0,
-            "wma_grad_sell_cnt": 0,
-            "daily_wma_grad_sell_cnt": 0,
-            "reanchor_cnt": 0,
-            "daily_reanchor_cnt": 0,
-            "cumulative_reanchor_drop_usd": 0.0,
-        }
-        if not has_buckets:
-            reset_kw["daily_main_buy_cnt"] = 0
-            reset_kw["daily_main_sell_cnt"] = 0
-        if not has_sub_buckets:
-            reset_kw["daily_sub_buy_cnt"] = 0
-            reset_kw["daily_sub_sell_cnt"] = 0
-        if not has_buckets and not has_sub_buckets:
-            reset_kw["used_reserve_portions_cnt"] = 0
-            reset_kw["injected_reserve_usd"] = 0.0
-            reset_kw["cycle_ratchet_max_lots"] = 0
-            reset_kw["sub_ratchet_max_lots"] = 0
-
-        st_reset = await self.context.ledger.update_state(
-            TARGET_SYMBOL, **reset_kw
-        )
-        snap_fn = getattr(
-            self.context.ledger, "create_daily_backup_snapshot", None
-        )
-        if callable(snap_fn):
-            try:
-                await snap_fn()
-            except Exception:
-                pass
-
-        self.context.wakeup_event.set()
-        live_p, _ = await self._refresh_live_price_and_metrics()
-        summary = summarize_stratum_portfolio(
-            st_reset, live_price=live_p, now_est=datetime.now(EST_TZ)
-        )
-        init_seed = safe_float(summary.get("initial_seed_usd"), 10000.0)
-        free_cash = safe_float(summary.get("free_cash_usd"), 0.0)
-        next_bud = safe_float(
-            summary.get("next_portion_budget"), init_seed * 0.08
-        )
-        quota_badge_str = _format_case67_quota_badge(summary)
-        held_sh = safe_int(summary.get("held_shares"), 0)
-        sub_sh = safe_int(summary.get("sub_held_shares"), 0)
-        sub_tiers = safe_int(summary.get("sub_held_tiers"), 0)
-        held_tiers = safe_int(summary.get("held_tiers"), 0)
-        held_lots = safe_int(summary.get("held_lots"), 0)
-        ratchet_lots = safe_int(
-            summary.get("cycle_ratchet_max_lots"), held_lots
-        )
-        sub_note = f"+서브 {sub_sh}주({sub_tiers}층)" if sub_sh > 0 else ""
-        lot_keep_str = (
-            f"보유 {held_lots}회차/단차잠금 {ratchet_lots}회차"
-            if ratchet_lots > held_lots
-            else f"{held_lots}회차"
-        )
-
+    async def _reset_assassin_stats_command(self, chat_id: str) -> None:
+        st_sp = self.context.ledger.get_state(TARGET_SYMBOL)
+        init_seed = safe_float(st_sp.get("initial_seed_usd"), 10000.0)
+        assn_ledger = ensure_assassin_ledger(self.context)
+        await assn_ledger.reset_assassin_stats_only(sniper_seed_usd=init_seed)
         await self.send_message(
             chat_id=chat_id,
             text=(
-                "🧹 <b>[실현수익 0점 초기화 완료]</b>\n"
-                "🔸 이번사이클 / 누적 세후실현익: <b>$0.00</b>\n"
-                f"🔸 복귀 기준시드: <b>${init_seed:,.2f}</b> ({summary.get('portion_mode_label')} · 가용현금 <b>${free_cash:,.2f}</b>)\n"
-                f"🔸 차기 1회(8%) 정량: 예산 <b>${next_bud:,.2f}</b> ➔ {quota_badge_str}\n"
-                f"🔸 보유 지층 보존: 본 <b>{held_sh}주</b> ({held_tiers}개층 · {lot_keep_str}{sub_note} 유지)"
+                "🧹 <b>[[모의] 암살자 누적 전적 초기화 완료]</b>\n"
+                f"▫️ 기준 시드: <b>${init_seed:,.2f}</b>\n"
+                "▫️ 누적 출격일 / 단리·복리 실현익이 0점으로 초기화되었습니다."
             ),
             reply_markup=_build_main_reply_keyboard(),
         )
-
-    async def _execute_manual_update_command(self, chat_id: str) -> None:
-        """
-        # [Case 62, Case 68, Case 75 & Case 81 : 13대 코어 모듈 프리플라이트 안내 동기화]:
-        """
-        await self._ack_telegram_offset(self._last_update_id)
-        await self.send_message(
-            chat_id=chat_id,
-            text=(
-                "⏳ <b>[시스템 업데이트 개시]</b>\n"
-                "🔸 GitHub 최신 코드 동기화 및 13대 코어 모듈 프리플라이트 검증 중..."
-            ),
-            reply_markup=_build_main_reply_keyboard(),
-        )
-        fn_upd = getattr(
-            plugin_updater, "execute_git_pull_and_preflight", None
-        )
-        changed = False
-        if callable(fn_upd):
-            upd_res = await _call_plugin_adaptive(
-                fn_upd, base_dir=self.base_dir
-            )
-            if isinstance(upd_res, tuple):
-                ok = bool(upd_res[0]) if len(upd_res) >= 1 else False
-                if len(upd_res) >= 3 and isinstance(upd_res[2], bool):
-                    changed = bool(upd_res[2])
-                str_parts = [
-                    str(x).strip()
-                    for x in upd_res[1:]
-                    if isinstance(x, str) and str(x).strip()
-                ]
-                msg = (
-                    " · ".join(str_parts)
-                    if str_parts
-                    else "✅ 13대 코어 모듈 인메모리 컴파일 및 AST 심볼 정합성 100% 통과 · 원장 보존"
-                )
-            else:
-                ok = bool(upd_res)
-                msg = "✅ 13대 코어 모듈 인메모리 컴파일 및 AST 심볼 정합성 100% 통과 · 원장 보존"
-        else:
-            ok, msg = verify_all_modules_compile(self.base_dir)
-
-        await self._ack_telegram_offset(self._last_update_id)
-
-        if not ok:
-            await self.send_message(
-                chat_id=chat_id,
-                text=f"⚠️ <b>[업데이트 중단 · 기존 원장 안전 보존]</b>\n{_escape_html(msg)}",
-                reply_markup=_build_main_reply_keyboard(),
-            )
-            return
-
-        if not changed:
-            await self.send_message(
-                chat_id=chat_id,
-                text=(
-                    "✅ <b>[최신 버전 검증 완료 · 무중단 가동 유지]</b>\n"
-                    "🔸 원격 변경사항이 없으므로 재기동 없이 현재 스나이퍼 엔진과 원장을 계속 유지합니다."
-                ),
-                reply_markup=_build_main_reply_keyboard(),
-            )
-            return
-
-        await self.send_message(
-            chat_id=chat_id,
-            text=(
-                "🚀 <b>[신규 업데이트 검증 통과]</b>\n"
-                "🔸 원장 데이터 100% 보존 상태로 스나이퍼 데몬을 무중단 자가 재기동합니다..."
-            ),
-            reply_markup=_build_main_reply_keyboard(),
-        )
-        await self._close_tg_http_client()
-        trigger_graceful_restart(
-            context=self.context,
-            shutdown_event=getattr(self.context, "shutdown_event", None),
-            reason="MANUAL_TELEGRAM_UPDATE",
-            watchdog_delay_sec=3.5,
-        )
-        await asyncio.sleep(0.3)
-        perform_self_restart_execv(reason="MANUAL_TELEGRAM_UPDATE")
 
     async def _handle_command_or_text(
         self, chat_id: str, raw_text: str
@@ -2184,9 +1661,6 @@ class _AdaptiveTelegramBridge:
         text = str(raw_text or "").strip()
         if not text:
             return
-
-        if not self.chat_id and chat_id:
-            self.chat_id = str(chat_id)
 
         clean_num_check = (
             text.replace(",", "").replace("$", "").replace(".", "").strip()
@@ -2207,9 +1681,8 @@ class _AdaptiveTelegramBridge:
                 await self.send_message(
                     chat_id=chat_id,
                     text=(
-                        "🔒 <b>[시드머니 오입력 방지 잠금 안내]</b>\n"
-                        "🔸 평시 숫자 오입력으로 인해 시드머니가 변조되는 것을 막기 위해 잠금 상태입니다.\n"
-                        "🔸 시드를 변경하시려면 <b>⚙️ 전술 제어반(/settlement)</b> 에서 <b>[💵 기준 시드머니($) 설정]</b> 버튼을 먼저 누르거나, "
+                        "🔒 <b>[시드머니 오입력 방지 잠금]</b>\n"
+                        "🔸 <b>⚙️ 전술 제어반</b>에서 <b>[💵 기준 시드머니 설정]</b> 버튼을 먼저 누르거나,\n"
                         f"<code>/seed {_escape_html(clean_num_check)}</code> 명령어로 입력해 주세요."
                     ),
                     reply_markup=_build_main_reply_keyboard(),
@@ -2220,7 +1693,10 @@ class _AdaptiveTelegramBridge:
         if "@" in first_token:
             first_token = first_token.split("@", 1)[0]
 
-        if first_token in ("/start", "/menu", "/help") or text == "⬅️ 메인 메뉴":
+        if (
+            first_token in ("/start", "/menu", "/help")
+            or text == "⬅️ 메인 메뉴"
+        ):
             st = self.context.ledger.get_state(TARGET_SYMBOL)
             msg = build_start_schedule_message(
                 st, now_est=datetime.now(EST_TZ), context=self.context
@@ -2254,32 +1730,19 @@ class _AdaptiveTelegramBridge:
             await self._render_and_send_settlement(chat_id=chat_id)
             return
 
-        if first_token in ("/mode", "/portion_mode"):
-            parts = text.split(maxsplit=1)
-            arg_mode: Optional[str] = None
-            if len(parts) >= 2:
-                raw_arg = parts[1].strip().upper()
-                if raw_arg in (
-                    "SIMPLE",
-                    "SIMPLE_08PCT",
-                    "INCOME",
-                    "단리",
-                    "인출",
-                    "인출형",
-                ):
-                    arg_mode = PORTION_MODE_SIMPLE
-                elif raw_arg in (
-                    "COMP",
-                    "COMPOUND",
-                    "COMP_08PCT",
-                    "복리",
-                    "증식",
-                    "자산증식형",
-                ):
-                    arg_mode = PORTION_MODE_COMPOUND
-            await self._toggle_portion_mode_and_notify(
-                chat_id=chat_id, target_mode=arg_mode
-            )
+        if first_token == "/assassin" or text in (
+            "🗡️ 모의 암살자",
+            "🗡️ 암살자 레이더",
+        ):
+            await self._render_and_send_assassin_dashboard(chat_id=chat_id)
+            return
+
+        if first_token == "/reset_assassin":
+            await self._reset_assassin_stats_command(chat_id=chat_id)
+            return
+
+        if first_token == "/mode":
+            await self._toggle_portion_mode_command(chat_id=chat_id)
             return
 
         if first_token == "/seed":
@@ -2293,7 +1756,8 @@ class _AdaptiveTelegramBridge:
             return
 
         if first_token == "/reset_profit":
-            await self._reset_realized_profit_only(chat_id=chat_id)
+            ctrl = tg_ui_plugin.TelegramCommandController(self.context)
+            await ctrl._reset_realized_profit_only(chat_id=chat_id)
             return
 
         if first_token in ("/reset", "/reset_seed"):
@@ -2301,8 +1765,8 @@ class _AdaptiveTelegramBridge:
                 chat_id=chat_id,
                 text=(
                     "🔒 <b>[지층 리셋 영구 차단 안내]</b>\n"
-                    "🔸 보유 중인 주식 지층 보호를 위해 지층 초기화 기능은 비활성화되었습니다.\n"
-                    "🔸 보유 주식을 유지한 채 실현수익만 초기화하여 설정된 기준 시드로 복귀하시려면 <code>/reset_profit</code> 명령어를 입력해 주세요."
+                    "🔸 보유 지층 보호를 위해 리셋은 비활성화되었습니다.\n"
+                    "🔸 수익만 0점 초기화하시려면 <code>/reset_profit</code> 을 입력해 주세요."
                 ),
                 reply_markup=_build_main_reply_keyboard(),
             )
@@ -2312,282 +1776,27 @@ class _AdaptiveTelegramBridge:
             "🚀 시스템 업데이트",
             "🚀 업데이트",
         ):
-            await self._execute_manual_update_command(chat_id=chat_id)
+            ctrl = tg_ui_plugin.TelegramCommandController(self.context)
+            ctrl._last_update_id = self._last_update_id
+            await ctrl._execute_manual_update_command(chat_id=chat_id)
             return
 
     async def _handle_callback_query(self, cb: Dict[str, Any]) -> None:
-        cb_id = str(cb.get("id") or "").strip()
-        data = str(cb.get("data") or "").strip()
-        msg_obj = (
-            cb.get("message") if isinstance(cb.get("message"), dict) else {}
-        )
-        chat_obj = (
-            msg_obj.get("chat") if isinstance(msg_obj.get("chat"), dict) else {}
-        )
-        chat_id = str(chat_obj.get("id") or self.chat_id or "").strip()
-        msg_id = safe_int(msg_obj.get("message_id"), 0)
-
-        if cb_id:
-            await self._call_tg(
-                "answerCallbackQuery",
-                {"callback_query_id": cb_id},
-                timeout_sec=5.0,
-            )
-
-        if not chat_id:
-            return
-
-        if data == "cmd_avwap":
-            await self._render_and_send_avwap(
-                chat_id=chat_id, edit_msg_id=msg_id
-            )
-        elif data == "cmd_sync":
-            await self._render_and_send_sync(
-                chat_id=chat_id, edit_msg_id=msg_id
-            )
-        elif data == "cmd_settlement":
-            await self._render_and_send_settlement(
-                chat_id=chat_id, edit_msg_id=msg_id
-            )
-        elif data == "cmd_start":
-            st = self.context.ledger.get_state(TARGET_SYMBOL)
-            msg = build_start_schedule_message(
-                st, now_est=datetime.now(EST_TZ), context=self.context
-            )
-            await self.edit_or_send_message(
-                chat_id=chat_id,
-                message_id=msg_id,
-                text=msg,
-                reply_markup=None,
-            )
-        elif data == "toggle_bot_active":
-            st_cur = self.context.ledger.get_state(TARGET_SYMBOL)
-            next_act = not bool(st_cur.get("is_active", True))
-            await self.context.ledger.update_state(
-                TARGET_SYMBOL, is_active=next_act
-            )
-            if next_act:
-                fn_relock = getattr(
-                    defense_plugin, "relock_stratum_on_bot_resume", None
-                )
-                if callable(fn_relock):
-                    await _call_plugin_adaptive(
-                        fn_relock,
-                        context=self.context,
-                        now_est=datetime.now(EST_TZ),
-                    )
-                else:
-                    await _call_plugin_adaptive(
-                        reconcile_stratum_with_broker_holdings_plugin,
-                        context=self.context,
-                        holdings=self.context.latest_holdings,
-                        prices=self.context.latest_prices,
-                        now_est=datetime.now(EST_TZ),
-                        force_sync=True,
-                    )
-            self.context.wakeup_event.set()
-            await self._render_and_send_settlement(
-                chat_id=chat_id, edit_msg_id=msg_id
-            )
-        elif data == "toggle_portion_mode":
-            await self._toggle_portion_mode_and_notify(
-                chat_id=chat_id, edit_msg_id=msg_id
-            )
-        elif data == "prompt_seed_input":
-            self._awaiting_seed_input_chats[chat_id] = time.monotonic()
-            await self.send_message(
-                chat_id=chat_id,
-                text=(
-                    "💵 <b>[기준 시드머니($) 입력 안내]</b>\n"
-                    "🔸 지금부터 <b>5분 이내</b>에 운용할 기준 달러 시드머니 금액을 숫자만 채팅창에 입력해 주세요.\n"
-                    "🔸 예시: <code>10000</code> 또는 <code>19000</code>"
-                ),
-                reply_markup=_build_main_reply_keyboard(),
-            )
-        elif data == "reset_profit_only":
-            await self._reset_realized_profit_only(chat_id=chat_id)
+        ctrl = tg_ui_plugin.TelegramCommandController(self.context)
+        ctrl._last_update_id = self._last_update_id
+        ctrl._awaiting_seed_input_chats = self._awaiting_seed_input_chats
+        await ctrl._handle_callback_query(cb)
 
     async def run_polling_loop(self) -> None:
-        """
-        🚨 [Case 81 : 내장 텔레그램 브릿지 불사조 폴링 루프 (Immortal Supervisor Wrapper)]:
-        """
-        if not _extract_valid_tg_token(self.bot_token):
-            self.bot_token, discovered_cid = _discover_telegram_credentials(
-                self.base_dir, getattr(self.context, "api", None)
-            )
-            if not self.chat_id and discovered_cid:
-                self.chat_id = discovered_cid
-
-        if not _extract_valid_tg_token(self.bot_token):
-            logger.error(
-                "🚨 유효한 텔레그램 봇 토큰(숫자:영숫자)을 찾을 수 없습니다! 현재 폴더(%s)의 .env 내 TELEGRAM_BOT_TOKEN 을 확인하세요.",
-                self.base_dir,
-            )
-            while not self.context.shutdown_event.is_set():
-                await asyncio.sleep(10.0)
-            return
-
-        try:
-            while not self.context.shutdown_event.is_set():
-                try:
-                    await self._ensure_tg_http_client()
-                    await self._call_tg(
-                        "deleteWebhook",
-                        {"drop_pending_updates": False},
-                        timeout_sec=8.0,
-                    )
-                    await self._flush_stale_updates_on_startup()
-                    logger.info(
-                        "📡 [Case 81 불사조 텔레그램 관제탑 폴링 루프 가동 완료] (폴더=%s · chat_id=%s · last_update_id=%d)",
-                        getattr(self.context, "folder_slug", "default"),
-                        self.chat_id or "auto-detect",
-                        self._last_update_id,
-                    )
-
-                    while not self.context.shutdown_event.is_set():
-                        try:
-                            payload: Dict[str, Any] = {
-                                "offset": self._last_update_id + 1,
-                                "timeout": 15,
-                                "allowed_updates": [
-                                    "message",
-                                    "callback_query",
-                                ],
-                            }
-                            res = await self._call_tg(
-                                "getUpdates", payload, timeout_sec=20.0
-                            )
-                            if isinstance(res, dict) and bool(res.get("ok")):
-                                self._consecutive_poll_errors = 0
-                                updates = res.get("result")
-                                if isinstance(updates, list):
-                                    for upd in updates:
-                                        if self.context.shutdown_event.is_set():
-                                            break
-                                        if not isinstance(upd, dict):
-                                            continue
-                                        uid = safe_int(upd.get("update_id"), 0)
-                                        if uid > self._last_update_id:
-                                            await self._persist_offset_locally(
-                                                uid
-                                            )
-
-                                        try:
-                                            if isinstance(
-                                                upd.get("callback_query"), dict
-                                            ):
-                                                await self._handle_callback_query(
-                                                    upd["callback_query"]
-                                                )
-                                            elif isinstance(
-                                                upd.get("message"), dict
-                                            ):
-                                                m_obj = upd["message"]
-                                                c_obj = (
-                                                    m_obj.get("chat")
-                                                    if isinstance(
-                                                        m_obj.get("chat"), dict
-                                                    )
-                                                    else {}
-                                                )
-                                                cid = str(
-                                                    c_obj.get("id")
-                                                    or self.chat_id
-                                                    or ""
-                                                ).strip()
-                                                if (
-                                                    self.chat_id
-                                                    and cid
-                                                    and cid != self.chat_id
-                                                ):
-                                                    continue
-                                                txt = str(
-                                                    m_obj.get("text") or ""
-                                                ).strip()
-                                                msg_date = safe_float(
-                                                    m_obj.get("date"), 0.0
-                                                )
-                                                if (
-                                                    msg_date > 0.0
-                                                    and msg_date
-                                                    < (self._boot_epoch - 1.0)
-                                                    and (
-                                                        txt.lower().startswith(
-                                                            "/update"
-                                                        )
-                                                        or txt
-                                                        in (
-                                                            "🚀 시스템 업데이트",
-                                                            "🚀 업데이트",
-                                                        )
-                                                    )
-                                                ):
-                                                    await self._ack_telegram_offset(
-                                                        uid
-                                                    )
-                                                    continue
-                                                if txt:
-                                                    await self._handle_command_or_text(
-                                                        chat_id=cid,
-                                                        raw_text=txt,
-                                                    )
-                                        except asyncio.CancelledError:
-                                            raise
-                                        except Exception as disp_exc:
-                                            logger.warning(
-                                                "⚠️ [Case 81 내장 브릿지 개별 메시지 처리 예외 격리(폴링 유지)]: %s",
-                                                disp_exc,
-                                            )
-                            else:
-                                self._consecutive_poll_errors += 1
-                                err_code = (
-                                    safe_int(res.get("error_code"), 0)
-                                    if isinstance(res, dict)
-                                    else 0
-                                )
-                                if (
-                                    err_code == 409
-                                    or self._consecutive_poll_errors >= 3
-                                ):
-                                    await self._recreate_tg_http_client(
-                                        reason=f"POLL_FAIL_CODE_{err_code}_CNT_{self._consecutive_poll_errors}"
-                                    )
-                                    self._consecutive_poll_errors = 0
-                                    await asyncio.sleep(3.0)
-                                else:
-                                    await asyncio.sleep(1.5)
-                        except asyncio.CancelledError:
-                            raise
-                        except Exception as exc:
-                            self._consecutive_poll_errors += 1
-                            if self._consecutive_poll_errors >= 3:
-                                await self._recreate_tg_http_client(
-                                    reason=f"POLL_EXC_{type(exc).__name__}"
-                                )
-                                self._consecutive_poll_errors = 0
-                            logger.debug(
-                                "텔레그램 폴링 내부 루프 일시 예외(자가 치유): %s",
-                                exc,
-                            )
-                            await asyncio.sleep(2.0)
-                except asyncio.CancelledError:
-                    break
-                except Exception as sup_exc:
-                    logger.warning(
-                        "🛡️ [Case 81 내장 브릿지 불사조 감독 루프 재기동] 3초 후 세션 재생성 복구: %s",
-                        sup_exc,
-                    )
-                    await self._recreate_tg_http_client(
-                        reason="SUPERVISOR_RECOVERY"
-                    )
-                    await asyncio.sleep(3.0)
-        finally:
-            await self._close_tg_http_client()
+        ctrl = tg_ui_plugin.TelegramCommandController(self.context)
+        await ctrl.run_polling_loop()
 
 
-async def _run_auto_update_loop_dynamic(
-    context: Any, interval_sec: float = 3600.0
-) -> None:
+async def _run_auto_update_loop_dynamic(context: Any) -> None:
+    """
+    # [Case 07, Case 68, Case 75 & Case 81]:
+    백그라운드 무인 자동 업데이트 루프를 안전하게 위임 실행한다.
+    """
     fn = _resolve_module_attr(
         modules=(plugin_updater,),
         candidate_names=(
@@ -2596,20 +1805,8 @@ async def _run_auto_update_loop_dynamic(
             "start_auto_update_loop",
             "background_auto_update_loop",
         ),
-        predicate=lambda f: (
-            inspect.iscoroutinefunction(f) and "loop" in f.__name__.lower()
-        ),
     )
     if callable(fn):
         await _call_plugin_adaptive(
-            fn, context=context, interval_sec=interval_sec
+            fn, context=context, interval_sec=3600.0
         )
-        return
-
-    while not context.shutdown_event.is_set():
-        try:
-            await asyncio.wait_for(
-                context.shutdown_event.wait(), timeout=interval_sec
-            )
-        except asyncio.TimeoutError:
-            pass

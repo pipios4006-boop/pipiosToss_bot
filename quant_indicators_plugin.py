@@ -1,32 +1,12 @@
 # -*- coding: utf-8 -*-
 """
-# MODIFIED: quant_indicators_plugin.py (황금시간 07:00~07:50 RSI<=19 올인 판별 함수·상수·라벨·주석 전면 영구 소각)
+# MODIFIED: quant_indicators_plugin.py (Case 92 Wilder RSI14 실시간 합성 + 암살자 4대 지표[RSI·VWAP·전일정규장종가·04:07프리장시가] 및 QQQ 방향성 안전망 변화율 벡터 확장)
 인피니트 스노우볼 (Infinite Snowball) v3.0 — 순수 롱(SOXL) 매수 04:07 ~ 16:00 EST 제한
 (정규장 마감 30분 전 15:30 ~ 16:00 EST 본·서브 그리드 0주 새 사이클 첫 1층 진입 및 상단층 보유 중 1층 공석 +1.0% 돌파 추격 동시 차단 ·
-2층 단가 이하 -1.0% 눌림목 재장전 및 10분 게이트 추매/잔량보충 100% 허용 · Case 84, Case 88) &
-익절 매도 24시간 전 세션(프리마켓 + 정규장 + 애프터마켓 + 데이마켓 · 방안 C 오버나이트 통합이평 사수) 확장 오버나이트 지층관리 스나이퍼
-시계열 100% 벡터화 지표 엔진 · 실시간 틱 인메모리 1분봉 자체 합성기(_LIVE_1M_BAR_STORE) 및
-10분 고정 매수 게이트 버킷 산출(본 그리드 및 Default-ON 3층 서브 그리드 독립 평가 지원) 코어 모듈 (Step 03 / 13)
-- 제4헌법 & Case 01, Case 79, Case 83, Case 84 & Case 88:
-  1) 모든 시계열 및 세션 경계 연산은 미국 동부 시간(EST_TZ = ZoneInfo('America/New_York')) 단일 소스 락온
-  2) 매수 허용 시간창(is_active_buy_window : 평일 04:07 ~ 16:00 EST)과
-     익절 매도 허용 시간창(is_active_sell_window : 04:00 ~ 04:06 EST 오프닝 안정화 및 주말 휴장 외
-     프리마켓 · 정규장 · 애프터마켓[16:00 ~ 19:59 EST] · 데이마켓[20:00 ~ 03:59 EST] 전 구간) 엄격 분리!
-  3) 금요일 애프터마켓(16:00 ~ 19:59 EST) 익절 매도를 허용하기 위해 주말 휴장 구간을
-     금요일 20:00 EST ~ 일요일 17:59 EST 로 제어 (일요일 18:00 EST 이후 월요일 데이마켓 정상 개방)
-  4) API 1분봉(공식 거래량 V · 시가 O 우선 보존) + 실시간 1.5초 틱 인메모리 1분봉(고가 H · 저가 L 극단값 보존)
-     하이브리드 무손실 벡터화 병합(_sync_api_candles_into_memory_store 경합 방어) ·
-     Wilder's RSI(14) O(1) 상수 시간 무부하 합성 탑재!
-  5) 🛡️ [Case 84 & Case 88] 정규장 마감 30분 전(is_late_regular_new_cycle_cutoff_window : 평일 15:30 ~ 16:00 EST) 판별기 탑재
-     - 기보유 지층(본·서브 1층 이상)의 10분 게이트 신저가/스텝업/저가해금 추매(DIP_1FL / SUB_DIP_1FL),
-       1층 미체결 잔량 보충(TOPUP_1FL / SUB_TOPUP_1FL), 상단층 보유 중 1층 공석 시 2층 단가 이하 눌림목(-1.00%, PULLBACK_RELOAD) 재장전은 100% 허용하되,
-       본·서브 0주 상태(사이클 종료 상태)에서 새 사이클 첫 1층(REENTRY_1FL / SUB_REENTRY_1FL)으로 고점 진입하는 것과
-       상단층 보유 중 1층 공석 상태에서 +1.00% 상승돌파(BREAKOUT_RELOAD)로 추격 진입하는 것을 동시 원천 차단!
-- Case 36, Case 64 & Case 88: 04:07 ~ 16:00 EST 구간 10분 고정 매수 게이트(LOCKED_BUY_INTERVAL_MIN = 10) 버킷 산출 및
-  본 그리드·서브 그리드 각각의 동일 버킷 내 중복 평가 원천 차단(evaluate_buy_gate_bucket_status)
-- 벡터화 강제: Pandas DataFrame / NumPy 배열 연산 시 for 루프를 100% 배제하고 벡터화 수식으로만
-  프리장(04:00 ~ 09:29 EST) / 정규장(09:30 ~ 16:00 EST) 누적 VWAP, 고/저가 진폭, 5일 이동평균(5MA) 진폭 기반
-  예상 변동 밴드, 실시간 하이킨 아시(Heikin-Ashi) 양/음봉 배지 및 Wilder's RSI(14)를 고속 산출한다.
+04:07 ~ 15:29 EST 1층 공석 +1.0% 돌파 시 RSI(14) <= 50.0 필터 결합 · 2층 단가 이하 -1.0% 눌림목 재장전 및 10분 게이트 추매/잔량보충 100% 허용 · Case 84, Case 88, Case 92) &
+익절 매도 24시간 전 세션(프리마켓 + 정규장 + 애프터마켓 + 데이마켓 · 방안 C 오버나이트 통합이평 사수) 확장 오버나이트 지층관리 스나이퍼 +
+🗡️ [모의 ⇄ 실전 Dual-Ready] 암살자(Assassin) 정찰병 4대 지표(① RSI14 · ② 프리장/정규장 VWAP · ③ 전날 정규장 종가 · ④ 당일 04:07 프리장 시가) 및
+나스닥(QQQ) 방향성 인지 3단계 안전망(1분/3분/10분 변화율 · 순수 하락 진폭) 100% 벡터화 지표 엔진 코어 모듈 (Step 03 / 13)
 """
 
 from __future__ import annotations
@@ -61,8 +41,27 @@ NEW_CYCLE_BUY_CUTOFF_HM: int = safe_int(_API_NEW_CYCLE_BUY_CUTOFF_HM, 1530)
 
 # 브로커 1분봉 차트 API 지연/결측 시에도 실시간 1.5초 현재가 틱으로 1분봉을 자체 축적하는 인메모리 링버퍼
 _LIVE_1M_BAR_LOCK = threading.RLock()
-_LIVE_1M_BAR_STORE: Dict[str, List[Dict[str, Any]]] = {TARGET_SYMBOL: []}
+_LIVE_1M_BAR_STORE: Dict[str, List[Dict[str, Any]]] = {
+    TARGET_SYMBOL: [],
+    "QQQ": [],
+}
 _MAX_MEMORY_1M_BARS: int = 360
+
+
+class _BuyGateBucketResultTuple(tuple):
+    """
+    기존 스나이퍼 코어의 4-튜플 언패킹:
+      is_gate_open, cur_bucket_id, today_str, info = evaluate_buy_gate_bucket_status(...)
+    과 암살자(assassin_plugin.py)의 딕셔너리 스타일 조회:
+      b_stat = evaluate_buy_gate_bucket_status(...)
+      cur_b10 = b_stat.get("bucket_10m", -1)
+    를 동시에 100% 지원하는 하이브리드 튜플 클래스.
+    """
+
+    def get(self, key: str, default: Any = None) -> Any:
+        if len(self) >= 4 and isinstance(self[3], dict):
+            return self[3].get(key, default)
+        return default
 
 
 # ---------------------------------------------------------------------------
@@ -75,7 +74,7 @@ def _record_live_tick_to_memory_bar(
 ) -> Tuple[str, int]:
     """
     실시간 1.5초 현재가 틱 기반 인메모리 1분봉 자체 합성기:
-    매 1.5초 루프 또는 /avwap 조회 시 유입되는 실시간 현재가(live_price)를
+    매 1.5초 루프 또는 /avwap · /assassin 조회 시 유입되는 실시간 현재가(live_price)를
     미국 동부 시간(EST_TZ) 분 단위 버킷(YYYY-MM-DDTHH:MM:00±HH:MM)으로 축적한다.
     반환값: (현재 분 키 문자열 cur_min_key, 인메모리 누적 분봉 개수)
     """
@@ -277,11 +276,6 @@ def is_active_buy_window(
 ) -> bool:
     """
     # [🎯 2 & Case 01, Case 79, Case 88 : 매수 전용 시간창 (평일 04:07 ~ 16:00 EST 엄격 제한)]:
-    - 본 그리드 및 서브 그리드의 모든 매수(0주 첫 진입 REENTRY_1FL / SUB_REENTRY_1FL ·
-      1층 미체결 잔량 TOPUP_1FL / SUB_TOPUP_1FL · 1층 공석 60초 주기 재장전 ·
-      10분 와이드/스텝업/저가해금 추매 DIP_1FL / SUB_DIP_1FL)는
-      오직 평일(월~금) 프리장 개시(04:07 EST)부터 정규장 마감(16:00 EST)까지만 허용한다.
-    - 애프터마켓(16:01 ~ 19:59 EST) 및 데이마켓(20:00 ~ 03:59 EST, 일요일 저녁 포함)에서는 매수를 100% 차단(False)한다.
     """
     if now_est is not None:
         dt = now_est.astimezone(EST_TZ)
@@ -306,12 +300,6 @@ def is_late_regular_new_cycle_cutoff_window(
 ) -> bool:
     """
     # [Case 84 & Case 88 : 정규장 마감 30분 전(평일 15:30:00 ~ 16:00:59 EST) 본·서브 0주 새 사이클 첫 1층 진입 및 상단층 보유 중 1층 공석 +1.0% 돌파 추격 동시 차단 판별기]:
-    - 평일(월~금) 정규장 마감 30분 전 구간(1530 <= hm <= 1600)일 때 True 를 반환한다.
-    - 이 구간에서는 기보유 지층(본·서브 1층 이상 적재)의 10분 게이트 신저가/스텝업/저가해금 추매(DIP_1FL / SUB_DIP_1FL),
-      1층 미체결 잔량 보충(TOPUP_1FL / SUB_TOPUP_1FL), 그리고 상단층 보유 중 1층 공석 시 2층 단가 이하
-      -1.00% 눌림목 재장전(PULLBACK_RELOAD)은 100% 정상 허용하되,
-      본 그리드 또는 서브 그리드 0주 상태(사이클 종료 상태)에서 새 사이클 첫 1층(REENTRY_1FL / SUB_REENTRY_1FL)으로 고점 진입하는 것과
-      상단층 보유 중 1층 공석 상태에서 +1.00% 상승돌파(BREAKOUT_RELOAD)로 추격 진입하는 것을 동시 원천 차단한다!
     """
     dt = now_est.astimezone(EST_TZ) if now_est else datetime.now(EST_TZ)
     if is_weekend_nyse_closed(dt) or dt.weekday() >= 5:
@@ -329,9 +317,6 @@ def is_active_sell_window(
 ) -> bool:
     """
     # [🎯 2 & Case 79, Case 88 : 익절 매도 전용 확장 시간창 (프리마켓 + 정규장 + 애프터마켓 + 데이마켓 전 구간 개방)]:
-    - 오버나이트를 하면서도 목표 익절가(본·서브 1층 +1.50% / 본 2~7층·서브 2~3층 개별 및 통합이동평균 +1.00%)에 도달하면
-      애프터마켓(16:00 ~ 19:59 EST)과 데이마켓(20:00 ~ 03:59 EST)에서도 즉시 지정가 익절 매도가 나가도록 개방한다.
-    - 오직 04:00 ~ 04:06 EST 프리장 오프닝 안정화 구간(7분)과 주말 휴장(금 20:00 ~ 일 17:59 EST)에만 매도 모니터를 멈춘다.
     """
     if now_est is not None:
         dt = now_est.astimezone(EST_TZ)
@@ -348,8 +333,6 @@ def is_extended_sell_only_window(
 ) -> bool:
     """
     # [Case 79 : 장외 익절 매도 전용 구간(애프터마켓 · 데이마켓) 여부 판별기]:
-    현재 시각이 익절 매도는 열려 있으나(is_active_sell_window == True)
-    신규/추가 매수는 잠겨 있는(is_active_buy_window == False) 애프터마켓 또는 데이마켓 구간인지 판별한다.
     """
     return bool(
         is_active_sell_window(hm, now_est=now_est)
@@ -360,7 +343,7 @@ def is_extended_sell_only_window(
 def get_market_session_label(now_est: Optional[datetime] = None) -> str:
     """
     # [Case 79, Case 83, Case 84 & Case 88]:
-    현재 EST 시각에 따른 세션 상태 라벨(프리장 · 정규장 · 정규장 마감30분전 0주/돌파차단 · 애프터장 · 데이장 익절감시 및 매수잠금 상태 명시)을 반환한다.
+    현재 EST 시각에 따른 세션 상태 라벨을 반환한다.
     """
     dt = now_est.astimezone(EST_TZ) if now_est else datetime.now(EST_TZ)
     if is_weekend_nyse_closed(dt):
@@ -387,17 +370,12 @@ def evaluate_buy_gate_bucket_status(
     buy_interval_min: int = LOCKED_BUY_INTERVAL_MIN,
     last_evaluated_bucket_id: int = -1,
     last_evaluated_date: str = "",
-) -> Tuple[bool, int, str, Dict[str, Any]]:
+) -> _BuyGateBucketResultTuple:
     """
     🚨 Case 01, Case 36, Case 64, Case 79, Case 84 & Case 88:
     04:07 EST 기점 10분 고정 매수 게이트(04:07, 04:17, 04:27, ..., 15:57 및 16:00 마감봉)의
     현재 버킷 ID(cur_bucket_id)와 게이트 오픈 여부(is_gate_open), 차기 검문 시각(next_gate_hm_str)을 산출한다.
-    - 본 그리드(last_evaluated_buy_bucket_id)와 서브 그리드(sub_last_evaluated_buy_bucket_id) 각각에 대해
-      독립적으로 게이트 오픈 여부를 판정할 수 있다.
-    - 애프터마켓(16:01 ~ 19:59 EST) 및 데이마켓(20:00 ~ 03:59 EST)에서는 is_active_buy_window == False 이므로
-      언제나 is_gate_open = False 를 반환하여 장외 매수를 100% 원천 차단한다.
-    - 동일 거래일(today_str) 내 동일 버킷(cur_bucket_id <= last_evaluated_bucket_id)에서는
-      is_gate_open = False 를 반환하여 중복 매수를 100% 원천 차단한다.
+    - 반환 객체(_BuyGateBucketResultTuple)는 기존 4-튜플 언패킹과 .get("bucket_10m") 조회를 동시에 지원한다.
     """
     dt = now_est.astimezone(EST_TZ) if now_est else datetime.now(EST_TZ)
     today_str = dt.strftime("%Y-%m-%d")
@@ -407,20 +385,24 @@ def evaluate_buy_gate_bucket_status(
     interval = LOCKED_BUY_INTERVAL_MIN  # 10분 하드 고정 (Case 64)
 
     if not is_active_buy_window(hm, now_est=dt) or is_weekend_nyse_closed(dt):
-        return (
-            False,
-            -1,
-            today_str,
-            {
-                "is_active_window": False,
-                "is_sell_window_open": is_active_sell_window(hm, now_est=dt),
-                "is_new_cycle_cutoff": False,
-                "mins_from_0407": -1,
-                "bucket_10m": -1,
-                "is_exact_boundary_min": False,
-                "next_gate_hm_str": "04:07 EST (매수잠금·익절감시)",
-                "session_label": get_market_session_label(dt),
-            },
+        return _BuyGateBucketResultTuple(
+            (
+                False,
+                -1,
+                today_str,
+                {
+                    "is_active_window": False,
+                    "is_sell_window_open": is_active_sell_window(
+                        hm, now_est=dt
+                    ),
+                    "is_new_cycle_cutoff": False,
+                    "mins_from_0407": -1,
+                    "bucket_10m": -1,
+                    "is_exact_boundary_min": False,
+                    "next_gate_hm_str": "04:07 EST (매수잠금·익절감시)",
+                    "session_label": get_market_session_label(dt),
+                },
+            )
         )
 
     mins_from_0407 = max(0, cur_min_of_day - GATE_START_MIN_OF_DAY)
@@ -461,12 +443,54 @@ def evaluate_buy_gate_bucket_status(
         "next_gate_hm_str": next_gate_str,
         "session_label": get_market_session_label(dt),
     }
-    return is_gate_open, cur_bucket_id, today_str, info
+    return _BuyGateBucketResultTuple(
+        (is_gate_open, cur_bucket_id, today_str, info)
+    )
 
 
 # ---------------------------------------------------------------------------
-# [핵심 3] 100% 벡터화 시계열 지표 산출 엔진 (compute_soxl_quant_metrics_1m)
+# [핵심 3] 100% 벡터화 시계열 지표 산출 엔진 (compute_soxl_quant_metrics_1m & compute_1m_indicators_vectorized)
 # ---------------------------------------------------------------------------
+def compute_realtime_synthetic_rsi(
+    live_price: float,
+    prev_bar_close: float,
+    prev_avg_gain: float,
+    prev_avg_loss: float,
+    period: int = 14,
+) -> float:
+    """
+    # [Case 92 & 암살자 4대 지표]:
+    직전 완성봉 종가(prev_bar_close) 및 Wilder 평균 상승/하락폭(prev_avg_gain, prev_avg_loss)에
+    현재 실시간 틱 가격(live_price)을 O(1) 상수 시간에 합성하여 실시간 Wilder's RSI(14)를 반환한다.
+    """
+    lp = safe_float(live_price, 0.0)
+    p_close = safe_float(prev_bar_close, 0.0)
+    if lp <= 0.0 or p_close <= 0.0:
+        return 50.0
+
+    p_len = float(max(2, safe_int(period, 14)))
+    prev_g = max(0.0, safe_float(prev_avg_gain, 0.0))
+    prev_l = max(0.0, safe_float(prev_avg_loss, 0.0))
+
+    diff = lp - p_close
+    cur_g = max(0.0, diff)
+    cur_l = max(0.0, -diff)
+
+    if prev_g <= 1e-12 and prev_l <= 1e-12:
+        live_g = cur_g / p_len
+        live_l = cur_l / p_len
+    else:
+        live_g = (prev_g * (p_len - 1.0) + cur_g) / p_len
+        live_l = (prev_l * (p_len - 1.0) + cur_l) / p_len
+
+    if live_g <= 1e-12 and live_l <= 1e-12:
+        return 50.0
+    if live_l <= 1e-12:
+        return 100.0
+    rs = live_g / live_l
+    return round(100.0 - (100.0 / (1.0 + rs)), 2)
+
+
 def _compute_5ma_intraday_amp_pct_vectorized(
     daily_candles: Optional[List[Dict[str, Any]]],
     df_1m: Optional[pd.DataFrame] = None,
@@ -528,7 +552,7 @@ def _compute_vectorized_heikin_ashi_and_rsi(
     closes: np.ndarray,
 ) -> Dict[str, Any]:
     """
-    Wilder's RSI(14) 벡터화 연산 및 2봉 이상 즉시 기저값 생성:
+    Wilder's RSI(14), Heikin-Ashi(HA_Open, HA_Close), 및 단기 변화율(1분/3분/10분) 벡터화 연산기:
     100% 벡터화(np.diff + Wilder's EWM) 연산으로 n >= 2 이상이면 첫 봉 NaN 왜곡 없이
     직전 완성봉 종가(prev_bar_close)와 직전 완성봉까지의 평균 상승/하락폭(prev_avg_gain, prev_avg_loss)을 산출한다.
     """
@@ -536,9 +560,16 @@ def _compute_vectorized_heikin_ashi_and_rsi(
     if n == 0:
         return {
             "rsi_14": 50.0,
+            "rsi": 50.0,
             "rsi_ready": False,
             "candle_count": 0,
             "prev_bar_close": 0.0,
+            "close_3m_ago": 0.0,
+            "close_10m_ago": 0.0,
+            "vel_1m_pct": 0.0,
+            "vel_3m_pct": 0.0,
+            "vel_10m_pct": 0.0,
+            "vel_max_3m_10m_pct": 0.0,
             "prev_avg_gain": 0.0,
             "prev_avg_loss": 0.0,
             "ha_open": 0.0,
@@ -549,6 +580,7 @@ def _compute_vectorized_heikin_ashi_and_rsi(
             "cur_bar_high": 0.0,
             "cur_bar_low": 0.0,
             "ha_bull": True,
+            "is_ha_bull": True,
             "ha_badge": "🕯️HA양봉",
         }
 
@@ -571,9 +603,24 @@ def _compute_vectorized_heikin_ashi_and_rsi(
     prev_ha_close = float(ha_close_arr[-2]) if n >= 2 else cur_ha_close
     is_bull = bool(cur_ha_close >= cur_ha_open)
 
-    # Wilder's RSI(14) 벡터화 연산 (np.diff 기반으로 첫 원소 NaN 오염 원천 배제)
+    cur_c = float(closes[-1])
+    prev_bar_close = float(closes[-2]) if n >= 2 else cur_c
+    c_3m_ago = float(closes[-4]) if n >= 4 else float(closes[0])
+    c_10m_ago = float(closes[-11]) if n >= 11 else float(closes[0])
+
+    vel_1m_pct = (
+        ((cur_c - prev_bar_close) / prev_bar_close) * 100.0
+        if prev_bar_close > 0.0
+        else 0.0
+    )
+    vel_3m_pct = (
+        ((cur_c - c_3m_ago) / c_3m_ago) * 100.0 if c_3m_ago > 0.0 else 0.0
+    )
+    vel_10m_pct = (
+        ((cur_c - c_10m_ago) / c_10m_ago) * 100.0 if c_10m_ago > 0.0 else 0.0
+    )
+
     rsi_val = 50.0
-    prev_bar_close = float(closes[-2]) if n >= 2 else float(closes[-1])
     prev_avg_g = 0.0
     prev_avg_l = 0.0
 
@@ -610,11 +657,19 @@ def _compute_vectorized_heikin_ashi_and_rsi(
             rs = last_g / last_l
             rsi_val = 100.0 - (100.0 / (1.0 + rs))
 
+    clean_rsi = round(rsi_val, 2)
     return {
-        "rsi_14": round(rsi_val, 2),
+        "rsi_14": clean_rsi,
+        "rsi": clean_rsi,
         "rsi_ready": bool(n >= 14),
         "candle_count": int(n),
         "prev_bar_close": round(prev_bar_close, 4),
+        "close_3m_ago": round(c_3m_ago, 4),
+        "close_10m_ago": round(c_10m_ago, 4),
+        "vel_1m_pct": round(vel_1m_pct, 4),
+        "vel_3m_pct": round(vel_3m_pct, 4),
+        "vel_10m_pct": round(vel_10m_pct, 4),
+        "vel_max_3m_10m_pct": round(max(vel_3m_pct, vel_10m_pct), 4),
         "prev_avg_gain": round(prev_avg_g, 6),
         "prev_avg_loss": round(prev_avg_l, 6),
         "ha_open": round(cur_ha_open, 4),
@@ -625,6 +680,7 @@ def _compute_vectorized_heikin_ashi_and_rsi(
         "cur_bar_high": round(float(highs[-1]), 4),
         "cur_bar_low": round(float(lows[-1]), 4),
         "ha_bull": is_bull,
+        "is_ha_bull": is_bull,
         "ha_badge": "🕯️HA양봉" if is_bull else "🌑HA음봉",
     }
 
@@ -726,22 +782,110 @@ def _calc_session_vwap_and_bands(
     }
 
 
+def _extract_prev_reg_close_and_pre_open(
+    df_all: pd.DataFrame,
+    target_date: str,
+    daily_candles: Optional[List[Dict[str, Any]]] = None,
+    explicit_prev_close: float = 0.0,
+    fallback_price: float = 0.0,
+) -> Tuple[float, float]:
+    """
+    # NEW: 암살자(Assassin) 정찰병 필수 조건 3(전날 정규장 종가 prev_reg_close) & 조건 4(당일 04:07 프리장 시가 pre_open_price) 정밀 추출기
+    1) prev_reg_close:
+       - explicit_prev_close > 0.0 이면 우선 채택
+       - 1분봉(df_all) 내 target_date 이전 영업일의 정규장(09:30 ~ 16:00 EST) 마지막 봉 종가 추출
+       - 부재 시 일봉(daily_candles)에서 target_date 이전 마지막 확정 일봉의 closePrice 추출
+    2) pre_open_price:
+       - 당일(target_date) 04:07 ~ 09:29 EST 첫 1분봉의 시가(O) 추출 (부재 시 당일 첫 봉 시가)
+    """
+    prev_reg_c = safe_float(explicit_prev_close, 0.0)
+    pre_open_p = 0.0
+
+    if df_all is not None and not df_all.empty and "Date" in df_all.columns:
+        df_today = df_all[df_all["Date"] == target_date]
+        if not df_today.empty:
+            pre_sub = df_today[
+                (df_today["hm"] >= 407) & (df_today["hm"] <= 929)
+            ]
+            if not pre_sub.empty:
+                pre_open_p = float(pre_sub["O"].iloc[0])
+            else:
+                ge_407 = df_today[df_today["hm"] >= 407]
+                if not ge_407.empty:
+                    pre_open_p = float(ge_407["O"].iloc[0])
+                else:
+                    pre_open_p = float(df_today["O"].iloc[0])
+
+        if prev_reg_c <= 0.0:
+            df_prev = df_all[df_all["Date"] < target_date]
+            if not df_prev.empty:
+                prev_dates = sorted(df_prev["Date"].unique())
+                last_prev_d = str(prev_dates[-1])
+                df_last_d = df_prev[df_prev["Date"] == last_prev_d]
+                reg_prev = df_last_d[
+                    (df_last_d["hm"] >= 930) & (df_last_d["hm"] <= 1600)
+                ]
+                if not reg_prev.empty:
+                    prev_reg_c = float(reg_prev["C"].iloc[-1])
+                else:
+                    prev_reg_c = float(df_last_d["C"].iloc[-1])
+
+    if (
+        prev_reg_c <= 0.0
+        and isinstance(daily_candles, list)
+        and len(daily_candles) >= 1
+    ):
+        try:
+            sorted_d = sorted(
+                [c for c in daily_candles if isinstance(c, dict)],
+                key=lambda x: str(x.get("timestamp") or ""),
+            )
+            for dc in reversed(sorted_d):
+                ts_s = str(dc.get("timestamp") or "")[:10]
+                c_val = safe_float(
+                    dc.get("closePrice") or dc.get("close"), 0.0
+                )
+                if c_val > 0.0 and (not ts_s or ts_s < target_date):
+                    prev_reg_c = c_val
+                    break
+            if prev_reg_c <= 0.0 and len(sorted_d) >= 2:
+                prev_reg_c = safe_float(
+                    sorted_d[-2].get("closePrice")
+                    or sorted_d[-2].get("close"),
+                    0.0,
+                )
+        except Exception:
+            pass
+
+    fb = safe_float(fallback_price, 0.0)
+    if pre_open_p <= 0.0:
+        pre_open_p = fb if fb > 0.0 else prev_reg_c
+    if prev_reg_c <= 0.0:
+        prev_reg_c = pre_open_p if pre_open_p > 0.0 else fb
+
+    return round(prev_reg_c, 4), round(pre_open_p, 4)
+
+
 def compute_soxl_quant_metrics_1m(
     candles: List[Dict[str, Any]],
     live_price: float = 0.0,
     now_est: Optional[datetime] = None,
     daily_candles: Optional[List[Dict[str, Any]]] = None,
+    prev_day_close: float = 0.0,
+    symbol: str = TARGET_SYMBOL,
 ) -> Dict[str, Any]:
     """
-    🎯 2 & Case 01, 15, 79, 84, 88:
+    🎯 2 & Case 01, 15, 79, 84, 88, 92 & 암살자 4대 지표 통합 연산기:
     토스 Open API 1분봉(candles), 인메모리 실시간 합성 1분봉(_LIVE_1M_BAR_STORE) 및 일봉(daily_candles)을 입력받아:
-    1) 당일 프리장(04:00 ~ 09:29 EST) VWAP · 고/저가 진폭 · 예상 변동 밴드
-    2) 당일 정규장(09:30 ~ 16:00 EST) VWAP · 고/저가 진폭 · 예상 변동 밴드
-    3) 최근 5영업일 평균 진폭(5MA) 및 실시간 하이킨 아시 추세 배지(🕯️HA양봉 / 🌑HA음봉) · Wilder's RSI(14)
-    4) 04:07 ~ 16:00 EST 10분 고정 매수 게이트 버킷 · 장마감 30분전 0주 신규 및 1층 공석 돌파 컷오프(15:30 ~ 16:00 EST) 정보
+    1) 당일 프리장(04:07 ~ 09:29 EST) 누적 VWAP · 고/저가 진폭 · 예상 변동 밴드
+    2) 당일 정규장(09:30 ~ 16:00 EST) 누적 VWAP · 고/저가 진폭 · 예상 변동 밴드
+    3) 최근 5영업일 평균 진폭(5MA) · 실시간 하이킨 아시 추세 배지(🕯️HA양봉 / 🌑HA음봉) · Wilder's RSI(14)
+    4) 암살자 4대 필수 조건(① rsi_14/rsi · ② premarket_vwap/vwap · ③ prev_reg_close/prev_day_close · ④ pre_open_price) 및
+       단기 변화율(vel_1m_pct, vel_3m_pct, vel_10m_pct) · 시가 대비 순수 하락 진폭(bear_drop_amp_pct)
+    5) 04:07 ~ 16:00 EST 10분 고정 매수 게이트 버킷 · 장마감 30분전 0주 신규 및 1층 공석 돌파 컷오프(15:30 ~ 16:00 EST) 정보
     를 100% 벡터화 연산으로 산출하여 반환한다.
-    (Case 79: 데이마켓/애프터마켓에서 브로커가 시세·캔들을 제공하지 않는 경우에도 경고 로그나 알림 없이 조용히 묵음 반환)
     """
+    sym = str(symbol or TARGET_SYMBOL).upper().strip()
     dt_now = now_est.astimezone(EST_TZ) if now_est else datetime.now(EST_TZ)
     hm_now = dt_now.hour * 100 + dt_now.minute
     _, cur_bucket_id, today_str, gate_info = evaluate_buy_gate_bucket_status(
@@ -749,18 +893,28 @@ def compute_soxl_quant_metrics_1m(
     )
     lp = safe_float(live_price, 0.0)
     cur_min_key, _ = _record_live_tick_to_memory_bar(
-        TARGET_SYMBOL, lp, now_est=dt_now
+        sym, lp, now_est=dt_now
     )
+    init_prev_c = safe_float(prev_day_close, 0.0)
 
     default_out: Dict[str, Any] = {
-        "symbol": TARGET_SYMBOL,
+        "symbol": sym,
         "live_price": round(lp, 4),
+        "current_price": round(lp, 4),
         "ma5_amp_pct": 6.50,
         "rsi_14": 50.0,
+        "rsi": 50.0,
         "rsi_ready": False,
         "candle_count": 0,
         "cur_bar_minute_key": cur_min_key,
         "prev_bar_close": 0.0,
+        "close_3m_ago": 0.0,
+        "close_10m_ago": 0.0,
+        "vel_1m_pct": 0.0,
+        "vel_3m_pct": 0.0,
+        "vel_10m_pct": 0.0,
+        "vel_max_3m_10m_pct": 0.0,
+        "bear_drop_amp_pct": 0.0,
         "prev_avg_gain": 0.0,
         "prev_avg_loss": 0.0,
         "ha_open": round(lp, 4),
@@ -771,22 +925,27 @@ def compute_soxl_quant_metrics_1m(
         "cur_bar_high": round(lp, 4),
         "cur_bar_low": round(lp, 4),
         "ha_bull": True,
+        "is_ha_bull": True,
         "ha_badge": "🕯️HA양봉",
-        "premarket_vwap": 0.0,
-        "premarket_high": 0.0,
-        "premarket_low": 0.0,
+        "prev_reg_close": round(init_prev_c if init_prev_c > 0.0 else lp, 4),
+        "prev_day_close": round(init_prev_c if init_prev_c > 0.0 else lp, 4),
+        "pre_open_price": round(lp, 4),
+        "premarket_vwap": round(lp, 4),
+        "premarket_high": round(lp, 4),
+        "premarket_low": round(lp, 4),
         "premarket_amp_pct": 0.0,
-        "premarket_est_low": 0.0,
-        "premarket_est_high": 0.0,
-        "regular_vwap": 0.0,
-        "regular_high": 0.0,
-        "regular_low": 0.0,
+        "premarket_est_low": round(lp, 2),
+        "premarket_est_high": round(lp, 2),
+        "regular_vwap": round(lp, 4),
+        "regular_high": round(lp, 4),
+        "regular_low": round(lp, 4),
         "regular_amp_pct": 0.0,
-        "regular_est_low": 0.0,
-        "regular_est_high": 0.0,
-        "day_vwap": 0.0,
-        "day_high": 0.0,
-        "day_low": 0.0,
+        "regular_est_low": round(lp, 2),
+        "regular_est_high": round(lp, 2),
+        "day_vwap": round(lp, 4),
+        "vwap": round(lp, 4),
+        "day_high": round(lp, 4),
+        "day_low": round(lp, 4),
         "day_amp_pct": 0.0,
         "bucket_10m": cur_bucket_id,
         "is_new_cycle_cutoff": is_late_regular_new_cycle_cutoff_window(
@@ -797,7 +956,7 @@ def compute_soxl_quant_metrics_1m(
         "updated_est": dt_now.strftime("%m-%d %H:%M:%S EST"),
     }
 
-    merged_candles = _merge_api_and_memory_candles(candles, TARGET_SYMBOL)
+    merged_candles = _merge_api_and_memory_candles(candles, sym)
     if not merged_candles:
         default_out["ma5_amp_pct"] = _compute_5ma_intraday_amp_pct_vectorized(
             daily_candles, None
@@ -860,7 +1019,6 @@ def compute_soxl_quant_metrics_1m(
         if df.empty:
             return default_out
 
-        # 동일 분(dt_min) 내 인메모리 틱 고/저가 극단값 및 거래소 공식 거래량(V)·시가(O) 벡터화 병합
         if df.duplicated(subset=["dt_min"]).any():
             grp_min = df.groupby("dt_min", sort=False)
             df["H"] = grp_min["H"].transform("max")
@@ -869,9 +1027,7 @@ def compute_soxl_quant_metrics_1m(
             df.drop_duplicates(subset=["dt_min"], keep="last", inplace=True)
 
         df.sort_values("dt_min", ascending=True, inplace=True)
-
-        # API + 메모리 병합 정제본을 인메모리 1분봉 저장소에 다시 동기화하여 히스토리 영구 보존
-        _sync_api_candles_into_memory_store(TARGET_SYMBOL, df)
+        _sync_api_candles_into_memory_store(sym, df)
 
         df["Date"] = df["dt_est"].dt.strftime("%Y-%m-%d")
         df["hm"] = df["dt_est"].dt.hour * 100 + df["dt_est"].dt.minute
@@ -906,7 +1062,23 @@ def compute_soxl_quant_metrics_1m(
         )
         df_today = df[df["Date"] == target_date]
 
-        df_pre = df_today[(df_today["hm"] >= 400) & (df_today["hm"] <= 929)]
+        prev_reg_c, pre_open_p = _extract_prev_reg_close_and_pre_open(
+            df_all=df,
+            target_date=target_date,
+            daily_candles=daily_candles,
+            explicit_prev_close=init_prev_c,
+            fallback_price=lp,
+        )
+
+        # 백테스트(build_soxl_scout_cache.py)와 동일하게 04:07 EST 이후 프리장 누적 VWAP 산출 (04:00~04:06 폴백 포함)
+        df_pre_0407 = df_today[
+            (df_today["hm"] >= 407) & (df_today["hm"] <= 929)
+        ]
+        df_pre = (
+            df_pre_0407
+            if not df_pre_0407.empty
+            else df_today[(df_today["hm"] >= 400) & (df_today["hm"] <= 929)]
+        )
         df_reg = df_today[(df_today["hm"] >= 930) & (df_today["hm"] <= 1600)]
 
         pre_stats = _calc_session_vwap_and_bands(df_pre, ma5_amp)
@@ -922,53 +1094,113 @@ def compute_soxl_quant_metrics_1m(
                 else all_stats["vwap"]
             )
         )
+        eff_pre_vwap = (
+            pre_stats["vwap"] if pre_stats["vwap"] > 0.0 else active_vwap
+        )
+        bear_drop_amp = (
+            max(0.0, ((pre_open_p - lp) / pre_open_p) * 100.0)
+            if pre_open_p > 0.0
+            else 0.0
+        )
 
         out = dict(default_out)
         out.update(ha_rsi_info)
         out.update(
             {
                 "live_price": round(lp, 4),
+                "current_price": round(lp, 4),
                 "ma5_amp_pct": ma5_amp,
-                "premarket_vwap": pre_stats["vwap"],
+                "prev_reg_close": prev_reg_c,
+                "prev_day_close": prev_reg_c,
+                "pre_open_price": pre_open_p,
+                "bear_drop_amp_pct": round(bear_drop_amp, 4),
+                "premarket_vwap": eff_pre_vwap,
                 "premarket_high": pre_stats["high"],
                 "premarket_low": pre_stats["low"],
                 "premarket_amp_pct": pre_stats["amp_pct"],
                 "premarket_est_low": pre_stats["est_low"],
                 "premarket_est_high": pre_stats["est_high"],
-                "regular_vwap": reg_stats["vwap"],
+                "regular_vwap": (
+                    reg_stats["vwap"]
+                    if reg_stats["vwap"] > 0.0
+                    else active_vwap
+                ),
                 "regular_high": reg_stats["high"],
                 "regular_low": reg_stats["low"],
                 "regular_amp_pct": reg_stats["amp_pct"],
                 "regular_est_low": reg_stats["est_low"],
                 "regular_est_high": reg_stats["est_high"],
                 "day_vwap": active_vwap,
+                "vwap": eff_pre_vwap if hm_now <= 929 else active_vwap,
                 "day_high": all_stats["high"],
                 "day_low": all_stats["low"],
                 "day_amp_pct": all_stats["amp_pct"],
             }
         )
-        return refresh_metrics_with_live_tick(out, lp, now_est=dt_now)
+        return refresh_metrics_with_live_tick(
+            out, lp, now_est=dt_now, symbol=sym
+        )
     except Exception as exc:
-        # Case 79: 데이마켓 등 장외 시간대 캔들 결측 시에도 소음 없이 조용히 디버그 로깅
         logger.debug("compute_soxl_quant_metrics_1m 연산 폴백(묵음): %s", exc)
-        return refresh_metrics_with_live_tick(default_out, lp, now_est=dt_now)
+        return refresh_metrics_with_live_tick(
+            default_out, lp, now_est=dt_now, symbol=sym
+        )
+
+
+def compute_1m_indicators_vectorized(
+    candles: List[Dict[str, Any]],
+    prev_day_close: float = 0.0,
+    live_price: float = 0.0,
+    now_est: Optional[datetime] = None,
+    daily_candles: Optional[List[Dict[str, Any]]] = None,
+    symbol: str = TARGET_SYMBOL,
+) -> Dict[str, Any]:
+    """
+    # NEW: assassin_plugin.py 및 sniper_plugin_core.py 온디맨드 1분봉 벡터 지표 산출기 호환 엔트리
+    """
+    return compute_soxl_quant_metrics_1m(
+        candles=candles,
+        live_price=live_price,
+        now_est=now_est,
+        daily_candles=daily_candles,
+        prev_day_close=prev_day_close,
+        symbol=symbol,
+    )
+
+
+def compute_qqq_macro_metrics_1m(
+    candles: List[Dict[str, Any]],
+    live_price: float = 0.0,
+    now_est: Optional[datetime] = None,
+) -> Dict[str, Any]:
+    """
+    # NEW: 나스닥 100 추종 QQQ 1분봉 기반 방향성 인지 3단계 안전망 지표 산출기
+    """
+    return compute_soxl_quant_metrics_1m(
+        candles=candles,
+        live_price=live_price,
+        now_est=now_est,
+        daily_candles=None,
+        prev_day_close=0.0,
+        symbol="QQQ",
+    )
 
 
 # ---------------------------------------------------------------------------
-# [핵심 4] 실시간 틱(live_price) O(1) 무부하 합성기 (refresh_metrics_with_live_tick — Case 84 & Case 88)
+# [핵심 4] 실시간 틱(live_price) O(1) 무부하 합성기 (refresh_metrics_with_live_tick — Case 84, 88, 92 & 암살자 연동)
 # ---------------------------------------------------------------------------
 def refresh_metrics_with_live_tick(
     base_metrics: Optional[Dict[str, Any]],
     live_price: float,
     now_est: Optional[datetime] = None,
+    symbol: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
-    # [Case 84 & Case 88 : 실시간 틱 O(1) 합성 · dt_now.minute 변수명 정합성 락온 · 장마감 30분전 0주/돌파 컷오프 상태 동기화]:
+    # MODIFIED [Case 84, Case 88, Case 92 & 암살자 4대 지표 실시간 O(1) 틱 합성]:
     1) 실시간 현재가(live_price)를 인메모리 1분봉 저장소(_LIVE_1M_BAR_STORE)에 즉시 반영한다.
-    2) 만약 새로운 분(minute)으로 넘어갔거나 기존 base_metrics 의 prev_bar_close 가 0.0 인 경우,
-       인메모리 1분봉 저장소에서 직전 완성봉 기저값(prev_bar_close, prev_avg_gain, prev_avg_loss)을 즉시 복원한다.
-    3) prev_bar_close > 0.0 이면 매 1.5초 실시간 현재가 변동을 Wilder's RSI(14) 공식에 즉시 합성하여
-       레이더에 살아 움직이는 실시간 RSI(14)를 제공한다!
+    2) 새로운 분(minute) 진입 시 직전 완성봉 기저값(prev_bar_close, prev_avg_gain, prev_avg_loss)을 복원한다.
+    3) prev_bar_close > 0.0 이면 매 1.5초(또는 0.4초) 실시간 틱 변동을 Wilder's RSI(14)와
+       단기 변화율(vel_1m_pct, vel_3m_pct, vel_10m_pct), 하이킨 아시(ha_bull / is_ha_bull)에 즉시 합성한다!
     """
     dt_now = now_est.astimezone(EST_TZ) if now_est else datetime.now(EST_TZ)
     dt = dt_now
@@ -978,23 +1210,30 @@ def refresh_metrics_with_live_tick(
     )
 
     met = dict(base_metrics) if isinstance(base_metrics, dict) else {}
+    sym = str(
+        symbol or met.get("symbol") or TARGET_SYMBOL
+    ).upper().strip()
+    met["symbol"] = sym
+
     lp = safe_float(live_price, 0.0)
     if lp <= 0.0:
-        lp = safe_float(met.get("live_price"), 0.0)
+        lp = safe_float(
+            met.get("live_price"), safe_float(met.get("current_price"), 0.0)
+        )
     else:
         met["live_price"] = round(lp, 4)
+        met["current_price"] = round(lp, 4)
 
     cur_min_key, mem_bar_cnt = _record_live_tick_to_memory_bar(
-        TARGET_SYMBOL, lp, now_est=dt_now
+        sym, lp, now_est=dt_now
     )
     prev_min_key = str(met.get("cur_bar_minute_key") or "")
 
-    # 새로운 1분봉 경계 진입 또는 기저값(prev_bar_close) 미초기화 시 인메모리 1분봉으로 기저값 즉시 갱신
     if mem_bar_cnt >= 2 and (
         safe_float(met.get("prev_bar_close"), 0.0) <= 0.0
         or (prev_min_key and prev_min_key != cur_min_key)
     ):
-        mem_ha_rsi = _recompute_ha_rsi_from_memory_store(TARGET_SYMBOL)
+        mem_ha_rsi = _recompute_ha_rsi_from_memory_store(sym)
         if isinstance(mem_ha_rsi, dict):
             met.update(mem_ha_rsi)
 
@@ -1003,7 +1242,6 @@ def refresh_metrics_with_live_tick(
     ma5_amp = max(1.0, safe_float(met.get("ma5_amp_pct"), 6.50))
     amp_ratio = ma5_amp / 100.0
 
-    # 1) 실시간 틱 기반 Heikin-Ashi 양/음봉 및 Wilder's RSI(14) O(1) 상수 시간 합성
     if lp > 0.0:
         prev_ho = safe_float(met.get("prev_ha_open"), lp)
         prev_hc = safe_float(met.get("prev_ha_close"), lp)
@@ -1022,6 +1260,7 @@ def refresh_metrics_with_live_tick(
         met["ha_open"] = round(live_ha_open, 4)
         met["ha_close"] = round(live_ha_close, 4)
         met["ha_bull"] = is_bull
+        met["is_ha_bull"] = is_bull
         met["ha_badge"] = "🕯️HA양봉" if is_bull else "🌑HA음봉"
 
         prev_b_close = safe_float(met.get("prev_bar_close"), 0.0)
@@ -1029,29 +1268,51 @@ def refresh_metrics_with_live_tick(
         prev_avg_l = max(0.0, safe_float(met.get("prev_avg_loss"), 0.0))
 
         if prev_b_close > 0.0:
-            diff = lp - prev_b_close
-            cur_g = max(0.0, diff)
-            cur_l_val = max(0.0, -diff)
-            if prev_avg_g <= 1e-12 and prev_avg_l <= 1e-12:
-                live_avg_g = cur_g / 14.0
-                live_avg_l = cur_l_val / 14.0
-            else:
-                live_avg_g = (prev_avg_g * 13.0 + cur_g) / 14.0
-                live_avg_l = (prev_avg_l * 13.0 + cur_l_val) / 14.0
+            live_rsi = compute_realtime_synthetic_rsi(
+                live_price=lp,
+                prev_bar_close=prev_b_close,
+                prev_avg_gain=prev_avg_g,
+                prev_avg_loss=prev_avg_l,
+                period=14,
+            )
+            met["rsi_14"] = live_rsi
+            met["rsi"] = live_rsi
+            met["vel_1m_pct"] = round(
+                ((lp - prev_b_close) / prev_b_close) * 100.0, 4
+            )
 
-            if live_avg_g <= 1e-12 and live_avg_l <= 1e-12:
-                live_rsi = 50.0
-            elif live_avg_l <= 1e-12:
-                live_rsi = 100.0
-            else:
-                rs = live_avg_g / live_avg_l
-                live_rsi = 100.0 - (100.0 / (1.0 + rs))
-            met["rsi_14"] = round(live_rsi, 2)
+        c_3m = safe_float(met.get("close_3m_ago"), prev_b_close)
+        c_10m = safe_float(met.get("close_10m_ago"), prev_b_close)
+        if c_3m > 0.0:
+            met["vel_3m_pct"] = round(((lp - c_3m) / c_3m) * 100.0, 4)
+        if c_10m > 0.0:
+            met["vel_10m_pct"] = round(((lp - c_10m) / c_10m) * 100.0, 4)
+        met["vel_max_3m_10m_pct"] = round(
+            max(
+                safe_float(met.get("vel_3m_pct"), 0.0),
+                safe_float(met.get("vel_10m_pct"), 0.0),
+            ),
+            4,
+        )
+
+        pre_open_p = safe_float(met.get("pre_open_price"), lp)
+        if pre_open_p <= 0.0:
+            pre_open_p = lp
+            met["pre_open_price"] = round(lp, 4)
+        met["bear_drop_amp_pct"] = round(
+            max(0.0, ((pre_open_p - lp) / pre_open_p) * 100.0), 4
+        )
+
+        if safe_float(met.get("prev_reg_close"), 0.0) <= 0.0:
+            met["prev_reg_close"] = round(
+                safe_float(met.get("prev_day_close"), pre_open_p), 4
+            )
+        if safe_float(met.get("prev_day_close"), 0.0) <= 0.0:
+            met["prev_day_close"] = met["prev_reg_close"]
 
         if not bool(met.get("rsi_ready", False)) and mem_bar_cnt >= 14:
             met["rsi_ready"] = True
 
-    # 2) 현재 세션(프리장 04:00 ~ 09:29 / 정규장 09:30 ~ 16:00) 고/저가 및 예상 밴드 실시간 갱신
     if lp > 0.0 and 400 <= hm <= 929:
         ph = max(safe_float(met.get("premarket_high"), 0.0), lp)
         pl_prev = safe_float(met.get("premarket_low"), 0.0)
@@ -1064,6 +1325,7 @@ def refresh_metrics_with_live_tick(
         met["premarket_est_low"] = round(min(pl, ph / (1.0 + amp_ratio)), 2)
         if safe_float(met.get("premarket_vwap"), 0.0) <= 0.0:
             met["premarket_vwap"] = round(lp, 4)
+        met["vwap"] = met["premarket_vwap"]
     elif lp > 0.0 and 930 <= hm <= 1600:
         rh = max(safe_float(met.get("regular_high"), 0.0), lp)
         rl_prev = safe_float(met.get("regular_low"), 0.0)
@@ -1076,6 +1338,13 @@ def refresh_metrics_with_live_tick(
         met["regular_est_low"] = round(min(rl, rh / (1.0 + amp_ratio)), 2)
         if safe_float(met.get("regular_vwap"), 0.0) <= 0.0:
             met["regular_vwap"] = round(lp, 4)
+        met["vwap"] = met["regular_vwap"]
+
+    if safe_float(met.get("vwap"), 0.0) <= 0.0 and lp > 0.0:
+        met["vwap"] = round(
+            safe_float(met.get("day_vwap"), lp),
+            4,
+        )
 
     met["bucket_10m"] = cur_bucket_id
     met["is_new_cycle_cutoff"] = is_late_regular_new_cycle_cutoff_window(
