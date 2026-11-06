@@ -1,11 +1,12 @@
 # -*- coding: utf-8 -*-
 """
-# MODIFIED: sniper_plugin_core.py (황금시간 07:00~07:50 RSI<=19 올인 골든포켓·GOLDEN_L1 정산/가드/주석 전면 영구 소각 & Case 91 무제한 예비시드 수혈 횟수 카운트 및 복리/단리 모드 연동)
+# MODIFIED: sniper_plugin_core.py (황금시간 07:00~07:50 RSI<=19 올인 골든포켓·GOLDEN_L1 정산/가드/주석 전면 영구 소각 & Case 91 무제한 예비시드 수혈 횟수 카운트 및 복리/단리 모드 연동 & Case 92 실시간 1분봉 Wilder RSI(14) 추출기 _get_live_soxl_rsi_14 탑재)
 인피니트 스노우볼 (Infinite Snowball) v3.0 — 스나이퍼 매수 코어 Part 1 / 2 (Step 06 / 13)
 역할:
 1) 스나이퍼 매수 전역 상수 락온 (DEFAULT_GRID_MERGE_MODE = "L2_L7_MERGE_SORT" [Case 87] ·
    SUB_MERGE_MODE_L1_L3 = "SUB_L1_L3_MERGE" / SUB_MAX_TIERS_3 = 3 / SUB_MAX_TOTAL_LOTS_4 = 4 [Case 88] ·
    PORTION_MODE_COMPOUND / PORTION_MODE_SIMPLE [Case 91] ·
+   REENTRY_BREAKOUT_MAX_RSI_50 = 50.0 [Case 92] ·
    STEP2X_15PCT_C20 · BUY_ORDER_MAX_WAIT_SEC = 60.0 · AUTO_FILL_GRACE_SHIELD_SEC = 15.0 ·
    REENTRY_MONITOR_TIME_SHIELD_SEC = 60.0 · RESERVE_DEPOSIT_CHECK_INTERVAL_SEC = 60.0)
 2) 매수·매도 체결 직후 토스 잔고 API 인덱싱 시차(0.1 ~ 0.4초) 보호 양방향 15.0초 그레이스 쉴드 및
@@ -16,8 +17,9 @@
    (mark_sub_reentry_monitor_60s_cycle_shield, is_within_sub_reentry_monitor_time_shield · Case 88)
 4) 시드고갈 입금 대기(waiting_reserve_deposit) 중 60.0초 주기 확인 타임쉴드 관리기
    (mark_reserve_deposit_check_shield, is_within_reserve_deposit_check_shield · Case 77)
-5) 실시간 SOXL 현재가 추출 및 60초 타임쉴드 경과 직후 최신 현재가 직접 재조회기
-   (_get_live_soxl_price, _fetch_fresh_current_soxl_price · Case 65, 73)
+5) 실시간 SOXL 현재가 추출 · 60초 타임쉴드 경과 직후 최신 현재가 직접 재조회기 및
+   1층 공석 +1.00% 상승돌파 필터용 실시간 1분봉 Wilder RSI(14) 추출기
+   (_get_live_soxl_price, _fetch_fresh_current_soxl_price, _get_live_soxl_rsi_14 · Case 65, 73, 92)
 6) 💉 GUARD30 & 무제한 예비수혈 (30% 자투리 1주 승격 방지 가드 · 계좌별 동적 왕복 수수료율 연동[Case 86] ·
    예수금 API 0.0 반환 시 0.25초 재시도 · 시드고갈 단 1회 입금 요청 알림 영구 래치 waiting_reserve_deposit_alert_sent 및 중복 디스크 쓰기 스킵 ·
    토스 실계좌 여유자금 감지 기반 횟수 제한 없는 무제한 온디맨드 예비시드 자동 수혈 및 수혈 횟수 카운트) 실행 엔진
@@ -30,8 +32,8 @@
    7층 초과 시 구 1층 보존 + 구 2층 + 구 7층 통합 중간층 재배치(L2_L7_MERGE_SORT) 및 사이클 최고 도달 회차(cycle_ratchet_max_lots) 단차 잠금 갱신(Case 87) ·
    STEP2X_15PCT_C20 스텝업 잠금 저가/회차 갱신(Case 76, 87) ·
    15:30 EST 경계 미체결 취소 시 본·서브 0주 신규 진입 및 1층 공석 +1.0% 돌파 추격 동시 안전 취소(Case 84, Case 88) 및
-   미체결 매수 주문 60.0초 동기화/안전 취소기 (_commit_filled_buy_to_stratum_ledger, sync_pending_buy_order_plugin · Case 19, 24, 59 ~ 91)
-- 제1헌법 ~ 제6헌법 및 Case 01 ~ 91 완벽 준수
+   미체결 매수 주문 60.0초 동기화/안전 취소기 (_commit_filled_buy_to_stratum_ledger, sync_pending_buy_order_plugin · Case 19, 24, 59 ~ 92)
+- 제1헌법 ~ 제6헌법 및 Case 01 ~ 92 완벽 준수
 """
 
 from __future__ import annotations
@@ -51,6 +53,7 @@ from quant_engine import (
     MIN_DIP_VS_L1_RATIO,
     PORTION_MODE_COMPOUND,
     PORTION_MODE_SIMPLE,
+    REENTRY_BREAKOUT_MAX_RSI_50,
     REENTRY_BREAKOUT_RISE_PCT,
     ROUND_TRIP_FEE_RATE_PCT,
     SUB_FROZEN_DAYS_TRIGGER,
@@ -75,6 +78,7 @@ from quant_engine import (
     vrev_add_quota_lot_and_merge_2tier,
 )
 from quant_indicators_plugin import (
+    compute_soxl_quant_metrics_1m,
     is_late_regular_new_cycle_cutoff_window,
     refresh_metrics_with_live_tick,
 )
@@ -616,6 +620,54 @@ async def _fetch_fresh_current_soxl_price(
     except Exception as exc:
         logger.debug("매수 직전 실시간 현재가 재조회 폴백 사용: %s", exc)
     return safe_float(fallback_price, 0.0)
+
+
+async def _get_live_soxl_rsi_14(
+    context: Any,
+    live_price: float = 0.0,
+    now_est: Optional[datetime] = None,
+) -> float:
+    """
+    # NEW [Case 92 : 1층 공석 +1.00% 상승돌파(BREAKOUT_RELOAD) 시 RSI(14) <= 50.0 필터용 실시간 Wilder RSI(14) 추출기]:
+    1) candle_metrics_cache["SOXL"] 에 1분봉 기저값(prev_bar_close > 0.0)이 확보되어 있으면
+       refresh_metrics_with_live_tick() 으로 O(1) 상수 시간에 현재가 틱이 반영된 실시간 Wilder RSI(14)를 산출한다.
+    2) 부팅 직후 등 1분봉 기저값이 아직 확보되지 않은 경우 즉시 get_candles_1m(total_count=100)을 1회 온디맨드 호출하여
+       Wilder RSI(14) 기저값을 프리워밍함으로써 더미값(50.0) 왜곡을 원천 차단한다.
+    """
+    dt_now = now_est.astimezone(EST_TZ) if now_est else datetime.now(EST_TZ)
+    lp = safe_float(live_price, 0.0)
+    raw_cache = getattr(context, "candle_metrics_cache", None)
+    base_met = (
+        raw_cache.get(TARGET_SYMBOL) if isinstance(raw_cache, dict) else None
+    )
+
+    if (
+        not isinstance(base_met, dict)
+        or safe_float(base_met.get("prev_bar_close"), 0.0) <= 0.0
+    ):
+        api_obj = getattr(context, "api", None)
+        if api_obj is not None and hasattr(api_obj, "get_candles_1m"):
+            try:
+                c_1m = await api_obj.get_candles_1m(
+                    symbol=TARGET_SYMBOL, total_count=100
+                )
+                if c_1m:
+                    base_met = compute_soxl_quant_metrics_1m(
+                        candles=c_1m,
+                        live_price=lp,
+                        now_est=dt_now,
+                    )
+            except Exception as exc:
+                logger.debug("RSI(14) 온디맨드 1분봉 프리워밍 폴백: %s", exc)
+
+    met = refresh_metrics_with_live_tick(
+        base_met if isinstance(base_met, dict) else {},
+        lp,
+        now_est=dt_now,
+    )
+    if isinstance(raw_cache, dict):
+        raw_cache[TARGET_SYMBOL] = met
+    return round(safe_float(met.get("rsi_14"), 50.0), 2)
 
 
 def min_req_cash_str(val: float) -> str:

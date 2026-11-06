@@ -1,26 +1,26 @@
 # -*- coding: utf-8 -*-
 """
-# MODIFIED: sniper_plugin.py (황금시간 07:00~07:50 RSI<=19 올인 분기 G · 골든포켓 참조 · 임포트 전면 영구 소각 & Case 91 무제한 예비수혈 및 인출형[단리]/자산증식형[복리] 매수 정량 연동)
+# MODIFIED: sniper_plugin.py (황금시간 07:00~07:50 RSI<=19 올인 분기 G · 골든포켓 참조 · 임포트 전면 영구 소각 & Case 91 무제한 예비수혈 및 인출형[단리]/자산증식형[복리] 매수 정량 연동 & Case 92 본/서브 1층 공석 +1.00% 상승돌파 시 1분봉 Wilder RSI(14) <= 50.0 필터 탑재)
 인피니트 스노우볼 (Infinite Snowball) v3.0 — 스나이퍼 매수 코어 Part 2 / 2 (Step 07 / 13)
 역할:
-1) sniper_plugin_core.py (Part 1 / 2) 의 모든 상수·타임쉴드·GUARD30 무제한 예비수혈·체결커밋·미체결 동기화 심볼 명시적 재익스포트(Facade Re-export)로
+1) sniper_plugin_core.py (Part 1 / 2) 의 모든 상수·타임쉴드·실시간 RSI(14) 추출기(_get_live_soxl_rsi_14)·GUARD30 무제한 예비수혈·체결커밋·미체결 동기화 심볼 명시적 재익스포트(Facade Re-export)로
    타 모듈(defense_plugin.py, tg_ui_plugin.py, main_runtime.py, main.py, plugin_updater.py) AST 임포트 호환성 100% 보장
-2) 🛡️ [Case 88 & Case 91 : 13_SUB_L1L3_RESV05_CAP4L] 스위치 없는 100% 기본 상시 적용(Default ON) 3층 서브 그리드 매수 엔진(_execute_sub_grid_buy_engine_plugin):
+2) 🛡️ [Case 88, Case 91 & Case 92 : 13_SUB_L1L3_RESV05_CAP4L] 스위치 없는 100% 기본 상시 적용(Default ON) 3층 서브 그리드 매수 엔진(_execute_sub_grid_buy_engine_plugin):
    - 본 그리드 1개 층 이상 보유 중(len(buckets) > 0) 본 그리드 5영업일 이상 연속 무매매(main_consec_frozen_days >= 5) 도달 시 또는 서브 그리드 기가동 중(len(sub_buckets) > 0) 상시 작동
    - 자산증식형(복리 · COMP_08PCT) / 인출형(단리 · SIMPLE_08PCT) 운용 모드에 연동된 본 그리드 0.5회분(4.0%) 보호예수금(reserved_for_main_usd) 차감 가용 유휴 현금(avail_idle_cash_usd) 및 서브 최대 누적 4회분(16.0%) 상한 캡(SUB_MAX_TOTAL_LOTS_4 = 4) 엄격 적용
    - 분기 S-A (서브 0주 첫 진입 SUB_REENTRY_1FL : 15:30 ~ 16:00 EST 차단 Case 84 & 유휴현금 부족 시 60초 쉴드 & 뮤텍스 2차 타임쉴드 검문) ·
-     분기 S-B1 (서브 1층 공석 60초 주기 눌림/돌파 재장전 SUB_REENTRY_1FL : 서브 2층 단가 상한 가드 Case 73 & 15:30 ~ 16:00 EST 돌파 차단 Case 84 & 뮤텍스 2차 타임쉴드 검문) ·
+     분기 S-B1 (서브 1층 공석 60초 주기 눌림[-1.0% 무필터]/돌파[+1.0% & RSI(14) <= 50.0 필터 · Case 92] 재장전 SUB_REENTRY_1FL : 서브 2층 단가 상한 가드 Case 73 & 15:30 ~ 16:00 EST 돌파 차단 Case 84 & 뮤텍스 2차 타임쉴드/RSI 검문) ·
      분기 S-B0 (서브 1층 부분체결 잔량 SUB_TOPUP_1FL 1.5초 모니터 재대기 Case 78 & 유휴현금 부족 시 60초 쉴드 & 뮤텍스 2차 타임쉴드 검문) ·
      분기 S-B2 (서브 활성 1층 보유 중 10분 게이트 : 서브 최고도달회차 4단 와이드 신저가 OR 서브 10영업일 무매매 & -10.0% 저가해금 SUB_UNLOCK_10D_D10 추매 SUB_DIP_1FL & 유휴현금 부족 시 해당 10분 버킷 즉시 소모 처리로 무한 API 폴링 차단)
 3) 04:07 ~ 16:00 EST 비대칭 매수 타격 게이트 실행기 (execute_seed_protected_buy_gate_plugin):
    - 🛡️ [분기 A · Case 65, 67, 77, 84, 91] : 본 그리드 0주 상태(is_zero_shares)에서 0주 종료 후 60.0초 타임쉴드 경과 뒤 현재가 지정가 첫 1층(REENTRY_1FL) 산입하되,
      정규장 마감 30분 전(15:30 ~ 16:00 EST, is_late_regular_new_cycle_cutoff_window) 구간에서는 0주 새 사이클 첫 1층 진입을 100% 원천 차단(HOLD_LATE_SESSION_NEW_CYCLE_CUTOFF)!
-   - 🔥 [분기 B-1 · Case 67, 73, 77, 84, 88, 91] : 본 그리드 상단 2층 ~ 7층(GRID_L2 ~ GRID_L7) 보유 중 1층 공석 시 매 60.0초 주기 재장전 모니터
-     (본 그리드 패스/대기 시 즉시 Default-ON 3층 서브 그리드 엔진으로 제어권 인계)
+   - 🔥 [분기 B-1 · Case 67, 73, 77, 84, 88, 91, 92] : 본 그리드 상단 2층 ~ 7층(GRID_L2 ~ GRID_L7) 보유 중 1층 공석 시 매 60.0초 주기 재장전 모니터
+     (-1.00% 눌림목 무필터 승인 & +1.00% 상승돌파 시 1분봉 Wilder RSI(14) <= 50.0 필터 결합 · RSI > 50.0 과열 돌파 시 HOLD_BREAKOUT_RSI_OVER_50 차단 후 Default-ON 3층 서브 그리드 엔진으로 제어권 인계)
    - 🎯 [분기 B-0 · Case 78, 88] : 본 그리드 활성 1층 지정가 부분 체결 미체결 잔량(TOPUP_1FL) 1.5초 모니터 (원장 가용현금 1주 비용 선행 가드 및 부족 시 60초 쿨다운 쉴드 적용)
-   - 🔵 [분기 B-2 · Case 60, 72, 76, 77, 87, 88, 91] : 본 그리드 활성 1층 보유 중 10분 고정 매수 게이트(4단 와이드 신저가 OR STEP2X_15PCT_C20 스텝업 해금) 및
+   - 🔵 [분기 B-2 · Case 60, 72, 76, 77, 87, 88, 91] : 본 그리드 활성 1층 보유 중 10분 고정 매수 게이트(4단 와이드 신저가 무필터 OR STEP2X_15PCT_C20 스텝업 해금) 및
      본 그리드 대기/패스 틱에서 Default-ON 3층 서브 그리드 매수 엔진 연속 가동
-- 제1헌법 ~ 제6헌법 및 Case 01 ~ 91 완벽 준수
+- 제1헌법 ~ 제6헌법 및 Case 01 ~ 92 완벽 준수
 """
 
 from __future__ import annotations
@@ -40,6 +40,8 @@ from quant_engine import (
     PORTION_MODE_COMPOUND,
     PORTION_MODE_SIMPLE,
     PORTION_RATIO_LOCKED,
+    REENTRY_BREAKOUT_MAX_RSI_50,
+    REENTRY_BREAKOUT_RISE_PCT,
     ROUND_TRIP_FEE_RATE_PCT,
     SUB_FROZEN_DAYS_TRIGGER,
     SUB_GRID_DEFAULT_ENABLED,
@@ -93,6 +95,7 @@ from sniper_plugin_core import (
     _commit_filled_buy_to_stratum_ledger,
     _fetch_fresh_current_soxl_price,
     _get_live_soxl_price,
+    _get_live_soxl_rsi_14,
     is_within_auto_fill_grace_shield,
     is_within_reentry_monitor_time_shield,
     is_within_reserve_deposit_check_shield,
@@ -119,7 +122,7 @@ logger = logging.getLogger("toss_sniper.sniper_plugin")
 
 
 # ---------------------------------------------------------------------------
-# [핵심 1 · Case 88 & Case 91] 스위치 없는 100% 기본 상시 적용(Default ON) 3층 서브 그리드 매수 엔진 (_execute_sub_grid_buy_engine_plugin)
+# [핵심 1 · Case 88, Case 91 & Case 92] 스위치 없는 100% 기본 상시 적용(Default ON) 3층 서브 그리드 매수 엔진 (_execute_sub_grid_buy_engine_plugin)
 # ---------------------------------------------------------------------------
 async def _execute_sub_grid_buy_engine_plugin(
     context: Any,
@@ -129,7 +132,7 @@ async def _execute_sub_grid_buy_engine_plugin(
     live_p: float,
 ) -> Optional[Dict[str, Any]]:
     """
-    # MODIFIED [Case 88 & Case 91 : 🛡️ 13_SUB_L1L3_RESV05_CAP4L — Default-ON 3층 서브 그리드 매수 엔진 (자산증식형[복리] ⇄ 인출형[단리] 연동 & 유휴현금 부족 시 10분 버킷 즉시 소모 & 60초 쉴드 & 뮤텍스 2차 타임쉴드 검문 강화)]:
+    # MODIFIED [Case 88, Case 91 & Case 92 : 🛡️ 13_SUB_L1L3_RESV05_CAP4L — Default-ON 3층 서브 그리드 매수 엔진 (자산증식형[복리] ⇄ 인출형[단리] 연동 & 서브 1층 공석 +1.00% 돌파 시 RSI(14) <= 50.0 필터 & 유휴현금 부족 시 10분 버킷 즉시 소모 & 60초 쉴드 & 뮤텍스 2차 타임쉴드 검문 강화)]:
     본 그리드가 대기/패스한 틱에서 호출되어:
     1) 본 그리드가 최소 1개 층 이상 보유 중(len(buckets) > 0)이고,
        본 그리드 연속 무매매일(main_consec_frozen_days >= 5)이 5영업일 이상이거나 이미 서브 그리드가 가동 중(len(sub_buckets) > 0)일 때 작동한다.
@@ -137,7 +140,8 @@ async def _execute_sub_grid_buy_engine_plugin(
        순수 유휴 현금(avail_idle_cash_usd) 범위 내에서만 매수하며, 온디맨드 예비시드 차입이나 시드고갈 알림을 절대 발동하지 않는다.
     3) 서브 누적 합병 회차가 최대 상한 4회분(SUB_MAX_TOTAL_LOTS_4 = 4, 기준자산의 16.0%)에 도달하면
        미체결 잔량 보충(SUB_TOPUP_1FL) 외의 모든 신규/추가 서브 매수를 차단(HOLD_SUB_CAP_4_LOTS_REACHED)하여 본 그리드 탄약을 보전한다.
-    4) 서브 10분 게이트(S-B2)에서 유휴현금 부족 시 해당 10분 버킷(sub_last_evaluated_buy_bucket_id)을 즉시 소모 처리하고,
+    4) 서브 1층 공석 재장전(S-B1) 시 -1.00% 눌림목은 무필터로 승인하고 +1.00% 상승돌파는 1분봉 Wilder RSI(14) <= 50.0 이하일 때만 승인한다 (Case 92).
+    5) 서브 10분 게이트(S-B2)에서 유휴현금 부족 시 해당 10분 버킷(sub_last_evaluated_buy_bucket_id)을 즉시 소모 처리하고,
        서브 0주(S-A) 및 서브 잔량 보충(S-B0)에서 유휴현금 부족 시 60.0초 쿨다운 쉴드를 각인하여 불필요한 반복 API 호출을 원천 차단한다.
     """
     st = context.ledger.get_state(TARGET_SYMBOL)
@@ -455,7 +459,7 @@ async def _execute_sub_grid_buy_engine_plugin(
 
     # -----------------------------------------------------------------------
     # [서브 분기 S-B1 : 서브 상단(2~3층)만 보유 중 (서브 1층 공석, is_sub_l2_only == True)]
-    # -> 서브 누적 4회분 미만 & 매 60.0초 주기 & 서브 2층 단가 상한(Case 73) & 15:30 돌파 차단(Case 84)
+    # -> 서브 누적 4회분 미만 & 매 60.0초 주기 & 서브 2층 단가 상한(Case 73) & 15:30 돌파 차단(Case 84) & +1.0% 돌파 시 RSI(14) <= 50.0 필터(Case 92)
     # -----------------------------------------------------------------------
     if is_sub_l2_only:
         if sub_cur_total_lots >= sub_max_lots_cap:
@@ -480,6 +484,9 @@ async def _execute_sub_grid_buy_engine_plugin(
         if fresh_live_p <= 0.0:
             return {"status": "NO_FRESH_LIVE_PRICE"}
 
+        live_rsi_14 = await _get_live_soxl_rsi_14(
+            context, live_price=fresh_live_p, now_est=dt_now
+        )
         sub_min_upper_p = min(sb.book_price for sb in sub_buckets)
         sub_anchor_p = safe_float(
             st.get("sub_anchor_price"), sub_min_upper_p
@@ -495,6 +502,8 @@ async def _execute_sub_grid_buy_engine_plugin(
             min_upper_tier_price=sub_min_upper_p,
             is_late_new_cycle_cutoff=is_late_cutoff,
             is_late_cutoff=is_late_cutoff,
+            rsi_14=live_rsi_14,
+            breakout_max_rsi=REENTRY_BREAKOUT_MAX_RSI_50,
         )
         sub_sig_type = str(sub_re_sig.get("signal_type") or "HOLD_WAIT_GATE")
 
@@ -512,6 +521,7 @@ async def _execute_sub_grid_buy_engine_plugin(
                 "status": "SUB_L2_ONLY_REENTRY_HOLD",
                 "signal_type": sub_sig_type,
                 "live_price": fresh_live_p,
+                "rsi_14": live_rsi_14,
                 "sub_l2_ceiling_price": sub_min_upper_p,
             }
 
@@ -573,6 +583,27 @@ async def _execute_sub_grid_buy_engine_plugin(
                         "status": "SUB_L2_ONLY_LATE_BREAKOUT_BLOCKED",
                         "signal_type": "HOLD_LATE_SESSION_BREAKOUT_CUTOFF",
                     }
+
+                # [Case 92 : 뮤텍스 내부 서브 1층 공석 +1.00% 돌파 시 RSI(14) <= 50.0 2차 검문]
+                if sub_sig_type == "BREAKOUT_RELOAD":
+                    mutex_sub_rsi = await _get_live_soxl_rsi_14(
+                        context, live_price=fresh_live_p, now_est=dt_re_m
+                    )
+                    if mutex_sub_rsi > (REENTRY_BREAKOUT_MAX_RSI_50 + 1e-6):
+                        sub_re_epoch = mark_sub_reentry_monitor_60s_cycle_shield(
+                            context=context,
+                            symbol=TARGET_SYMBOL,
+                            eval_price=fresh_live_p,
+                        )
+                        await context.ledger.update_state(
+                            TARGET_SYMBOL,
+                            last_sub_reentry_eval_ts=sub_re_epoch,
+                        )
+                        return {
+                            "status": "SUB_L2_ONLY_BREAKOUT_RSI_BLOCKED",
+                            "signal_type": "HOLD_BREAKOUT_RSI_OVER_50",
+                            "rsi_14": mutex_sub_rsi,
+                        }
 
                 sub_min_upper_p = min(sb.book_price for sb in now_sub_buckets)
                 exec_order_p = max(
@@ -747,9 +778,10 @@ async def _execute_sub_grid_buy_engine_plugin(
                 )
                 context.wakeup_event.set()
                 logger.info(
-                    "🛡️ [Case 88 SOXL 서브그리드 상단 %d개층 보유 중 60초 주기 서브 1층 재장전(%s) 발주] %d주 @ 지정가 $%.2f <= 서브2층상한 $%.2f (4%%예산 $%.2f · orderId=%s)",
+                    "🛡️ [Case 88/92 SOXL 서브그리드 상단 %d개층 보유 중 60초 주기 서브 1층 재장전(%s · RSI=%.1f) 발주] %d주 @ 지정가 $%.2f <= 서브2층상한 $%.2f (4%%예산 $%.2f · orderId=%s)",
                     len(now_sub_buckets),
                     sub_sig_type,
+                    live_rsi_14,
                     buy_qty_sub,
                     exec_order_p,
                     sub_min_upper_p,
@@ -759,6 +791,7 @@ async def _execute_sub_grid_buy_engine_plugin(
                 return {
                     "status": "SUB_L2_HELD_HYBRID_1FL_ORDERED",
                     "signal_type": sub_sig_type,
+                    "rsi_14": live_rsi_14,
                     "orderId": oid,
                     "qty": buy_qty_sub,
                     "price": exec_order_p,
@@ -975,7 +1008,7 @@ async def _execute_sub_grid_buy_engine_plugin(
                                 )
 
     # -----------------------------------------------------------------------
-    # [서브 분기 S-B2 · Case 88 : 서브 활성 1층 보유 중 10분 고정 매수 게이트 (4단 와이드 신저가 OR 10영업일/-10% 저가해금)]
+    # [서브 분기 S-B2 · Case 88 : 서브 활성 1층 보유 중 10분 고정 매수 게이트 (4단 와이드 신저가 무필터 OR 10영업일/-10% 저가해금)]
     # -----------------------------------------------------------------------
     if sub_cur_total_lots >= sub_max_lots_cap:
         return {
@@ -1311,13 +1344,14 @@ async def _execute_sub_grid_buy_engine_plugin(
                 "sub_cur_total_lots": now_sub_lots,
             }
 # ---------------------------------------------------------------------------
-# [핵심 2] 진화 챔피언 (👑 06_L2L7_RATCHET_8PCT × 🛡️ 13_SUB_L1L3_RESV05_CAP4L[Default ON] × 💉 무제한 예비수혈 × 🔓 06_STEP2X_15PCT_C20 × 🛡️ Case 84 × 💵 Case 91 복리/단리 연동) : 비대칭 매수 타격 엔진
+# [핵심 2] 진화 챔피언 (👑 06_L2L7_RATCHET_8PCT × 🛡️ 13_SUB_L1L3_RESV05_CAP4L[Default ON] × 💉 무제한 예비수혈 × 🔓 06_STEP2X_15PCT_C20 × 🛡️ Case 84 × 🔹 Case 92 돌파 RSI<=50 × 💵 Case 91 복리/단리 연동) : 비대칭 매수 타격 엔진
 #  - 분기 A   : 본 그리드 0주 상태(사이클 종료) -> 15:30 ~ 16:00 EST 구간에서는 새 사이클 첫 1층 진입 100% 차단(Case 84) · 그 외 60초 타임쉴드 후 첫 1층(REENTRY_1FL) 산입
 #  - 분기 B-1 : 본 그리드 상단 2~7층 보유 중 1층 공석 -> 매 60.0초(1분) 주기 재장전 모니터 & 2층 단가 상한(Case 73) 하에서
-#               -1.00% 눌림목(PULLBACK_RELOAD · 04:07 ~ 16:00 EST 전 구간 허용) 및 +1.00% 상승돌파(BREAKOUT_RELOAD · 04:07 ~ 15:29 EST 허용 / 15:30 ~ 16:00 EST 돌파 차단 · Case 84)
+#               -1.00% 눌림목(PULLBACK_RELOAD · 무필터 · 04:07 ~ 16:00 EST 전 구간 허용) 및
+#               +1.00% 상승돌파(BREAKOUT_RELOAD · 1분봉 Wilder RSI(14) <= 50.0 필터 결합[Case 92] · 04:07 ~ 15:29 EST 허용 / 15:30 ~ 16:00 EST 돌파 차단[Case 84])
 #               (본 그리드 대기/패스 시 Default-ON 3층 서브 그리드 엔진 연속 가동 · Case 88)
 #  - 분기 B-0 : 본 그리드 활성 1층 부분체결 미체결 잔량(rem_quota_qty > 0) -> 60초 타임쉴드 후 매 1.5초 모니터에서 현재가 <= 1층 단가 도래 시 잔량(TOPUP_1FL) 발주(Case 78)
-#  - 분기 B-2 : 본 그리드 활성 1층 보유 중 -> 10분 고정 게이트 & 정적 기억저가 및 최고도달회차(cycle_ratchet_max_lots · Case 87) 잠금 4단 와이드 신저가 OR STEP2X_15PCT_C20 스텝업 추매(Case 76) & GUARD30/무제한 예비수혈(Case 77, Case 91)
+#  - 분기 B-2 : 본 그리드 활성 1층 보유 중 -> 10분 고정 게이트 & 정적 기억저가 및 최고도달회차(cycle_ratchet_max_lots · Case 87) 잠금 4단 와이드 신저가(무필터) OR STEP2X_15PCT_C20 스텝업 추매(Case 76) & GUARD30/무제한 예비수혈(Case 77, Case 91)
 #               (본 그리드 대기/패스 시 Default-ON 3층 서브 그리드 엔진 연속 가동 · Case 88)
 # ---------------------------------------------------------------------------
 async def execute_seed_protected_buy_gate_plugin(
@@ -1327,7 +1361,7 @@ async def execute_seed_protected_buy_gate_plugin(
     now_est: Optional[datetime] = None,
 ) -> Dict[str, Any]:
     """
-    🎯 1, 🎯 2, 🎯 4 & Case 25 ~ 91 (챔피언 : 👑 06_L2L7_RATCHET_8PCT × 🛡️ 13_SUB_L1L3_RESV05_CAP4L[Default ON] × 💉 무제한 예비수혈 × 🔓 06_STEP2X_15PCT_C20 × 🛡️ Case 84 × 💵 Case 91 복리/단리 모드 연동):
+    🎯 1, 🎯 2, 🎯 4 & Case 25 ~ 92 (챔피언 : 👑 06_L2L7_RATCHET_8PCT × 🛡️ 13_SUB_L1L3_RESV05_CAP4L[Default ON] × 💉 무제한 예비수혈 × 🔓 06_STEP2X_15PCT_C20 × 🛡️ Case 84 × 🔹 Case 92 돌파 RSI<=50 × 💵 Case 91 복리/단리 모드 연동):
     04:07:00 ~ 16:00:00 EST 운용 구간에서 작동하는 비대칭 매수 타격 엔진.
     """
     dt_now = now_est.astimezone(EST_TZ) if now_est else datetime.now(EST_TZ)
@@ -1654,11 +1688,12 @@ async def execute_seed_protected_buy_gate_plugin(
                 }
 
     # -----------------------------------------------------------------------
-    # [분기 B-1 · Case 73, Case 77, Case 84, Case 88 & Case 91 : 본 그리드 상단(2층 ~ 7층)만 보유 중 (1층 공석, is_l2_only_vacant_l1 == True)]
+    # [분기 B-1 · Case 73, Case 77, Case 84, Case 88, Case 91 & Case 92 : 본 그리드 상단(2층 ~ 7층)만 보유 중 (1층 공석, is_l2_only_vacant_l1 == True)]
     # -> 2층 단가 이하(Case 73) 안전 영역 내에서:
-    #    - 눌림목(-1.00%, PULLBACK_RELOAD)은 04:07 ~ 16:00 EST 전 구간 허용!
-    #    - 상승돌파(+1.00%, BREAKOUT_RELOAD)는 04:07 ~ 15:29 EST 허용하되,
-    #      15:30 ~ 16:00 EST 구간에서는 데드캣 고점 추격 방어를 위해 HOLD_LATE_SESSION_BREAKOUT_CUTOFF 로 원천 차단!
+    #    - 눌림목(-1.00%, PULLBACK_RELOAD)은 무필터로 04:07 ~ 16:00 EST 전 구간 허용!
+    #    - 상승돌파(+1.00%, BREAKOUT_RELOAD)는 04:07 ~ 15:29 EST 구간에서 1분봉 Wilder RSI(14) <= 50.0 (Case 92) 조건을 충족할 때만 허용하며,
+    #      RSI(14) > 50.0 과열 구간에서는 HOLD_BREAKOUT_RSI_OVER_50 으로 차단해 저점 -1.00% 눌림목 진입으로 전환하고,
+    #      15:30 ~ 16:00 EST 구간에서는 데드캣 고점 추격 방어를 위해 HOLD_LATE_SESSION_BREAKOUT_CUTOFF 로 원천 차단! (Case 84)
     #    - 본 그리드가 60초 재장전 쉴드 중이거나 패스했을 때는 즉시 Default-ON 3층 서브 그리드 엔진을 가동!
     # -----------------------------------------------------------------------
     if is_l2_only_vacant_l1:
@@ -1688,6 +1723,9 @@ async def execute_seed_protected_buy_gate_plugin(
         if fresh_live_p <= 0.0:
             return {"status": "NO_FRESH_LIVE_PRICE"}
 
+        live_rsi_14 = await _get_live_soxl_rsi_14(
+            context, live_price=fresh_live_p, now_est=dt_now
+        )
         min_upper_tier_p = min(b.book_price for b in buckets)
         wma_info = compute_upper_2_to_7_moving_avg(buckets)
         upper_wma_p = safe_float(
@@ -1705,6 +1743,8 @@ async def execute_seed_protected_buy_gate_plugin(
             min_upper_tier_price=min_upper_tier_p,
             is_late_new_cycle_cutoff=is_late_cutoff,
             is_late_cutoff=is_late_cutoff,
+            rsi_14=live_rsi_14,
+            breakout_max_rsi=REENTRY_BREAKOUT_MAX_RSI_50,
         )
         sig_type = str(reentry_sig.get("signal_type") or "HOLD_WAIT_GATE")
 
@@ -1748,6 +1788,7 @@ async def execute_seed_protected_buy_gate_plugin(
                     "status": "L2_ONLY_REENTRY_INVERSION_BLOCKED",
                     "signal_type": sig_type,
                     "live_price": fresh_live_p,
+                    "rsi_14": live_rsi_14,
                     "l2_ceiling_price": min_upper_tier_p,
                     "ref_anchor": reentry_sig.get("ref_anchor"),
                     "chg_from_exit_pct": reentry_sig.get("chg_from_exit_pct"),
@@ -1765,6 +1806,28 @@ async def execute_seed_protected_buy_gate_plugin(
                     "status": "L2_ONLY_REENTRY_LATE_BREAKOUT_BLOCKED",
                     "signal_type": sig_type,
                     "live_price": fresh_live_p,
+                    "rsi_14": live_rsi_14,
+                    "l2_ceiling_price": min_upper_tier_p,
+                    "ref_anchor": reentry_sig.get("ref_anchor"),
+                    "chg_from_exit_pct": reentry_sig.get("chg_from_exit_pct"),
+                    "seed_protect_pass_cnt": new_day_pass,
+                    "next_reentry_check_sec": REENTRY_MONITOR_TIME_SHIELD_SEC,
+                }
+            if sig_type == "HOLD_BREAKOUT_RSI_OVER_50":
+                logger.info(
+                    "🛡️ [Case 92 1층 공석 +1.0%% 상승돌파 시 RSI(14) > 50.0 과열 차단] 현재가 $%.2f (직전익절 $%.2f 대비 %+.2f%%) · 실시간 RSI(14)=%.1f > %.1f -> 과열 돌파 패스 & 저점 눌림목(-1.0%%) 대기 (60초 타임쉴드 재장전)",
+                    fresh_live_p,
+                    safe_float(reentry_sig.get("ref_anchor"), anchor_p),
+                    safe_float(reentry_sig.get("chg_from_exit_pct"), 0.0),
+                    live_rsi_14,
+                    REENTRY_BREAKOUT_MAX_RSI_50,
+                )
+                return {
+                    "status": "L2_ONLY_REENTRY_BREAKOUT_RSI_BLOCKED",
+                    "signal_type": sig_type,
+                    "live_price": fresh_live_p,
+                    "rsi_14": live_rsi_14,
+                    "breakout_max_rsi": REENTRY_BREAKOUT_MAX_RSI_50,
                     "l2_ceiling_price": min_upper_tier_p,
                     "ref_anchor": reentry_sig.get("ref_anchor"),
                     "chg_from_exit_pct": reentry_sig.get("chg_from_exit_pct"),
@@ -1774,6 +1837,7 @@ async def execute_seed_protected_buy_gate_plugin(
             return {
                 "status": "L2_ONLY_REENTRY_HOLD_PASSED",
                 "signal_type": sig_type,
+                "rsi_14": live_rsi_14,
                 "ref_anchor": reentry_sig.get("ref_anchor"),
                 "l2_ceiling_price": min_upper_tier_p,
                 "chg_from_exit_pct": reentry_sig.get("chg_from_exit_pct"),
@@ -1836,6 +1900,41 @@ async def execute_seed_protected_buy_gate_plugin(
                         "live_price": fresh_live_p,
                         "seed_protect_pass_cnt": new_day_pass,
                     }
+
+                # [Case 92 : 뮤텍스 내부 본 그리드 1층 공석 +1.00% 돌파 시 RSI(14) <= 50.0 2차 검문]
+                if sig_type == "BREAKOUT_RELOAD":
+                    mutex_rsi_14 = await _get_live_soxl_rsi_14(
+                        context, live_price=fresh_live_p, now_est=dt_re_mutex
+                    )
+                    if mutex_rsi_14 > (REENTRY_BREAKOUT_MAX_RSI_50 + 1e-6):
+                        new_pass_cnt = (
+                            safe_int(st_now.get("seed_protect_pass_cnt"), 0)
+                            + 1
+                        )
+                        new_day_pass = (
+                            safe_int(
+                                st_now.get("daily_seed_protect_pass_cnt"), 0
+                            )
+                            + 1
+                        )
+                        re_eval_epoch = mark_reentry_monitor_60s_cycle_shield(
+                            context=context,
+                            symbol=TARGET_SYMBOL,
+                            eval_price=fresh_live_p,
+                        )
+                        await context.ledger.update_state(
+                            TARGET_SYMBOL,
+                            last_reentry_eval_ts=re_eval_epoch,
+                            seed_protect_pass_cnt=new_pass_cnt,
+                            daily_seed_protect_pass_cnt=new_day_pass,
+                        )
+                        return {
+                            "status": "L2_ONLY_REENTRY_BREAKOUT_RSI_BLOCKED",
+                            "signal_type": "HOLD_BREAKOUT_RSI_OVER_50",
+                            "live_price": fresh_live_p,
+                            "rsi_14": mutex_rsi_14,
+                            "seed_protect_pass_cnt": new_day_pass,
+                        }
 
                 min_upper_tier_p = min(b.book_price for b in now_buckets)
                 exec_order_p = max(
@@ -2008,9 +2107,10 @@ async def execute_seed_protected_buy_gate_plugin(
                 )
                 context.wakeup_event.set()
                 logger.info(
-                    "🔥 [SOXL 상단 %d개층 보유 중 60초 주기 현재가 지정가 1층 재장전(%s) 발주] %d주 @ 지정가 $%.2f <= 2층상한 $%.2f (1회예산 $%.2f · 직전익절 $%.2f · 이평 $%.2f · orderId=%s)",
+                    "🔥 [Case 92 SOXL 상단 %d개층 보유 중 60초 주기 현재가 지정가 1층 재장전(%s · RSI=%.1f) 발주] %d주 @ 지정가 $%.2f <= 2층상한 $%.2f (1회예산 $%.2f · 직전익절 $%.2f · 이평 $%.2f · orderId=%s)",
                     len(now_buckets),
                     sig_type,
+                    live_rsi_14,
                     buy_qty,
                     exec_order_p,
                     min_upper_tier_p,
@@ -2022,6 +2122,7 @@ async def execute_seed_protected_buy_gate_plugin(
                 return {
                     "status": "L2_HELD_HYBRID_REAL_1FL_ORDERED",
                     "signal_type": sig_type,
+                    "rsi_14": live_rsi_14,
                     "orderId": oid,
                     "qty": buy_qty,
                     "price": exec_order_p,
@@ -2224,7 +2325,7 @@ async def execute_seed_protected_buy_gate_plugin(
     # -----------------------------------------------------------------------
     # [분기 B-2 · Case 60, Case 72, Case 76, Case 77, Case 87, Case 88 & Case 91 : 본 그리드 활성 1층 보유 중 (has_active_l1_bucket(buckets) == True)]
     # -> 04:07 EST 기점 10분 고정 매수 게이트 신규 버킷 도래 시 정적 기억 최저가 및 최고 도달 회차(cycle_ratchet_max_lots) 잠금 기준
-    #    4단 와이드 OR STEP2X_15PCT_C20 스텝업 추매 판정! (본 그리드 대기/패스 시 Default-ON 3층 서브 그리드 엔진 연속 가동)
+    #    4단 와이드(무필터) OR STEP2X_15PCT_C20 스텝업 추매 판정! (본 그리드 대기/패스 시 Default-ON 3층 서브 그리드 엔진 연속 가동)
     # -----------------------------------------------------------------------
     is_gate_open, cur_bucket_id, today_str, b_info = (
         evaluate_buy_gate_bucket_status(

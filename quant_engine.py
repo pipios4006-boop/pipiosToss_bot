@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 """
-# MODIFIED: quant_engine.py (황금시간 07:00~07:50 RSI<=19 올인 재익스포트·포켓매칭·다중익절·요약·TDD 전면 영구 소각 & Case 91 무제한 예비수혈 카운트 및 인출형[단리]/자산증식형[복리] 요약·TDD 탑재)
+# MODIFIED: quant_engine.py (황금시간 07:00~07:50 RSI<=19 올인 재익스포트·포켓매칭·다중익절·요약·TDD 전면 영구 소각 & Case 91 무제한 예비수혈 카운트 및 인출형[단리]/자산증식형[복리] 요약·TDD & Case 92 1층 공석 +1.00% 상승돌파 RSI(14) <= 50.0 필터 요약·TDD 탑재)
 인피니트 스노우볼 (Infinite Snowball) v3.0 — 퀀트 엔진 코어 Part 2 / 2 (Step 05 / 13)
 역할:
-1) quant_engine_core.py (Part 1 / 2) 의 모든 상수(DEFAULT_GRID_MERGE_MODE · Case 88 서브 그리드 상수 · Case 91 복리/단리 모드 상수 포함)·구조체·정량/무제한수혈/스텝업/서브해금/컷오프/동적수수료 판정 심볼
+1) quant_engine_core.py (Part 1 / 2) 의 모든 상수(DEFAULT_GRID_MERGE_MODE · Case 88 서브 그리드 상수 · Case 91 복리/단리 모드 상수 · Case 92 REENTRY_BREAKOUT_MAX_RSI_50 포함)·구조체·정량/무제한수혈/스텝업/서브해금/컷오프/동적수수료 판정 심볼
    명시적 재익스포트(Facade Re-export)로 타 모듈 AST 임포트 호환성 100% 보장
 2) 본 그리드 1층 ~ 7층 골디락스 순수 멀티 그리드 배치 및 병합기(vrev_add_quota_lot_and_merge_2tier :
    REENTRY_1FL 독립 1층 배치 / TOPUP_1FL 기존 1층 무승격 원자적 합산[Case 78] /
@@ -19,9 +19,9 @@
    해당 그리드의 개별 층(1층 및 상단 개별/합병층) 쪼개 팔기를 잠가 통합 이동평균(wma_2_to_7 / sub_wma_2_to_3) 도망을 원천 봉쇄하고,
    2층 ~ 7층(서브 2층 ~ 3층) 순수 이동평균 단가 대비 +1.00% 목표가(wma_target_p / sub_wma_target_p) 도달 시에는
    1층 매수 단가와 무관하게 1층 물량까지 동일한 가격(wma_target_p)에 조건 없이 100% 포함하여 전량 매도(SELL_ALL_GRAD / SELL_SUB_ALL_GRAD)함으로써 즉시 0주 사이클을 완전 종료시키는 하이브리드 매도 판정기(evaluate_multi_grid_sell_targets)
-5) 포트폴리오 통합 요약기(summarize_stratum_portfolio · 자산증식형[복리] vs 인출형[단리] 예산 산출 · 당일 인출가능 실현수익[daily_withdrawable_profit_usd] · 누적 인출가능 잉여현금[withdrawable_surplus_usd] · 자체수혈 탄창[self_reserve_portions] · 무제한 예비시드 수혈 횟수 카운트 · 층별 자산 금액[$]/비중[%] · 10칸 유니코드 배분 게이지[🟦🟨🟩] · 현재 사이클 단위 실현수익[cycle_realized_net_usd] · 전량 졸업 시 확정 예정 총자산[projected_graduation_equity_usd] 산출 포함) 및
-   기동 전 TDD 사전 무결성 검증 슈트(run_quant_engine_tdd · Case 25 ~ 91 전수 검증)
-- 제1헌법 ~ 제6헌법 및 Case 01 ~ 91 완벽 준수
+5) 포트폴리오 통합 요약기(summarize_stratum_portfolio · 자산증식형[복리] vs 인출형[단리] 예산 산출 · 당일 인출가능 실현수익[daily_withdrawable_profit_usd] · 누적 인출가능 잉여현금[withdrawable_surplus_usd] · 자체수혈 탄창[self_reserve_portions] · 무제한 예비시드 수혈 횟수 카운트 · 층별 자산 금액[$]/비중[%] · 10칸 유니코드 배분 게이지[🟦🟨🟩] · 현재 사이클 단위 실현수익[cycle_realized_net_usd] · 전량 졸업 시 확정 예정 총자산[projected_graduation_equity_usd] · Case 92 1층 공석 +1.00% 돌파 RSI(14) <= 50.0 필터 상태 산출 포함) 및
+   기동 전 TDD 사전 무결성 검증 슈트(run_quant_engine_tdd · Case 25 ~ 92 전수 검증)
+- 제1헌법 ~ 제6헌법 및 Case 01 ~ 92 완벽 준수
 """
 
 from __future__ import annotations
@@ -49,6 +49,7 @@ from quant_engine_core import (
     PORTION_MODE_SIMPLE,
     PORTION_RATIO_LOCKED,
     REANCHOR_NET_BUFFER_MULT,
+    REENTRY_BREAKOUT_MAX_RSI_50,
     REENTRY_BREAKOUT_RISE_PCT,
     REENTRY_PULLBACK_DROP_PCT,
     RESERVE_DEPOSIT_TOLERANCE_RATIO,
@@ -781,7 +782,7 @@ def evaluate_multi_grid_sell_targets(
     sub_buckets: Optional[Sequence[StratumBucket]] = None,
 ) -> Dict[str, Any]:
     """
-    # MODIFIED [Case 69, Case 70, Case 71, Case 72, Case 83, Case 87 & Case 88 (방안 C 오버나이트 통합이평 사수 & 2~7층 순수 통합이평 +1.00% 도달 시 1층 물량 무조건 동일 가격 포함 전량 매도 사이클 종료 판정기)]:
+    # MODIFIED [Case 69, Case 70, Case 71, Case 72, Case 83, Case 87, Case 88 & Case 89 (방안 C 오버나이트 통합이평 사수 & 2~7층 순수 통합이평 +1.00% 도달 시 1층 물량 무조건 동일 가격 포함 전량 매도 사이클 종료 판정기)]:
     - 2층 ~ 7층(서브 2층 ~ 3층) 이동평균 단가는 1층 매수 가격을 포함하지 않고 순수 2층 ~ 7층(서브 2층 ~ 3층) 물량만으로 산출한다.
     - 현재가(lp)가 2층 ~ 7층 순수 이동평균 단가 대비 +1.00% 익절가(wma_target_p)에 도달하면,
       1층 매수 가격과 무관하게 1층(index 0) 물량도 조건 없이 동일한 가격(wma_target_p)에 포함하여
@@ -1145,7 +1146,7 @@ def calc_sell_realized_pnl(
         "net_rate_pct": net_rate_pct,
     }
 # ---------------------------------------------------------------------------
-# [핵심 5] 포트폴리오 · 1~7층 골디락스 본 그리드(L2_L7_MERGE_SORT & 최고도달회차 잠금) · Default-ON 1~3층 서브 그리드(SUB_L1_L3_MERGE & 최대4회분 캡) · 복리/단리(일일 인출가능 수익 & 자체수혈 탄창) · 무제한 예비수혈 카운트 · 시드 배분 게이지(🟦🟨🟩) · 현재 사이클 단위 수익 · 전량졸업 예정자산(🎓) 통합 요약기 (Case 59 ~ 91)
+# [핵심 5] 포트폴리오 · 1~7층 골디락스 본 그리드(L2_L7_MERGE_SORT & 최고도달회차 잠금) · Default-ON 1~3층 서브 그리드(SUB_L1_L3_MERGE & 최대4회분 캡) · 복리/단리(일일 인출가능 수익 & 자체수혈 탄창) · 무제한 예비수혈 카운트 · 시드 배분 게이지(🟦🟨🟩) · 현재 사이클 단위 수익 · 전량졸업 예정자산(🎓) · Case 92 돌파 RSI<=50 필터 통합 요약기 (Case 59 ~ 92)
 # ---------------------------------------------------------------------------
 def _build_10block_allocation_gauge(
     main_cost: float,
@@ -1207,9 +1208,10 @@ def summarize_stratum_portfolio(
     state_dict: Dict[str, Any],
     live_price: float = 0.0,
     now_est: Optional[datetime] = None,
+    rsi_14: Optional[float] = None,
 ) -> Dict[str, Any]:
     """
-    # MODIFIED [🎯 1 ~ 🎯 5 & Case 59 ~ 91 & 본/서브 최고 도달 회차 단차 잠금 · Default-ON 3층 서브 그리드 · 자산증식형(복리) ⇄ 인출형(단리 · 당일 인출가능 실현수익 & 누적 잉여현금 자체수혈 탄창) · 무제한 예비시드 수혈 횟수 카운트 · 층별 자산 비중(%) · 10칸 유니코드 배분 게이지(🟦🟨🟩) · 현재 사이클 단위 수익 · 전량졸업 예정자산(🎓) 통합 요약기]:
+    # MODIFIED [🎯 1 ~ 🎯 5 & Case 59 ~ 92 & 본/서브 최고 도달 회차 단차 잠금 · Default-ON 3층 서브 그리드 · 자산증식형(복리) ⇄ 인출형(단리 · 당일 인출가능 실현수익 & 누적 잉여현금 자체수혈 탄창) · 무제한 예비시드 수혈 횟수 카운트 · 층별 자산 비중(%) · 10칸 유니코드 배분 게이지(🟦🟨🟩) · 현재 사이클 단위 수익 · 전량졸업 예정자산(🎓) · Case 92 1층 공석 +1.00% 돌파 RSI(14) <= 50.0 필터 상태 통합 요약기]:
     """
     st = state_dict if isinstance(state_dict, dict) else {}
     dt_now = now_est.astimezone(EST_TZ) if now_est else datetime.now(EST_TZ)
@@ -1217,6 +1219,18 @@ def summarize_stratum_portfolio(
     is_late_cutoff = bool(
         dt_now.weekday() < 5 and (NEW_CYCLE_BUY_CUTOFF_HM <= hm_now <= 1600)
     )
+
+    eff_rsi_14: Optional[float] = (
+        safe_float(rsi_14, 0.0)
+        if rsi_14 is not None
+        else (
+            safe_float(st.get("rsi_14"), 0.0)
+            if st.get("rsi_14") is not None
+            else None
+        )
+    )
+    if eff_rsi_14 is not None and eff_rsi_14 <= 0.0:
+        eff_rsi_14 = None
 
     raw_buckets = buckets_from_dicts(st.get("buckets", []))
     buckets = enforce_true_breakeven_floor_on_buckets(raw_buckets)
@@ -1470,6 +1484,8 @@ def summarize_stratum_portfolio(
         min_upper_tier_price=min_indiv_upper_price,
         is_late_new_cycle_cutoff=is_late_cutoff,
         is_late_cutoff=is_late_cutoff,
+        rsi_14=eff_rsi_14,
+        breakout_max_rsi=REENTRY_BREAKOUT_MAX_RSI_50,
     )
     reentry_ref_anchor = safe_float(reentry_sig.get("ref_anchor"), anchor_p)
     reentry_pullback_price = safe_float(
@@ -1486,6 +1502,16 @@ def summarize_stratum_portfolio(
     )
     reentry_signal_type = str(
         reentry_sig.get("signal_type") or "HOLD_WAIT_GATE"
+    )
+    reentry_rsi_14 = safe_float(
+        reentry_sig.get("rsi_14"),
+        eff_rsi_14 if eff_rsi_14 is not None else 50.0,
+    )
+    reentry_breakout_max_rsi = safe_float(
+        reentry_sig.get("breakout_max_rsi"), REENTRY_BREAKOUT_MAX_RSI_50
+    )
+    reentry_breakout_rsi_blocked = bool(
+        reentry_sig.get("breakout_rsi_blocked", False)
     )
 
     if buckets:
@@ -1589,7 +1615,7 @@ def summarize_stratum_portfolio(
     )
 
     # -----------------------------------------------------------------------
-    # [Case 88 & Case 91 : 🛡️ 13_SUB_L1L3_RESV05_CAP4L — Default-ON 3층 서브 그리드 상태 및 지표 산출]
+    # [Case 88, Case 91 & Case 92 : 🛡️ 13_SUB_L1L3_RESV05_CAP4L — Default-ON 3층 서브 그리드 상태 및 지표 산출]
     # -----------------------------------------------------------------------
     main_consec_frozen_days = max(
         0, safe_int(st.get("main_consec_frozen_days"), 0)
@@ -1687,6 +1713,8 @@ def summarize_stratum_portfolio(
         min_upper_tier_price=sub_min_indiv_upper_price,
         is_late_new_cycle_cutoff=is_late_cutoff,
         is_late_cutoff=is_late_cutoff,
+        rsi_14=eff_rsi_14,
+        breakout_max_rsi=REENTRY_BREAKOUT_MAX_RSI_50,
     )
     sub_reentry_ref_anchor = safe_float(
         sub_reentry_sig.get("ref_anchor"), sub_anchor_p
@@ -1705,6 +1733,9 @@ def summarize_stratum_portfolio(
     )
     sub_reentry_signal_type = str(
         sub_reentry_sig.get("signal_type") or "HOLD_WAIT_GATE"
+    )
+    sub_reentry_breakout_rsi_blocked = bool(
+        sub_reentry_sig.get("breakout_rsi_blocked", False)
     )
 
     if sub_buckets:
@@ -2080,6 +2111,7 @@ def summarize_stratum_portfolio(
         "sub_chg_from_reentry_anchor_pct": sub_chg_from_reentry_anchor_pct,
         "sub_l2_ceiling_price": round(sub_l2_ceiling_price, 4),
         "sub_reentry_signal_type": sub_reentry_signal_type,
+        "sub_reentry_breakout_rsi_blocked": sub_reentry_breakout_rsi_blocked,
         "sub_next_target_qty": sub_next_target_qty,
         "sub_anchor_quota_qty": sub_anchor_quota_qty,
         "sub_budget_cap_qty": sub_budget_cap_qty,
@@ -2201,6 +2233,9 @@ def summarize_stratum_portfolio(
         "chg_from_reentry_anchor_pct": chg_from_reentry_anchor_pct,
         "l2_ceiling_price": round(l2_ceiling_price, 4),
         "reentry_signal_type": reentry_signal_type,
+        "reentry_rsi_14": reentry_rsi_14,
+        "reentry_breakout_max_rsi": reentry_breakout_max_rsi,
+        "reentry_breakout_rsi_blocked": reentry_breakout_rsi_blocked,
         "next_target_qty": next_target_qty,
         "anchor_quota_qty": anchor_quota_qty,
         "budget_cap_qty": budget_cap_qty,
@@ -2231,7 +2266,7 @@ def summarize_stratum_portfolio(
 
 
 # ---------------------------------------------------------------------------
-# [핵심 6] TDD 사전 무결성 자동 검증 슈트 (Case 25 ~ 91 전수 검증)
+# [핵심 6] TDD 사전 무결성 자동 검증 슈트 (Case 25 ~ 92 전수 검증)
 # ---------------------------------------------------------------------------
 def run_quant_engine_tdd() -> bool:
     """
@@ -2243,7 +2278,7 @@ def run_quant_engine_tdd() -> bool:
     본·서브 1층(+1.50%) / 본 2~7층·서브 2~3층 개별 및 합병층(+1.00%) / 본 2~7층·서브 2~3층 순수 통합 이동평균(+1.00% 도달 시 1층 물량 무조건 동일 가격 포함 전량 매도 사이클 종료) 다중 익절 판정(Case 71, 72, 87, 88),
     🚨 Case 83 (방안 C) 오버나이트(is_overnight_session=True) 중 상단층 보유 시 개별층 매도 잠금 및 상단 순수 통합이평(+1.00%) 도달 시 1층 포함 전량 일괄 졸업 허용,
     상단 그리드 단독 보유(1층 공석) 시 2층 단가 상한 역전 차단(HOLD_PREVENT_INVERSION · Case 73) 및
-    눌림/돌파 독립 1층 재장전(Case 59, 73),
+    눌림(-1.0% 무필터)/돌파(+1.0% & RSI(14) <= 50.0 필터 · Case 92) 독립 1층 재장전(Case 59, 73, 92),
     🛡️ Case 84: 정규장 마감 30분 전(is_late_new_cycle_cutoff=True, 15:30 ~ 16:00 EST) 구간에서 상단 지층 보유 중 1층 공석 시
     +1.0% 상승돌파(BREAKOUT_RELOAD)를 HOLD_LATE_SESSION_BREAKOUT_CUTOFF 로 원천 차단하고 2층 단가 이하 -1.0% 눌림목(PULLBACK_RELOAD)만 정상 승인,
     정적 기억저가 잠금 및 🔓 06_STEP2X_15PCT_C20 3중 안전문 스텝업 저가 해금(Case 60, 72, 76),
@@ -2265,7 +2300,8 @@ def run_quant_engine_tdd() -> bool:
             and SUB_MERGE_MODE_L1_L3 == "SUB_L1_L3_MERGE"
             and SUB_MAX_TIERS_3 == 3
             and SUB_MAX_TOTAL_LOTS_4 == 4
-        ), "TDD 실패(Case 88 서브 그리드 기본 상수 위반)"
+            and abs(REENTRY_BREAKOUT_MAX_RSI_50 - 50.0) < 1e-6
+        ), "TDD 실패(Case 88/92 서브 그리드 및 돌파 RSI 상한 상수 위반)"
 
         # 1) 8% 황금정량 및 Case 67 min(budget_cap_qty, anchor_quota_qty) 캡핑 검증
         q_dip, bud_c67 = compute_golden8_quota_qty(
@@ -2419,12 +2455,13 @@ def run_quant_engine_tdd() -> bool:
             "TDD 실패(Case 71/72): 1층 익절 후 1층 공석(상단 그리드만 보유) 상태 판별 오류"
         )
 
-        # 5) 🚨 Case 73 & Case 84: 1층 공석 상태에서 현재가 > 2층 단가($85.00) 역전 차단 및 15:30~16:00 돌파 차단 / 눌림목 승인 검증
+        # 5) 🚨 Case 73, Case 84 & Case 92: 1층 공석 상태에서 현재가 > 2층 단가($85.00) 역전 차단 · 15:30~16:00 돌파 차단 · +1.00% 돌파 시 RSI(14) <= 50.0 필터 · -1.00% 눌림목 무필터 승인 검증
         sig_inv = evaluate_l2_only_hybrid_reentry_signal(
             live_price=85.50,
             anchor_price=83.41,
             l2_book_price=85.00,
             min_upper_tier_price=85.00,
+            rsi_14=42.0,
         )
         assert (
             sig_inv["should_buy"] is False
@@ -2438,11 +2475,28 @@ def run_quant_engine_tdd() -> bool:
             l2_book_price=85.00,
             min_upper_tier_price=85.00,
             is_late_new_cycle_cutoff=False,
+            rsi_14=48.5,
         )
         assert (
             sig_brk_ok["should_buy"] is True
             and sig_brk_ok["signal_type"] == "BREAKOUT_RELOAD"
-        ), f"TDD 실패(Case 73 04:07~15:29 2층 이하 안전 돌파 승인): {sig_brk_ok}"
+            and sig_brk_ok["breakout_rsi_blocked"] is False
+        ), f"TDD 실패(Case 73/92 04:07~15:29 RSI<=50 안전 돌파 승인): {sig_brk_ok}"
+
+        sig_brk_rsi_blocked = evaluate_l2_only_hybrid_reentry_signal(
+            live_price=84.30,
+            anchor_price=83.41,
+            l2_book_price=85.00,
+            min_upper_tier_price=85.00,
+            is_late_new_cycle_cutoff=False,
+            rsi_14=54.2,
+        )
+        assert (
+            sig_brk_rsi_blocked["should_buy"] is False
+            and sig_brk_rsi_blocked["signal_type"]
+            == "HOLD_BREAKOUT_RSI_OVER_50"
+            and sig_brk_rsi_blocked["breakout_rsi_blocked"] is True
+        ), f"TDD 실패(Case 92 1층공석 +1.0% 돌파 시 RSI(14)>50 과열 차단 미작동): {sig_brk_rsi_blocked}"
 
         sig_brk_late_blocked = evaluate_l2_only_hybrid_reentry_signal(
             live_price=84.30,
@@ -2450,6 +2504,7 @@ def run_quant_engine_tdd() -> bool:
             l2_book_price=85.00,
             min_upper_tier_price=85.00,
             is_late_new_cycle_cutoff=True,
+            rsi_14=42.0,
         )
         assert (
             sig_brk_late_blocked["should_buy"] is False
@@ -2463,11 +2518,13 @@ def run_quant_engine_tdd() -> bool:
             l2_book_price=85.00,
             min_upper_tier_price=85.00,
             is_late_new_cycle_cutoff=True,
+            rsi_14=62.5,
         )
         assert (
             sig_pull_ok["should_buy"] is True
             and sig_pull_ok["signal_type"] == "PULLBACK_RELOAD"
-        ), f"TDD 실패(Case 73/84 눌림목 재장전 승인): {sig_pull_ok}"
+            and sig_pull_ok["breakout_rsi_blocked"] is False
+        ), f"TDD 실패(Case 73/84/92 눌림목 무필터 재장전 승인): {sig_pull_ok}"
 
         reloaded_grid = vrev_add_quota_lot_and_merge_2tier(
             rem_uppers, 10, 80.50, 805.0, "REENTRY_1FL"
@@ -2831,6 +2888,6 @@ def run_quant_engine_tdd() -> bool:
         set_runtime_round_trip_fee_rate_pct(prev_rt, us_commission_rate=prev_one)
 
     logger.info(
-        "✅ [QuantEngine TDD 사전 무결성 검증 통과] 챔피언 👑 06_L2L7_RATCHET_8PCT × 🛡️ 13_SUB_L1L3_RESV05_CAP4L(Default ON) × 💉 무제한 예비수혈 × 🔓 06_STEP2X_15PCT_C20 × 💵 인출형(단리)/자산증식형(복리) & Case 84 ~ 91 전수 검증 완료"
+        "✅ [QuantEngine TDD 사전 무결성 검증 통과] 챔피언 👑 06_L2L7_RATCHET_8PCT × 🛡️ 13_SUB_L1L3_RESV05_CAP4L(Default ON) × 💉 무제한 예비수혈 × 🔓 06_STEP2X_15PCT_C20 × 🔹 BRK_RSI50 × 💵 인출형(단리)/자산증식형(복리) & Case 84 ~ 92 전수 검증 완료"
     )
     return True

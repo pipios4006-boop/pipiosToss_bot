@@ -1,13 +1,14 @@
 # -*- coding: utf-8 -*-
 """
-# MODIFIED: quant_engine_core.py (황금시간 07:00~07:50 RSI<=19 올인 클래스·함수·상수 전면 영구 소각 & Case 91 무제한 예비수혈 카운트 및 인출형[단리]/자산증식형[복리] 정량 산출기 탑재)
+# MODIFIED: quant_engine_core.py (황금시간 07:00~07:50 RSI<=19 올인 클래스·함수·상수 전면 영구 소각 & Case 91 무제한 예비수혈 카운트 및 인출형[단리]/자산증식형[복리] 정량 산출기 & Case 92 1층 공석 +1.00% 상승돌파 시 RSI(14) <= 50.0 필터 탑재)
 인피니트 스노우볼 (Infinite Snowball) v3.0 — 퀀트 엔진 코어 Part 1 / 2 (Step 04 / 13)
 역할:
 1) 전역 퀀트 상수 락온 (본 그리드 8% 황금비율 · 7-Layer 골디락스 그리드 · DEFAULT_GRID_MERGE_MODE = "L2_L7_MERGE_SORT" [Case 87] ·
    🛡️ 스위치 없는 100% 기본 상시 적용[Default ON] 3-Layer 서브 그리드 4% 정량 · 0.5회분 보호예수 · 최대 4회분[16%] 상한 캡 · SUB_L1_L3_MERGE [Case 88] ·
    📈 자산증식형[복리 · COMP_08PCT] ⇄ 💵 인출형[단리 · SIMPLE_08PCT] 운용 모드 [Case 91] ·
    STEP2X_15PCT_C20 · GUARD30 무제한 예비수혈[실계좌 30% 가드 이상 시 횟수 제한 없이 미할당 여유달러 즉시 수혈 및 횟수 카운트 Case 89, Case 91] ·
-   Case 84 15:30 0주 신규진입 및 1층 공석 돌파추격 차단)
+   Case 84 15:30 0주 신규진입 및 1층 공석 돌파추격 차단 ·
+   Case 92 1층 공석 +1.00% 상승돌파 시 1분봉 Wilder RSI(14) <= 50.0 필터 REENTRY_BREAKOUT_MAX_RSI_50 = 50.0)
 2) 계좌별 미국 주식 매매 수수료율(GET /api/v1/commissions : 편도 0.07% -> 왕복 0.14% / 편도 0.10% -> 왕복 0.20%) 런타임 동적 동기화 브릿지 탑재 (Case 86)
 3) 순수 실물 매수 원가(book_price == actual_avg_price) 구조체 (StratumBucket) ·
    본 그리드 상단(7층 초과 시 구 1층[새 2층 후보] 보존 + 구 2층 + 구 7층 가중평균 통합 후 평단 오름차순 중간층 재배치 L2_L7_MERGE_SORT · Case 87) 번호 정규화·합병기(relabel_upper_grid_tiers) 및
@@ -17,11 +18,12 @@
 5) 30% 자투리 1주 승격 방지 가드(GUARD30) & 토스 실계좌 주문가능금액이 30% 가드 이상일 때 횟수 제한 없이 미할당 여유자금 즉시 온디맨드 예비시드 자동 수혈 판정기(Case 77, Case 89, Case 91) 및
    0주 전량 졸업 시 예비시드 원금 자동 상환 연산기(Case 77, Case 91)
 6) 사이클 최고 도달 회차(eff_lots = max(held_lots, cycle_ratchet_max_lots)) 잠금 기반 4단 와이드 점진 활주로(1~4회 -1.0% / 5~8회 -2.0% / 9~10회 -3.5% / 11회+ -5.5% · Case 87, Case 88) ·
-   1층 공석 시 2층 단가 상한 역전 차단(HOLD_PREVENT_INVERSION · Case 73) 기반 눌림목(-1.00%)/상승돌파(+1.00%) 하이브리드 재장전 판정기
-   (Case 84: 15:30 ~ 16:00 EST 구간에서는 1층 공석 +1.00% 상승돌파 추격을 HOLD_LATE_SESSION_BREAKOUT_CUTOFF 로 원천 차단하고 2층 단가 이하 -1.00% 눌림목만 허용!) ·
+   1층 공석 시 2층 단가 상한 역전 차단(HOLD_PREVENT_INVERSION · Case 73) 기반 눌림목(-1.00% 무필터)/상승돌파(+1.00% & RSI(14) <= 50.0 필터 · Case 92) 하이브리드 재장전 판정기
+   (Case 84: 15:30 ~ 16:00 EST 구간에서는 1층 공석 +1.00% 상승돌파 추격을 HOLD_LATE_SESSION_BREAKOUT_CUTOFF 로 원천 차단하고,
+    Case 92: 04:07 ~ 15:29 EST 구간에서 +1.00% 상승돌파 도달 시 RSI(14) > 50.0 과열 구간이면 HOLD_BREAKOUT_RSI_OVER_50 으로 차단하여 저점 -1.00% 눌림목으로 유도!) ·
    본 그리드 3중 안전문(보유 2층 이하 & 현금비중 20%+ & 저점대비 2.0배+ 반등) 통과 시 -15.0% 스텝업 저가 해금 판정기(Case 76) 및
    서브 그리드 최대 4회분(16%) 상한 캡 검문 & 10영업일 무매매·서브 1층 대비 -10.0% 저가 해금 판정기(evaluate_sub_grid_dip_signal · Case 88)
-- 제1헌법 ~ 제6헌법 및 Case 01 ~ 91 완벽 준수
+- 제1헌법 ~ 제6헌법 및 Case 01 ~ 92 완벽 준수
 """
 
 from __future__ import annotations
@@ -104,9 +106,13 @@ SUB_UNLOCK_DROP_FROM_L1_PCT: float = float(
     getattr(toss_api, "SUB_UNLOCK_DROP_FROM_L1_PCT", 10.0)
 )
 
-# 🎯 4 & Case 59, Case 71, Case 72, Case 73, Case 84, Case 88: 상단 그리드 보유 중 1층 공석 시 60초 주기 눌림목/상승돌파 임계치(%)
+# 🎯 4 & Case 59, Case 71, Case 72, Case 73, Case 84, Case 88, Case 92: 상단 그리드 보유 중 1층 공석 시 60초 주기 눌림목/상승돌파 임계치(%) 및 돌파 RSI 상한(50.0)
 REENTRY_PULLBACK_DROP_PCT: float = -1.00
 REENTRY_BREAKOUT_RISE_PCT: float = 1.00
+# NEW [Case 92 : 1층 공석 +1.00% 상승돌파(BREAKOUT_RELOAD) 전용 1분봉 Wilder RSI(14) <= 50.0 필터 상한 상수]
+REENTRY_BREAKOUT_MAX_RSI_50: float = float(
+    getattr(toss_api, "REENTRY_BREAKOUT_MAX_RSI_50", 50.0)
+)
 
 # [Case 84 & Case 88]: 정규장 마감 30분 전(15:30 ~ 16:00 EST) 본·서브 0주 새 사이클 첫 1층 진입 및 1층 공석 +1.0% 돌파 추격 동시 차단 기준 시각(HHMM)
 NEW_CYCLE_BUY_CUTOFF_HM: int = int(
@@ -606,8 +612,6 @@ def enforce_true_breakeven_floor_on_buckets(
             )
         )
     return adjusted
-
-
 # ---------------------------------------------------------------------------
 # [핵심 2] 본 그리드 8%(12.5분할) & 서브 그리드 4%(25분할) 정량 주수(복리/단리 연동) · 유휴현금(0.5회분 보호예수) · GUARD30 판정 · 무제한 온디맨드 수혈/상환기 (🎯 1 & Case 25 ~ 35, 67, 77, 86, 88, 89, 91)
 # ---------------------------------------------------------------------------
@@ -798,6 +802,8 @@ def resolve_affordable_buy_qty(
         round(float(buy_qty) * exec_p, 4) if buy_qty > 0 else 0.0
     )
     return buy_qty, actual_spent_usd
+
+
 def evaluate_guard30_and_reserve_injection(
     free_cash_usd: float,
     broker_bp_usd: Optional[float],
@@ -1004,7 +1010,7 @@ def compute_reserve_repayment_on_zero(
 
 
 # ---------------------------------------------------------------------------
-# [핵심 3] 사이클 최고 도달 회차 잠금 기반 4단 와이드 점진 단차(Case 87, 88) · 하이브리드 1층 재장전(Case 84 돌파차단) · 본 그리드 STEP2X_15PCT_C20 스텝업 해금(Case 76) · 서브 그리드 최대 4회분 캡 및 10일/-10% 저가 해금 판정기 (Case 36 ~ 88)
+# [핵심 3] 사이클 최고 도달 회차 잠금 기반 4단 와이드 점진 단차(Case 87, 88) · 하이브리드 1층 재장전(Case 84 돌파차단 & Case 92 돌파 RSI(14) <= 50.0 필터) · 본 그리드 STEP2X_15PCT_C20 스텝업 해금(Case 76) · 서브 그리드 최대 4회분 캡 및 10일/-10% 저가 해금 판정기 (Case 36 ~ 92)
 # ---------------------------------------------------------------------------
 def get_golden8_prog_thresholds(
     held_lots: int,
@@ -1053,16 +1059,20 @@ def evaluate_l2_only_hybrid_reentry_signal(
     min_upper_tier_price: float = 0.0,
     is_late_new_cycle_cutoff: bool = False,
     is_late_cutoff: Optional[bool] = None,
+    rsi_14: Optional[float] = None,
+    breakout_max_rsi: float = REENTRY_BREAKOUT_MAX_RSI_50,
 ) -> Dict[str, Any]:
     """
-    # [🎯 4 & Case 59, Case 67, Case 71, Case 72, Case 73, Case 84 & Case 88]:
+    # MODIFIED [🎯 4 & Case 59, Case 67, Case 71, Case 72, Case 73, Case 84, Case 88 & Case 92]:
     본 그리드 상단 2층 ~ 7층(GRID_L2 ~ GRID_L7) 또는 서브 그리드 상단 2층 ~ 3층(GRID_L2 ~ GRID_L3) 지층이 존재하는 상태에서 1층이 공석일 때:
     - 현재가 > 2층 단가(ceil_p) 시에는 1층 > 2층 단가 역전을 막기 위해 HOLD_PREVENT_INVERSION 으로 차단(Case 73)하고,
     - 현재가 <= 2층 단가 안전 영역 내에서는:
-      1) 직전 익절가 대비 -1.00% 이하 눌림목(PULLBACK_RELOAD)은 04:07 ~ 16:00 EST 전 매수 구간에서 100% 정상 승인하고,
-      2) 직전 익절가 대비 +1.00% 이상 상승돌파(BREAKOUT_RELOAD)는 04:07 ~ 15:29 EST 구간에서만 승인하되,
-         정규장 마감 30분 전(15:30 ~ 16:00 EST, late_cutoff == True) 구간에서는 장 막판 데드캣 숏스퀴즈 고점 추격으로 인한
-         시드고갈을 막기 위해 HOLD_LATE_SESSION_BREAKOUT_CUTOFF 로 원천 차단한다! (Case 84)
+      1) 직전 익절가 대비 -1.00% 이하 눌림목(PULLBACK_RELOAD)은 무필터(RSI 무관)로 04:07 ~ 16:00 EST 전 매수 구간에서 100% 정상 승인하고,
+      2) 직전 익절가 대비 +1.00% 이상 상승돌파(BREAKOUT_RELOAD)는:
+         - 정규장 마감 30분 전(15:30 ~ 16:00 EST, late_cutoff == True) 구간에서는 HOLD_LATE_SESSION_BREAKOUT_CUTOFF 로 원천 차단(Case 84)하며,
+         - 04:07 ~ 15:29 EST 구간에서는 1분봉 Wilder RSI(14) <= 50.0 (breakout_max_rsi) 조건을 결합하여,
+           단기 과열 구간(RSI(14) > 50.0) 돌파는 HOLD_BREAKOUT_RSI_OVER_50 으로 차단해 저점 -1.00% 눌림목 진입으로 유도하고
+           과매도 회복 초입(RSI(14) <= 50.0) 진성 추세 전환 돌파만 승인한다! (Case 92)
     """
     lp = safe_float(live_price, 0.0)
     anc = safe_float(anchor_price, 0.0)
@@ -1075,6 +1085,19 @@ def evaluate_l2_only_hybrid_reentry_signal(
         is_late_cutoff
         if is_late_cutoff is not None
         else is_late_new_cycle_cutoff
+    )
+
+    max_rsi_cap = safe_float(breakout_max_rsi, REENTRY_BREAKOUT_MAX_RSI_50)
+    has_rsi_filter = bool(
+        rsi_14 is not None
+        and safe_float(rsi_14, -1.0) > 0.0
+        and max_rsi_cap > 0.0
+    )
+    eff_rsi_val = (
+        round(safe_float(rsi_14, 50.0), 2) if rsi_14 is not None else 50.0
+    )
+    is_breakout_rsi_blocked = bool(
+        has_rsi_filter and eff_rsi_val > (max_rsi_cap + 1e-6)
     )
 
     ref_anchor = (
@@ -1104,6 +1127,9 @@ def evaluate_l2_only_hybrid_reentry_signal(
             "pullback_target_price": pullback_target_p,
             "breakout_target_price": breakout_target_p,
             "l2_ceiling_price": round(ceil_p, 4),
+            "rsi_14": eff_rsi_val,
+            "breakout_max_rsi": round(max_rsi_cap, 2),
+            "breakout_rsi_blocked": is_breakout_rsi_blocked,
         }
 
     chg_from_exit_pct = ((lp - ref_anchor) / ref_anchor) * 100.0
@@ -1119,9 +1145,12 @@ def evaluate_l2_only_hybrid_reentry_signal(
             "pullback_target_price": pullback_target_p,
             "breakout_target_price": breakout_target_p,
             "l2_ceiling_price": round(ceil_p, 4),
+            "rsi_14": eff_rsi_val,
+            "breakout_max_rsi": round(max_rsi_cap, 2),
+            "breakout_rsi_blocked": is_breakout_rsi_blocked,
         }
 
-    # 조건 A : -1.00% 이하 눌림목 재장전 (04:07 ~ 16:00 EST 전 매수 구간 100% 정상 허용)
+    # 조건 A : -1.00% 이하 눌림목 재장전 (무필터 · 04:07 ~ 16:00 EST 전 매수 구간 100% 정상 허용)
     if chg_from_exit_pct <= REENTRY_PULLBACK_DROP_PCT:
         return {
             "should_buy": True,
@@ -1132,9 +1161,12 @@ def evaluate_l2_only_hybrid_reentry_signal(
             "pullback_target_price": pullback_target_p,
             "breakout_target_price": breakout_target_p,
             "l2_ceiling_price": round(ceil_p, 4),
+            "rsi_14": eff_rsi_val,
+            "breakout_max_rsi": round(max_rsi_cap, 2),
+            "breakout_rsi_blocked": False,
         }
 
-    # 조건 B : +1.00% 이상 상승돌파 재장전 (Case 84 : 15:30 ~ 16:00 EST 구간에서는 돌파 추격 원천 차단!)
+    # 조건 B : +1.00% 이상 상승돌파 재장전 (Case 84 15:30 돌파 차단 & Case 92 RSI(14) <= 50.0 필터 결합)
     if chg_from_exit_pct >= REENTRY_BREAKOUT_RISE_PCT:
         if late_cutoff:
             return {
@@ -1146,6 +1178,24 @@ def evaluate_l2_only_hybrid_reentry_signal(
                 "pullback_target_price": pullback_target_p,
                 "breakout_target_price": breakout_target_p,
                 "l2_ceiling_price": round(ceil_p, 4),
+                "rsi_14": eff_rsi_val,
+                "breakout_max_rsi": round(max_rsi_cap, 2),
+                "breakout_rsi_blocked": is_breakout_rsi_blocked,
+            }
+        # 🚨 [Case 92 핵심 방어 : +1.00% 상승돌파 시 1분봉 Wilder RSI(14) > 50.0 과열 구간이면 고점 추격 차단 -> -1.00% 눌림목 유도]
+        if is_breakout_rsi_blocked:
+            return {
+                "should_buy": False,
+                "signal_type": "HOLD_BREAKOUT_RSI_OVER_50",
+                "ref_anchor": round(ref_anchor, 4),
+                "quota_ref_price": round(ref_anchor, 4),
+                "chg_from_exit_pct": round(chg_from_exit_pct, 2),
+                "pullback_target_price": pullback_target_p,
+                "breakout_target_price": breakout_target_p,
+                "l2_ceiling_price": round(ceil_p, 4),
+                "rsi_14": eff_rsi_val,
+                "breakout_max_rsi": round(max_rsi_cap, 2),
+                "breakout_rsi_blocked": True,
             }
         return {
             "should_buy": True,
@@ -1156,6 +1206,9 @@ def evaluate_l2_only_hybrid_reentry_signal(
             "pullback_target_price": pullback_target_p,
             "breakout_target_price": breakout_target_p,
             "l2_ceiling_price": round(ceil_p, 4),
+            "rsi_14": eff_rsi_val,
+            "breakout_max_rsi": round(max_rsi_cap, 2),
+            "breakout_rsi_blocked": False,
         }
 
     return {
@@ -1167,6 +1220,9 @@ def evaluate_l2_only_hybrid_reentry_signal(
         "pullback_target_price": pullback_target_p,
         "breakout_target_price": breakout_target_p,
         "l2_ceiling_price": round(ceil_p, 4),
+        "rsi_14": eff_rsi_val,
+        "breakout_max_rsi": round(max_rsi_cap, 2),
+        "breakout_rsi_blocked": is_breakout_rsi_blocked,
     }
 
 
