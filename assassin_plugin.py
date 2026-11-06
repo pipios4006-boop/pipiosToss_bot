@@ -1,16 +1,16 @@
 # -*- coding: utf-8 -*-
 """
-# MODIFIED: assassin_plugin.py (Part 1/2 — 🗡️ [모의 ⇄ 실전 Dual-Ready] 암살자 독립 플러그인 · 당일 4대 앵커 원장 영속화 · 10대 진성 게이트 · 방향성 3단 안전망 v2 · HA 트레일링 · Case 93)
+# MODIFIED: assassin_plugin.py (Part 1/2 — 🗡️ [모의 ⇄ 실전 Dual-Ready] 암살자 독립 플러그인 · 원장 내 $45.74 동일값 오염 앵커 자동 감지 자가 치유[Self-Healing] · 400봉 상한 연동 · 10대 진성 게이트 · 방향성 3단 안전망 v2 · HA 트레일링 · Case 93)
 인피니트 스노우볼 (Infinite Snowball) v3.0 — 스나이퍼와 100% 물리적 격리된 상시 가동 [모의 ⇄ 실전 Dual-Ready] 암살자(Assassin) 코어 모듈 (Step 10 / 14 · Case 93)
 - 역할:
-  1) 스나이퍼 원장(soxl_stratum_ledger*.json) 및 예수금과 100% 물리적 분리된 독립 3중 원장(AssassinSimLedger : assassin_sim_ledger_{folder_slug}.json) 운용
+  1) 스나이퍼 원장(soxl_stratum_ledger*.json) 및 예수금과 100% 물리적 분리된 독립 3중 원장(AssassinSimLedger : assassin_sim_ledger_{folder_slug}.json) 운용 및 오염된 동일값 앵커 자동 초기화 자가 치유
   2) 현재 ASSASSIN_LIVE_ORDER_HARD_LOCK = True 로 실전 주문 발사를 물리적으로 100% 차단하되,
      내부 주문 상태 머신(매수 발주 · +5.00% 상단 안전 캡 선장전 · +1.00% 점화 HA 트레일링 modify_order 가격 정정 스윕 · 15:59 2단계 방탄 MOC)은
      토스증권 Open API v1.2.14 실전 규격과 100% 동일하게 구현하여 스위치 해금 즉시 실전 암살자로 탈바꿈 가능
   3) 평일 04:07 ~ 08:14 EST 골든타임 1주 독립 정찰병(IndependentScoutUnit · 이동평균 및 합병 100% 배제) 파견 및 4대 지표(① RSI14 · ② 프리VWAP · ③ 전일종가 · ④ 04:07프리시가) 기록
   4) 2번째+ 정찰병 타점에서 10대 진성 게이트(헌법 G1 ~ G5 + 폭락장 BG1 ~ BG5) 충족 시 기준 시드 100% 현재가 지정가 즉시 진입
   5) 08:15 EST 이후 순수 롱 방향성 인지 나스닥 100 선물/QQQ 3단계 안전망 v2 (안전망 상승/지지 중 손절 절대 금지 · 음봉 & 신저가 하락 진행 중 역행만 칼손절)
-  6) 5대 라이프사이클 실시간 텔레그램 푸시 알림 및 /assassin 상세 관제 보드(온디맨드 다중페이지 1m + 1d 일봉 + QQQ 1m 동시 프리워밍) 제공
+  6) 5대 라이프사이클 실시간 텔레그램 푸시 알림 및 /assassin 상세 관제 보드(온디맨드 400봉 1m + 1d 일봉 + QQQ 1m 동시 프리워밍) 제공
 """
 
 from __future__ import annotations
@@ -97,6 +97,19 @@ SAFETY_STAGE23_SOXL_LOSS_MAX_PCT: float = -0.30  # 2·3차 역행 손절 발동 
 SAFETY_STAGE23_QQQ_VEL3M_DROP_PCT: float = -0.25  # 2·3차 발동 QQQ 3분 변화율 급락 가속 기준 (<= -0.25%)
 SAFETY_DYN_QQQ_MIN_THR_PCT: float = 0.80      # 동적 하락 진폭 최소 임계치 (0.80%)
 SAFETY_DYN_QQQ_MAX_THR_PCT: float = 1.00      # 동적 하락 진폭 최대 캡 (1.00%)
+
+
+def _is_collapsed_assassin_anchors(
+    prev_c: float, pre_o: float, pre_v: float
+) -> bool:
+    """
+    # NEW [Case 93 : 3대 가격 앵커(전일종가 · 04:07프리시가 · 프리VWAP)가 단일 현재가 폴백값으로 오염되었는지 판별]:
+    """
+    if prev_c <= 0.0 or pre_o <= 0.0 or pre_v <= 0.0:
+        return True
+    return bool(
+        abs(prev_c - pre_o) < 1e-6 and abs(pre_v - prev_c) < 1e-6
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -237,7 +250,7 @@ class AssassinSimLedger:
             "session_phase": "IDLE_WAIT_0407",
             "is_session_done": False,
             "session_done_reason": "",
-            # 당일 확정 4대 앵커 지표 원장 백업 (재기동 시 첫 틱 폴백 원천 차단)
+            # 당일 확정 4대 앵커 지표 원장 백업 (진성 확인된 값만 보존)
             "today_anchors_locked": False,
             "today_prev_reg_close": 0.0,
             "today_pre_open_price": 0.0,
@@ -323,7 +336,9 @@ class AssassinSimLedger:
             "updated_at": now_est.isoformat(),
         }
 
-    def _sanitize_state(self, raw_st: Dict[str, Any], default_seed: float) -> Dict[str, Any]:
+    def _sanitize_state(
+        self, raw_st: Dict[str, Any], default_seed: float
+    ) -> Dict[str, Any]:
         base = self._default_symbol_state(default_seed)
         if isinstance(raw_st, dict):
             base.update(raw_st)
@@ -353,6 +368,22 @@ class AssassinSimLedger:
             ),
             4,
         )
+
+        # 🚨 [Case 93 자가 치유 : 원장에 저장된 3대 앵커가 모두 동일($45.74)한 폴백 오염 상태이면 즉시 잠금 해제 및 0.0 초기화!]
+        t_prev = safe_float(base.get("today_prev_reg_close"), 0.0)
+        t_open = safe_float(base.get("today_pre_open_price"), 0.0)
+        t_vwap = safe_float(base.get("today_premarket_vwap"), 0.0)
+        if _is_collapsed_assassin_anchors(t_prev, t_open, t_vwap):
+            base["today_anchors_locked"] = False
+            if (
+                t_prev > 0.0
+                and abs(t_prev - t_open) < 1e-6
+                and abs(t_vwap - t_prev) < 1e-6
+            ):
+                base["today_prev_reg_close"] = 0.0
+                base["today_pre_open_price"] = 0.0
+                base["today_premarket_vwap"] = 0.0
+                base["today_regular_vwap"] = 0.0
 
         if not isinstance(base.get("scout_units"), list):
             base["scout_units"] = []
@@ -394,7 +425,7 @@ class AssassinSimLedger:
                 loaded_st or {}, default_seed=sniper_seed_usd
             )
             self._data = {TARGET_SYMBOL: clean_st}
-            self._save_sync_unlocked(force= loaded_st is None)
+            self._save_sync_unlocked(force=(loaded_st is None))
 
     def _comparable_payload_str(self) -> str:
         st_copy = copy.deepcopy(self._data.get(TARGET_SYMBOL, {}))
@@ -477,7 +508,10 @@ class AssassinSimLedger:
             for k, v in kwargs.items():
                 st[k] = v
             self._data[TARGET_SYMBOL] = self._sanitize_state(
-                st, default_seed=safe_float(st.get("initial_seed_usd"), 10000.0)
+                st,
+                default_seed=safe_float(
+                    st.get("initial_seed_usd"), 10000.0
+                ),
             )
             self._save_sync_unlocked(force=False)
             return copy.deepcopy(self._data[TARGET_SYMBOL])
@@ -1087,7 +1121,7 @@ def evaluate_assassin_ha_trailing_and_exits(
     }
 # -*- coding: utf-8 -*-
 """
-# MODIFIED: assassin_plugin.py (Part 2/2 — 4대 지표 다중페이지 1m+1d 온디맨드 프리워밍 및 원장 잠금 · Dual-Ready 주문 어댑터 · 5대 실시간 알림 · /assassin 상세 관제 보드 · TDD 검증기)
+# MODIFIED: assassin_plugin.py (Part 2/2 — 4대 지표 400봉 1m + 10봉 1d 온디맨드 프리워밍 · 오염 앵커 복원 차단 및 진성 원장 잠금 · force_warmup 쿨다운 바이패스 · 08:15 퇴근 후 불필요 워밍업 경합 차단 · Dual-Ready 주문 어댑터 · 5대 실시간 알림 · /assassin 상세 관제 보드 · TDD 검증기)
 """
 
 # 온디맨드 캔들 워밍업 과호출 방지용 인메모리 쿨다운 타임스탬프
@@ -1109,13 +1143,14 @@ async def _extract_live_assassin_features_and_qqq_snapshot(
 ) -> Dict[str, Any]:
     """
     # MODIFIED [Case 93 핵심 패치]:
-    1) SOXL 및 QQQ 의 실시간 현재가와 1분봉/일봉 지표를 추출한다.
-    2) 만약 캔들 캐시가 아직 워밍업되지 않았거나(anchors_ready == False),
+    1) SOXL 및 QQQ 의 실시간 현재가와 1분봉(400봉 상한)/일봉(10봉) 지표를 추출한다.
+    2) 캔들 캐시가 아직 워밍업되지 않았거나(anchors_ready == False),
        전일 정규장 종가(prev_reg_close) · 당일 04:07 프리장 시가(pre_open_price) · 프리장 VWAP(premarket_vwap)이
-       첫 틱 가격으로 동일하게 묶여 있는 경우 즉시 다중 페이지 SOXL 1분봉(total_count=600) + SOXL 일봉(1d, count=10) +
-       QQQ 1분봉(count=60)을 온디맨드로 조회하여 실제 차트 데이터를 복원한다!
-    3) 한번 확보된 당일 진성 앵커(전일종가 · 04:07프리시가 · 프리VWAP)는 암살자 원장(AssassinSimLedger)에
-       당일 잠금(today_anchors_locked=True)으로 영속화하여 재기동 후에도 100% 보존한다.
+       첫 틱 가격($45.74)으로 동일하게 묶여 있는 경우(anchors_collapsed == True),
+       즉시 SOXL 1분봉(total_count=400) + SOXL 일봉(1d, count=10) + QQQ 1분봉(total_count=60)을
+       온디맨드로 조회하여 실제 차트 데이터를 복원한다! (force_warmup=True 시 쿨다운 즉시 바이패스)
+    3) 진성으로 확인된 당일 앵커(전일종가 · 04:07프리시가 · 프리VWAP)만 암살자 원장(AssassinSimLedger)에
+       당일 잠금(today_anchors_locked=True)으로 영속화하며, 동일값 폴백 데이터는 절대 원장에 잠그거나 복원하지 않는다.
     """
     global _LAST_ASSASSIN_WARMUP_MONO
     dt_now = now_est.astimezone(EST_TZ) if now_est else datetime.now(EST_TZ)
@@ -1166,23 +1201,17 @@ async def _extract_live_assassin_features_and_qqq_snapshot(
         if isinstance(raw_qm, dict):
             qqq_met = dict(raw_qm)
 
-    # 현재 캐시된 3대 앵커가 모두 동일(폴백 상태)한지 검사
     c_prev_c = safe_float(soxl_met.get("prev_reg_close"), 0.0)
     c_pre_o = safe_float(soxl_met.get("pre_open_price"), 0.0)
     c_pre_v = safe_float(soxl_met.get("premarket_vwap"), 0.0)
-    anchors_collapsed = bool(
-        c_prev_c <= 0.0
-        or c_pre_o <= 0.0
-        or c_pre_v <= 0.0
-        or (
-            abs(c_prev_c - c_pre_o) < 1e-6
-            and abs(c_pre_v - c_prev_c) < 1e-6
-            and safe_int(soxl_met.get("daily_candle_count"), 0) == 0
-        )
+    anchors_collapsed = _is_collapsed_assassin_anchors(
+        c_prev_c, c_pre_o, c_pre_v
     )
 
     now_mono = time.monotonic()
-    warmup_cooldown = 3.0 if force_warmup else 12.0
+    can_run_warmup = bool(
+        force_warmup or (now_mono - _LAST_ASSASSIN_WARMUP_MONO) >= 10.0
+    )
     if (
         context is not None
         and hasattr(context, "api")
@@ -1192,12 +1221,12 @@ async def _extract_live_assassin_features_and_qqq_snapshot(
             or anchors_collapsed
             or safe_float(soxl_met.get("prev_bar_close"), 0.0) <= 0.0
         )
-        and (now_mono - _LAST_ASSASSIN_WARMUP_MONO) >= warmup_cooldown
+        and can_run_warmup
     ):
         _LAST_ASSASSIN_WARMUP_MONO = now_mono
         try:
             c_1m = await context.api.get_candles_1m(
-                symbol=TARGET_SYMBOL, count=200, total_count=600
+                symbol=TARGET_SYMBOL, count=200, total_count=400
             )
             c_1d = await context.api.get_candles_1d(
                 symbol=TARGET_SYMBOL, count=10
@@ -1214,9 +1243,12 @@ async def _extract_live_assassin_features_and_qqq_snapshot(
                 if lp <= 0.0:
                     lp = safe_float(soxl_met.get("live_price"), 0.0)
         except Exception as exc:
-            logger.debug("Assassin SOXL 1m+1d 온디맨드 워밍업 폴백: %s", exc)
+            logger.debug("Assassin SOXL 400봉 1m+1d 온디맨드 워밍업 폴백: %s", exc)
 
-        if safe_float(qqq_met.get("prev_bar_close"), 0.0) <= 0.0:
+        if (
+            force_warmup
+            or safe_float(qqq_met.get("prev_bar_close"), 0.0) <= 0.0
+        ):
             try:
                 q_1m = await context.api.get_candles_1m(
                     symbol=MACRO_REF_SYMBOL, count=60, total_count=60
@@ -1250,18 +1282,52 @@ async def _extract_live_assassin_features_and_qqq_snapshot(
     pre_vwap = safe_float(soxl_met.get("premarket_vwap"), 0.0)
     reg_vwap = safe_float(soxl_met.get("regular_vwap"), 0.0)
 
-    # 원장에 잠긴 당일 진성 앵커와 상호 보완 동기화
+    found_true_prev_c = bool(soxl_met.get("found_true_prev_close", False))
+    found_true_pre_o = bool(soxl_met.get("found_true_pre_open", False))
+    found_true_pre_v = bool(soxl_met.get("found_true_pre_vwap", False))
+
+    # 원장에 저장된 당일 앵커 확인 (만약 원장 값이 동일값 폴백 오염 상태이면 무시하고 폐기)
     saved_prev_c = safe_float(st_assn.get("today_prev_reg_close"), 0.0)
     saved_pre_o = safe_float(st_assn.get("today_pre_open_price"), 0.0)
     saved_pre_v = safe_float(st_assn.get("today_premarket_vwap"), 0.0)
+    if _is_collapsed_assassin_anchors(saved_prev_c, saved_pre_o, saved_pre_v):
+        saved_prev_c = 0.0
+        saved_pre_o = 0.0
+        saved_pre_v = 0.0
 
-    if bool(soxl_met.get("anchors_ready", False)) and prev_reg_close > 0.0:
+    # 정규장(09:30 EST 이후)에 400봉(약 6.6시간)만 조회하여 아침 04:07 프리장 봉이 1분봉 윈도우 밖으로 지나간 경우,
+    # 당일 아침에 원장에 정상 잠겨 있던 saved_pre_o / saved_pre_v 를 복원하여 보존한다.
+    if not found_true_prev_c and saved_prev_c > 0.0:
+        prev_reg_close = saved_prev_c
+        found_true_prev_c = True
+    if not found_true_pre_o and saved_pre_o > 0.0:
+        pre_open_price = saved_pre_o
+        found_true_pre_o = True
+    if not found_true_pre_v and saved_pre_v > 0.0:
+        pre_vwap = saved_pre_v
+        found_true_pre_v = True
+
+    is_now_valid_distinct = not _is_collapsed_assassin_anchors(
+        prev_reg_close, pre_open_price, pre_vwap
+    )
+    if (
+        (found_true_prev_c or found_true_pre_o or found_true_pre_v)
+        and is_now_valid_distinct
+    ):
         need_save_anchors = bool(
             not bool(st_assn.get("today_anchors_locked", False))
-            or abs(saved_prev_c - prev_reg_close) > 1e-4
-            or (pre_open_price > 0.0 and abs(saved_pre_o - pre_open_price) > 1e-4)
             or (
-                hm_now <= 935
+                found_true_prev_c
+                and abs(saved_prev_c - prev_reg_close) > 1e-4
+            )
+            or (
+                found_true_pre_o
+                and pre_open_price > 0.0
+                and abs(saved_pre_o - pre_open_price) > 1e-4
+            )
+            or (
+                found_true_pre_v
+                and hm_now <= 935
                 and pre_vwap > 0.0
                 and abs(saved_pre_v - pre_vwap) > 1e-4
             )
@@ -1278,13 +1344,6 @@ async def _extract_live_assassin_features_and_qqq_snapshot(
                 ),
                 today_regular_vwap=round(reg_vwap, 4),
             )
-    else:
-        if saved_prev_c > 0.0:
-            prev_reg_close = saved_prev_c
-        if saved_pre_o > 0.0:
-            pre_open_price = saved_pre_o
-        if saved_pre_v > 0.0:
-            pre_vwap = saved_pre_v
 
     if prev_reg_close <= 0.0:
         prev_reg_close = lp
@@ -1295,8 +1354,6 @@ async def _extract_live_assassin_features_and_qqq_snapshot(
     if reg_vwap <= 0.0:
         reg_vwap = safe_float(soxl_met.get("vwap"), lp)
 
-    # 골든타임(04:07 ~ 09:29 EST)에는 프리장 VWAP을 기준 VWAP으로 사용하고,
-    # 정규장(09:30 ~ 16:00 EST)에서도 정찰병 괴리율 기준은 프리장 VWAP을 유지하되 정규장 VWAP을 병기한다.
     ref_vwap = pre_vwap if pre_vwap > 0.0 else reg_vwap
 
     vs_vwap_pct = (
@@ -1680,7 +1737,10 @@ async def _dispatch_new_scout_unit_and_check_gates(
         sc1_p = lp
 
     vs_sc1 = ((lp - sc1_p) / sc1_p) * 100.0 if sc1_p > 0.0 else 0.0
-    tp = math.ceil((lp * (1.0 + SCOUT_PROFIT_TARGET_PCT / 100.0) - 1e-9) * 100.0) / 100.0
+    tp = (
+        math.ceil((lp * (1.0 + SCOUT_PROFIT_TARGET_PCT / 100.0) - 1e-9) * 100.0)
+        / 100.0
+    )
     now_ts = time.time()
 
     new_scout = IndependentScoutUnit(
@@ -1787,7 +1847,12 @@ async def _dispatch_new_scout_unit_and_check_gates(
     if not ok_buy:
         return "ASSASSIN_BUY_FAILED"
 
-    arm_p = math.ceil((fill_p * (1.0 + ASSASSIN_ARM_IGNITION_PCT / 100.0) - 1e-9) * 100.0) / 100.0
+    arm_p = (
+        math.ceil(
+            (fill_p * (1.0 + ASSASSIN_ARM_IGNITION_PCT / 100.0) - 1e-9) * 100.0
+        )
+        / 100.0
+    )
     cap_p = round(fill_p * (1.0 + ASSASSIN_SAFE_CAP_PCT / 100.0), 2)
     _, cap_oid = await _dispatch_assassin_safe_cap_sell_order(
         context=context,
@@ -1857,6 +1922,8 @@ async def execute_simulated_assassin_tick_plugin(
     🚨 Case 93 핵심:
     main.py 의 main_sniper_loop() 최상단(스나이퍼 ON/OFF 분기 이전)에서 매 틱 호출되는
     [모의 ⇄ 실전 Dual-Ready] 암살자 상시 작동 상태 머신.
+    - 이미 당일 세션이 종료(is_session_done == True)된 경우에는 시세 스냅샷/워밍업 호출 전에
+      즉시 리턴하여 백그라운드 루프가 _LAST_ASSASSIN_WARMUP_MONO 쿨다운을 점유하지 않도록 보호한다.
     """
     dt_now = now_est.astimezone(EST_TZ) if now_est else datetime.now(EST_TZ)
     if is_weekend_nyse_closed(dt_now) or dt_now.weekday() >= 5:
@@ -1893,11 +1960,11 @@ async def execute_simulated_assassin_tick_plugin(
             context.assassin_high_freq_active = False
         return "WAIT_0407_OPEN"
 
-    # 16:02 EST 이후 장외 시간대에는 당일 세션 종료 대기
-    if hm > 1602 and bool(st.get("is_session_done", False)):
+    # 당일 이미 퇴근 완료된 상태면 불필요한 캔들 워밍업 없이 즉시 대기 반환
+    if bool(st.get("is_session_done", False)):
         if context is not None:
             context.assassin_high_freq_active = False
-        return "SESSION_ALREADY_DONE"
+        return str(st.get("session_done_reason") or "SESSION_DONE")
 
     feat = await _extract_live_assassin_features_and_qqq_snapshot(
         context=context, now_est=dt_now
@@ -1905,12 +1972,6 @@ async def execute_simulated_assassin_tick_plugin(
     lp = safe_float(feat.get("live_price"), 0.0)
     if lp <= 0.0:
         return "NO_LIVE_PRICE"
-
-    # 당일 이미 퇴근 완료된 상태면 대기
-    if bool(st.get("is_session_done", False)):
-        if context is not None:
-            context.assassin_high_freq_active = False
-        return str(st.get("session_done_reason") or "SESSION_DONE")
 
     now_ts = time.time()
 
@@ -2016,18 +2077,20 @@ async def execute_simulated_assassin_tick_plugin(
             st.get("comp_invested_usd"), float(c_qty) * ep
         )
 
-        _, _, s_net = calc_sell_realized_pnl(
-            sell_price=exec_xp,
-            sell_qty=s_qty,
-            actual_invested_cost_usd=s_inv,
+        s_pnl_info = calc_sell_realized_pnl(
+            sold_qty=s_qty,
+            sell_exec_price=exec_xp,
+            sold_actual_cost_usd=s_inv,
             round_trip_fee_rate_pct=rt_fee,
         )
-        _, _, c_net = calc_sell_realized_pnl(
-            sell_price=exec_xp,
-            sell_qty=c_qty,
-            actual_invested_cost_usd=c_inv,
+        c_pnl_info = calc_sell_realized_pnl(
+            sold_qty=c_qty,
+            sell_exec_price=exec_xp,
+            sold_actual_cost_usd=c_inv,
             round_trip_fee_rate_pct=rt_fee,
         )
+        s_net = safe_float(s_pnl_info.get("net_pnl_usd"), 0.0)
+        c_net = safe_float(c_pnl_info.get("net_pnl_usd"), 0.0)
         gain_pct = ((exec_xp - ep) / ep) * 100.0 if ep > 0.0 else 0.0
 
         init_s = max(
@@ -2142,7 +2205,6 @@ async def execute_simulated_assassin_tick_plugin(
             no_trade_days=safe_int(st.get("no_trade_days"), 0) + 1,
             alert_0815_no_trade_sent=True,
         )
-        # 04:07 ~ 08:14 EST 구간 동안 실제 정찰을 수행하다가 08:15 에 퇴근하는 경우 알림 발송
         if had_scouts_today and not already_sent:
             await _send_2_0815_no_trade_offwork_alert(
                 context=context, st=st, feat=feat, now_est=dt_now
@@ -2395,7 +2457,7 @@ async def build_assassin_detail_dashboard_html(
 ) -> str:
     """
     /assassin 명령어 또는 전술 제어반 [🗡️ [모의] 암살자 상세 관제] 버튼 클릭 시 호출되는 상세 관제 보드.
-    호출 즉시 force_warmup=True 로 SOXL 1m(다중페이지) + 1d(일봉) + QQQ 1m을 점검하여
+    호출 즉시 force_warmup=True 로 SOXL 1m(400봉) + 1d(일봉 10봉) + QQQ 1m을 즉시 점검하여
     ② 프리VWAP · ③ 전일종가 · ④ 프리시가가 정확히 분리 표출되도록 보장한다.
     """
     now_est = datetime.now(EST_TZ)
@@ -2530,7 +2592,11 @@ def run_assassin_plugin_tdd() -> bool:
     3) 08:15 EST 이후 방향성 인지 3단계 안전망 v2에서 안전망이 상승/지지 중일 때
        손절이 100% 차단(False)되고, 음봉 & 신저가 하락 가속 시에만 역행 손절(True)되는지 검증
     4) +1.00% 점화 후 보존선(arm_100_price) 하향 터치 시 최소 +1.00% 익절이 보장되는지 검증
+    5) 동일값 폴백 오염 앵커(_is_collapsed_assassin_anchors) 감지 검증
     """
+    assert _is_collapsed_assassin_anchors(45.74, 45.74, 45.74) is True
+    assert _is_collapsed_assassin_anchors(44.10, 45.20, 45.74) is False
+
     hit_1, _, _ = evaluate_10_truth_gates_signal(
         day_scout_seq=1,
         rsi_14=18.0,

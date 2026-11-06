@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 """
-# MODIFIED: toss_api.py (황금시간 07:00~07:50 RSI<=19 올인 관련 상수 재익스포트 및 주석 전면 소각)
-인피니트 스노우볼 (Infinite Snowball) v3.0 — 토스증권 Open API (v1.2.14) 방탄 통신 통제소 (Part 2 / 2 · Step 02 / 13)
+# MODIFIED: toss_api.py (Part 1/2 — 황금시간 07:00~07:50 RSI<=19 올인 관련 상수 재익스포트 및 주석 전면 소각 & Case 91 복리/단리 심볼 재익스포트 & Case 93 get_candles_1m count/total_count 양방향 호환 및 최대 400분봉[2페이지] 상한 하드 락온으로 00:00 EST 날짜변경선 침범 원천 차단)
+인피니트 스노우볼 (Infinite Snowball) v3.0 — 토스증권 Open API (v1.2.14) 방탄 통신 통제소 (Part 2 / 2 · Step 02 / 14)
 - 역할:
-  1) toss_api_core.py (Part 1 / 2) 의 모든 상수(DEFAULT_GRID_MERGE_MODE · Case 88 서브 그리드 상수 포함)·유틸리티·폴더격리·디스크치유·
+  1) toss_api_core.py (Part 1 / 2) 의 모든 상수(DEFAULT_GRID_MERGE_MODE · Case 88 서브 그리드 상수 · Case 91 복리/단리 모드 상수 포함)·유틸리티·폴더격리·디스크치유·
      GlobalThrottle·SoxlStratumLedger 심볼을 명시적으로 재익스포트(Facade Re-export)하여 타 모듈 AST 심볼 임포트 무결성 100% 보장
   2) 제1헌법 ~ 제6헌법 및 API.txt (v1.2.14) 100% 준수 TossApiClient 구현:
      - OAuth2 토큰 자동 발급 및 만료 전 선제 갱신 (POST /oauth2/token)
@@ -11,6 +11,7 @@
      - 계좌별 미국 주식(US) 실제 매매 수수료율 조회·락온 및 일시 통신 실패 시 원장/런타임 수수료율 보존 폴백 (GET /api/v1/commissions · Case 86)
      - REAL_ALLOWED_SYMBOLS = ("SOXL",) 단일 롱 화이트리스트 물리적 강제 (인버스 숏 SOXS 원천 차단 · Case 09)
      - 1분봉 윗꼬리(Upper-Wick) 슈팅 포착용 최근 5.0초 내 유효 체결 최고가 추출기 (get_recent_wick_high_price · Case 82)
+     - 날짜변경선(00:00 EST) 야간 꼬리 침범을 원천 차단하는 최대 400분봉(2페이지 × 200봉) 1분봉 수집기 (get_candles_1m · Case 93) 및 일봉 수집기 (get_candles_1d)
      - 토스 CLOSED 주문 원장 역추적기 (probe_latest_manual_fill_price : 실측 수수료 commission + tax 추출 포함 · Case 19, Case 63, Case 86, Case 88)
      - 모든 파일/네트워크 I/O 의 asyncio.to_thread 비동기 격리 및 GlobalThrottle 중앙 통제
 """
@@ -51,6 +52,8 @@ from toss_api_core import (
     MIN_DIP_BUDGET_RATIO,
     MIN_DIP_VS_L1_RATIO,
     NEW_CYCLE_BUY_CUTOFF_HM,
+    PORTION_MODE_COMPOUND,
+    PORTION_MODE_SIMPLE,
     PORTION_RATIO_LOCKED,
     REAL_ALLOWED_SYMBOLS,
     REANCHOR_NET_BUFFER_MULT,
@@ -76,6 +79,7 @@ from toss_api_core import (
     StratumLedger,
     TARGET_SYMBOL,
     TOSS_OPENAPI_BASE_URL,
+    VALID_PORTION_MODES,
     _HybridFileLock,
     _NonRetryableApiError,
     _load_env_files_into_environ,
@@ -86,6 +90,7 @@ from toss_api_core import (
     get_folder_slug,
     get_runtime_round_trip_fee_rate_pct,
     get_runtime_us_commission_rate,
+    is_simple_income_mode,
     resolve_folder_isolated_ledger_paths,
     safe_float,
     safe_int,
@@ -728,7 +733,6 @@ class TossApiClient:
             if prices:
                 return min(prices)
         return safe_float(fallback_price, 0.0)
-
     @staticmethod
     def _parse_candle_page_result(
         res: Any,
@@ -800,45 +804,107 @@ class TossApiClient:
                 exc,
             )
 
-        if not before:
-            fb_params: Dict[str, Any] = {
-                "symbol": sym_clean,
-                "interval": intv_clean,
-                "count": min(100, q_cnt),
-            }
-            try:
-                res_fb = await self._request(
-                    method="GET",
-                    path="/api/v1/candles",
-                    params=fb_params,
-                    require_account=False,
-                    rate_group="MARKET_DATA_CHART",
-                )
-                return self._parse_candle_page_result(res_fb)
-            except Exception as exc2:
-                logger.debug("get_candles 2차 폴백 예외(묵음): %s", exc2)
+        fb_params: Dict[str, Any] = {
+            "symbol": sym_clean,
+            "interval": intv_clean,
+            "count": min(200, q_cnt),
+        }
+        if before:
+            fb_params["before"] = str(before).strip()
+        try:
+            res_fb = await self._request(
+                method="GET",
+                path="/api/v1/candles",
+                params=fb_params,
+                require_account=False,
+                rate_group="MARKET_DATA_CHART",
+            )
+            return self._parse_candle_page_result(res_fb)
+        except Exception as exc2:
+            logger.debug("get_candles 2차 폴백 예외(묵음): %s", exc2)
 
         return [], None
+
+    @staticmethod
+    def _has_today_0407_open_bar_in_candles(
+        candles: List[Dict[str, Any]],
+        today_est_str: str,
+    ) -> bool:
+        """
+        # NEW [Case 93 : 400봉(2페이지) 수집 시 당일 04:07 EST 시초봉 도달 또는 자정(00:00 EST) 경계 감지 조기 종료 판별기]:
+        수집된 1분봉 배열에 당일 04:00 ~ 04:15 EST 프리장 오프닝 봉이 이미 포함되었거나
+        전날 날짜(d_str < today_est_str) 경계에 도달했으면 즉시 추가 페이지네이션을 중단하여
+        전날 밤 23:59 EST 데이마켓 야간 꼬리 침범을 차단한다.
+        """
+        if not candles:
+            return False
+        for c in candles:
+            ts_raw = str(
+                c.get("timestamp")
+                or c.get("dt")
+                or c.get("dateTime")
+                or c.get("time")
+                or ""
+            ).strip()
+            if not ts_raw:
+                continue
+            try:
+                dt_obj = datetime.fromisoformat(
+                    ts_raw.replace("Z", "+00:00")
+                ).astimezone(EST_TZ)
+                d_str = dt_obj.strftime("%Y-%m-%d")
+                hm = dt_obj.hour * 100 + dt_obj.minute
+                if d_str < today_est_str:
+                    return True
+                if d_str == today_est_str and 400 <= hm <= 415:
+                    return True
+            except Exception:
+                continue
+        return False
 
     async def get_candles_1m(
         self,
         symbol: str = TARGET_SYMBOL,
-        total_count: int = 300,
+        total_count: int = 400,
+        count: Optional[int] = None,
+        before: Optional[str] = None,
         adjusted: bool = True,
+        **kwargs: Any,
     ) -> List[Dict[str, Any]]:
-        target_cnt = max(1, min(600, safe_int(total_count, 300)))
+        """
+        # MODIFIED [Case 93 : count / total_count 양방향 호환 및 최대 400분봉(2페이지 × 200봉) 상한 하드 락온]:
+        - 미국 프리장(04:07 ~ 09:29 EST, 323봉) 및 정규장(09:30 ~ 16:00 EST, 390봉)을
+          00:00 EST 자정 날짜변경선 야간 꼬리 침범 없이 가장 깔끔하게 커버하도록
+          최대 조회 상한을 400봉(최대 2페이지)으로 고정한다.
+        """
+        sym_clean = str(symbol or TARGET_SYMBOL).upper().strip()
+        now_est = datetime.now(EST_TZ)
+        today_est_str = now_est.strftime("%Y-%m-%d")
+
+        req_cnt = max(safe_int(total_count, 0), safe_int(count, 0))
+        if req_cnt <= 0:
+            req_cnt = 400
+
+        target_cnt = max(1, min(400, req_cnt))
         collected: List[Dict[str, Any]] = []
         seen_ts: Set[str] = set()
-        before_cursor: Optional[str] = None
-        max_pages = max(1, int(math.ceil(target_cnt / 200.0)) + 1)
+        before_cursor: Optional[str] = (
+            str(before).strip() if before else None
+        )
+        max_pages = max(1, min(2, int(math.ceil(target_cnt / 200.0))))
 
         for page_idx in range(max_pages):
-            rem = max(1, min(200, target_cnt - len(collected) + 1))
+            rem = max(1, min(200, target_cnt - len(collected)))
+            page_req_cnt = (
+                200
+                if (page_idx == 0 and target_cnt >= 150)
+                else max(100, rem)
+            )
             try:
                 batch, next_b = await self.get_candles(
-                    symbol=symbol,
+                    symbol=sym_clean,
                     interval="1m",
-                    count=(200 if page_idx == 0 and target_cnt >= 100 else rem),
+                    count=page_req_cnt,
                     before=before_cursor,
                     adjusted=adjusted,
                 )
@@ -871,6 +937,15 @@ class TossApiClient:
                     added_in_page += 1
 
             if (
+                sym_clean == TARGET_SYMBOL
+                and len(collected) >= min(200, target_cnt)
+                and self._has_today_0407_open_bar_in_candles(
+                    collected, today_est_str
+                )
+            ):
+                break
+
+            if (
                 not next_b
                 or next_b == before_cursor
                 or added_in_page == 0
@@ -897,15 +972,23 @@ class TossApiClient:
         symbol: str = TARGET_SYMBOL,
         count: int = 10,
         adjusted: bool = True,
+        **kwargs: Any,
     ) -> List[Dict[str, Any]]:
         try:
             batch, _ = await self.get_candles(
                 symbol=symbol,
                 interval="1d",
-                count=max(1, min(200, safe_int(count, 10))),
+                count=max(2, min(200, safe_int(count, 10))),
                 adjusted=adjusted,
             )
-            batch.sort(key=lambda x: str(x.get("timestamp") or ""))
+            batch.sort(
+                key=lambda x: str(
+                    x.get("timestamp")
+                    or x.get("date")
+                    or x.get("dt")
+                    or ""
+                )
+            )
             return batch
         except Exception as exc:
             logger.debug("get_candles_1d 조회 예외: %s", exc)
@@ -1235,6 +1318,30 @@ class TossApiClient:
         )
         r_obj = res.get("result") if isinstance(res, dict) else {}
         return r_obj if isinstance(r_obj, dict) else {}
+
+    async def place_limit_order(
+        self,
+        symbol: str,
+        side: str,
+        quantity: int,
+        price: float,
+        time_in_force: str = "DAY",
+        client_order_id: Optional[str] = None,
+        enforce_daymarket_block: bool = False,
+    ) -> Dict[str, Any]:
+        """
+        # NEW [Case 93 : assassin_plugin.py Dual-Ready 주문 어댑터 호환 메서드]:
+        """
+        return await self.create_order(
+            symbol=symbol,
+            side=side,
+            quantity=quantity,
+            price=price,
+            order_type="LIMIT",
+            time_in_force=time_in_force,
+            client_order_id=client_order_id,
+            enforce_daymarket_block=enforce_daymarket_block,
+        )
 
     async def modify_order(
         self,

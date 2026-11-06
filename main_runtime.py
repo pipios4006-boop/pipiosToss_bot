@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
 """
-# MODIFIED: main_runtime.py (Part 1/2 — get_candles_1m count/total_count 양방향 호환 및 nextBefore 다중 페이지네이션 강제 래핑 · 일봉 1d 자동 보충 · Case 91 ~ 93 완벽 연동)
+# MODIFIED: main_runtime.py (Part 1/2 — get_candles_1m count/total_count 양방향 호환 및 최대 400분봉[2페이지] 상한 하드 락온 · 일봉 1d 자동 보충 · Case 91 ~ 93 완벽 연동)
 인피니트 스노우볼 (Infinite Snowball) v3.0 — 메인 런타임 서포트 브릿지 (메인 코드 2분할 리팩토링 Part 1 / 2 · Step 12 / 14)
 - 역할:
   1) 적응형 비동기 플러그인 호출기(_call_plugin_adaptive) 및 동적 심볼 리졸버(_resolve_module_attr) (Case 13)
   2) TossApiClient 런타임 메서드 호환성 폴리필 어댑터(_install_toss_api_compatibility_patches ·
-     get_candles_1m count/total_count 호환 및 nextBefore 다중 페이지 역추적 강제 래핑 ·
+     get_candles_1m count/total_count 호환 및 최대 400분봉[2페이지] nextBefore 역추적 강제 래핑 ·
      get_commissions / ensure_us_commission_rate 런타임 수수료 폴백 보존 포함 · Case 86, Case 93)
   3) 폴더별 3중 원장 인스턴스 팩토리(_instantiate_stratum_ledger · Case 68, Case 87, Case 88, Case 91) 및 주말 휴장 판별(_check_weekend_nyse_closed_dynamic · Case 01, 79, 83)
   4) 100% 벡터화 1분봉/일봉 지표 및 실시간 틱 Wilder's RSI(14) · 암살자 4대 지표(전일종가·04:07프리시가·프리VWAP) · QQQ 방향성 안전망 지표 무손실 직결(_compute_candle_metrics_dynamic, _compute_qqq_metrics_dynamic)
@@ -176,7 +176,7 @@ def _resolve_module_attr(
 
 
 # ---------------------------------------------------------------------------
-# [핵심 2] TossApiClient 런타임 메서드 호환성 폴리필 어댑터 (get_candles_1m 다중 페이지네이션 강제 래핑 포함)
+# [핵심 2] TossApiClient 런타임 메서드 호환성 폴리필 어댑터 (get_candles_1m 400봉 2페이지 상한 강제 래핑 포함)
 # ---------------------------------------------------------------------------
 def _empty_soxl_holding_entry() -> Dict[str, Any]:
     return {
@@ -432,8 +432,15 @@ def _extract_candles_list(
     raw_res: Any,
 ) -> Tuple[List[Dict[str, Any]], Optional[str]]:
     """
-    result.candles 표준 스키마뿐만 아니라 result 직접 리스트, items, data 키 응답을 모두 파싱한다.
+    result.candles 표준 스키마뿐만 아니라 (candles, nextBefore) 튜플, result 직접 리스트, items, data 키 응답을 모두 파싱한다.
     """
+    if isinstance(raw_res, tuple) and len(raw_res) == 2:
+        c_part, nb_part = raw_res
+        if isinstance(c_part, list):
+            return (
+                [c for c in c_part if isinstance(c, dict)],
+                str(nb_part).strip() if nb_part else None,
+            )
     if isinstance(raw_res, list):
         return [c for c in raw_res if isinstance(c, dict)], None
     if isinstance(raw_res, dict):
@@ -460,13 +467,20 @@ def _has_today_0407_open_bar_in_candles(
     candles: List[Dict[str, Any]], today_est_str: str
 ) -> bool:
     """
-    수집된 1분봉 리스트 내에 당일(today_est_str) 04:07 ~ 04:15 EST 구간의 프리장 오프닝 캔들이
-    포함되어 있는지 빠르게 검사한다.
+    수집된 1분봉 리스트 내에 당일(today_est_str) 04:00 ~ 04:15 EST 구간의 프리장 오프닝 캔들이
+    포함되었거나 전일 날짜 경계(d_str < today_est_str)에 도달했으면 True 를 반환하여
+    00:00 EST 자정 날짜변경선 야간 꼬리 침범 없이 페이지네이션을 조기 종료한다.
     """
     if not candles:
         return False
     for c in candles:
-        ts_raw = str(c.get("timestamp") or "").strip()
+        ts_raw = str(
+            c.get("timestamp")
+            or c.get("dt")
+            or c.get("dateTime")
+            or c.get("time")
+            or ""
+        ).strip()
         if not ts_raw:
             continue
         try:
@@ -477,7 +491,7 @@ def _has_today_0407_open_bar_in_candles(
             hm = dt_est.hour * 100 + dt_est.minute
             if d_str < today_est_str:
                 return True
-            if d_str == today_est_str and hm <= 407:
+            if d_str == today_est_str and 400 <= hm <= 415:
                 return True
         except Exception:
             continue
@@ -489,9 +503,8 @@ def _install_toss_api_compatibility_patches() -> None:
     # MODIFIED [Case 86 & Case 93]:
     1) TossApiClient 에 필수 메서드가 누락된 경우 폴리필을 장착한다.
     2) 기존 TossApiClient.get_candles_1m 이 존재하더라도 count / total_count 키워드 인자 충돌(TypeError)을
-       100% 방지하고, 정규장(09:30 EST 이후)에서도 당일 04:07 EST 프리장 시가 및 프리장 누적 VWAP을
-       정확히 산출할 수 있도록 nextBefore 다중 페이지네이션(최대 5페이지 = 1,000분봉)을 수행하는
-       업그레이드 래퍼를 무조건부 장착한다!
+       100% 방지하고, 00:00 EST 날짜변경선 야간 꼬리 침범을 원천 차단하는 최대 400분봉(2페이지 × 200봉)
+       상한 래퍼를 장착한다!
     """
     if not hasattr(TossApiClient, "get_commissions"):
 
@@ -605,7 +618,7 @@ def _install_toss_api_compatibility_patches() -> None:
             _poly_get_holdings_map_with_status,
         )
 
-    # [핵심 패치]: 기존 get_candles_1m 이 존재하더라도 count / total_count 양방향 호환 및 nextBefore 다중 페이지네이션 강제 장착
+    # [핵심 패치]: count / total_count 양방향 호환 및 최대 400분봉(2페이지 × 200봉) 상한 하드 락온
     if not getattr(TossApiClient, "_candles_1m_v3_patched", False):
         _orig_get_candles_1m = getattr(TossApiClient, "get_candles_1m", None)
 
@@ -619,29 +632,16 @@ def _install_toss_api_compatibility_patches() -> None:
             **kwargs: Any,
         ) -> List[Dict[str, Any]]:
             now_est = datetime.now(EST_TZ)
-            hm_now = now_est.hour * 100 + now_est.minute
             today_est_str = now_est.strftime("%Y-%m-%d")
             sym_clean = str(symbol or TARGET_SYMBOL).upper().strip()
 
-            # SOXL 조회 시 당일 04:07 EST 이후 경과 분수를 계산하여 04:07 시초봉까지 닿도록 요청 봉수 자동 확장
-            mins_since_0400 = (
-                max(200, (now_est.hour * 60 + now_est.minute) - 230)
-                if (sym_clean == TARGET_SYMBOL and 407 <= hm_now <= 1605)
-                else 200
-            )
             explicit_req = max(
                 safe_int(total_count, 0),
                 safe_int(count, 0),
             )
-            if explicit_req <= 0:
-                req_total = mins_since_0400
-            elif sym_clean == TARGET_SYMBOL and explicit_req >= 200:
-                req_total = max(explicit_req, mins_since_0400)
-            else:
-                req_total = explicit_req
-
-            req_total = max(1, min(1000, req_total))
-            max_pages = max(1, min(5, int(math.ceil(req_total / 200.0))))
+            req_total = 400 if explicit_req <= 0 else explicit_req
+            req_total = max(1, min(400, req_total))
+            max_pages = max(1, min(2, int(math.ceil(req_total / 200.0))))
 
             collected: List[Dict[str, Any]] = []
             seen_ts: Set[str] = set()
@@ -651,30 +651,54 @@ def _install_toss_api_compatibility_patches() -> None:
 
             for page_i in range(max_pages):
                 rem = max(1, min(200, req_total - len(collected)))
-                q_params: Dict[str, Any] = {
-                    "symbol": sym_clean,
-                    "interval": "1m",
-                    "count": (200 if (page_i == 0 and req_total >= 150) else max(100, rem)),
-                    "adjusted": "true" if adjusted else "false",
-                }
-                if before_cursor:
-                    q_params["before"] = before_cursor
+                page_cnt = (
+                    200
+                    if (page_i == 0 and req_total >= 150)
+                    else max(100, rem)
+                )
 
                 page_candles: List[Dict[str, Any]] = []
                 next_b: Optional[str] = None
-                try:
-                    raw = await _invoke_raw_toss_api(
-                        self,
-                        method="GET",
-                        path="/api/v1/candles",
-                        params=q_params,
-                        require_account=False,
-                    )
-                    page_candles, next_b = _extract_candles_list(raw)
-                except Exception:
-                    page_candles, next_b = [], None
 
-                if not page_candles and page_i == 0 and callable(_orig_get_candles_1m):
+                if hasattr(self, "get_candles") and callable(self.get_candles):
+                    try:
+                        c_res = await self.get_candles(
+                            symbol=sym_clean,
+                            interval="1m",
+                            count=page_cnt,
+                            before=before_cursor,
+                            adjusted=adjusted,
+                        )
+                        page_candles, next_b = _extract_candles_list(c_res)
+                    except Exception:
+                        page_candles, next_b = [], None
+
+                if not page_candles:
+                    q_params: Dict[str, Any] = {
+                        "symbol": sym_clean,
+                        "interval": "1m",
+                        "count": page_cnt,
+                        "adjusted": "true" if adjusted else "false",
+                    }
+                    if before_cursor:
+                        q_params["before"] = before_cursor
+                    try:
+                        raw = await _invoke_raw_toss_api(
+                            self,
+                            method="GET",
+                            path="/api/v1/candles",
+                            params=q_params,
+                            require_account=False,
+                        )
+                        page_candles, next_b = _extract_candles_list(raw)
+                    except Exception:
+                        page_candles, next_b = [], None
+
+                if (
+                    not page_candles
+                    and page_i == 0
+                    and callable(_orig_get_candles_1m)
+                ):
                     try:
                         fallback_res = await _call_plugin_adaptive(
                             _orig_get_candles_1m,
@@ -685,7 +709,9 @@ def _install_toss_api_compatibility_patches() -> None:
                             before=before_cursor,
                             adjusted=adjusted,
                         )
-                        page_candles, next_b = _extract_candles_list(fallback_res)
+                        page_candles, next_b = _extract_candles_list(
+                            fallback_res
+                        )
                     except Exception:
                         pass
 
@@ -694,7 +720,13 @@ def _install_toss_api_compatibility_patches() -> None:
 
                 added_in_page = 0
                 for c in page_candles:
-                    ts_s = str(c.get("timestamp") or "").strip()
+                    ts_s = str(
+                        c.get("timestamp")
+                        or c.get("dt")
+                        or c.get("dateTime")
+                        or c.get("time")
+                        or ""
+                    ).strip()
                     if ts_s and ts_s not in seen_ts:
                         seen_ts.add(ts_s)
                         collected.append(c)
@@ -703,9 +735,9 @@ def _install_toss_api_compatibility_patches() -> None:
                 if added_in_page == 0:
                     break
 
-                # 당일 04:07 EST 이전 봉까지 이미 도달했고 최소 200봉 이상 확보되었으면 조기 종료
                 if (
-                    len(collected) >= min(200, req_total)
+                    sym_clean == TARGET_SYMBOL
+                    and len(collected) >= min(200, req_total)
                     and _has_today_0407_open_bar_in_candles(
                         collected, today_est_str
                     )
@@ -720,7 +752,17 @@ def _install_toss_api_compatibility_patches() -> None:
                     break
                 before_cursor = next_b
 
-            collected.sort(key=lambda x: str(x.get("timestamp") or ""))
+            collected.sort(
+                key=lambda x: str(
+                    x.get("timestamp")
+                    or x.get("dt")
+                    or x.get("dateTime")
+                    or x.get("time")
+                    or ""
+                )
+            )
+            if len(collected) > req_total:
+                collected = collected[-req_total:]
             return collected
 
         setattr(TossApiClient, "get_candles_1m", _upgraded_get_candles_1m)
@@ -733,10 +775,34 @@ def _install_toss_api_compatibility_patches() -> None:
             self: Any,
             symbol: str = TARGET_SYMBOL,
             count: int = 10,
+            adjusted: bool = True,
             **kwargs: Any,
         ) -> List[Dict[str, Any]]:
             req_cnt = max(2, min(200, safe_int(count, 10)))
             sym_clean = str(symbol or TARGET_SYMBOL).upper().strip()
+
+            if hasattr(self, "get_candles") and callable(self.get_candles):
+                try:
+                    c_res = await self.get_candles(
+                        symbol=sym_clean,
+                        interval="1d",
+                        count=req_cnt,
+                        adjusted=adjusted,
+                    )
+                    c_list, _ = _extract_candles_list(c_res)
+                    if c_list:
+                        c_list.sort(
+                            key=lambda x: str(
+                                x.get("timestamp")
+                                or x.get("date")
+                                or x.get("dt")
+                                or ""
+                            )
+                        )
+                        return c_list
+                except Exception:
+                    pass
+
             try:
                 raw = await _invoke_raw_toss_api(
                     self,
@@ -746,13 +812,20 @@ def _install_toss_api_compatibility_patches() -> None:
                         "symbol": sym_clean,
                         "interval": "1d",
                         "count": req_cnt,
-                        "adjusted": "true",
+                        "adjusted": "true" if adjusted else "false",
                     },
                     require_account=False,
                 )
                 c_list, _ = _extract_candles_list(raw)
                 if c_list:
-                    c_list.sort(key=lambda x: str(x.get("timestamp") or ""))
+                    c_list.sort(
+                        key=lambda x: str(
+                            x.get("timestamp")
+                            or x.get("date")
+                            or x.get("dt")
+                            or ""
+                        )
+                    )
                     return c_list
             except Exception:
                 pass
@@ -767,7 +840,14 @@ def _install_toss_api_compatibility_patches() -> None:
                     )
                     c_list, _ = _extract_candles_list(res)
                     if c_list:
-                        c_list.sort(key=lambda x: str(x.get("timestamp") or ""))
+                        c_list.sort(
+                            key=lambda x: str(
+                                x.get("timestamp")
+                                or x.get("date")
+                                or x.get("dt")
+                                or ""
+                            )
+                        )
                         return c_list
                 except Exception:
                     pass
@@ -1090,7 +1170,7 @@ async def _compute_qqq_metrics_dynamic(
     )
 # -*- coding: utf-8 -*-
 """
-# MODIFIED: main_runtime.py (Part 2/2 — 폴더별 텔레그램 자격증명 탐색기 · _AdaptiveTelegramBridge 내 1m+1d+QQQ 온디맨드 정밀 워밍업 및 /assassin · /reset_assassin · /mode 결속)
+# MODIFIED: main_runtime.py (Part 2/2 — 폴더별 텔레그램 자격증명 탐색기 · _AdaptiveTelegramBridge 내 400봉 1m + 10봉 1d + QQQ 온디맨드 정밀 워밍업 및 /assassin · /reset_assassin · /mode 결속)
 """
 
 
@@ -1176,7 +1256,7 @@ def _discover_telegram_credentials(
 
 
 # ---------------------------------------------------------------------------
-# [핵심 5] 내장형 적응형 텔레그램 브릿지 (_AdaptiveTelegramBridge — Case 81 불사조 폴링 & 🗡️ 모의 암살자 4대 지표 정밀 워밍업 연동)
+# [핵심 5] 내장형 적응형 텔레그램 브릿지 (_AdaptiveTelegramBridge — Case 81 불사조 폴링 & 🗡️ 모의 암살자 4대 지표 400봉 1m+1d 정밀 워밍업 연동)
 # ---------------------------------------------------------------------------
 class _AdaptiveTelegramBridge:
     """
@@ -1470,8 +1550,8 @@ class _AdaptiveTelegramBridge:
         # MODIFIED [Case 92 & Case 93]:
         /avwap · /assassin 조회 시 SOXL 및 QQQ 현재가를 최신화하고,
         캔들 캐시에 전일 정규장 종가(prev_reg_close)나 04:07 프리장 시가(pre_open_price)가
-        아직 정밀 분리되지 않은 상태면 즉시 다중 페이지 1분봉(600봉) + 일봉(10봉) + QQQ 1분봉을
-        온디맨드로 프리워밍하여 4대 지표 폴백 현상을 100% 원천 제거한다.
+        아직 정밀 분리되지 않은 상태면 즉시 400봉(2페이지) 1분봉 + 일봉(10봉) + QQQ 1분봉을
+        온디맨드로 프리워밍하여 4대 지표($45.74) 폴백 현상을 100% 원천 제거한다.
         """
         now_est = datetime.now(EST_TZ)
         live_p = safe_float(
@@ -1501,6 +1581,7 @@ class _AdaptiveTelegramBridge:
         base_met = self.context.candle_metrics_cache.get(TARGET_SYMBOL, {})
         need_soxl_warm = bool(
             not isinstance(base_met, dict)
+            or not bool(base_met.get("anchors_ready", False))
             or safe_float(base_met.get("prev_bar_close"), 0.0) <= 0.0
             or safe_float(base_met.get("candle_count"), 0) < 15
             or (
@@ -1519,21 +1600,21 @@ class _AdaptiveTelegramBridge:
         if need_soxl_warm:
             try:
                 c_1m = await self.context.api.get_candles_1m(
-                    symbol=TARGET_SYMBOL, count=200, total_count=600
+                    symbol=TARGET_SYMBOL, count=200, total_count=400
                 )
                 c_1d = await self.context.api.get_candles_1d(
                     symbol=TARGET_SYMBOL, count=10
                 )
-                if c_1m:
+                if c_1m or c_1d:
                     base_met = await asyncio.to_thread(
                         compute_soxl_quant_metrics_1m,
-                        c_1m,
+                        c_1m or [],
                         live_p,
                         now_est,
-                        c_1d,
+                        c_1d or [],
                     )
             except Exception as exc:
-                logger.debug("SOXL 온디맨드 1m+1d 워밍업 폴백: %s", exc)
+                logger.debug("SOXL 온디맨드 400봉 1m+1d 워밍업 폴백: %s", exc)
 
         qqq_met = self.context.candle_metrics_cache.get("QQQ", {})
         if (
