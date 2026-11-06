@@ -2,17 +2,19 @@
 # -*- coding: utf-8 -*-
 """
 # MODIFIED: /home/pipiosToss/mergy.py
-인피니트 스노우볼 (Infinite Snowball) v3.0 — 13대 코어 파이썬 모듈 단일 파일 병합기
+인피니트 스노우볼 (Infinite Snowball) v3.0 — 14대 코어 파이썬 모듈 단일 파일 병합기 (Case 93 반영)
 - toss_api 2분할(toss_api_core.py + toss_api.py),
   quant_engine 2분할(quant_engine_core.py + quant_engine.py),
   sniper_plugin 2분할(sniper_plugin_core.py + sniper_plugin.py),
-  main 2분할(main_runtime.py + main.py)이 반영된 13대 코어 *.py 파일을
+  🗡️ [모의 ⇄ 실전 Dual-Ready] 암살자 독립 플러그인(assassin_plugin.py),
+  main 2분할(main_runtime.py + main.py)이 반영된 14대 코어 *.py 파일을
   어디에서 실행하더라도 /home/pipiosToss 에서 아키텍처 순서대로 인메모리 문법 검증 후 병합하여
   /home/pipios4006/code.txt 파일로 원자적(Atomic) 저장합니다.
 """
 
 from __future__ import annotations
 
+import ast
 import os
 import sys
 from datetime import datetime
@@ -23,7 +25,7 @@ OUTPUT_DIR: str = "/home/pipios4006"
 OUTPUT_FILE: str = os.path.join(OUTPUT_DIR, "code.txt")
 SELF_FILENAME: str = "mergy.py"
 
-# MODIFIED: toss_api_core.py 를 [FILE 01 / 13] 위치에 정식 등록하여 13대 코어 모듈 순서 100% 동기화
+# MODIFIED [Case 93]: assassin_plugin.py 를 [FILE 10 / 14] 위치에 정식 등록하여 14대 코어 모듈 순서 100% 동기화
 CORE_MODULE_ORDER: Tuple[str, ...] = (
     "toss_api_core.py",
     "toss_api.py",
@@ -34,6 +36,7 @@ CORE_MODULE_ORDER: Tuple[str, ...] = (
     "sniper_plugin.py",
     "sniper_exit_plugin.py",
     "defense_plugin.py",
+    "assassin_plugin.py",
     "tg_ui_plugin.py",
     "plugin_updater.py",
     "main_runtime.py",
@@ -113,9 +116,10 @@ def merge_python_files() -> int:
         with open(fpath, "r", encoding="utf-8", errors="replace") as rf:
             content = rf.read()
 
-        # NEW [Case 75 & Case 85]: 디스크 쓰기 0 Byte 인메모리 컴파일로 문법 및 f-string 중괄호 무결성 즉시 검증
+        # NEW [Case 75, Case 85 & Case 93]: 디스크 쓰기 0 Byte 인메모리 컴파일 & AST 파싱으로 문법 및 f-string 중괄호 무결성 즉시 검증
         try:
             compile(content, fpath, "exec", dont_inherit=True)
+            ast.parse(content, filename=fpath)
         except SyntaxError as syn_err:
             syntax_errors.append(
                 f"{fname} (line {syn_err.lineno}): {syn_err.msg}"
