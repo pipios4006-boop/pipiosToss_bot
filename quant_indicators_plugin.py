@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-# MODIFIED: quant_indicators_plugin.py (Part 1/2 — 1분봉 400봉 상한 락온 · Pandas 2.2+/NumPy 2.0 Read-Only View copy=True 크래시 원천 차단 · 일봉 1d 명목거래일 추출 · 전날 23:59 EST 야간봉 오인 폴백 삭제 · 진성 4대 앵커 래치 보존 · Case 92, Case 93)
+# MODIFIED: quant_indicators_plugin.py (Part 1/2 — 1분봉 400봉 상한 락온 · Pandas 2.2+/NumPy 2.0 Read-Only View copy=True 크래시 원천 차단 · 일봉 1d 명목거래일 추출 · 전날 23:59 EST 야간봉 오인 폴백 삭제 · 프리장 데이터 부재 시 정규장 시가/정규VWAP 가짜 폴백 영구 제거 및 0.0 무오염 반환 · 진성 4대 앵커 래치 보존 · Case 92, Case 93)
 인피니트 스노우볼 (Infinite Snowball) v3.0 — 순수 롱(SOXL) 매수 04:07 ~ 16:00 EST 제한
 (정규장 마감 30분 전 15:30 ~ 16:00 EST 본·서브 그리드 0주 새 사이클 첫 1층 진입 및 상단층 보유 중 1층 공석 +1.0% 돌파 추격 동시 차단 ·
 04:07 ~ 15:29 EST 1층 공석 +1.0% 돌파 시 RSI(14) <= 50.0 필터 결합 · 2층 단가 이하 -1.0% 눌림목 재장전 및 10분 게이트 추매/잔량보충 100% 허용 · Case 84, Case 88, Case 92) &
@@ -47,7 +47,7 @@ _LIVE_1M_BAR_STORE: Dict[str, List[Dict[str, Any]]] = {
 }
 _MAX_MEMORY_1M_BARS: int = 400
 
-# [Case 93]: 정규장 진입 후에도 당일 한번 진성으로 확보된 전일 정규장 종가 · 04:07 프리장 시가 · 프리장 누적 VWAP을 보존하는 당일 인메모리 래치
+# [Case 93]: 정규장 진입 및 장 마감 후에도 당일 한번 진성으로 확보된 전일 정규장 종가 · 04:07 프리장 시가 · 프리장 누적 VWAP을 보존하는 당일 인메모리 래치
 _DAILY_ANCHOR_LOCK = threading.RLock()
 _DAILY_SESSION_ANCHOR_STORE: Dict[Tuple[str, str], Dict[str, Any]] = {}
 
@@ -73,7 +73,7 @@ def _is_collapsed_anchor_triplet(
 ) -> bool:
     """
     전일 정규장 종가(prev_c), 당일 04:07 프리장 시가(pre_o), 프리장 누적 VWAP(pre_v) 3개 값이
-    모두 동일한 단일 현재가 폴백값으로 뭉개져 있는지 판별한다.
+    모두 양수이면서 동일한 단일 현재가 폴백값으로 뭉개져 있는지 판별한다.
     """
     if prev_c <= 0.0 or pre_o <= 0.0 or pre_v <= 0.0:
         return False
@@ -117,7 +117,7 @@ def _update_daily_anchor_latch(
 ) -> None:
     """
     # MODIFIED [Case 93 : 오직 실제 차트(1d/1m)에서 확인된 진성 앵커만 당일 인메모리 래치에 저장]:
-    현재가 폴백으로 채워진 가짜 데이터는 래치에 절대 저장하지 않는다.
+    현재가나 정규장 시가/정규장 VWAP 폴백으로 채워진 가짜 데이터는 래치에 절대 저장하지 않는다.
     """
     sym = str(symbol or TARGET_SYMBOL).upper().strip()
     d_key = str(target_date or "").strip()
@@ -861,6 +861,12 @@ def _recompute_ha_rsi_from_memory_store(
         return res
     except Exception:
         return None
+# -*- coding: utf-8 -*-
+"""
+# MODIFIED: quant_indicators_plugin.py (Part 2/2 — 프리장 04:00~09:29 EST 데이터 부재 시 정규장 시가/정규VWAP 가짜 폴백 영구 소각 및 0.0 무오염 반환 · 당일 프리장 진성 래치 보존 · Case 92, Case 93)
+"""
+
+
 def _calc_session_vwap_and_bands(
     df_sess: pd.DataFrame,
     ma5_amp_pct: float,
@@ -977,17 +983,17 @@ def _extract_prev_reg_close_and_pre_open(
     symbol: str = TARGET_SYMBOL,
 ) -> Tuple[float, float, bool, bool]:
     """
-    # MODIFIED [Case 93 : 암살자 정찰병 필수 조건 3(전날 정규장 종가 prev_reg_close) & 조건 4(당일 04:07 프리장 시가 pre_open_price) 정밀 분리 및 야간 23:59 EST 자정가 오인 폴백 영구 삭제]:
+    # MODIFIED [Case 93 : 암살자 정찰병 필수 조건 3(전날 정규장 종가 prev_reg_close) & 조건 4(당일 04:07 프리장 시가 pre_open_price) 무오염 분리 및 가짜 정규장 시가 폴백 영구 소각]:
     1) prev_reg_close (전일 정규장 종가):
        - explicit_prev_close > 0.0 이면 최우선 채택
        - 일봉(daily_candles)의 고유 명목 거래일(raw_d)을 기준으로 당일 진행 일봉(raw_d >= target_date)이면
          직전 확정 일봉(sorted_d[-2])의 종가를, 당일 일봉 생성 전(raw_d < target_date)이면 최신 확정 일봉(sorted_d[-1])의 종가를 추출
        - 부재 시 공식 1분봉(df_all) 내 target_date 이전 영업일의 정규장(09:30 ~ 16:00 EST) 마지막 완성봉 종가(C)만 추출하며,
-         전날 밤 23:59 EST 데이마켓 야간봉(df_last_d["C"].iloc[-1])으로 빠지던 왜곡 폴백은 영구 삭제!
+         전날 밤 23:59 EST 데이마켓 야간봉으로 빠지던 왜곡 폴백은 영구 삭제!
     2) pre_open_price (당일 04:07 프리장 시가):
-       - 당일(target_date) 실제 API 1분봉(_synthetic == False) 중 04:07 ~ 09:29 EST 첫 봉의 시가(O) 추출
-    3) 오직 진성으로 확인된 값(found_true_prev_close / found_true_pre_open)만 당일 래치(_DAILY_SESSION_ANCHOR_STORE)에 보존하며
-       현재가 폴백값은 절대 래치에 저장하지 않는다.
+       - 당일(target_date) 실제 API 1분봉(_synthetic == False) 중 04:07 ~ 09:29 EST (또는 04:00 ~ 09:29 EST) 첫 봉의 시가(O)만 추출
+       - 장 마감 후 1분봉 조회 윈도우 이탈 등으로 당일 04:00 ~ 09:29 EST 봉이 없고 인메모리 래치에도 없을 때는,
+         일봉의 정규장 시가(09:30 EST Open)나 정규장 1분봉 시가/전일종가/현재가로 덮어쓰지 않고 정확히 0.0 (found_true_pre_open = False)을 반환한다!
     """
     latch = _get_daily_anchor_latch(symbol, target_date)
     prev_reg_c = safe_float(explicit_prev_close, 0.0)
@@ -995,9 +1001,8 @@ def _extract_prev_reg_close_and_pre_open(
 
     pre_open_p = 0.0
     found_true_pre_open = False
-    daily_today_open = 0.0
 
-    # 1단계: 일봉(1d)에서 고유 거래일(raw_d) 기준 직전 영업일 확정 정규장 종가 및 당일 일봉 시가 추출
+    # 1단계: 일봉(1d)에서 고유 거래일(raw_d) 기준 직전 영업일 확정 정규장 종가 추출 (일봉 시가는 정규장 09:30 시가이므로 프리시가에 절대 사용하지 않음)
     if isinstance(daily_candles, list) and len(daily_candles) >= 1:
         try:
             valid_d = [
@@ -1017,13 +1022,8 @@ def _extract_prev_reg_close_and_pre_open(
                 last_close = safe_float(
                     last_dc.get("closePrice") or last_dc.get("close"), 0.0
                 )
-                last_open = safe_float(
-                    last_dc.get("openPrice") or last_dc.get("open"), 0.0
-                )
 
                 if raw_d and raw_d >= target_date:
-                    if last_open > 0.0:
-                        daily_today_open = last_open
                     if prev_reg_c <= 0.0:
                         prior_list = [
                             c
@@ -1114,28 +1114,14 @@ def _extract_prev_reg_close_and_pre_open(
             ),
         )
 
-    # 4단계: 표시용 최후 안전 폴백 (래치에는 절대 저장하지 않으며 found_true_* 는 False 유지)
+    # 4단계: 전일 종가만 최후 안전 폴백 적용 (프리시가 pre_open_p 는 미확보 시 정규장 가격으로 덮어쓰지 않고 0.0 유지!)
     fb = safe_float(fallback_price, 0.0)
-    if pre_open_p <= 0.0:
-        if daily_today_open > 0.0:
-            pre_open_p = daily_today_open
-        elif (
-            df_all is not None
-            and not df_all.empty
-            and (df_all["Date"] == target_date).any()
-        ):
-            pre_open_p = float(
-                df_all[df_all["Date"] == target_date]["O"].iloc[0]
-            )
-        else:
-            pre_open_p = prev_reg_c if prev_reg_c > 0.0 else fb
-
     if prev_reg_c <= 0.0:
         prev_reg_c = pre_open_p if pre_open_p > 0.0 else fb
 
     return (
         round(prev_reg_c, 4),
-        round(pre_open_p, 4),
+        round(pre_open_p, 4) if found_true_pre_open else 0.0,
         found_true_prev_close,
         found_true_pre_open,
     )
@@ -1152,7 +1138,8 @@ def compute_soxl_quant_metrics_1m(
     """
     🎯 2 & Case 01, 15, 79, 84, 88, 92, 93 & 암살자 4대 지표 통합 연산기:
     토스 Open API 1분봉(candles), 인메모리 실시간 합성 1분봉(_LIVE_1M_BAR_STORE) 및 일봉(daily_candles)을 입력받아:
-    1) 당일 프리장(04:07 ~ 09:29 EST) 누적 VWAP · 고/저가 진폭 · 예상 변동 밴드 (정규장 진입 후에도 당일 진성 래치 보존)
+    1) 당일 프리장(04:07 ~ 09:29 EST) 누적 VWAP · 고/저가 진폭 · 예상 변동 밴드
+       (프리장 중 산출된 값은 당일 진성 래치에 보존하며, 장 마감 후 최초 가동 등으로 프리장 캔들이 없을 때는 정규VWAP 복사 없이 0.0 반환!)
     2) 당일 정규장(09:30 ~ 16:00 EST) 누적 VWAP · 고/저가 진폭 · 예상 변동 밴드
     3) 최근 5영업일 평균 진폭(5MA) · 실시간 하이킨 아시 추세 배지(🕯️HA양봉 / 🌑HA음봉) · Wilder's RSI(14)
     4) 암살자 4대 필수 조건(① rsi_14/rsi · ② premarket_vwap/vwap · ③ prev_reg_close/prev_day_close · ④ pre_open_price) 및
@@ -1214,13 +1201,13 @@ def compute_soxl_quant_metrics_1m(
         "ha_badge": "🕯️HA양봉",
         "prev_reg_close": round(init_prev_c if init_prev_c > 0.0 else lp, 4),
         "prev_day_close": round(init_prev_c if init_prev_c > 0.0 else lp, 4),
-        "pre_open_price": round(lp, 4),
-        "premarket_vwap": round(lp, 4),
-        "premarket_high": round(lp, 4),
-        "premarket_low": round(lp, 4),
+        "pre_open_price": 0.0,
+        "premarket_vwap": 0.0,
+        "premarket_high": 0.0,
+        "premarket_low": 0.0,
         "premarket_amp_pct": 0.0,
-        "premarket_est_low": round(lp, 2),
-        "premarket_est_high": round(lp, 2),
+        "premarket_est_low": 0.0,
+        "premarket_est_high": 0.0,
         "regular_vwap": round(lp, 4),
         "regular_high": round(lp, 4),
         "regular_low": round(lp, 4),
@@ -1432,12 +1419,13 @@ def compute_soxl_quant_metrics_1m(
                 else all_stats["vwap"]
             )
         )
+        # 🚨 [Case 93 무오염 패치 : 당일 프리장(04:00 ~ 09:29 EST) 데이터가 없을 때 정규장 VWAP(active_vwap)을 복사하지 않고 0.0 반환!]
         eff_pre_vwap = (
-            pre_stats["vwap"] if pre_stats["vwap"] > 0.0 else active_vwap
+            pre_stats["vwap"] if pre_stats["vwap"] > 0.0 else 0.0
         )
         bear_drop_amp = (
             max(0.0, ((pre_open_p - lp) / pre_open_p) * 100.0)
-            if pre_open_p > 0.0
+            if (pre_open_p > 0.0 and lp > 0.0)
             else 0.0
         )
 
@@ -1446,7 +1434,11 @@ def compute_soxl_quant_metrics_1m(
         )
         anchors_ready = bool(
             found_true_prev_close
-            and (found_true_pre_open or found_true_pre_vwap)
+            and (
+                found_true_pre_open
+                or found_true_pre_vwap
+                or reg_stats["vwap"] > 0.0
+            )
             and not is_collapsed
         )
 
@@ -1484,7 +1476,11 @@ def compute_soxl_quant_metrics_1m(
                 "regular_est_low": reg_stats["est_low"],
                 "regular_est_high": reg_stats["est_high"],
                 "day_vwap": active_vwap,
-                "vwap": eff_pre_vwap if hm_now <= 929 else active_vwap,
+                "vwap": (
+                    eff_pre_vwap
+                    if (hm_now <= 929 and eff_pre_vwap > 0.0)
+                    else active_vwap
+                ),
                 "day_high": all_stats["high"],
                 "day_low": all_stats["low"],
                 "day_amp_pct": all_stats["amp_pct"],
@@ -1552,8 +1548,9 @@ def refresh_metrics_with_live_tick(
     # MODIFIED [Case 84, Case 88, Case 92, Case 93 & 암살자 4대 지표 실시간 O(1) 틱 합성]:
     1) 실시간 현재가(live_price)를 인메모리 1분봉 저장소(_LIVE_1M_BAR_STORE)에 즉시 반영한다.
     2) 당일 인메모리 래치(_DAILY_SESSION_ANCHOR_STORE)에 진성으로 보존된 전일 정규장 종가(prev_reg_close),
-       당일 04:07 프리장 시가(pre_open_price), 프리장 누적 VWAP(premarket_vwap)이 있으면 우선 복원하여
-       틱 합성 과정에서 앵커 가격이 현재가로 덮어써지는 현상을 원천 차단한다.
+       당일 04:07 프리장 시가(pre_open_price), 프리장 누적 VWAP(premarket_vwap)이 있으면 우선 복원하며,
+       장 마감 후(또는 정규장 중) 프리장 기록이 없어 pre_open_price / premarket_vwap 이 0.0 인 경우에는
+       절대로 현재가(lp)로 덮어쓰지 않고 0.0 을 유지한다!
     3) prev_bar_close > 0.0 이면 매 1.5초(또는 0.4초) 실시간 틱 변동을 Wilder's RSI(14)와
        단기 변화율(vel_1m_pct, vel_3m_pct, vel_10m_pct), 하이킨 아시(ha_bull / is_ha_bull)에 즉시 합성한다!
     """
@@ -1616,7 +1613,7 @@ def refresh_metrics_with_live_tick(
             or not bool(met.get("found_true_pre_vwap", False))
         ):
             met["premarket_vwap"] = round(
-                safe_float(latched_pre_stats.get("vwap"), lp), 4
+                safe_float(latched_pre_stats.get("vwap"), 0.0), 4
             )
             met["found_true_pre_vwap"] = True
 
@@ -1676,17 +1673,33 @@ def refresh_metrics_with_live_tick(
             4,
         )
 
-        pre_open_p = safe_float(met.get("pre_open_price"), lp)
-        if pre_open_p <= 0.0:
-            pre_open_p = lp
-            met["pre_open_price"] = round(lp, 4)
-        met["bear_drop_amp_pct"] = round(
-            max(0.0, ((pre_open_p - lp) / pre_open_p) * 100.0), 4
-        )
+        # 🚨 [Case 93 무오염 패치 : 프리장(04:07 ~ 09:29 EST) 외 구간에서는 미확보된 pre_open_price(0.0)를 현재가로 덮어쓰지 않음!]
+        pre_open_p = safe_float(met.get("pre_open_price"), 0.0)
+        if pre_open_p <= 0.0 and (407 <= hm <= 929):
+            pre_open_p = round(lp, 4)
+            met["pre_open_price"] = pre_open_p
+            met["found_true_pre_open"] = True
+            _update_daily_anchor_latch(
+                symbol=sym,
+                target_date=today_str,
+                pre_open_price=pre_open_p,
+            )
+
+        if pre_open_p > 0.0:
+            met["bear_drop_amp_pct"] = round(
+                max(0.0, ((pre_open_p - lp) / pre_open_p) * 100.0), 4
+            )
+        else:
+            met["pre_open_price"] = 0.0
+            met["bear_drop_amp_pct"] = 0.0
 
         if safe_float(met.get("prev_reg_close"), 0.0) <= 0.0:
             met["prev_reg_close"] = round(
-                safe_float(met.get("prev_day_close"), pre_open_p), 4
+                safe_float(
+                    met.get("prev_day_close"),
+                    pre_open_p if pre_open_p > 0.0 else lp,
+                ),
+                4,
             )
         if safe_float(met.get("prev_day_close"), 0.0) <= 0.0:
             met["prev_day_close"] = met["prev_reg_close"]
@@ -1706,6 +1719,7 @@ def refresh_metrics_with_live_tick(
         met["premarket_est_low"] = round(min(pl, ph / (1.0 + amp_ratio)), 2)
         if safe_float(met.get("premarket_vwap"), 0.0) <= 0.0:
             met["premarket_vwap"] = round(lp, 4)
+            met["found_true_pre_vwap"] = True
         met["vwap"] = met["premarket_vwap"]
     elif lp > 0.0 and 930 <= hm <= 1600:
         rh = max(safe_float(met.get("regular_high"), 0.0), lp)

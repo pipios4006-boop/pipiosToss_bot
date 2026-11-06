@@ -1,9 +1,11 @@
 # -*- coding: utf-8 -*-
 """
-# MODIFIED: assassin_plugin.py (Part 1/2 — 🗡️ [모의 ⇄ 실전 Dual-Ready] 암살자 독립 플러그인 · 원장 내 $45.74 동일값 오염 앵커 자동 감지 자가 치유[Self-Healing] · 400봉 상한 연동 · 10대 진성 게이트 · 방향성 3단 안전망 v2 · HA 트레일링 · Case 93)
+# MODIFIED: assassin_plugin.py (Part 1/2 — 🗡️ [모의 ⇄ 실전 Dual-Ready] 암살자 독립 플러그인 · 프리시가/프리VWAP 무오염 2단계 하이브리드 원장 박제 및 미확보 시 $0.00 표출 · 구버전 정규장 시가/VWAP 폴백 오염 원장 자동 정화[Self-Healing] · 400봉 상한 연동 · 10대 진성 게이트 · 방향성 3단 안전망 v2 · HA 트레일링 · Case 93)
 인피니트 스노우볼 (Infinite Snowball) v3.0 — 스나이퍼와 100% 물리적 격리된 상시 가동 [모의 ⇄ 실전 Dual-Ready] 암살자(Assassin) 코어 모듈 (Step 10 / 14 · Case 93)
 - 역할:
-  1) 스나이퍼 원장(soxl_stratum_ledger*.json) 및 예수금과 100% 물리적 분리된 독립 3중 원장(AssassinSimLedger : assassin_sim_ledger_{folder_slug}.json) 운용 및 오염된 동일값 앵커 자동 초기화 자가 치유
+  1) 스나이퍼 원장(soxl_stratum_ledger*.json) 및 예수금과 100% 물리적 분리된 독립 3중 원장(AssassinSimLedger : assassin_sim_ledger_{folder_slug}.json) 운용 ·
+     프리장(04:07 ~ 09:29 EST) 중 실측된 진성 프리시가(today_pre_open_price) 및 프리VWAP(today_premarket_vwap) 영속화 박제 ·
+     장 마감 후 최초 기동 등 당일 프리장 데이터 미확보 시 정규장 가격 가짜 폴백 없이 $0.00 (0.00%) 무오염 표출 및 구버전 오염 원장 자동 자가 치유
   2) 현재 ASSASSIN_LIVE_ORDER_HARD_LOCK = True 로 실전 주문 발사를 물리적으로 100% 차단하되,
      내부 주문 상태 머신(매수 발주 · +5.00% 상단 안전 캡 선장전 · +1.00% 점화 HA 트레일링 modify_order 가격 정정 스윕 · 15:59 2단계 방탄 MOC)은
      토스증권 Open API v1.2.14 실전 규격과 100% 동일하게 구현하여 스위치 해금 즉시 실전 암살자로 탈바꿈 가능
@@ -103,10 +105,11 @@ def _is_collapsed_assassin_anchors(
     prev_c: float, pre_o: float, pre_v: float
 ) -> bool:
     """
-    # NEW [Case 93 : 3대 가격 앵커(전일종가 · 04:07프리시가 · 프리VWAP)가 단일 현재가 폴백값으로 오염되었는지 판별]:
+    # MODIFIED [Case 93 : 3대 가격 앵커(전일종가 · 04:07프리시가 · 프리VWAP)가 모두 양수이면서 단일 현재가 폴백값으로 오염되었는지 판별]:
+    pre_o == 0.0 또는 pre_v == 0.0 은 프리장 미확보($0.00 표출) 정상 상태이므로 False 를 반환한다.
     """
     if prev_c <= 0.0 or pre_o <= 0.0 or pre_v <= 0.0:
-        return True
+        return False
     return bool(
         abs(prev_c - pre_o) < 1e-6 and abs(pre_v - prev_c) < 1e-6
     )
@@ -161,13 +164,13 @@ class IndependentScoutUnit:
             ),
             qty=max(1, safe_int(d.get("qty"), 1)),
             rsi_14=round(safe_float(d.get("rsi_14"), 50.0), 2),
-            pre_vwap=round(safe_float(d.get("pre_vwap"), ep), 4),
+            pre_vwap=round(safe_float(d.get("pre_vwap"), 0.0), 4),
             vs_vwap_pct=round(safe_float(d.get("vs_vwap_pct"), 0.0), 2),
             prev_reg_close=round(safe_float(d.get("prev_reg_close"), ep), 4),
             vs_prev_close_pct=round(
                 safe_float(d.get("vs_prev_close_pct"), 0.0), 2
             ),
-            pre_open_price=round(safe_float(d.get("pre_open_price"), ep), 4),
+            pre_open_price=round(safe_float(d.get("pre_open_price"), 0.0), 4),
             vs_pre_open_pct=round(
                 safe_float(d.get("vs_pre_open_pct"), 0.0), 2
             ),
@@ -250,8 +253,11 @@ class AssassinSimLedger:
             "session_phase": "IDLE_WAIT_0407",
             "is_session_done": False,
             "session_done_reason": "",
-            # 당일 확정 4대 앵커 지표 원장 백업 (진성 확인된 값만 보존)
+            # 당일 확정 4대 앵커 지표 원장 백업 (진성 확인된 값만 개별 검증 플래그와 함께 보존)
             "today_anchors_locked": False,
+            "today_prev_close_verified": False,
+            "today_pre_open_verified": False,
+            "today_pre_vwap_verified": False,
             "today_prev_reg_close": 0.0,
             "today_pre_open_price": 0.0,
             "today_premarket_vwap": 0.0,
@@ -369,28 +375,66 @@ class AssassinSimLedger:
             4,
         )
 
-        # 🚨 [Case 93 자가 치유 : 원장에 저장된 3대 앵커가 모두 동일($45.74)한 폴백 오염 상태이면 즉시 잠금 해제 및 0.0 초기화!]
-        t_prev = safe_float(base.get("today_prev_reg_close"), 0.0)
-        t_open = safe_float(base.get("today_pre_open_price"), 0.0)
-        t_vwap = safe_float(base.get("today_premarket_vwap"), 0.0)
-        if _is_collapsed_assassin_anchors(t_prev, t_open, t_vwap):
-            base["today_anchors_locked"] = False
-            if (
-                t_prev > 0.0
-                and abs(t_prev - t_open) < 1e-6
-                and abs(t_vwap - t_prev) < 1e-6
-            ):
-                base["today_prev_reg_close"] = 0.0
-                base["today_pre_open_price"] = 0.0
-                base["today_premarket_vwap"] = 0.0
-                base["today_regular_vwap"] = 0.0
-
         if not isinstance(base.get("scout_units"), list):
             base["scout_units"] = []
         if not isinstance(base.get("day_scout_history"), list):
             base["day_scout_history"] = []
         if not isinstance(base.get("gate_hit_counts"), dict):
             base["gate_hit_counts"] = {}
+
+        # 🚨 [Case 93 자가 치유 : 구버전 폴백으로 인해 오염된 프리시가($48.70) 및 프리VWAP($45.43 == 정규VWAP) 자동 감지 및 0.0 초기화!]
+        t_prev = safe_float(base.get("today_prev_reg_close"), 0.0)
+        t_open = safe_float(base.get("today_pre_open_price"), 0.0)
+        t_vwap = safe_float(base.get("today_premarket_vwap"), 0.0)
+        t_reg_vwap = safe_float(base.get("today_regular_vwap"), 0.0)
+
+        pre_open_ver = bool(base.get("today_pre_open_verified", False))
+        pre_vwap_ver = bool(base.get("today_pre_vwap_verified", False))
+
+        # 1) 3대 앵커가 모두 동일한 단일 틱 가격으로 오염된 경우 전체 초기화
+        if _is_collapsed_assassin_anchors(t_prev, t_open, t_vwap):
+            base["today_anchors_locked"] = False
+            base["today_prev_close_verified"] = False
+            base["today_pre_open_verified"] = False
+            base["today_pre_vwap_verified"] = False
+            base["today_prev_reg_close"] = 0.0
+            base["today_pre_open_price"] = 0.0
+            base["today_premarket_vwap"] = 0.0
+            base["today_regular_vwap"] = 0.0
+        else:
+            # 2) 만약 당일 아침 정찰병(#1) 파견 기록이 존재하면 정찰병이 기록한 진성 프리시가/프리VWAP 복원
+            hist = base.get("day_scout_history") or []
+            if (not pre_open_ver or not pre_vwap_ver) and len(hist) > 0:
+                first_sc = hist[0] if isinstance(hist[0], dict) else {}
+                sc_open = safe_float(
+                    first_sc.get("pre_open_price")
+                    or first_sc.get("entry_price"),
+                    0.0,
+                )
+                sc_vwap = safe_float(first_sc.get("pre_vwap"), 0.0)
+                if sc_open > 0.0:
+                    base["today_pre_open_price"] = round(sc_open, 4)
+                    base["today_pre_open_verified"] = True
+                    pre_open_ver = True
+                if sc_vwap > 0.0:
+                    base["today_premarket_vwap"] = round(sc_vwap, 4)
+                    base["today_pre_vwap_verified"] = True
+                    pre_vwap_ver = True
+
+            # 3) 진성 검증 플래그(today_pre_open_verified / today_pre_vwap_verified)가 없거나
+            #    프리VWAP이 정규VWAP과 소수점까지 동일하게 복사된 오염 데이터인 경우 즉시 0.0 으로 정화!
+            if not pre_open_ver:
+                base["today_pre_open_price"] = 0.0
+                base["today_pre_open_verified"] = False
+            if not pre_vwap_ver or (
+                not pre_vwap_ver
+                and t_vwap > 0.0
+                and t_reg_vwap > 0.0
+                and abs(t_vwap - t_reg_vwap) < 1e-6
+            ):
+                base["today_premarket_vwap"] = 0.0
+                base["today_pre_vwap_verified"] = False
+
         return base
 
     def _load_or_init_sync(
@@ -524,8 +568,8 @@ class AssassinSimLedger:
         self, today_est_str: str, sniper_seed_usd: float = 0.0
     ) -> Dict[str, Any]:
         """
-        새로운 미국 영업일(today_est_str) 진입 시 당일 정찰병 및 본대 포지션 슬롯을 클리어하고
-        누적 성적표(total_trade_days, simple_cum_net_usd, comp_cum_net_usd 등)는 100% 보존한다.
+        새로운 미국 영업일(today_est_str) 진입 시 당일 정찰병 및 본대 포지션 슬롯과
+        당일 프리장 앵커 검증 플래그를 클리어하고 누적 성적표는 100% 보존한다.
         """
         st = self.get_state()
         cur_date = str(st.get("current_session_date") or "").strip()
@@ -558,6 +602,9 @@ class AssassinSimLedger:
             is_session_done=False,
             session_done_reason="",
             today_anchors_locked=False,
+            today_prev_close_verified=False,
+            today_pre_open_verified=False,
+            today_pre_vwap_verified=False,
             today_prev_reg_close=0.0,
             today_pre_open_price=0.0,
             today_premarket_vwap=0.0,
@@ -1121,7 +1168,7 @@ def evaluate_assassin_ha_trailing_and_exits(
     }
 # -*- coding: utf-8 -*-
 """
-# MODIFIED: assassin_plugin.py (Part 2/2 — 4대 지표 400봉 1m + 10봉 1d 온디맨드 프리워밍 · 오염 앵커 복원 차단 및 진성 원장 잠금 · force_warmup 쿨다운 바이패스 · 08:15 퇴근 후 불필요 워밍업 경합 차단 · Dual-Ready 주문 어댑터 · 5대 실시간 알림 · /assassin 상세 관제 보드 · TDD 검증기)
+# MODIFIED: assassin_plugin.py (Part 2/2 — 4대 지표 400봉 1m + 10봉 1d 온디맨드 프리워밍 · 프리시가/프리VWAP 진성 검증 원장 박제 및 미확보 시 $0.00 무오염 표출 · force_warmup 쿨다운 바이패스 · 08:15 퇴근 후 불필요 워밍업 경합 차단 · Dual-Ready 주문 어댑터 · 5대 실시간 알림 · /assassin 상세 관제 보드 · TDD 검증기)
 """
 
 # 온디맨드 캔들 워밍업 과호출 방지용 인메모리 쿨다운 타임스탬프
@@ -1142,15 +1189,20 @@ async def _extract_live_assassin_features_and_qqq_snapshot(
     force_warmup: bool = False,
 ) -> Dict[str, Any]:
     """
-    # MODIFIED [Case 93 핵심 패치]:
+    # MODIFIED [Case 93 핵심 패치 — 프리시가 & 프리VWAP 2단계 하이브리드 정합성 및 미확보 시 $0.00 무오염 표출]:
     1) SOXL 및 QQQ 의 실시간 현재가와 1분봉(400봉 상한)/일봉(10봉) 지표를 추출한다.
     2) 캔들 캐시가 아직 워밍업되지 않았거나(anchors_ready == False),
-       전일 정규장 종가(prev_reg_close) · 당일 04:07 프리장 시가(pre_open_price) · 프리장 VWAP(premarket_vwap)이
-       첫 틱 가격($45.74)으로 동일하게 묶여 있는 경우(anchors_collapsed == True),
-       즉시 SOXL 1분봉(total_count=400) + SOXL 일봉(1d, count=10) + QQQ 1분봉(total_count=60)을
-       온디맨드로 조회하여 실제 차트 데이터를 복원한다! (force_warmup=True 시 쿨다운 즉시 바이패스)
-    3) 진성으로 확인된 당일 앵커(전일종가 · 04:07프리시가 · 프리VWAP)만 암살자 원장(AssassinSimLedger)에
-       당일 잠금(today_anchors_locked=True)으로 영속화하며, 동일값 폴백 데이터는 절대 원장에 잠그거나 복원하지 않는다.
+       전일 정규장 종가(prev_reg_close)가 미확보된 경우 즉시 SOXL 1분봉(total_count=400) +
+       SOXL 일봉(1d, count=10) + QQQ 1분봉(total_count=60)을 온디맨드로 조회하여 실제 차트 데이터를 복원한다!
+       (force_warmup=True 시 쿨다운 즉시 바이패스)
+    3) [1단계 : 아침 프리장에 가동된 날 ➔ 원장 박제값 유지]:
+       당일 04:07 ~ 09:29 EST 프리장 1분봉에서 실측된 진성 프리시가(found_true_pre_open)와
+       프리VWAP(found_true_pre_vwap)은 암살자 원장(AssassinSimLedger)에 검증 플래그
+       (today_pre_open_verified=True, today_pre_vwap_verified=True)와 함께 영속화 박제하여,
+       오후 정규장이나 장 마감 후 1분봉 윈도우가 밀려나더라도 그대로 보존한다.
+    4) [2단계 : 장 마감 후(또는 정규장 중) 최초 배포하여 당일 프리장 데이터가 없는 날 ➔ $0.00 표출]:
+       원장 및 1분봉 어디에도 당일 프리장 데이터가 없을 때는 정규장 시가($48.70)나 정규장 VWAP($45.43),
+       전일종가, 현재가로 가짜 폴백하는 것을 영구 금지하고 정확히 0.0 ($0.00 (+0.00%))을 반환한다!
     """
     global _LAST_ASSASSIN_WARMUP_MONO
     dt_now = now_est.astimezone(EST_TZ) if now_est else datetime.now(EST_TZ)
@@ -1218,6 +1270,7 @@ async def _extract_live_assassin_features_and_qqq_snapshot(
         and (
             force_warmup
             or not bool(soxl_met.get("anchors_ready", False))
+            or not bool(soxl_met.get("found_true_prev_close", False))
             or anchors_collapsed
             or safe_float(soxl_met.get("prev_bar_close"), 0.0) <= 0.0
         )
@@ -1283,30 +1336,55 @@ async def _extract_live_assassin_features_and_qqq_snapshot(
     reg_vwap = safe_float(soxl_met.get("regular_vwap"), 0.0)
 
     found_true_prev_c = bool(soxl_met.get("found_true_prev_close", False))
-    found_true_pre_o = bool(soxl_met.get("found_true_pre_open", False))
-    found_true_pre_v = bool(soxl_met.get("found_true_pre_vwap", False))
+    found_true_pre_o = bool(
+        soxl_met.get("found_true_pre_open", False) and pre_open_price > 0.0
+    )
+    found_true_pre_v = bool(
+        soxl_met.get("found_true_pre_vwap", False) and pre_vwap > 0.0
+    )
 
-    # 원장에 저장된 당일 앵커 확인 (만약 원장 값이 동일값 폴백 오염 상태이면 무시하고 폐기)
-    saved_prev_c = safe_float(st_assn.get("today_prev_reg_close"), 0.0)
-    saved_pre_o = safe_float(st_assn.get("today_pre_open_price"), 0.0)
-    saved_pre_v = safe_float(st_assn.get("today_premarket_vwap"), 0.0)
+    # 원장에 진성 검증되어 박제된 당일 앵커 확인
+    saved_prev_ver = bool(st_assn.get("today_prev_close_verified", False))
+    saved_open_ver = bool(st_assn.get("today_pre_open_verified", False))
+    saved_vwap_ver = bool(st_assn.get("today_pre_vwap_verified", False))
+
+    saved_prev_c = (
+        safe_float(st_assn.get("today_prev_reg_close"), 0.0)
+        if saved_prev_ver
+        else 0.0
+    )
+    saved_pre_o = (
+        safe_float(st_assn.get("today_pre_open_price"), 0.0)
+        if saved_open_ver
+        else 0.0
+    )
+    saved_pre_v = (
+        safe_float(st_assn.get("today_premarket_vwap"), 0.0)
+        if saved_vwap_ver
+        else 0.0
+    )
+
     if _is_collapsed_assassin_anchors(saved_prev_c, saved_pre_o, saved_pre_v):
         saved_prev_c = 0.0
         saved_pre_o = 0.0
         saved_pre_v = 0.0
+        saved_prev_ver = False
+        saved_open_ver = False
+        saved_vwap_ver = False
 
-    # 정규장(09:30 EST 이후)에 400봉(약 6.6시간)만 조회하여 아침 04:07 프리장 봉이 1분봉 윈도우 밖으로 지나간 경우,
-    # 당일 아침에 원장에 정상 잠겨 있던 saved_pre_o / saved_pre_v 를 복원하여 보존한다.
+    # 1단계: 오후 정규장이나 장 마감 후 400봉 윈도우 밖으로 아침 프리장 봉이 밀려난 경우,
+    # 당일 아침 프리장에 원장에 진성 박제해 둔 saved_pre_o / saved_pre_v 를 복원한다!
     if not found_true_prev_c and saved_prev_c > 0.0:
         prev_reg_close = saved_prev_c
         found_true_prev_c = True
-    if not found_true_pre_o and saved_pre_o > 0.0:
+    if not found_true_pre_o and saved_open_ver and saved_pre_o > 0.0:
         pre_open_price = saved_pre_o
         found_true_pre_o = True
-    if not found_true_pre_v and saved_pre_v > 0.0:
+    if not found_true_pre_v and saved_vwap_ver and saved_pre_v > 0.0:
         pre_vwap = saved_pre_v
         found_true_pre_v = True
 
+    # 진성으로 확인된 지표만 원장에 개별 검증 플래그와 함께 영속화 박제
     is_now_valid_distinct = not _is_collapsed_assassin_anchors(
         prev_reg_close, pre_open_price, pre_vwap
     )
@@ -1315,50 +1393,61 @@ async def _extract_live_assassin_features_and_qqq_snapshot(
         and is_now_valid_distinct
     ):
         need_save_anchors = bool(
-            not bool(st_assn.get("today_anchors_locked", False))
-            or (
+            (
                 found_true_prev_c
-                and abs(saved_prev_c - prev_reg_close) > 1e-4
+                and (
+                    not saved_prev_ver
+                    or abs(saved_prev_c - prev_reg_close) > 1e-4
+                )
             )
             or (
                 found_true_pre_o
-                and pre_open_price > 0.0
-                and abs(saved_pre_o - pre_open_price) > 1e-4
+                and (
+                    not saved_open_ver
+                    or abs(saved_pre_o - pre_open_price) > 1e-4
+                )
             )
             or (
                 found_true_pre_v
-                and hm_now <= 935
-                and pre_vwap > 0.0
-                and abs(saved_pre_v - pre_vwap) > 1e-4
+                and (
+                    not saved_vwap_ver
+                    or (hm_now <= 935 and abs(saved_pre_v - pre_vwap) > 1e-4)
+                )
             )
         )
         if need_save_anchors:
-            st_assn = await assn_ledger.update_state(
-                today_anchors_locked=True,
-                today_prev_reg_close=round(prev_reg_close, 4),
-                today_pre_open_price=round(
-                    pre_open_price if pre_open_price > 0.0 else saved_pre_o, 4
-                ),
-                today_premarket_vwap=round(
-                    pre_vwap if pre_vwap > 0.0 else saved_pre_v, 4
-                ),
-                today_regular_vwap=round(reg_vwap, 4),
-            )
+            upd_anchor_kw: Dict[str, Any] = {
+                "today_anchors_locked": True,
+                "today_regular_vwap": round(reg_vwap, 4),
+            }
+            if found_true_prev_c and prev_reg_close > 0.0:
+                upd_anchor_kw["today_prev_reg_close"] = round(
+                    prev_reg_close, 4
+                )
+                upd_anchor_kw["today_prev_close_verified"] = True
+            if found_true_pre_o and pre_open_price > 0.0:
+                upd_anchor_kw["today_pre_open_price"] = round(
+                    pre_open_price, 4
+                )
+                upd_anchor_kw["today_pre_open_verified"] = True
+            if found_true_pre_v and pre_vwap > 0.0:
+                upd_anchor_kw["today_premarket_vwap"] = round(pre_vwap, 4)
+                upd_anchor_kw["today_pre_vwap_verified"] = True
+            st_assn = await assn_ledger.update_state(**upd_anchor_kw)
 
+    # 2단계: 미확보 시 가짜 폴백 영구 금지 (프리시가 및 프리VWAP은 미확보 시 정확히 0.0 유지!)
     if prev_reg_close <= 0.0:
         prev_reg_close = lp
-    if pre_open_price <= 0.0:
-        pre_open_price = prev_reg_close if prev_reg_close > 0.0 else lp
-    if pre_vwap <= 0.0:
-        pre_vwap = pre_open_price if pre_open_price > 0.0 else lp
-    if reg_vwap <= 0.0:
-        reg_vwap = safe_float(soxl_met.get("vwap"), lp)
-
-    ref_vwap = pre_vwap if pre_vwap > 0.0 else reg_vwap
+    if not found_true_pre_o or pre_open_price <= 0.0:
+        pre_open_price = 0.0
+    if not found_true_pre_v or pre_vwap <= 0.0:
+        pre_vwap = 0.0
+    if reg_vwap <= 0.0 and hm_now >= ASSASSIN_REGULAR_OPEN_HM:
+        reg_vwap = safe_float(soxl_met.get("day_vwap"), lp)
 
     vs_vwap_pct = (
-        ((lp - ref_vwap) / ref_vwap) * 100.0
-        if (lp > 0.0 and ref_vwap > 0.0)
+        ((lp - pre_vwap) / pre_vwap) * 100.0
+        if (lp > 0.0 and pre_vwap > 0.0)
         else 0.0
     )
     vs_reg_vwap_pct = (
@@ -1379,7 +1468,7 @@ async def _extract_live_assassin_features_and_qqq_snapshot(
 
     sc1_p = safe_float(st_assn.get("scout1_open_price"), 0.0)
     if sc1_p <= 0.0:
-        sc1_p = pre_open_price if pre_open_price > 0.0 else lp
+        sc1_p = pre_open_price if pre_open_price > 0.0 else 0.0
     vs_scout1_pct = (
         ((lp - sc1_p) / sc1_p) * 100.0 if (lp > 0.0 and sc1_p > 0.0) else 0.0
     )
@@ -1404,7 +1493,7 @@ async def _extract_live_assassin_features_and_qqq_snapshot(
     qqq_bear_amp = round(
         max(
             safe_float(qqq_met.get("bear_drop_amp_pct"), 0.0),
-            max(0.0, -vs_pre_open_pct * 0.35),
+            max(0.0, -vs_pre_open_pct * 0.35) if pre_open_price > 0.0 else 0.0,
         ),
         3,
     )
@@ -1413,16 +1502,22 @@ async def _extract_live_assassin_features_and_qqq_snapshot(
         "live_price": round(lp, 4),
         "qqq_live_price": round(qqq_lp, 4),
         "rsi_14": rsi_14,
-        "pre_vwap": round(pre_vwap, 4),
-        "reg_vwap": round(reg_vwap, 4),
-        "vs_vwap_pct": round(vs_vwap_pct, 2),
-        "vs_reg_vwap_pct": round(vs_reg_vwap_pct, 2),
+        "pre_vwap": round(pre_vwap, 4) if pre_vwap > 0.0 else 0.0,
+        "reg_vwap": round(reg_vwap, 4) if reg_vwap > 0.0 else 0.0,
+        "vs_vwap_pct": round(vs_vwap_pct, 2) if pre_vwap > 0.0 else 0.0,
+        "vs_reg_vwap_pct": (
+            round(vs_reg_vwap_pct, 2) if reg_vwap > 0.0 else 0.0
+        ),
         "prev_reg_close": round(prev_reg_close, 4),
         "vs_prev_close_pct": round(vs_prev_close_pct, 2),
-        "pre_open_price": round(pre_open_price, 4),
-        "vs_pre_open_pct": round(vs_pre_open_pct, 2),
-        "scout1_open_price": round(sc1_p, 4),
-        "vs_scout1_pct": round(vs_scout1_pct, 2),
+        "pre_open_price": (
+            round(pre_open_price, 4) if pre_open_price > 0.0 else 0.0
+        ),
+        "vs_pre_open_pct": (
+            round(vs_pre_open_pct, 2) if pre_open_price > 0.0 else 0.0
+        ),
+        "scout1_open_price": round(sc1_p, 4) if sc1_p > 0.0 else 0.0,
+        "vs_scout1_pct": round(vs_scout1_pct, 2) if sc1_p > 0.0 else 0.0,
         "cur_bar_open": round(cur_bar_open, 4),
         "cur_bar_high": round(cur_bar_high, 4),
         "cur_bar_low": round(cur_bar_low, 4),
@@ -1517,7 +1612,7 @@ async def _dispatch_assassin_exit_sweep_order(
     is_moc_1559: bool = False,
 ) -> Tuple[bool, float]:
     """
-    +1.00% 보존선/트레일링 스윕, 08:15 이후 방향성 3단 안전망, 15:00 수익권 VWAP, 또는 15:59 방탄 MOC 청산 실행기:
+    +1.00% 보존선/트레일링 스윕, 08:15 EST 이후 방향성 3단 안전망, 15:00 수익권 VWAP, 또는 15:59 방탄 MOC 청산 실행기:
     - SIMULATED 모드: 실주문 없이 즉시 target_exit_price 로 모의 체결 정산.
     - LIVE 모드 전환 시:
       선장전된 +5.00% 캡 주문(existing_cap_order_id)이 존재하면 POST /api/v1/orders/{orderId}/modify (quantity 미포함)로
@@ -1736,6 +1831,24 @@ async def _dispatch_new_scout_unit_and_check_gates(
     if new_seq == 1 or sc1_p <= 0.0:
         sc1_p = lp
 
+    eff_pre_open = safe_float(feat.get("pre_open_price"), 0.0)
+    if eff_pre_open <= 0.0:
+        eff_pre_open = sc1_p
+    eff_vs_pre_open = (
+        ((lp - eff_pre_open) / eff_pre_open) * 100.0
+        if eff_pre_open > 0.0
+        else 0.0
+    )
+
+    eff_pre_vwap = safe_float(feat.get("pre_vwap"), 0.0)
+    if eff_pre_vwap <= 0.0:
+        eff_pre_vwap = lp
+    eff_vs_vwap = (
+        ((lp - eff_pre_vwap) / eff_pre_vwap) * 100.0
+        if eff_pre_vwap > 0.0
+        else 0.0
+    )
+
     vs_sc1 = ((lp - sc1_p) / sc1_p) * 100.0 if sc1_p > 0.0 else 0.0
     tp = (
         math.ceil((lp * (1.0 + SCOUT_PROFIT_TARGET_PCT / 100.0) - 1e-9) * 100.0)
@@ -1753,12 +1866,12 @@ async def _dispatch_new_scout_unit_and_check_gates(
         target_price=round(tp, 2),
         qty=1,
         rsi_14=safe_float(feat.get("rsi_14"), 50.0),
-        pre_vwap=safe_float(feat.get("pre_vwap"), lp),
-        vs_vwap_pct=safe_float(feat.get("vs_vwap_pct"), 0.0),
+        pre_vwap=round(eff_pre_vwap, 4),
+        vs_vwap_pct=round(eff_vs_vwap, 2),
         prev_reg_close=safe_float(feat.get("prev_reg_close"), lp),
         vs_prev_close_pct=safe_float(feat.get("vs_prev_close_pct"), 0.0),
-        pre_open_price=safe_float(feat.get("pre_open_price"), lp),
-        vs_pre_open_pct=safe_float(feat.get("vs_pre_open_pct"), 0.0),
+        pre_open_price=round(eff_pre_open, 4),
+        vs_pre_open_pct=round(eff_vs_pre_open, 2),
         vs_scout1_pct=round(vs_sc1, 2),
         is_bull_bar=bool(feat.get("is_bull_bar", True)),
     )
@@ -1795,6 +1908,10 @@ async def _dispatch_new_scout_unit_and_check_gates(
         "day_scout_history": history_list[-30:],
         "day_scout_seq": new_seq,
         "scout1_open_price": round(sc1_p, 4),
+        "today_pre_open_price": round(eff_pre_open, 4),
+        "today_pre_open_verified": True,
+        "today_premarket_vwap": round(eff_pre_vwap, 4),
+        "today_pre_vwap_verified": True,
         "scout_anchor_price": round(lp, 4),
         "scout_cycle_min_buy_price": new_min_p,
         "scout_ratchet_max_lots": new_ratchet,
@@ -1991,7 +2108,7 @@ async def execute_simulated_assassin_tick_plugin(
             soxl_is_bull_bar=bool(feat.get("is_bull_bar", True)),
             soxl_is_ha_bull=bool(feat.get("is_ha_bull", True)),
             soxl_prev_reg_close=safe_float(feat.get("prev_reg_close"), lp),
-            soxl_pre_open_price=safe_float(feat.get("pre_open_price"), lp),
+            soxl_pre_open_price=safe_float(feat.get("pre_open_price"), 0.0),
             soxl_reg_vwap=safe_float(feat.get("reg_vwap"), lp),
             post_entry_min_price=safe_float(
                 st.get("post_entry_min_price"), lp
@@ -2458,7 +2575,8 @@ async def build_assassin_detail_dashboard_html(
     """
     /assassin 명령어 또는 전술 제어반 [🗡️ [모의] 암살자 상세 관제] 버튼 클릭 시 호출되는 상세 관제 보드.
     호출 즉시 force_warmup=True 로 SOXL 1m(400봉) + 1d(일봉 10봉) + QQQ 1m을 즉시 점검하여
-    ② 프리VWAP · ③ 전일종가 · ④ 프리시가가 정확히 분리 표출되도록 보장한다.
+    아침 프리장 중 가동된 날은 원장에 박제된 실제 프리시가/프리VWAP을 표출하고,
+    장 마감 후 최초 배포 등 당일 프리장 기록이 없는 날은 정규장 가격 폴백 없이 $0.00 (+0.00%)으로 무오염 표출한다.
     """
     now_est = datetime.now(EST_TZ)
     hm_now = now_est.hour * 100 + now_est.minute
@@ -2583,7 +2701,7 @@ async def build_assassin_detail_dashboard_html(
 
 
 # ---------------------------------------------------------------------------
-# [핵심 10] 부팅 시 암살자 10대 진성 게이트 & 방향성 3단 안전망 v2 TDD 자가 검증기
+# [핵심 10] 부팅 시 암살자 10대 진성 게이트 & 방향성 3단 안전망 v2 & 프리장 지표 무오염 TDD 자가 검증기
 # ---------------------------------------------------------------------------
 def run_assassin_plugin_tdd() -> bool:
     """
@@ -2592,10 +2710,11 @@ def run_assassin_plugin_tdd() -> bool:
     3) 08:15 EST 이후 방향성 인지 3단계 안전망 v2에서 안전망이 상승/지지 중일 때
        손절이 100% 차단(False)되고, 음봉 & 신저가 하락 가속 시에만 역행 손절(True)되는지 검증
     4) +1.00% 점화 후 보존선(arm_100_price) 하향 터치 시 최소 +1.00% 익절이 보장되는지 검증
-    5) 동일값 폴백 오염 앵커(_is_collapsed_assassin_anchors) 감지 검증
+    5) 동일값 폴백 오염 앵커(_is_collapsed_assassin_anchors) 및 미확보 프리장 지표(0.0) 정상 판별 검증
     """
     assert _is_collapsed_assassin_anchors(45.74, 45.74, 45.74) is True
     assert _is_collapsed_assassin_anchors(44.10, 45.20, 45.74) is False
+    assert _is_collapsed_assassin_anchors(47.20, 0.0, 0.0) is False
 
     hit_1, _, _ = evaluate_10_truth_gates_signal(
         day_scout_seq=1,
