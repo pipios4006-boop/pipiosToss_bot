@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-# MODIFIED: assassin_plugin.py (Part 1/2 — 🗡️ [모의 ⇄ 실전 Dual-Ready] 암살자 독립 플러그인 · 본대 출동 순간 QQQ 지수[entry_qqq_price] 동시 저장 및 QQQ 2.0% 진폭의 50%[-0.80% ~ -1.00%] 3단계 안전망[암살자 익절 상태 시 홀딩 / 손실 상태 시 즉시 칼손절] 탑재 · 프리시가/프리VWAP 무오염 2단계 하이브리드 원장 박제 및 미확보 시 $0.00 표출 · 400봉 상한 연동 · 10대 진성 게이트 · HA 트레일링 · Case 93)
+# MODIFIED: assassin_plugin.py (Part 1/2 — 🗡️ [모의 ⇄ 실전 Dual-Ready] 암살자 독립 플러그인 · T03_A_DIP10_ALL_SCOUT[10분 와이드 정찰 파견 + #1 선봉 파견 후 매 1분 직전 정찰 저점 대비 -1.00% 눌림 상시 진성 게이트 10 스캔] 탑재 · 본대 출동 순간 QQQ 지수[entry_qqq_price] 동시 저장 및 QQQ 2.0% 진폭의 50%[-0.80% ~ -1.00%] 3단계 안전망[암살자 익절 상태 시 홀딩 / 손실 상태 시 즉시 칼손절] 탑재 · 프리시가/프리VWAP 무오염 2단계 하이브리드 원장 박제 및 미확보 시 $0.00 표출 · 400봉 상한 연동 · 10대 진성 게이트 · HA 트레일링 · Case 93)
 인피니트 스노우볼 (Infinite Snowball) v3.0 — 스나이퍼와 100% 물리적 격리된 상시 가동 [모의 ⇄ 실전 Dual-Ready] 암살자(Assassin) 코어 모듈 (Step 10 / 14 · Case 93)
 - 역할:
   1) 스나이퍼 원장(soxl_stratum_ledger*.json) 및 예수금과 100% 물리적 분리된 독립 3중 원장(AssassinSimLedger : assassin_sim_ledger_{folder_slug}.json) 운용 ·
@@ -10,7 +10,9 @@
      내부 주문 상태 머신(매수 발주 · +5.00% 상단 안전 캡 선장전 · +1.00% 점화 HA 트레일링 modify_order 가격 정정 스윕 · 15:59 2단계 방탄 MOC)은
      토스증권 Open API v1.2.14 실전 규격과 100% 동일하게 구현하여 스위치 해금 즉시 실전 암살자로 탈바꿈 가능
   3) 평일 04:07 ~ 08:14 EST 골든타임 1주 가상 독립 정찰병(IndependentScoutUnit · 실제 매수 없음 · 이동평균 및 합병 100% 배제) 파견 및 4대 지표(① RSI14 · ② 프리VWAP · ③ 전일종가 · ④ 04:07프리시가) 기록
-  4) 2번째+ 정찰병 타점에서 10대 진성 게이트(헌법 G1 ~ G5 + 폭락장 BG1 ~ BG5) 충족 시 하루 1회 기준 시드 100% 현재가 지정가 즉시 진입 및 출동 순간의 QQQ 지수(entry_qqq_price) 동시 저장
+  4) 👑 [T03_A_DIP10_ALL_SCOUT] 2번째+ 정찰병 파견 타점뿐만 아니라, #1 선봉 정찰병 파견 이후(day_scout_seq >= 1, 60초 타임쉴드 경과 뒤)
+     현재가가 직전 정찰 최저점(ref_dip_low) 대비 -1.00% 이하로 눌린 상태에서는 10분 게이트를 기다리지 않고 매 1분마다 10대 진성 게이트(헌법 G1 ~ G5 + 폭락장 BG1 ~ BG5)를 상시 스캔하여,
+     10분 사이 소멸되는 V자 양봉 반전 타점까지 하루 1회 기준 시드 100% 현재가 지정가로 즉시 진입 및 출동 순간의 QQQ 지수(entry_qqq_price) 동시 저장
   5) 출동 시점 QQQ 지수(entry_qqq_price) 기반 3단계 안전망 v2 (QQQ 2.0% 진폭 비율의 50% 기준 최소 -0.80% ~ 최대 -1.00% 하락 도달 시 암살자가 익절 상태면 홀딩 · 손실 상태면 즉시 칼손절)
   6) 5대 라이프사이클 실시간 텔레그램 푸시 알림 및 /assassin 상세 관제 보드(온디맨드 400봉 1m + 1d 일봉 + QQQ 1m 동시 프리워밍) 제공
 """
@@ -85,6 +87,12 @@ SCOUT_PULLBACK_DROP_PCT: float = -1.00   # 정찰병 1층 공석 눌림목 (-1.0
 SCOUT_BREAKOUT_RISE_PCT: float = 1.00    # 정찰병 1층 공석 돌파 (+1.00% & RSI<=50.0)
 SCOUT_BREAKOUT_MAX_RSI: float = 50.0     # 정찰병 돌파 최대 허용 RSI(14)
 SCOUT_TIME_SHIELD_SEC: float = 60.0      # 정찰병 매수/매도 후 60초 타임쉴드
+
+# NEW [Case 93 : T03_A_DIP10_ALL_SCOUT — 10분 정찰병 파견 유지 + 직전 정찰 저점 대비 -1.00% 눌림 구간 매 1분 상시 진성 게이트 10 스캔 상수 및 인메모리 래치]
+SCOUT_T03A_DIP_SCAN_DROP_PCT: float = -1.00
+SCOUT_T03A_DIP_SCAN_INTERVAL_SEC: float = 60.0
+_LAST_T03A_DIP_SCAN_KEY: str = ""
+_LAST_T03A_DIP_SCAN_TS: float = 0.0
 
 ASSASSIN_SAFE_CAP_PCT: float = 5.00      # 본대 진입 직후 상단 안전 캡 (+5.00%)
 ASSASSIN_ARM_IGNITION_PCT: float = 1.00  # 트레일링 점화 및 최소 수익 보존선 (+1.00%)
@@ -281,10 +289,11 @@ class AssassinSimLedger:
             "last_scout_sell_ts": 0.0,
             "last_scout_reentry_eval_ts": 0.0,
             "last_scout_bucket_10m": -1,
-            # 본대(Main Force) 포지션 · 출동 순간 QQQ 지수(entry_qqq_price) 및 트레일링 상태
+            # 본대(Main Force) 포지션 · 출동 순간 QQQ 지수(entry_qqq_price) · 진입 트리거 모드 및 트레일링 상태
             "has_position": False,
             "entry_gate_id": "",
             "entry_gate_desc": "",
+            "entry_trigger_mode": "",
             "entry_time_est": "",
             "entry_ts": 0.0,
             "entry_price": 0.0,
@@ -388,6 +397,9 @@ class AssassinSimLedger:
         base["qqq_chg_from_entry_pct"] = round(
             safe_float(base.get("qqq_chg_from_entry_pct"), 0.0), 3
         )
+        base["entry_trigger_mode"] = str(
+            base.get("entry_trigger_mode") or ""
+        ).strip()
         raw_dyn_thr = safe_float(
             base.get("dyn_qqq_stage2_thr_pct"), SAFETY_DYN_QQQ_MIN_THR_PCT
         )
@@ -588,9 +600,10 @@ class AssassinSimLedger:
         self, today_est_str: str, sniper_seed_usd: float = 0.0
     ) -> Dict[str, Any]:
         """
-        새로운 미국 영업일(today_est_str) 진입 시 당일 정찰병 및 본대 포지션 슬롯(entry_qqq_price 포함)과
-        당일 프리장 앵커 검증 플래그를 클리어하고 누적 성적표는 100% 보존한다.
+        새로운 미국 영업일(today_est_str) 진입 시 당일 정찰병 및 본대 포지션 슬롯(entry_qqq_price · entry_trigger_mode 포함)과
+        당일 프리장 앵커 검증 플래그 및 T03_A 인메모리 스캔 래치를 클리어하고 누적 성적표는 100% 보존한다.
         """
+        global _LAST_T03A_DIP_SCAN_KEY, _LAST_T03A_DIP_SCAN_TS
         st = self.get_state()
         cur_date = str(st.get("current_session_date") or "").strip()
         if cur_date == today_est_str:
@@ -607,6 +620,9 @@ class AssassinSimLedger:
                     initial_seed_usd=round(sniper_seed_usd, 4)
                 )
             return st
+
+        _LAST_T03A_DIP_SCAN_KEY = ""
+        _LAST_T03A_DIP_SCAN_TS = 0.0
 
         eff_seed = (
             round(sniper_seed_usd, 4)
@@ -645,6 +661,7 @@ class AssassinSimLedger:
             has_position=False,
             entry_gate_id="",
             entry_gate_desc="",
+            entry_trigger_mode="",
             entry_time_est="",
             entry_ts=0.0,
             entry_price=0.0,
@@ -739,7 +756,7 @@ def ensure_assassin_ledger(context: Any) -> AssassinSimLedger:
 
 
 # ---------------------------------------------------------------------------
-# [핵심 3] 10대 진성 게이트(헌법 G1~G5 + 폭락장 BG1~BG5) 판정 엔진 (Case 93)
+# [핵심 3] 10대 진성 게이트(헌법 G1~G5 + 폭락장 BG1~BG5) 판정 엔진 (Case 93 · T03_A_DIP10_ALL_SCOUT 연동)
 # ---------------------------------------------------------------------------
 def evaluate_10_truth_gates_signal(
     day_scout_seq: int,
@@ -750,14 +767,21 @@ def evaluate_10_truth_gates_signal(
     vs_scout1_pct: float,
     prior_scout_wins_today: int,
     is_bull_bar: bool,
+    allow_sc1_dip_scan: bool = False,
 ) -> Tuple[bool, str, str]:
     """
-    # [Case 93 : 2번째 이후 정찰병(day_scout_seq >= 2) 타점에서의 10대 진성 게이트 판정기]:
-    - 04:07 EST 첫 선봉 정찰병(day_scout_seq == 1)은 기준점 수립 전용이므로 본대 진입에서 제외한다.
-    - G1 ~ G5 (헌법 5대 게이트) 또는 BG1 ~ BG5 (폭락장 전용 5대 게이트) 중 하나라도 충족 시
-      (True, gate_id, gate_desc) 를 반환한다.
+    # MODIFIED [Case 93 : 2번째+ 정찰병 파견 타점 및 T03_A(#1 파견 후 직전 정찰 저점 대비 -1.00% 이하 1분 눌림 스캔)에서의 10대 진성 게이트 판정기]:
+    - 04:07 EST 첫 선봉 정찰병(day_scout_seq == 1) 최초 파견 순간(allow_sc1_dip_scan == False)에는
+      기준점 수립 전용이므로 본대 진입을 100% 차단한다.
+    - 반면 #1 파견 이후 60초 타임쉴드가 경과한 뒤 직전 정찰 저점 대비 -1.00% 이하로 눌린 상태에서
+      수행되는 1분 주기 상시 스캔(allow_sc1_dip_scan == True) 또는 2번째 이후 정찰병(day_scout_seq >= 2) 타점에서는
+      G1 ~ G5 (헌법 5대 게이트) 및 BG1 ~ BG5 (폭락장 전용 5대 게이트) 중 하나라도 충족 시
+      즉시 (True, gate_id, gate_desc) 를 반환한다.
     """
-    if safe_int(day_scout_seq, 0) < 2:
+    seq_int = safe_int(day_scout_seq, 0)
+    if seq_int <= 0:
+        return False, "", "정찰병 미파견"
+    if seq_int < 2 and not bool(allow_sc1_dip_scan):
         return False, "", "선봉 정찰병(#1) 기준점 수립"
 
     rsi = safe_float(rsi_14, 50.0)
@@ -1260,7 +1284,7 @@ def evaluate_assassin_ha_trailing_and_exits(
     }
 # -*- coding: utf-8 -*-
 """
-# MODIFIED: assassin_plugin.py (Part 2/2 — 본대 출동 순간 QQQ 지수[entry_qqq_price] 원장 동시 박제 · 출동 QQQ 대비 -0.80% ~ -1.00% 안전망[익절 상태 시 홀딩 / 손실 상태 시 칼손절] 실시간 추적 · 4대 지표 400봉 1m + 10봉 1d 온디맨드 프리워밍 · 프리시가/프리VWAP 무오염 표출 · Dual-Ready 어댑터 · 5대 알림 · /assassin 관제 보드 · TDD 검증기)
+# MODIFIED: assassin_plugin.py (Part 2/2 — T03_A_DIP10_ALL_SCOUT[직전 정찰 저점 대비 -1.00% 이하 매 1분 상시 진성 게이트 10 스캔 엔진 _evaluate_t03a_1m_dip_truth_gates_scan 및 본대 진입 공통 모듈 _enter_assassin_main_force_from_gate] 탑재 · 본대 출동 순간 QQQ 지수[entry_qqq_price] 원장 동시 박제 · 출동 QQQ 대비 -0.80% ~ -1.00% 안전망[익절 상태 시 홀딩 / 손실 상태 시 칼손절] 실시간 추적 · 4대 지표 400봉 1m + 10봉 1d 온디맨드 프리워밍 · 프리시가/프리VWAP 무오염 표출 · Dual-Ready 어댑터 · 5대 알림 · /assassin 관제 보드 · TDD 검증기)
 """
 
 # 온디맨드 캔들 워밍업 과호출 방지용 인메모리 쿨다운 타임스탬프
@@ -1734,7 +1758,7 @@ async def _dispatch_assassin_exit_sweep_order(
 
 
 # ---------------------------------------------------------------------------
-# [핵심 7] 5대 라이프사이클 실시간 텔레그램 푸시 알림 발송기 (Case 93)
+# [핵심 7] 5대 라이프사이클 실시간 텔레그램 푸시 알림 발송기 (Case 93 · T03_A 타점 표기 연동)
 # ---------------------------------------------------------------------------
 async def _send_1_scout_dispatched_alert(
     context: Any,
@@ -1801,6 +1825,7 @@ async def _send_3_truth_gate_entry_alert(
         return
     gate_id = str(st.get("entry_gate_id") or "")
     gate_desc = str(st.get("entry_gate_desc") or "")
+    trig_mode = str(st.get("entry_trigger_mode") or "")
     ep = safe_float(st.get("entry_price"), 0.0)
     eq_qqq = safe_float(
         st.get("entry_qqq_price"), safe_float(feat.get("qqq_live_price"), 0.0)
@@ -1814,17 +1839,23 @@ async def _send_3_truth_gate_entry_alert(
     dyn_thr = safe_float(
         st.get("dyn_qqq_stage2_thr_pct"), SAFETY_DYN_QQQ_MIN_THR_PCT
     )
+    seq_no = max(1, safe_int(st.get("entry_scout_seq"), 1))
+    trig_label = (
+        f"T03_A 1분 눌림 스캔(정찰 #{seq_no} 이후)"
+        if trig_mode.startswith("T03A_")
+        else f"정찰병 #{seq_no} 파견 타점"
+    )
 
     lines = [
         f"🗡️ <b>[[모의] 암살자 진성 게이트 [{_esc(gate_id)}] 포착 · 본대 전격 진입!]</b>",
         "──────────────",
         f"🎯 격발게이트: <b>{_esc(gate_desc)}</b>",
-        f"⚡ 진입단가: <b>${ep:.2f}</b> · 출동QQQ: <b>${eq_qqq:.2f}</b> (정찰병 #{safe_int(st.get('entry_scout_seq'), 2)} 타점)",
+        f"⚡ 진입단가: <b>${ep:.2f}</b> · 출동QQQ: <b>${eq_qqq:.2f}</b> ({_esc(trig_label)})",
         f"💵 단리투입: <b>{s_qty}주</b> (${s_inv:,.2f}) | 📈 복리투입: <b>{c_qty}주</b> (${c_inv:,.2f})",
         "──────────────",
         "📊 <b>[본대 진입 시점 4대 지표 박제]</b>",
-        f"① RSI(14): <b>{feat['rsi_14']:.1f}</b> | ② 프리VWAP: <b>${feat['pre_vwap']:.2f}</b> ({feat['vs_vwap_pct']:+.2f}%)",
-        f"③ 전일종가: <b>${feat['prev_reg_close']:.2f}</b> ({feat['vs_prev_close_pct']:+.2f}%) | ④ 프리시가: <b>${feat['pre_open_price']:.2f}</b> ({feat['vs_pre_open_pct']:+.2f}%)",
+        f"① RSI(14): <b>{safe_float(st.get('entry_rsi_14'), feat['rsi_14']):.1f}</b> | ② 프리VWAP: <b>${safe_float(st.get('entry_vwap'), feat['pre_vwap']):.2f}</b> ({safe_float(st.get('entry_vs_vwap_pct'), feat['vs_vwap_pct']):+.2f}%)",
+        f"③ 전일종가: <b>${safe_float(st.get('entry_prev_close'), feat['prev_reg_close']):.2f}</b> ({safe_float(st.get('entry_vs_prev_close_pct'), feat['vs_prev_close_pct']):+.2f}%) | ④ 프리시가: <b>${safe_float(st.get('entry_pre_open'), feat['pre_open_price']):.2f}</b> ({safe_float(st.get('entry_vs_pre_open_pct'), feat['vs_pre_open_pct']):+.2f}%)",
         "──────────────",
         f"👑 상단안전캡(+5.0%): <b>${cap_p:.2f}</b> 선장전 완료",
         f"🔥 트레일링점화(+1.0%): <b>${arm_p:.2f}</b> 도달 시 보존선 잠금 & 0.4초 추적",
@@ -1900,8 +1931,141 @@ async def _send_5_exit_settlement_alert(
 
 
 # ---------------------------------------------------------------------------
-# [핵심 8] 메인 스나이퍼 루프 최상단 결속 상시 가동 틱 엔진 (execute_simulated_assassin_tick_plugin)
+# [핵심 8] 메인 스나이퍼 루프 최상단 결속 상시 가동 틱 엔진 (execute_simulated_assassin_tick_plugin — T03_A_DIP10_ALL_SCOUT 탑재)
 # ---------------------------------------------------------------------------
+async def _enter_assassin_main_force_from_gate(
+    context: Any,
+    assn_ledger: AssassinSimLedger,
+    st: Dict[str, Any],
+    feat: Dict[str, Any],
+    gate_id: str,
+    gate_desc: str,
+    entry_scout_seq: int,
+    entry_trigger_mode: str,
+    now_est: datetime,
+    now_ts: float,
+    entry_rsi_14: float,
+    entry_vwap: float,
+    entry_vs_vwap_pct: float,
+    entry_prev_close: float,
+    entry_vs_prev_close_pct: float,
+    entry_pre_open: float,
+    entry_vs_pre_open_pct: float,
+    extra_state_updates: Optional[Dict[str, Any]] = None,
+) -> str:
+    """
+    # NEW [Case 93 : 10대 진성 게이트 포착 시 본대 즉시 진입 및 출동 QQQ 지수(entry_qqq_price) 원장 박제 공통 함수]:
+    정찰병 파견 타점(#2+)과 T03_A 1분 눌림 스캔 타점(day_scout_seq >= 1 & 직전 정찰 저점 대비 -1.00% 이하)
+    양쪽에서 동일하게 호출되어 기준 시드 100% 현재가 지정가 진입 및 +5.00% 안전 캡 선장전을 수행한다.
+    """
+    lp = safe_float(feat.get("live_price"), 0.0)
+    if lp <= 0.0:
+        return "ASSASSIN_BUY_NO_PRICE"
+
+    init_seed = max(
+        100.0, safe_float(st.get("initial_seed_usd"), DEFAULT_INITIAL_SEED_USD)
+    )
+    comp_cash = max(
+        100.0, safe_float(st.get("comp_free_cash_usd"), init_seed)
+    )
+    rt_fee_pct = safe_float(
+        st.get("round_trip_fee_rate_pct"), ROUND_TRIP_FEE_RATE_PCT
+    )
+    fee_mult = 1.0 + (rt_fee_pct / 100.0) * 0.5
+
+    simple_qty = max(1, int(math.floor(init_seed / (lp * fee_mult))))
+    comp_qty = max(1, int(math.floor(comp_cash / (lp * fee_mult))))
+
+    ok_buy, buy_oid, fill_p = await _dispatch_assassin_buy_order(
+        context=context,
+        qty=comp_qty,
+        price=lp,
+        tag=f"GATE_{gate_id}",
+    )
+    if not ok_buy:
+        return "ASSASSIN_BUY_FAILED"
+
+    arm_p = (
+        math.ceil(
+            (fill_p * (1.0 + ASSASSIN_ARM_IGNITION_PCT / 100.0) - 1e-9) * 100.0
+        )
+        / 100.0
+    )
+    cap_p = round(fill_p * (1.0 + ASSASSIN_SAFE_CAP_PCT / 100.0), 2)
+    _, cap_oid = await _dispatch_assassin_safe_cap_sell_order(
+        context=context,
+        qty=comp_qty,
+        cap_price=cap_p,
+    )
+
+    entry_qqq_p = round(safe_float(feat.get("qqq_live_price"), 0.0), 4)
+    raw_nq_amp = safe_float(feat.get("qqq_bear_drop_amp_pct"), 0.0)
+    nq_bear_amp = (
+        max(1.60, min(SAFETY_QQQ_BASE_AMP_PCT, raw_nq_amp))
+        if raw_nq_amp > 0.0
+        else SAFETY_QQQ_BASE_AMP_PCT
+    )
+    dyn_qqq_thr = round(
+        min(
+            SAFETY_DYN_QQQ_MAX_THR_PCT,
+            max(
+                nq_bear_amp * SAFETY_QQQ_AMP_CUT_RATIO,
+                SAFETY_DYN_QQQ_MIN_THR_PCT,
+            ),
+        ),
+        2,
+    )
+
+    gate_counts = dict(st.get("gate_hit_counts") or {})
+    gate_counts[gate_id] = safe_int(gate_counts.get(gate_id), 0) + 1
+
+    state_kw: Dict[str, Any] = {
+        "session_phase": "MAIN_FORCE_ACTIVE",
+        "has_position": True,
+        "entry_gate_id": gate_id,
+        "entry_gate_desc": gate_desc,
+        "entry_trigger_mode": str(entry_trigger_mode or "SCOUT_GATE"),
+        "entry_time_est": now_est.strftime("%H:%M:%S"),
+        "entry_ts": now_ts,
+        "entry_price": round(fill_p, 4),
+        "entry_qqq_price": entry_qqq_p,
+        "qqq_chg_from_entry_pct": 0.0,
+        "entry_scout_seq": max(1, safe_int(entry_scout_seq, 1)),
+        "entry_rsi_14": round(entry_rsi_14, 2),
+        "entry_vwap": round(entry_vwap, 4),
+        "entry_vs_vwap_pct": round(entry_vs_vwap_pct, 2),
+        "entry_prev_close": round(entry_prev_close, 4),
+        "entry_vs_prev_close_pct": round(entry_vs_prev_close_pct, 2),
+        "entry_pre_open": round(entry_pre_open, 4),
+        "entry_vs_pre_open_pct": round(entry_vs_pre_open_pct, 2),
+        "nq_entry_bear_amp_pct": round(nq_bear_amp, 3),
+        "dyn_qqq_stage2_thr_pct": dyn_qqq_thr,
+        "simple_held_qty": simple_qty,
+        "simple_invested_usd": round(float(simple_qty) * fill_p, 4),
+        "comp_held_qty": comp_qty,
+        "comp_invested_usd": round(float(comp_qty) * fill_p, 4),
+        "cap_500_price": cap_p,
+        "arm_100_price": round(arm_p, 2),
+        "is_trailing_armed": False,
+        "armed_time_est": "",
+        "peak_price": round(fill_p, 4),
+        "post_entry_min_price": round(fill_p, 4),
+        "active_stop_floor_price": 0.0,
+        "pending_buy_order_id": buy_oid,
+        "safe_cap_sell_order_id": cap_oid,
+        "alert_entry_sent": True,
+        "gate_hit_counts": gate_counts,
+    }
+    if isinstance(extra_state_updates, dict) and extra_state_updates:
+        state_kw.update(extra_state_updates)
+
+    st = await assn_ledger.update_state(**state_kw)
+    await _send_3_truth_gate_entry_alert(
+        context=context, st=st, feat=feat, now_est=now_est
+    )
+    return f"ASSASSIN_MAIN_FORCE_ENTERED_{gate_id}"
+
+
 async def _dispatch_new_scout_unit_and_check_gates(
     context: Any,
     assn_ledger: AssassinSimLedger,
@@ -1913,9 +2077,10 @@ async def _dispatch_new_scout_unit_and_check_gates(
 ) -> str:
     """
     1주 가상 독립 정찰병을 파견하고, 2번째 이후 정찰병(day_scout_seq >= 2)이면
-    즉시 10대 진성 게이트(evaluate_10_truth_gates_signal)를 검문하여 충족 시
-    본대를 투입함과 동시에 출동 순간의 QQQ 지수(entry_qqq_price)를 원장에 박제한다.
+    즉시 10대 진성 게이트(evaluate_10_truth_gates_signal, allow_sc1_dip_scan=False)를 검문하여 충족 시
+    _enter_assassin_main_force_from_gate() 를 통해 본대를 투입한다.
     """
+    global _LAST_T03A_DIP_SCAN_KEY, _LAST_T03A_DIP_SCAN_TS
     lp = safe_float(feat.get("live_price"), 0.0)
     if lp <= 0.0:
         return "HOLD_NO_PRICE"
@@ -2000,7 +2165,11 @@ async def _dispatch_new_scout_unit_and_check_gates(
         vs_scout1_pct=new_scout.vs_scout1_pct,
         prior_scout_wins_today=prior_wins,
         is_bull_bar=new_scout.is_bull_bar,
+        allow_sc1_dip_scan=False,
     )
+
+    _LAST_T03A_DIP_SCAN_KEY = now_est.strftime("%Y-%m-%d %H:%M")
+    _LAST_T03A_DIP_SCAN_TS = now_ts
 
     upd_kw: Dict[str, Any] = {
         "session_phase": "SCOUTING_0407_0814",
@@ -2040,76 +2209,17 @@ async def _dispatch_new_scout_unit_and_check_gates(
     if not gate_hit:
         return f"SCOUT_DISPATCHED_#{new_seq}"
 
-    # 10대 진성 게이트 포착 -> 즉시 본대 진입 & 출동 순간 QQQ 지수(entry_qqq_price) 동시 저장!
-    init_seed = max(
-        100.0, safe_float(st.get("initial_seed_usd"), DEFAULT_INITIAL_SEED_USD)
-    )
-    comp_cash = max(
-        100.0, safe_float(st.get("comp_free_cash_usd"), init_seed)
-    )
-    rt_fee_pct = safe_float(
-        st.get("round_trip_fee_rate_pct"), ROUND_TRIP_FEE_RATE_PCT
-    )
-    fee_mult = 1.0 + (rt_fee_pct / 100.0) * 0.5
-
-    simple_qty = max(1, int(math.floor(init_seed / (lp * fee_mult))))
-    comp_qty = max(1, int(math.floor(comp_cash / (lp * fee_mult))))
-
-    ok_buy, buy_oid, fill_p = await _dispatch_assassin_buy_order(
+    return await _enter_assassin_main_force_from_gate(
         context=context,
-        qty=comp_qty,
-        price=lp,
-        tag=f"GATE_{gate_id}",
-    )
-    if not ok_buy:
-        return "ASSASSIN_BUY_FAILED"
-
-    arm_p = (
-        math.ceil(
-            (fill_p * (1.0 + ASSASSIN_ARM_IGNITION_PCT / 100.0) - 1e-9) * 100.0
-        )
-        / 100.0
-    )
-    cap_p = round(fill_p * (1.0 + ASSASSIN_SAFE_CAP_PCT / 100.0), 2)
-    _, cap_oid = await _dispatch_assassin_safe_cap_sell_order(
-        context=context,
-        qty=comp_qty,
-        cap_price=cap_p,
-    )
-
-    entry_qqq_p = round(safe_float(feat.get("qqq_live_price"), 0.0), 4)
-    # QQQ 진폭 비율 2.00% 기준 50% 비례 동적 안전망 손절 폭 산출 (범위: 최소 -0.80% ~ 최대 -1.00%)
-    raw_nq_amp = safe_float(feat.get("qqq_bear_drop_amp_pct"), 0.0)
-    nq_bear_amp = (
-        max(1.60, min(SAFETY_QQQ_BASE_AMP_PCT, raw_nq_amp))
-        if raw_nq_amp > 0.0
-        else SAFETY_QQQ_BASE_AMP_PCT
-    )
-    dyn_qqq_thr = round(
-        min(
-            SAFETY_DYN_QQQ_MAX_THR_PCT,
-            max(
-                nq_bear_amp * SAFETY_QQQ_AMP_CUT_RATIO,
-                SAFETY_DYN_QQQ_MIN_THR_PCT,
-            ),
-        ),
-        2,
-    )
-
-    gate_counts = dict(st.get("gate_hit_counts") or {})
-    gate_counts[gate_id] = safe_int(gate_counts.get(gate_id), 0) + 1
-
-    st = await assn_ledger.update_state(
-        session_phase="MAIN_FORCE_ACTIVE",
-        has_position=True,
-        entry_gate_id=gate_id,
-        entry_gate_desc=gate_desc,
-        entry_time_est=now_est.strftime("%H:%M:%S"),
-        entry_ts=now_ts,
-        entry_price=round(fill_p, 4),
-        entry_qqq_price=entry_qqq_p,
-        qqq_chg_from_entry_pct=0.0,
+        assn_ledger=assn_ledger,
+        st=st,
+        feat=feat,
+        gate_id=gate_id,
+        gate_desc=gate_desc,
         entry_scout_seq=new_seq,
+        entry_trigger_mode=f"SCOUT_#{new_seq}_{entry_type}",
+        now_est=now_est,
+        now_ts=now_ts,
         entry_rsi_14=new_scout.rsi_14,
         entry_vwap=new_scout.pre_vwap,
         entry_vs_vwap_pct=new_scout.vs_vwap_pct,
@@ -2117,28 +2227,152 @@ async def _dispatch_new_scout_unit_and_check_gates(
         entry_vs_prev_close_pct=new_scout.vs_prev_close_pct,
         entry_pre_open=new_scout.pre_open_price,
         entry_vs_pre_open_pct=new_scout.vs_pre_open_pct,
-        nq_entry_bear_amp_pct=round(nq_bear_amp, 3),
-        dyn_qqq_stage2_thr_pct=dyn_qqq_thr,
-        simple_held_qty=simple_qty,
-        simple_invested_usd=round(float(simple_qty) * fill_p, 4),
-        comp_held_qty=comp_qty,
-        comp_invested_usd=round(float(comp_qty) * fill_p, 4),
-        cap_500_price=cap_p,
-        arm_100_price=round(arm_p, 2),
-        is_trailing_armed=False,
-        armed_time_est="",
-        peak_price=round(fill_p, 4),
-        post_entry_min_price=round(fill_p, 4),
-        active_stop_floor_price=0.0,
-        pending_buy_order_id=buy_oid,
-        safe_cap_sell_order_id=cap_oid,
-        alert_entry_sent=True,
-        gate_hit_counts=gate_counts,
     )
-    await _send_3_truth_gate_entry_alert(
-        context=context, st=st, feat=feat, now_est=now_est
+
+
+def _resolve_t03a_reference_dip_low(
+    st: Dict[str, Any],
+    units: List[IndependentScoutUnit],
+) -> float:
+    """
+    # NEW [Case 93 : T03_A_DIP10_ALL_SCOUT 직전 정찰 기준 저점(ref_dip_low) 산출기]:
+    당일 파견된 정찰병들의 최저 진입가(scout_cycle_min_buy_price), 직전 정찰 기준가(scout_anchor_price),
+    현재 보유 정찰병 최저 단가(min(u.entry_price)), 또는 04:07 선봉가(scout1_open_price) 중
+    유효한 양수 최저점을 반환한다.
+    """
+    cands: List[float] = []
+    c_min = safe_float(st.get("scout_cycle_min_buy_price"), 0.0)
+    if c_min > 0.0:
+        cands.append(c_min)
+    anc = safe_float(st.get("scout_anchor_price"), 0.0)
+    if anc > 0.0:
+        cands.append(anc)
+    if units:
+        u_min = min(u.entry_price for u in units if u.entry_price > 0.0)
+        if u_min > 0.0:
+            cands.append(u_min)
+    if not cands:
+        sc1 = safe_float(st.get("scout1_open_price"), 0.0)
+        if sc1 > 0.0:
+            cands.append(sc1)
+    return round(min(cands), 4) if cands else 0.0
+
+
+async def _evaluate_t03a_1m_dip_truth_gates_scan(
+    context: Any,
+    assn_ledger: AssassinSimLedger,
+    st: Dict[str, Any],
+    feat: Dict[str, Any],
+    units: List[IndependentScoutUnit],
+    now_est: datetime,
+    now_ts: float,
+) -> Optional[str]:
+    """
+    # NEW [Case 93 : T03_A_DIP10_ALL_SCOUT — #1 선봉 파견 이후 직전 정찰 저점 대비 -1.00% 이하 눌림 구간 매 1분 상시 진성 게이트 10 스캔 엔진]:
+    1) 정찰병 파견 자체는 10분 와이드 규율을 그대로 유지하여 가짜 정찰병 남발을 막는다.
+    2) 당일 #1 선봉 정찰병이 파견(day_scout_seq >= 1)된 이후 60.0초 타임쉴드가 경과한 상태에서,
+       현재가(lp)가 직전 정찰 기준 저점(ref_dip_low) 대비 -1.00%(SCOUT_T03A_DIP_SCAN_DROP_PCT) 이하로 눌려 있으면,
+       10분 게이트를 기다리지 않고 매 1분(EST 분 변경 또는 60초 경과)마다 10대 진성 게이트(allow_sc1_dip_scan=True)를 즉시 검문한다.
+    3) 진성 게이트 미충족 시에는 인메모리 래치(_LAST_T03A_DIP_SCAN_KEY)만 갱신하여 디스크 쓰기(os.fsync) 0 Byte 를 유지한다 (Case 75).
+    4) 진성 게이트(G1 ~ G5 / BG1 ~ BG5) 충족 시에는 10분 사이 소멸되는 V자 양봉 반전 타점을 놓치지 않고
+       그 자리에서 즉시 본대 진입(_enter_assassin_main_force_from_gate)을 집행한다!
+    """
+    global _LAST_T03A_DIP_SCAN_KEY, _LAST_T03A_DIP_SCAN_TS
+
+    cur_seq = safe_int(st.get("day_scout_seq"), 0)
+    if cur_seq < 1:
+        return None
+
+    last_b_ts = safe_float(st.get("last_scout_buy_ts"), 0.0)
+    if (now_ts - last_b_ts) < SCOUT_TIME_SHIELD_SEC:
+        return None
+
+    lp = safe_float(feat.get("live_price"), 0.0)
+    ref_dip_low = _resolve_t03a_reference_dip_low(st, units)
+    if lp <= 0.0 or ref_dip_low <= 0.0:
+        return None
+
+    chg_from_dip_low = ((lp - ref_dip_low) / ref_dip_low) * 100.0
+    if chg_from_dip_low > (SCOUT_T03A_DIP_SCAN_DROP_PCT + 1e-6):
+        return None
+
+    cur_min_key = now_est.strftime("%Y-%m-%d %H:%M")
+    if (
+        _LAST_T03A_DIP_SCAN_KEY == cur_min_key
+        and (now_ts - _LAST_T03A_DIP_SCAN_TS) < SCOUT_T03A_DIP_SCAN_INTERVAL_SEC
+    ):
+        return None
+
+    _LAST_T03A_DIP_SCAN_KEY = cur_min_key
+    _LAST_T03A_DIP_SCAN_TS = now_ts
+
+    sc1_p = safe_float(
+        st.get("scout1_open_price"),
+        safe_float(feat.get("pre_open_price"), ref_dip_low),
     )
-    return f"ASSASSIN_MAIN_FORCE_ENTERED_{gate_id}"
+    if sc1_p <= 0.0:
+        sc1_p = ref_dip_low
+
+    eff_pre_open = safe_float(feat.get("pre_open_price"), 0.0)
+    if eff_pre_open <= 0.0:
+        eff_pre_open = sc1_p
+    eff_vs_pre_open = (
+        ((lp - eff_pre_open) / eff_pre_open) * 100.0
+        if eff_pre_open > 0.0
+        else 0.0
+    )
+
+    eff_pre_vwap = safe_float(feat.get("pre_vwap"), 0.0)
+    if eff_pre_vwap <= 0.0:
+        eff_pre_vwap = lp
+    eff_vs_vwap = (
+        ((lp - eff_pre_vwap) / eff_pre_vwap) * 100.0
+        if eff_pre_vwap > 0.0
+        else 0.0
+    )
+
+    eff_prev_close = safe_float(feat.get("prev_reg_close"), lp)
+    eff_vs_prev_close = safe_float(feat.get("vs_prev_close_pct"), 0.0)
+    vs_sc1 = ((lp - sc1_p) / sc1_p) * 100.0 if sc1_p > 0.0 else 0.0
+    rsi_now = safe_float(feat.get("rsi_14"), 50.0)
+    is_bull_now = bool(feat.get("is_bull_bar", True))
+    prior_wins = safe_int(st.get("prior_scout_wins_today"), 0)
+
+    gate_hit, gate_id, gate_desc = evaluate_10_truth_gates_signal(
+        day_scout_seq=cur_seq,
+        rsi_14=rsi_now,
+        vs_vwap_pct=round(eff_vs_vwap, 2),
+        vs_prev_close_pct=round(eff_vs_prev_close, 2),
+        vs_pre_open_pct=round(eff_vs_pre_open, 2),
+        vs_scout1_pct=round(vs_sc1, 2),
+        prior_scout_wins_today=prior_wins,
+        is_bull_bar=is_bull_now,
+        allow_sc1_dip_scan=True,
+    )
+    if not gate_hit:
+        return None
+
+    new_min_p = round(min(ref_dip_low, lp), 4)
+    return await _enter_assassin_main_force_from_gate(
+        context=context,
+        assn_ledger=assn_ledger,
+        st=st,
+        feat=feat,
+        gate_id=gate_id,
+        gate_desc=gate_desc,
+        entry_scout_seq=cur_seq,
+        entry_trigger_mode=f"T03A_1M_DIP_SCAN(저점${ref_dip_low:.2f}대비{chg_from_dip_low:+.2f}%)",
+        now_est=now_est,
+        now_ts=now_ts,
+        entry_rsi_14=rsi_now,
+        entry_vwap=eff_pre_vwap,
+        entry_vs_vwap_pct=eff_vs_vwap,
+        entry_prev_close=eff_prev_close,
+        entry_vs_prev_close_pct=eff_vs_prev_close,
+        entry_pre_open=eff_pre_open,
+        entry_vs_pre_open_pct=eff_vs_pre_open,
+        extra_state_updates={"scout_cycle_min_buy_price": new_min_p},
+    )
 
 
 async def execute_simulated_assassin_tick_plugin(
@@ -2148,7 +2382,7 @@ async def execute_simulated_assassin_tick_plugin(
     """
     🚨 Case 93 핵심:
     main.py 의 main_sniper_loop() 최상단(스나이퍼 ON/OFF 분기 이전)에서 매 틱 호출되는
-    [모의 ⇄ 실전 Dual-Ready] 암살자 상시 작동 상태 머신.
+    [모의 ⇄ 실전 Dual-Ready] 암살자 상시 작동 상태 머신 (T03_A_DIP10_ALL_SCOUT 탑재).
     - 이미 당일 세션이 종료(is_session_done == True)된 경우에는 시세 스냅샷/워밍업 호출 전에
       즉시 리턴하여 백그라운드 루프가 _LAST_ASSASSIN_WARMUP_MONO 쿨다운을 점유하지 않도록 보호한다.
     """
@@ -2458,7 +2692,7 @@ async def execute_simulated_assassin_tick_plugin(
         return "NO_TRADE_OFFWORK_0815"
 
     # ===================================================================
-    # [PHASE C] 04:07 ~ 08:14 EST 골든타임 1주 가상 독립 정찰병 파견 & 독립 익절
+    # [PHASE C] 04:07 ~ 08:14 EST 골든타임 1주 가상 독립 정찰병 파견 · 독립 익절 · T03_A 1분 눌림 상시 스캔
     # ===================================================================
     raw_units = st.get("scout_units") or []
     units = [
@@ -2521,14 +2755,6 @@ async def execute_simulated_assassin_tick_plugin(
             )
             return f"SCOUT_PROFIT_EXIT_{sold_count}"
 
-    # C-2) 정찰병 파견 게이트 검문 (최대 7명 독립 보유 한도)
-    if len(units) >= SCOUT_MAX_INDEPENDENT_UNITS:
-        return "HOLD_SCOUT_MAX_7_UNITS"
-
-    last_s_ts = safe_float(st.get("last_scout_sell_ts"), 0.0)
-    if (now_ts - max(last_b_ts, last_s_ts)) < SCOUT_TIME_SHIELD_SEC:
-        return "HOLD_SCOUT_60S_SHIELD"
-
     b_stat = evaluate_buy_gate_bucket_status(
         now_est=dt_now,
         buy_interval_min=LOCKED_BUY_INTERVAL_MIN,
@@ -2540,104 +2766,156 @@ async def execute_simulated_assassin_tick_plugin(
     cur_b10 = safe_int(b_stat.get("bucket_10m"), -1)
     is_b10_open = bool(b_stat[0]) if len(b_stat) >= 1 else False
 
-    # 분기 1: 당일 첫 선봉 정찰병(#1 · 01_OPEN_0407) 또는 전량 익절 후 0주 재진입
-    if not units:
-        e_type = (
-            "01_OPEN_0407"
-            if safe_int(st.get("day_scout_seq"), 0) == 0
-            else "01_ZERO_REENTRY"
-        )
-        return await _dispatch_new_scout_unit_and_check_gates(
-            context=context,
-            assn_ledger=assn_ledger,
-            st=st,
-            feat=feat,
-            entry_type=e_type,
-            now_est=dt_now,
-            cur_bucket_10m=cur_b10,
-        )
-
-    has_l1 = bool(st.get("scout_has_active_l1", True))
-    anchor_p = safe_float(
-        st.get("scout_anchor_price"), units[0].entry_price
+    last_s_ts = safe_float(st.get("last_scout_sell_ts"), 0.0)
+    in_60s_shield = bool(
+        (now_ts - max(last_b_ts, last_s_ts)) < SCOUT_TIME_SHIELD_SEC
     )
 
-    # 분기 2: 1층 정찰병 공석 상태 -> 60초 주기 눌림(-1.0% 무필터) / 돌파(+1.0% & RSI<=50) 재장전
-    if not has_l1:
-        last_re_ts = safe_float(st.get("last_scout_reentry_eval_ts"), 0.0)
-        if (now_ts - last_re_ts) < SCOUT_TIME_SHIELD_SEC:
-            return "HOLD_SCOUT_VACANT_L1_60S"
-
-        l2_ceil_p = min(u.entry_price for u in units)
-        if lp > l2_ceil_p + 1e-6:
-            await assn_ledger.update_state(last_scout_reentry_eval_ts=now_ts)
-            return "HOLD_SCOUT_PREVENT_INVERSION"
-
-        chg_from_anchor = (
-            ((lp - anchor_p) / anchor_p) * 100.0 if anchor_p > 0.0 else 0.0
-        )
-        if chg_from_anchor <= SCOUT_PULLBACK_DROP_PCT:
+    # C-2) 분기 1: 당일 첫 선봉 정찰병(#1 · 01_OPEN_0407) 또는 전량 익절 후 0주 재진입
+    if not units:
+        if safe_int(st.get("day_scout_seq"), 0) == 0:
             return await _dispatch_new_scout_unit_and_check_gates(
                 context=context,
                 assn_ledger=assn_ledger,
                 st=st,
                 feat=feat,
-                entry_type="02_PULL_1PCT_NOFILT",
+                entry_type="01_OPEN_0407",
                 now_est=dt_now,
-                cur_bucket_10m=-1,
+                cur_bucket_10m=cur_b10,
             )
-        if chg_from_anchor >= SCOUT_BREAKOUT_RISE_PCT:
-            if safe_float(feat.get("rsi_14"), 50.0) <= SCOUT_BREAKOUT_MAX_RSI:
+        if not in_60s_shield:
+            return await _dispatch_new_scout_unit_and_check_gates(
+                context=context,
+                assn_ledger=assn_ledger,
+                st=st,
+                feat=feat,
+                entry_type="01_ZERO_REENTRY",
+                now_est=dt_now,
+                cur_bucket_10m=cur_b10,
+            )
+        return "HOLD_SCOUT_60S_SHIELD"
+
+    if in_60s_shield:
+        return "HOLD_SCOUT_60S_SHIELD"
+
+    hold_status = "SCOUTING_ACTIVE"
+
+    # C-3) 정찰병 보유 한도(7명) 미만일 때 1층 공석 재장전 또는 10분 와이드 정찰병 파견 검문
+    if len(units) >= SCOUT_MAX_INDEPENDENT_UNITS:
+        hold_status = "HOLD_SCOUT_MAX_7_UNITS"
+    else:
+        has_l1 = bool(st.get("scout_has_active_l1", True))
+        anchor_p = safe_float(
+            st.get("scout_anchor_price"), units[0].entry_price
+        )
+
+        # 분기 2: 1층 정찰병 공석 상태 -> 60초 주기 눌림(-1.0% 무필터) / 돌파(+1.0% & RSI<=50) 재장전
+        if not has_l1:
+            last_re_ts = safe_float(st.get("last_scout_reentry_eval_ts"), 0.0)
+            if (now_ts - last_re_ts) < SCOUT_TIME_SHIELD_SEC:
+                hold_status = "HOLD_SCOUT_VACANT_L1_60S"
+            else:
+                l2_ceil_p = min(u.entry_price for u in units)
+                if lp > l2_ceil_p + 1e-6:
+                    await assn_ledger.update_state(
+                        last_scout_reentry_eval_ts=now_ts
+                    )
+                    hold_status = "HOLD_SCOUT_PREVENT_INVERSION"
+                else:
+                    chg_from_anchor = (
+                        ((lp - anchor_p) / anchor_p) * 100.0
+                        if anchor_p > 0.0
+                        else 0.0
+                    )
+                    if chg_from_anchor <= SCOUT_PULLBACK_DROP_PCT:
+                        return await _dispatch_new_scout_unit_and_check_gates(
+                            context=context,
+                            assn_ledger=assn_ledger,
+                            st=st,
+                            feat=feat,
+                            entry_type="02_PULL_1PCT_NOFILT",
+                            now_est=dt_now,
+                            cur_bucket_10m=-1,
+                        )
+                    if chg_from_anchor >= SCOUT_BREAKOUT_RISE_PCT:
+                        if (
+                            safe_float(feat.get("rsi_14"), 50.0)
+                            <= SCOUT_BREAKOUT_MAX_RSI
+                        ):
+                            return (
+                                await _dispatch_new_scout_unit_and_check_gates(
+                                    context=context,
+                                    assn_ledger=assn_ledger,
+                                    st=st,
+                                    feat=feat,
+                                    entry_type="03_BRK_1PCT_RSI50",
+                                    now_est=dt_now,
+                                    cur_bucket_10m=-1,
+                                )
+                            )
+                        await assn_ledger.update_state(
+                            last_scout_reentry_eval_ts=now_ts
+                        )
+                        hold_status = "HOLD_SCOUT_BRK_RSI_OVER_50"
+                    else:
+                        await assn_ledger.update_state(
+                            last_scout_reentry_eval_ts=now_ts
+                        )
+                        hold_status = "HOLD_SCOUT_VACANT_L1_WAIT"
+
+        # 분기 3: 활성 1층 정찰병 보유 중 -> 10분 고정 버킷 4단 와이드(-1.0% / -2.0% / -3.5% / -5.5%) 추매
+        elif is_b10_open and cur_b10 >= 0:
+            eff_lots = max(
+                len(units),
+                safe_int(st.get("scout_ratchet_max_lots"), len(units)),
+            )
+            drop_req_pct, _, _ = get_golden8_prog_thresholds(
+                held_lots=len(units),
+                cycle_ratchet_max_lots=eff_lots,
+            )
+            ref_min_p = min(
+                units[0].entry_price,
+                anchor_p,
+                safe_float(
+                    st.get("scout_cycle_min_buy_price"), units[0].entry_price
+                ),
+            )
+            chg_from_min = (
+                ((lp - ref_min_p) / ref_min_p) * 100.0
+                if ref_min_p > 0.0
+                else 0.0
+            )
+            if chg_from_min <= drop_req_pct:
                 return await _dispatch_new_scout_unit_and_check_gates(
                     context=context,
                     assn_ledger=assn_ledger,
                     st=st,
                     feat=feat,
-                    entry_type="03_BRK_1PCT_RSI50",
+                    entry_type="04_WIDE_GRID_DIP",
                     now_est=dt_now,
-                    cur_bucket_10m=-1,
+                    cur_bucket_10m=cur_b10,
                 )
-            await assn_ledger.update_state(last_scout_reentry_eval_ts=now_ts)
-            return "HOLD_SCOUT_BRK_RSI_OVER_50"
-
-        await assn_ledger.update_state(last_scout_reentry_eval_ts=now_ts)
-        return "HOLD_SCOUT_VACANT_L1_WAIT"
-
-    # 분기 3: 활성 1층 정찰병 보유 중 -> 10분 고정 버킷 4단 와이드(-1.0% / -2.0% / -3.5% / -5.5%) 추매
-    if is_b10_open and cur_b10 >= 0:
-        eff_lots = max(
-            len(units), safe_int(st.get("scout_ratchet_max_lots"), len(units))
-        )
-        drop_req_pct, _, _ = get_golden8_prog_thresholds(
-            held_lots=len(units),
-            cycle_ratchet_max_lots=eff_lots,
-        )
-        ref_min_p = min(
-            units[0].entry_price,
-            anchor_p,
-            safe_float(
-                st.get("scout_cycle_min_buy_price"), units[0].entry_price
-            ),
-        )
-        chg_from_min = (
-            ((lp - ref_min_p) / ref_min_p) * 100.0
-            if ref_min_p > 0.0
-            else 0.0
-        )
-        if chg_from_min <= drop_req_pct:
-            return await _dispatch_new_scout_unit_and_check_gates(
-                context=context,
-                assn_ledger=assn_ledger,
-                st=st,
-                feat=feat,
-                entry_type="04_WIDE_GRID_DIP",
-                now_est=dt_now,
-                cur_bucket_10m=cur_b10,
+            st = await assn_ledger.update_state(
+                last_scout_bucket_10m=cur_b10
             )
-        await assn_ledger.update_state(last_scout_bucket_10m=cur_b10)
-        return "HOLD_SCOUT_10M_WIDE_PASS"
+            hold_status = "HOLD_SCOUT_10M_WIDE_PASS"
 
-    return "SCOUTING_ACTIVE"
+    # C-4) 👑 [T03_A_DIP10_ALL_SCOUT 핵심]:
+    # 정찰병 미파견 틱(10분 게이트 대기 중 · 와이드 단차 미달 패스 직후 · 7명 만석 중)에서
+    # 현재가가 직전 정찰 기준 저점 대비 -1.00% 이하이면 매 1분마다 10대 진성 게이트를 상시 스캔!
+    t03a_res = await _evaluate_t03a_1m_dip_truth_gates_scan(
+        context=context,
+        assn_ledger=assn_ledger,
+        st=st,
+        feat=feat,
+        units=units,
+        now_est=dt_now,
+        now_ts=now_ts,
+    )
+    if t03a_res is not None:
+        return t03a_res
+
+    return hold_status
 
 
 # ---------------------------------------------------------------------------
@@ -2683,9 +2961,11 @@ def format_assassin_slim_radar_block(
                 td_s = safe_float(st.get("today_simple_net_usd"), 0.0)
                 status_line = f"🎯금일퇴근({td_g:+.2f}% · 단리 {td_s:+,.0f}$)"
         elif scouts_cnt > 0:
-            status_line = f"🕵️정찰중(현 {scouts_cnt}명 · 누적 {day_seq}명 파견)"
+            status_line = (
+                f"🕵️정찰중(현 {scouts_cnt}명·누적 {day_seq}명·T03_A스캔)"
+            )
         else:
-            status_line = "⏳04:07 정찰대기 (상시ON)"
+            status_line = "⏳04:07 정찰대기 (T03_A 상시ON)"
 
         return "\n".join(
             [
@@ -2727,6 +3007,21 @@ async def build_assassin_detail_dashboard_html(
     bar_str = "📈양봉" if feat.get("is_bull_bar") else "📉음봉"
     ha_str = "🟢양봉" if feat.get("is_ha_bull") else "🔴음봉"
 
+    raw_units = st.get("scout_units") or []
+    units = [
+        IndependentScoutUnit.from_dict(u)
+        for u in raw_units
+        if isinstance(u, dict)
+    ]
+    ref_dip_low = _resolve_t03a_reference_dip_low(st, units)
+    t03a_trig_p = (
+        round(
+            ref_dip_low * (1.0 + SCOUT_T03A_DIP_SCAN_DROP_PCT / 100.0), 2
+        )
+        if ref_dip_low > 0.0
+        else 0.0
+    )
+
     vwap_line = (
         f"① RSI(14): <b>{feat['rsi_14']:.1f}</b> | ② 프리VWAP: <b>${feat['pre_vwap']:.2f}</b> ({feat['vs_vwap_pct']:+.2f}%)"
     )
@@ -2735,15 +3030,22 @@ async def build_assassin_detail_dashboard_html(
     ) > 0.0:
         vwap_line += f" · 정규VWAP: <b>${feat['reg_vwap']:.2f}</b> ({feat['vs_reg_vwap_pct']:+.2f}%)"
 
+    t03a_scan_line = (
+        f"🔍 T03_A스캔: 정찰저점 <b>${ref_dip_low:.2f}</b> ➔ <b>${t03a_trig_p:.2f}</b>(-1.0%) 이하 매 1분 상시검문"
+        if ref_dip_low > 0.0
+        else "🔍 T03_A스캔: 10분 정찰 파견 + 선봉(#1) 후 저점 -1.0% 이하 매 1분 상시검문"
+    )
+
     lines: List[str] = [
         "🗡️ <b>[인피니트 스노우볼 · 암살자(Assassin) 관제 보드]</b>",
-        "⚙️ 운용모드: <b>🧪 모의 상시 작동 (SIMULATED · 실주문 100% 차단)</b>",
+        "⚙️ 운용모드: <b>🧪 모의 상시 작동 (SIMULATED · T03_A 1분 눌림 스캔)</b>",
         f"💵 기준시드: <b>${init_s:,.2f}</b> | 연속복리자산: <b>${comp_eq:,.2f}</b>",
         "━━━━━━━━━━━━━━━━━━",
         "📊 <b>[실시간 SOXL · QQQ 4대 지표 스냅샷]</b>",
         f"• 현재가: <b>${lp:.2f}</b> ({bar_str} / HA {ha_str}) · QQQ: <b>${qqq_lp:.2f}</b>",
         vwap_line,
         f"③ 전일종가: <b>${feat['prev_reg_close']:.2f}</b> ({feat['vs_prev_close_pct']:+.2f}%) | ④ 프리시가: <b>${feat['pre_open_price']:.2f}</b> ({feat['vs_pre_open_pct']:+.2f}%)",
+        t03a_scan_line,
         f"🛡️ QQQ안전망: 1분 <b>{feat['qqq_vel_1m_pct']:+.2f}%</b> · 3분 <b>{feat['qqq_vel_3m_pct']:+.2f}%</b> · 발동범위 <b>-0.80% ~ -1.00%</b>",
         "━━━━━━━━━━━━━━━━━━",
     ]
@@ -2765,10 +3067,11 @@ async def build_assassin_detail_dashboard_html(
         pk_p = safe_float(st.get("peak_price"), lp)
         fl_p = safe_float(st.get("active_stop_floor_price"), arm_p)
         armed = bool(st.get("is_trailing_armed", False))
+        trig_m = str(st.get("entry_trigger_mode") or "SCOUT_GATE")
         lines.extend(
             [
                 f"🔥 <b>[금일 본대 포지션 가동 중 · 게이트 {_esc(st.get('entry_gate_id'))}]</b>",
-                f"• 진입단가: <b>${ep:.2f}</b> ({_esc(st.get('entry_time_est'))} EST) ➔ 현재 <b>{cur_g:+.2f}%</b>",
+                f"• 진입단가: <b>${ep:.2f}</b> ({_esc(st.get('entry_time_est'))} EST · {_esc(trig_m)}) ➔ 현재 <b>{cur_g:+.2f}%</b>",
                 f"• 출동QQQ: <b>${eq_qqq:.2f}</b> ➔ 현재 <b>${qqq_lp:.2f}</b> (<b>{qqq_chg:+.2f}%</b> / 안전망 <b>-{dyn_thr:.2f}%</b>)",
                 f"• 보유수량: 단리 <b>{safe_int(st.get('simple_held_qty'), 0)}주</b> / 복리 <b>{safe_int(st.get('comp_held_qty'), 0)}주</b>",
                 f"• 목표/방어: 캡 <b>${cap_p:.2f}</b>(+5%) · 점화 <b>${arm_p:.2f}</b>(+1%) · 최고 <b>${pk_p:.2f}</b> · 스탑 <b>${fl_p:.2f}</b> ({'HA추적중' if armed else '점화대기'})",
@@ -2841,25 +3144,28 @@ async def build_assassin_detail_dashboard_html(
 
 
 # ---------------------------------------------------------------------------
-# [핵심 10] 부팅 시 암살자 10대 진성 게이트 & 출동 QQQ 기반 3단계 안전망 v2 & 프리장 지표 무오염 TDD 자가 검증기
+# [핵심 10] 부팅 시 암살자 10대 진성 게이트(T03_A 1분 눌림 스캔 포함) & 출동 QQQ 기반 3단계 안전망 v2 & 프리장 지표 무오염 TDD 자가 검증기
 # ---------------------------------------------------------------------------
 def run_assassin_plugin_tdd() -> bool:
     """
-    1) 선봉 정찰병(#1)에서는 진성 게이트가 격발되지 않는지 검증
-    2) 2번째 정찰병(#2)에서 G1 ~ G5 및 BG1 ~ BG5 가 정확히 격발되는지 검증
-    3) 08:15 EST 이후 출동 순간 QQQ 지수(entry_qqq_price) 기반 3단계 안전망 v2 검증:
+    1) 선봉 정찰병(#1) 최초 파견 순간(allow_sc1_dip_scan=False)에는 진성 게이트가 격발되지 않는지 검증
+    2) #1 선봉 파견 이후 T03_A 직전 정찰 저점 대비 -1.00% 이하 1분 눌림 스캔(allow_sc1_dip_scan=True)에서는
+       10분 게이트 도래 전이라도 G4 / G1 진성 게이트가 즉시 정상 격발되는지 검증
+    3) 2번째 정찰병(#2)에서 G1 ~ G5 및 BG1 ~ BG5 가 정확히 격발되는지 검증
+    4) 08:15 EST 이후 출동 순간 QQQ 지수(entry_qqq_price) 기반 3단계 안전망 v2 검증:
        - QQQ 2.0% 진폭 비율의 50% = 최소 -0.80% ~ 최대 -1.00% 도달 시에도
          암살자(SOXL)가 익절(수익) 상태(live_price >= entry_price)이면 퇴근하지 않고 홀딩(False)하는지 검증
        - 안전망이 상승/지지 중일 때 손절이 100% 차단(False)되는지 검증
        - 출동 QQQ 대비 -0.80% ~ -1.00% 도달 및 암살자 손실 상태(live_price < entry_price, 음봉 하락 중)에서
          즉시 칼손절(True, STAGE23_DIR_BEAR_BREAK)이 집행되는지 검증
-    4) +1.00% 점화 후 보존선(arm_100_price) 하향 터치 시 최소 +1.00% 익절이 보장되는지 검증
-    5) 동일값 폴백 오염 앵커(_is_collapsed_assassin_anchors) 및 미확보 프리장 지표(0.0) 정상 판별 검증
+    5) +1.00% 점화 후 보존선(arm_100_price) 하향 터치 시 최소 +1.00% 익절이 보장되는지 검증
+    6) 동일값 폴백 오염 앵커(_is_collapsed_assassin_anchors) 및 미확보 프리장 지표(0.0) 정상 판별 검증
     """
     assert _is_collapsed_assassin_anchors(45.74, 45.74, 45.74) is True
     assert _is_collapsed_assassin_anchors(44.10, 45.20, 45.74) is False
     assert _is_collapsed_assassin_anchors(47.20, 0.0, 0.0) is False
 
+    # 1) 선봉 정찰병(#1) 파견 순간(allow_sc1_dip_scan=False) 차단 검증
     hit_1, _, _ = evaluate_10_truth_gates_signal(
         day_scout_seq=1,
         rsi_14=18.0,
@@ -2869,8 +3175,25 @@ def run_assassin_plugin_tdd() -> bool:
         vs_scout1_pct=0.0,
         prior_scout_wins_today=1,
         is_bull_bar=True,
+        allow_sc1_dip_scan=False,
     )
-    assert not hit_1, "선봉 정찰병(#1)은 본대 진입에서 제외되어야 합니다."
+    assert not hit_1, "선봉 정찰병(#1) 최초 파견 순간은 본대 진입에서 제외되어야 합니다."
+
+    # 2) T03_A_DIP10_ALL_SCOUT : #1 파견 후 직전 정찰 저점 대비 -1.00% 이하 1분 눌림 스캔(allow_sc1_dip_scan=True) 시 G4 양봉 반전 포착 검증
+    hit_t03a_g4, gid_t03a_g4, _ = evaluate_10_truth_gates_signal(
+        day_scout_seq=1,
+        rsi_14=29.5,
+        vs_vwap_pct=-0.85,
+        vs_prev_close_pct=-1.40,
+        vs_pre_open_pct=-1.20,
+        vs_scout1_pct=-1.20,
+        prior_scout_wins_today=0,
+        is_bull_bar=True,
+        allow_sc1_dip_scan=True,
+    )
+    assert (
+        hit_t03a_g4 and gid_t03a_g4 == "G4"
+    ), "T03_A 1분 눌림 스캔(allow_sc1_dip_scan=True) G4 격발 검증 실패"
 
     hit_g2, gid_g2, _ = evaluate_10_truth_gates_signal(
         day_scout_seq=2,
