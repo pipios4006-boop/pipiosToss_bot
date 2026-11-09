@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 """
-# MODIFIED: main_runtime.py (Part 1/2 — get_candles_1m count/total_count 양방향 호환 및 최대 400분봉[2페이지] 상한 하드 락온 · 일봉 1d 자동 보충 · Case 91 ~ 93 완벽 연동)
-인피니트 스노우볼 (Infinite Snowball) v3.0 — 메인 런타임 서포트 브릿지 (메인 코드 2분할 리팩토링 Part 1 / 2 · Step 12 / 14)
+# MODIFIED: main_runtime.py (Part 1/2 — _call_plugin_adaptive 내 holdings·prices·now_est 자동 보충 방어벽 탑재로 필수 위치 인자 누락 TypeError 원천 봉쇄 · get_candles_1m count/total_count 양방향 호환 및 최대 400분봉[2페이지] 상한 하드 락온 · 일봉 1d 자동 보충 · Case 91 ~ 93 완벽 연동)
+인피니트 스노우볼 (Infinite Snowball) v3.0 — 메인 런타임 서포트 브릿지 (메인 코드 2분할 리팩토링 Part 1 / 2 · Step 13 / 14)
 - 역할:
-  1) 적응형 비동기 플러그인 호출기(_call_plugin_adaptive) 및 동적 심볼 리졸버(_resolve_module_attr) (Case 13)
+  1) 적응형 비동기 플러그인 호출기(_call_plugin_adaptive : holdings / prices / now_est 누락 시 context 기반 자동 보충 안전망 탑재) 및 동적 심볼 리졸버(_resolve_module_attr) (Case 13)
   2) TossApiClient 런타임 메서드 호환성 폴리필 어댑터(_install_toss_api_compatibility_patches ·
      get_candles_1m count/total_count 호환 및 최대 400분봉[2페이지] nextBefore 역추적 강제 래핑 ·
      get_commissions / ensure_us_commission_rate 런타임 수수료 폴백 보존 포함 · Case 86, Case 93)
@@ -119,17 +119,39 @@ def _escape_html(val: Any) -> str:
 
 
 # ---------------------------------------------------------------------------
-# [핵심 1] Case 13 & Case 62 : 적응형 비동기 플러그인 호출기 및 동적 심볼 리졸버
+# [핵심 1] Case 13 & Case 62 : 적응형 비동기 플러그인 호출기(필수 인자 자동 보충 탑재) 및 동적 심볼 리졸버
 # ---------------------------------------------------------------------------
 async def _call_plugin_adaptive(
     func: Callable[..., Any],
     **kwargs: Any,
 ) -> Any:
     """
-    🚨 Case 13:
+    🚨 Case 13 (강화판):
     플러그인 함수의 시그니처(인자 목록 및 **kwargs 수용 여부)를 동적으로 검사하여
     허용된 인자만 안전하게 주입하고 동기/비동기 함수를 모두 실행한다.
+    - 특히 호출부에서 holdings, prices, now_est 인자를 누락하더라도 context 객체로부터
+      자동으로 복원·주입하여 missing required positional argument (TypeError)를 원천 봉쇄한다!
     """
+    ctx = kwargs.get("context")
+    if ctx is not None:
+        if "holdings" not in kwargs or kwargs.get("holdings") is None:
+            ctx_h = getattr(ctx, "latest_holdings", None)
+            kwargs["holdings"] = ctx_h if isinstance(ctx_h, dict) else {}
+        if "prices" not in kwargs or kwargs.get("prices") is None:
+            lp_val = safe_float(kwargs.get("live_price"), 0.0)
+            ctx_p = getattr(ctx, "latest_prices", None)
+            if isinstance(ctx_p, dict) and ctx_p:
+                merged_p = dict(ctx_p)
+                if lp_val > 0.0:
+                    merged_p[TARGET_SYMBOL] = lp_val
+                kwargs["prices"] = merged_p
+            elif lp_val > 0.0:
+                kwargs["prices"] = {TARGET_SYMBOL: lp_val}
+            else:
+                kwargs["prices"] = {}
+    if "now_est" not in kwargs or kwargs.get("now_est") is None:
+        kwargs["now_est"] = datetime.now(EST_TZ)
+
     sig = inspect.signature(func)
     accepts_var_kw = any(
         p.kind == inspect.Parameter.VAR_KEYWORD
@@ -271,7 +293,7 @@ def _normalize_single_holding_item(
         else (
             pl_obj.get("rateAfterCost")
             if pl_obj.get("rateAfterCost") is not None
-            else pl_obj.get("rate")
+            else pl_obj.get("rate"),
         ),
         0.0,
     )
@@ -1149,7 +1171,7 @@ async def _compute_qqq_metrics_dynamic(
     now_est: datetime,
 ) -> Dict[str, Any]:
     """
-    # NEW: 나스닥 100 추종 QQQ 1분봉 기반 방향성 인지 3단계 안전망(vel_1m_pct, vel_3m_pct, bear_drop_amp_pct) 비동기 산출기
+    # NEW: 나스닥 100 추종 QQQ 1분봉 기반 방향성 인지 안전망(vel_1m_pct, vel_3m_pct, bear_drop_amp_pct) 비동기 산출기
     """
     try:
         res_qqq = await asyncio.to_thread(
@@ -1170,7 +1192,7 @@ async def _compute_qqq_metrics_dynamic(
     )
 # -*- coding: utf-8 -*-
 """
-# MODIFIED: main_runtime.py (Part 2/2 — 폴더별 텔레그램 자격증명 탐색기 · _AdaptiveTelegramBridge 내 400봉 1m + 10봉 1d + QQQ 온디맨드 정밀 워밍업 및 /assassin · /reset_assassin · /mode 결속)
+# MODIFIED: main_runtime.py (Part 2/2 — 폴더별 텔레그램 자격증명 탐색기 · _AdaptiveTelegramBridge 내 400봉 1m + 10봉 1d + QQQ 온디맨드 정밀 워밍업 및 /assassin · /reset_assassin · /mode 결속 · Case 01 ~ Case 93 완비)
 """
 
 

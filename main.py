@@ -1,15 +1,15 @@
 # -*- coding: utf-8 -*-
 """
-# MODIFIED: main.py (Part 1/2 — 🗡️ [모의] 암살자 상시 작동 결속 · SOXL+QQQ 다건 시세/1분봉 레이더 · Case 91 복리/단리 · Case 92 Wilder RSI14)
+# MODIFIED: main.py (Part 1/2 — 🗡️ [모의] 암살자 실주문 100% 물리적 차단 및 상시 작동 결속 · 실전 스나이퍼 STEP 1/4/6/8/9 holdings·prices 필수 인자 완비로 목표가 초과 시 미매도 TypeError 원천 소각 · STEP 6 last_closing_report_date 키 정합성 교정 · Case 01 ~ Case 93)
 인피니트 스노우볼 (Infinite Snowball) v3.0 — 순수 롱(🐂 SOXL 단독) 매수 04:07 ~ 16:00 EST 제한
 (정규장 마감 30분 전 15:30 ~ 16:00 EST 본·서브 0주 새 사이클 1층 진입 및 1층 공석 +1.0% 돌파 추격 차단 ·
 04:07 ~ 15:29 EST 1층 공석 +1.0% 돌파 시 1분봉 Wilder RSI(14) <= 50.0 필터 결합 · Case 84, Case 88, Case 92) &
 익절 매도 24시간 전 세션(프리마켓 + 정규장 + 애프터마켓 + 데이마켓 · 방안 C 오버나이트 통합이평 사수 · Case 83) 확장
 오버나이트 7층 골디락스 본 그리드(👑 06_L2L7_RATCHET_8PCT · Case 87) +
 🛡️ 스위치 없는 100% 기본 상시 적용(Default ON) 3층 서브 그리드(13_SUB_L1L3_RESV05_CAP4L · 최대 4회분[16%] 상한 캡 · Case 88) +
-🗡️ 스나이퍼 ON/OFF 및 보유 수량과 무관하게 24시간 상시 작동하며 5대 실시간 알림을 타전하는 [모의 ⇄ 실전 Dual-Ready] 암살자(assassin_plugin.py)
-경량화 메인 오케스트레이터 코어 모듈 (메인 코드 2분할 리팩토링 Part 2 / 2 · Step 13 / 13)
-- 제1헌법 ~ 제6헌법 및 Case 01 ~ 92 전수 락온
+🗡️ 스나이퍼 ON/OFF 및 보유 수량과 무관하게 24시간 상시 작동하며 5대 실시간 알림을 타전하는 [모의 ⇄ 실전 Dual-Ready] 암살자(assassin_plugin.py · ASSASSIN_LIVE_ORDER_HARD_LOCK = True 실주문 100% 잠금 · Case 93)
+경량화 메인 오케스트레이터 코어 모듈 (메인 코드 2분할 리팩토링 Part 2 / 2 · Step 14 / 14)
+- 제1헌법 ~ 제6헌법 및 Case 01 ~ 93 전수 락온
 """
 
 from __future__ import annotations
@@ -134,7 +134,7 @@ class SniperAppContext:
         self.ledger: Any = _instantiate_stratum_ledger(
             filepath=self.ledger_path, base_dir=self.base_dir
         )
-        # 🗡️ [모의] 암살자 전용 독립 3중 원장 초기화 및 장착
+        # 🗡️ [모의] 암살자 전용 독립 3중 원장 초기화 및 장착 (스나이퍼 원장·예수금 간섭 0%)
         self.assassin_ledger: Any = ensure_assassin_ledger(self)
 
         # 원장에 저장된 계좌별 수수료율을 런타임 메모리에 선행 동기화
@@ -228,11 +228,11 @@ class SniperAppContext:
 # ---------------------------------------------------------------------------
 async def candle_radar_loop(context: SniperAppContext) -> None:
     """
-    # MODIFIED [Case 79, Case 92 & 🗡️ 모의 암살자 4대 지표 · QQQ 안전망 레이더]:
-    1) SOXL 1분봉 및 일봉을 수집하여 VWAP, 전일 정규장 종가(prev_reg_close), 당일 04:07 프리장 시가(pre_open_price),
-       5MA 진폭, Heikin-Ashi 추세, Wilder's RSI(14) 기저값을 산출한다.
+    # MODIFIED [Case 79, Case 92, Case 93 & 🗡️ 모의 암살자 4대 지표 · QQQ 안전망 레이더]:
+    1) SOXL 1분봉(최대 400봉 상한) 및 일봉(10봉)을 수집하여 VWAP, 전일 정규장 종가(prev_reg_close),
+       당일 04:07 프리장 시가(pre_open_price), 5MA 진폭, Heikin-Ashi 추세, Wilder's RSI(14) 기저값을 산출한다.
     2) 프리장·정규장(04:00 ~ 16:05 EST) 구간에서는 QQQ 1분봉도 함께 수집하여
-       순수 롱 방향성 인지 3단계 안전망(vel_1m_pct, vel_3m_pct, bear_drop_amp_pct) 지표를 갱신한다.
+       순수 롱 방향성 인지 안전망(vel_1m_pct, vel_3m_pct, bear_drop_amp_pct) 지표를 갱신한다.
     """
     while not context.shutdown_event.is_set():
         now_est = datetime.now(EST_TZ)
@@ -251,7 +251,7 @@ async def candle_radar_loop(context: SniperAppContext) -> None:
 
         try:
             candles_1m = await context.api.get_candles_1m(
-                symbol=TARGET_SYMBOL, total_count=(300 if in_market else 200)
+                symbol=TARGET_SYMBOL, total_count=(400 if in_market else 200)
             )
             candles_1d = await context.api.get_candles_1d(
                 symbol=TARGET_SYMBOL, count=10
@@ -313,7 +313,7 @@ async def candle_radar_loop(context: SniperAppContext) -> None:
             pass
 # -*- coding: utf-8 -*-
 """
-# MODIFIED: main.py (Part 2/2 — 🗡️ [모의] 암살자 상시 작동 루프 결속 · 0.4초 고주파 부스터 · 실전 스나이퍼 v3.0 오케스트레이터 · Case 81/86/91/92 완비)
+# MODIFIED: main.py (Part 2/2 — 🗡️ [모의] 암살자 상시 작동 루프 결속 · 실전 스나이퍼 STEP 1/4/6/8/9 holdings·prices 인자 100% 완비 및 STEP 6 last_closing_report_date 키 정합성 교정으로 목표가 도달 즉시 익절 매도 보장 · Case 01 ~ Case 93 완비)
 """
 
 
@@ -345,15 +345,15 @@ def _evaluate_fast_shield_mode(
 # ---------------------------------------------------------------------------
 async def main_sniper_loop(context: SniperAppContext) -> None:
     """
-    🚨 제1헌법 ~ 제6헌법 & Case 01 ~ Case 92 + 🗡️ [모의] 암살자 상시 작동 루프:
+    🚨 제1헌법 ~ 제6헌법 & Case 01 ~ Case 93 + 🗡️ [모의] 암살자 상시 작동 루프:
     1) 평일 04:00 ~ 04:06 EST 오프닝 안정화 (미결 주문 선행 정산 · 수수료율 최신화 · 일일 카운터 롤오버)
     2) 실시간 SOXL (및 04:00 ~ 16:05 EST 구간 QQQ) 현재가 다건 조회 및 1분봉 Wilder RSI(14) · VWAP · HA O(1) 틱 합성
     3) 🗡️ [모의] 암살자 상시 실행 (execute_simulated_assassin_tick_plugin):
-       실전 스나이퍼의 ON/OFF 여부 및 보유 수량과 무관하게 매 틱 독립 작동하며 5대 실시간 알림을 타전한다!
+       실전 스나이퍼의 ON/OFF 여부 및 보유 수량과 무관하게 매 틱 독립 작동하며(실주문 100% 물리적 차단) 5대 실시간 알림을 타전한다!
     4) 실전 스나이퍼 미결 매수/매도 주문 선행 동기화 (Case 66) 및 실잔고 무결성 화해 (Case 61, 63, 69, 89)
     5) 실전 스나이퍼 매도 모니터 (매수 후 60초 타임쉴드 뒤 24시간 전 세션 1.5초 다중 익절 + 5초 윗꼬리 감지 + 방안 C 오버나이트 통합이평 사수 · Case 70, 79, 82, 83, 88, 89)
     6) 실전 스나이퍼 매수 게이트 (평일 04:07 ~ 16:00 EST · 15:30 0주/돌파 차단 · 1층 공석 돌파 RSI<=50 필터 · 10분 와이드 & STEP2X · Default-ON 3층 서브 그리드 · Case 67, 73, 76, 77, 78, 84, 87, 88, 91, 92)
-    7) 평일 16:00 EST 일일 마감 결산 브리핑 (인출형 당일 실현수익 현금 인출 가이드 포함 · Case 88, 91)
+    7) 평일 16:00 ~ 16:59 EST 일일 마감 결산 브리핑 (인출형 당일 실현수익 현금 인출 가이드 포함 · Case 88, 91)
     """
     last_reconcile_mono: float = 0.0
 
@@ -382,6 +382,8 @@ async def main_sniper_loop(context: SniperAppContext) -> None:
                 await _call_plugin_adaptive(
                     execute_0400_premarket_stabilization_plugin,
                     context=context,
+                    holdings=context.latest_holdings,
+                    prices=context.latest_prices,
                     now_est=now_est,
                 )
                 context.last_0400_sync_date = today_str
@@ -442,9 +444,13 @@ async def main_sniper_loop(context: SniperAppContext) -> None:
                     )
                 )
 
+            live_prices_dict: Dict[str, float] = {TARGET_SYMBOL: live_p}
+            if qqq_p > 0.0:
+                live_prices_dict[MACRO_REF_SYMBOL] = qqq_p
+
             # ---------------------------------------------------------------
             # STEP 3: 🗡️ [모의] 암살자 상시 가동 엔진 호출
-            # (실전 스나이퍼의 ON/OFF 및 보유 수량과 무관하게 백그라운드 상시 작동!)
+            # (ASSASSIN_LIVE_ORDER_HARD_LOCK = True 실주문 100% 차단 · 실전 스나이퍼와 물리적 완전 격리)
             # ---------------------------------------------------------------
             try:
                 await execute_simulated_assassin_tick_plugin(
@@ -470,6 +476,8 @@ async def main_sniper_loop(context: SniperAppContext) -> None:
                 await _call_plugin_adaptive(
                     sync_pending_sell_order_plugin,
                     context=context,
+                    holdings=context.latest_holdings,
+                    prices=live_prices_dict,
                     symbol=TARGET_SYMBOL,
                     live_price=live_p,
                     now_est=now_est,
@@ -480,6 +488,8 @@ async def main_sniper_loop(context: SniperAppContext) -> None:
                 await _call_plugin_adaptive(
                     sync_pending_buy_order_plugin,
                     context=context,
+                    holdings=context.latest_holdings,
+                    prices=live_prices_dict,
                     symbol=TARGET_SYMBOL,
                     live_price=live_p,
                     now_est=now_est,
@@ -512,26 +522,31 @@ async def main_sniper_loop(context: SniperAppContext) -> None:
                     if live_p <= 0.0 and h_lp > 0.0:
                         live_p = h_lp
                         context.latest_prices[TARGET_SYMBOL] = live_p
+                        live_prices_dict[TARGET_SYMBOL] = live_p
                         context.last_soxl_live_price = live_p
                         context.last_soxl_live_price_mono = now_mono
                     await _call_plugin_adaptive(
                         reconcile_stratum_with_broker_holdings_plugin,
                         context=context,
                         holdings=holdings_map,
-                        prices={TARGET_SYMBOL: live_p},
+                        prices=live_prices_dict,
                         now_est=now_est,
                         force_sync=False,
                     )
                     st = context.ledger.get_state(TARGET_SYMBOL)
 
             # ---------------------------------------------------------------
-            # STEP 6:평일 16:00 EST 정규장 마감 일일 결산 보고 (일 1회 · Case 88, 91)
+            # STEP 6: 평일 16:00 ~ 16:59 EST 정규장 마감 일일 결산 보고 (일 1회 · Case 88, 91)
             # ---------------------------------------------------------------
-            if hm >= 1600 and str(st.get("last_1600_settlement_date") or "") != today_str:
+            if (
+                1600 <= hm <= 1659
+                and str(st.get("last_closing_report_date") or "") != today_str
+            ):
                 await _call_plugin_adaptive(
                     execute_1600_daily_closing_settlement_plugin,
                     context=context,
-                    prices={TARGET_SYMBOL: live_p},
+                    holdings=context.latest_holdings,
+                    prices=live_prices_dict,
                     now_est=now_est,
                 )
                 st = context.ledger.get_state(TARGET_SYMBOL)
@@ -572,17 +587,31 @@ async def main_sniper_loop(context: SniperAppContext) -> None:
                 sell_res = await _call_plugin_adaptive(
                     execute_1m_sniper_sell_and_reanchor_plugin,
                     context=context,
+                    holdings=context.latest_holdings,
+                    prices=live_prices_dict,
                     symbol=TARGET_SYMBOL,
                     live_price=live_p,
-                    prices={TARGET_SYMBOL: live_p},
                     now_est=now_est,
                 )
                 st = context.ledger.get_state(TARGET_SYMBOL)
-                if str(st.get("sell_order_id") or "").strip() or (
-                    isinstance(sell_res, str)
-                    and any(
-                        tag in sell_res
-                        for tag in ("FILLED", "SUBMITTED", "SETTLED", "SOLD")
+                if (
+                    str(st.get("sell_order_id") or "").strip()
+                    or (
+                        isinstance(sell_res, dict)
+                        and bool(sell_res.get("did_sell_or_ratchet", False))
+                    )
+                    or (
+                        isinstance(sell_res, str)
+                        and any(
+                            tag in sell_res
+                            for tag in (
+                                "FILLED",
+                                "SUBMITTED",
+                                "SETTLED",
+                                "SOLD",
+                                "ORDERED",
+                            )
+                        )
                     )
                 ):
                     did_sell_action = True
@@ -600,9 +629,10 @@ async def main_sniper_loop(context: SniperAppContext) -> None:
                 await _call_plugin_adaptive(
                     execute_seed_protected_buy_gate_plugin,
                     context=context,
+                    holdings=context.latest_holdings,
+                    prices=live_prices_dict,
                     symbol=TARGET_SYMBOL,
                     live_price=live_p,
-                    prices={TARGET_SYMBOL: live_p},
                     metrics=context.candle_metrics_cache.get(
                         TARGET_SYMBOL, {}
                     ),
@@ -689,9 +719,9 @@ async def daily_gc_and_rollover_loop(context: SniperAppContext) -> None:
 # ---------------------------------------------------------------------------
 async def async_main() -> int:
     """
-    🚨 제1헌법 ~ 제6헌법 & Case 01 ~ Case 92 부팅 시퀀스:
+    🚨 제1헌법 ~ 제6헌법 & Case 01 ~ Case 93 부팅 시퀀스:
     1) 구버전 데드코드 파일 청소 및 14대 코어 모듈(assassin_plugin.py 포함) 무디스크 인메모리 컴파일 검증
-    2) 스나이퍼 퀀트 엔진 TDD(run_quant_engine_tdd) + 🗡️ 암살자 10대 진성 게이트 TDD(run_assassin_plugin_tdd) 실행
+    2) 스나이퍼 퀀트 엔진 TDD(run_quant_engine_tdd) + 🗡️ 암살자 14대 진성 게이트 TDD(run_assassin_plugin_tdd) 실행
     3) SniperAppContext 초기화 (스나이퍼 3중 원장 + [모의] 암살자 전용 3중 원장 동시 장착)
     4) 토스 종합매매 계좌(accountSeq) 및 미국 주식 실제 수수료율(GET /api/v1/commissions · Case 86) 락온
     5) 초기 실잔고 무결성 대조 및 "✅ 서버가 정상 작동 중입니다." 생존 배너 타전 (Case 16)
@@ -711,7 +741,7 @@ async def async_main() -> int:
     run_quant_engine_tdd()
     run_assassin_plugin_tdd()
     logger.info(
-        "✅ [Quant Engine TDD & Assassin 10 Truth Gates TDD] 전수 검증 통과!"
+        "✅ [Quant Engine TDD & Assassin 14 Truth Gates TDD] 전수 검증 통과!"
     )
 
     context = SniperAppContext(base_dir=base_dir)

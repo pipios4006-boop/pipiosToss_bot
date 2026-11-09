@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-# MODIFIED: sniper_plugin.py (황금시간 07:00~07:50 RSI<=19 올인 분기 G · 골든포켓 참조 · 임포트 전면 영구 소각 & Case 91 무제한 예비수혈 및 인출형[단리]/자산증식형[복리] 매수 정량 연동 & Case 92 본/서브 1층 공석 +1.00% 상승돌파 시 1분봉 Wilder RSI(14) <= 50.0 필터 탑재)
-인피니트 스노우볼 (Infinite Snowball) v3.0 — 스나이퍼 매수 코어 Part 2 / 2 (Step 07 / 13)
+# MODIFIED: sniper_plugin.py (Part 1/2 — _execute_sub_grid_buy_engine_plugin 및 execute_seed_protected_buy_gate_plugin 내 holdings·prices 선택 인자 안전 기본값 및 context 자동 폴백 탑재로 TypeError 원천 소각 · 황금시간 07:00~07:50 RSI<=19 올인 분기 G · 골든포켓 참조 · 임포트 전면 영구 소각 & Case 91 무제한 예비수혈 및 인출형[단리]/자산증식형[복리] 매수 정량 연동 & Case 92 본/서브 1층 공석 +1.00% 상승돌파 시 1분봉 Wilder RSI(14) <= 50.0 필터 탑재)
+인피니트 스노우볼 (Infinite Snowball) v3.0 — 스나이퍼 매수 코어 Part 2 / 2 (Step 07 / 14)
 역할:
 1) sniper_plugin_core.py (Part 1 / 2) 의 모든 상수·타임쉴드·실시간 RSI(14) 추출기(_get_live_soxl_rsi_14)·GUARD30 무제한 예비수혈·체결커밋·미체결 동기화 심볼 명시적 재익스포트(Facade Re-export)로
    타 모듈(defense_plugin.py, tg_ui_plugin.py, main_runtime.py, main.py, plugin_updater.py) AST 임포트 호환성 100% 보장
@@ -20,7 +20,7 @@
    - 🎯 [분기 B-0 · Case 78, 88] : 본 그리드 활성 1층 지정가 부분 체결 미체결 잔량(TOPUP_1FL) 1.5초 모니터 (원장 가용현금 1주 비용 선행 가드 및 부족 시 60초 쿨다운 쉴드 적용)
    - 🔵 [분기 B-2 · Case 60, 72, 76, 77, 87, 88, 91] : 본 그리드 활성 1층 보유 중 10분 고정 매수 게이트(4단 와이드 신저가 무필터 OR STEP2X_15PCT_C20 스텝업 해금) 및
      본 그리드 대기/패스 틱에서 Default-ON 3층 서브 그리드 매수 엔진 연속 가동
-- 제1헌법 ~ 제6헌법 및 Case 01 ~ 92 완벽 준수
+- 제1헌법 ~ 제6헌법 및 Case 01 ~ 93 완벽 준수
 """
 
 from __future__ import annotations
@@ -126,13 +126,14 @@ logger = logging.getLogger("toss_sniper.sniper_plugin")
 # ---------------------------------------------------------------------------
 async def _execute_sub_grid_buy_engine_plugin(
     context: Any,
-    holdings: Dict[str, Dict[str, Any]],
-    prices: Dict[str, float],
-    dt_now: datetime,
-    live_p: float,
+    holdings: Optional[Dict[str, Dict[str, Any]]] = None,
+    prices: Optional[Dict[str, float]] = None,
+    dt_now: Optional[datetime] = None,
+    live_p: float = 0.0,
+    **kwargs: Any,
 ) -> Optional[Dict[str, Any]]:
     """
-    # MODIFIED [Case 88, Case 91 & Case 92 : 🛡️ 13_SUB_L1L3_RESV05_CAP4L — Default-ON 3층 서브 그리드 매수 엔진 (자산증식형[복리] ⇄ 인출형[단리] 연동 & 서브 1층 공석 +1.00% 돌파 시 RSI(14) <= 50.0 필터 & 유휴현금 부족 시 10분 버킷 즉시 소모 & 60초 쉴드 & 뮤텍스 2차 타임쉴드 검문 강화)]:
+    # MODIFIED [Case 88, Case 91 & Case 92 : 🛡️ 13_SUB_L1L3_RESV05_CAP4L — Default-ON 3층 서브 그리드 매수 엔진 (holdings·prices 선택 인자 안전 기본값 처리 · 자산증식형[복리] ⇄ 인출형[단리] 연동 · 서브 1층 공석 +1.00% 돌파 시 RSI(14) <= 50.0 필터 · 유휴현금 부족 시 10분 버킷 즉시 소모 & 60초 쉴드 & 뮤텍스 2차 타임쉴드 검문 강화)]:
     본 그리드가 대기/패스한 틱에서 호출되어:
     1) 본 그리드가 최소 1개 층 이상 보유 중(len(buckets) > 0)이고,
        본 그리드 연속 무매매일(main_consec_frozen_days >= 5)이 5영업일 이상이거나 이미 서브 그리드가 가동 중(len(sub_buckets) > 0)일 때 작동한다.
@@ -144,6 +145,34 @@ async def _execute_sub_grid_buy_engine_plugin(
     5) 서브 10분 게이트(S-B2)에서 유휴현금 부족 시 해당 10분 버킷(sub_last_evaluated_buy_bucket_id)을 즉시 소모 처리하고,
        서브 0주(S-A) 및 서브 잔량 보충(S-B0)에서 유휴현금 부족 시 60.0초 쿨다운 쉴드를 각인하여 불필요한 반복 API 호출을 원천 차단한다.
     """
+    eff_dt_now = (
+        dt_now.astimezone(EST_TZ) if dt_now else datetime.now(EST_TZ)
+    )
+    eff_holdings = (
+        holdings
+        if isinstance(holdings, dict) and holdings
+        else (
+            getattr(context, "latest_holdings", {})
+            if context is not None
+            else {}
+        )
+    )
+    eff_prices = (
+        prices
+        if isinstance(prices, dict) and prices
+        else (
+            getattr(context, "latest_prices", {})
+            if context is not None
+            else {}
+        )
+    )
+    if live_p <= 0.0:
+        live_p = _get_live_soxl_price(
+            context, eff_prices, eff_holdings, eff_dt_now
+        )
+    if live_p <= 0.0:
+        return None
+
     st = context.ledger.get_state(TARGET_SYMBOL)
     if str(st.get("buy_order_id") or "").strip() or str(
         st.get("sell_order_id") or ""
@@ -159,8 +188,8 @@ async def _execute_sub_grid_buy_engine_plugin(
     if main_frozen_d < SUB_FROZEN_DAYS_TRIGGER and len(sub_buckets) == 0:
         return None
 
-    hm = dt_now.hour * 100 + dt_now.minute
-    if not is_active_buy_window(hm, now_est=dt_now):
+    hm = eff_dt_now.hour * 100 + eff_dt_now.minute
+    if not is_active_buy_window(hm, now_est=eff_dt_now):
         return None
 
     in_sell_sh, _ = is_within_post_sell_time_shield(context, st, TARGET_SYMBOL)
@@ -209,7 +238,7 @@ async def _execute_sub_grid_buy_engine_plugin(
     # -> 15:30 ~ 16:00 EST 구간에서는 서브 0주 새 사이클 첫 1층 진입 차단 (Case 84 & Case 88)
     # -----------------------------------------------------------------------
     if len(sub_buckets) == 0:
-        if is_late_regular_new_cycle_cutoff_window(hm, now_est=dt_now):
+        if is_late_regular_new_cycle_cutoff_window(hm, now_est=eff_dt_now):
             return {
                 "status": "HOLD_SUB_LATE_SESSION_NEW_CYCLE_CUTOFF",
                 "hm": hm,
@@ -388,7 +417,7 @@ async def _execute_sub_grid_buy_engine_plugin(
 
                 _, sub_cur_bucket_id, sub_today_str, _ = (
                     evaluate_buy_gate_bucket_status(
-                        now_est=dt_now,
+                        now_est=eff_dt_now,
                         buy_interval_min=LOCKED_BUY_INTERVAL_MIN,
                         last_evaluated_bucket_id=safe_int(
                             st_now.get("sub_last_evaluated_buy_bucket_id"), -1
@@ -485,14 +514,14 @@ async def _execute_sub_grid_buy_engine_plugin(
             return {"status": "NO_FRESH_LIVE_PRICE"}
 
         live_rsi_14 = await _get_live_soxl_rsi_14(
-            context, live_price=fresh_live_p, now_est=dt_now
+            context, live_price=fresh_live_p, now_est=eff_dt_now
         )
         sub_min_upper_p = min(sb.book_price for sb in sub_buckets)
         sub_anchor_p = safe_float(
             st.get("sub_anchor_price"), sub_min_upper_p
         )
         is_late_cutoff = is_late_regular_new_cycle_cutoff_window(
-            hm, now_est=dt_now
+            hm, now_est=eff_dt_now
         )
 
         sub_re_sig = evaluate_l2_only_hybrid_reentry_signal(
@@ -1019,7 +1048,7 @@ async def _execute_sub_grid_buy_engine_plugin(
 
     sub_gate_open, sub_cur_bucket_id, sub_today_str, _ = (
         evaluate_buy_gate_bucket_status(
-            now_est=dt_now,
+            now_est=eff_dt_now,
             buy_interval_min=LOCKED_BUY_INTERVAL_MIN,
             last_evaluated_bucket_id=safe_int(
                 st.get("sub_last_evaluated_buy_bucket_id"), -1
@@ -1105,7 +1134,7 @@ async def _execute_sub_grid_buy_engine_plugin(
                 return {"status": "HOLD_SUB_CAP_4_LOTS_REACHED"}
 
             sub_gate_m, _, _, _ = evaluate_buy_gate_bucket_status(
-                now_est=dt_now,
+                now_est=eff_dt_now,
                 buy_interval_min=LOCKED_BUY_INTERVAL_MIN,
                 last_evaluated_bucket_id=safe_int(
                     st_now.get("sub_last_evaluated_buy_bucket_id"), -1
@@ -1343,6 +1372,12 @@ async def _execute_sub_grid_buy_engine_plugin(
                 "price": exec_order_p,
                 "sub_cur_total_lots": now_sub_lots,
             }
+# -*- coding: utf-8 -*-
+"""
+# MODIFIED: sniper_plugin.py (Part 2/2 — execute_seed_protected_buy_gate_plugin 의 holdings·prices 선택 인자 안전 기본값 및 context 자동 복원 방어벽 장착 · 15:30 0주/돌파 차단 · 1층 공석 +1.0% 돌파 RSI(14) <= 50.0 필터 · GUARD30 무제한 예비수혈 · STEP2X 스텝업 해금 · Default-ON 3층 서브 그리드 연속 가동 · Case 01 ~ Case 93 완비)
+"""
+
+
 # ---------------------------------------------------------------------------
 # [핵심 2] 진화 챔피언 (👑 06_L2L7_RATCHET_8PCT × 🛡️ 13_SUB_L1L3_RESV05_CAP4L[Default ON] × 💉 무제한 예비수혈 × 🔓 06_STEP2X_15PCT_C20 × 🛡️ Case 84 × 🔹 Case 92 돌파 RSI<=50 × 💵 Case 91 복리/단리 연동) : 비대칭 매수 타격 엔진
 #  - 분기 A   : 본 그리드 0주 상태(사이클 종료) -> 15:30 ~ 16:00 EST 구간에서는 새 사이클 첫 1층 진입 100% 차단(Case 84) · 그 외 60초 타임쉴드 후 첫 1층(REENTRY_1FL) 산입
@@ -1356,24 +1391,49 @@ async def _execute_sub_grid_buy_engine_plugin(
 # ---------------------------------------------------------------------------
 async def execute_seed_protected_buy_gate_plugin(
     context: Any,
-    holdings: Dict[str, Dict[str, Any]],
-    prices: Dict[str, float],
+    holdings: Optional[Dict[str, Dict[str, Any]]] = None,
+    prices: Optional[Dict[str, float]] = None,
     now_est: Optional[datetime] = None,
+    **kwargs: Any,
 ) -> Dict[str, Any]:
     """
     🎯 1, 🎯 2, 🎯 4 & Case 25 ~ 92 (챔피언 : 👑 06_L2L7_RATCHET_8PCT × 🛡️ 13_SUB_L1L3_RESV05_CAP4L[Default ON] × 💉 무제한 예비수혈 × 🔓 06_STEP2X_15PCT_C20 × 🛡️ Case 84 × 🔹 Case 92 돌파 RSI<=50 × 💵 Case 91 복리/단리 모드 연동):
     04:07:00 ~ 16:00:00 EST 운용 구간에서 작동하는 비대칭 매수 타격 엔진.
+    - holdings 또는 prices 인자가 생략되더라도 context.latest_holdings / context.latest_prices 로 자동 복원한다.
     """
     dt_now = now_est.astimezone(EST_TZ) if now_est else datetime.now(EST_TZ)
     hm = dt_now.hour * 100 + dt_now.minute
+
+    eff_holdings = (
+        holdings
+        if isinstance(holdings, dict) and holdings
+        else (
+            getattr(context, "latest_holdings", {})
+            if context is not None
+            else {}
+        )
+    )
+    eff_prices = (
+        dict(prices)
+        if isinstance(prices, dict) and prices
+        else (
+            dict(getattr(context, "latest_prices", {}))
+            if context is not None
+            and isinstance(getattr(context, "latest_prices", None), dict)
+            else {}
+        )
+    )
+    kw_lp = safe_float(kwargs.get("live_price"), 0.0)
+    if kw_lp > 0.0 and safe_float(eff_prices.get(TARGET_SYMBOL), 0.0) <= 0.0:
+        eff_prices[TARGET_SYMBOL] = kw_lp
 
     # 1) 미체결 매수 주문이 있으면 먼저 체결 확인 수행
     st = context.ledger.get_state(TARGET_SYMBOL)
     if str(st.get("buy_order_id") or "").strip():
         return await sync_pending_buy_order_plugin(
             context=context,
-            holdings=holdings,
-            prices=prices,
+            holdings=eff_holdings,
+            prices=eff_prices,
             now_est=dt_now,
         )
 
@@ -1407,13 +1467,13 @@ async def execute_seed_protected_buy_gate_plugin(
             "remain_shield_sec": remain_buy_sec,
         }
 
-    live_p = _get_live_soxl_price(context, prices, holdings, dt_now)
+    live_p = _get_live_soxl_price(context, eff_prices, eff_holdings, dt_now)
     if live_p <= 0.0:
         return {"status": "NO_LIVE_PRICE"}
 
     buckets = buckets_from_dicts(st.get("buckets", []))
     sub_buckets = buckets_from_dicts(st.get("sub_buckets", []))
-    h_qty = safe_int((holdings or {}).get(TARGET_SYMBOL, {}).get("qty"), 0)
+    h_qty = safe_int((eff_holdings or {}).get(TARGET_SYMBOL, {}).get("qty"), 0)
 
     # 🛡️ 3-B) [Case 77 & Case 88] 본 그리드 시드고갈 입금 대기 중일 때 60.0초 감지 타임쉴드 검문
     # (단, 본 그리드가 입금 대기 쉴드 중이더라도 서브 그리드 미체결 잔량 보충 등 서브 엔진 작동 가능 여부를 먼저 점검)
@@ -1424,8 +1484,8 @@ async def execute_seed_protected_buy_gate_plugin(
         if buckets:
             sub_res_during_sh = await _execute_sub_grid_buy_engine_plugin(
                 context=context,
-                holdings=holdings,
-                prices=prices,
+                holdings=eff_holdings,
+                prices=eff_prices,
                 dt_now=dt_now,
                 live_p=live_p,
             )
@@ -1703,8 +1763,8 @@ async def execute_seed_protected_buy_gate_plugin(
         if in_re_shield:
             sub_res_re = await _execute_sub_grid_buy_engine_plugin(
                 context=context,
-                holdings=holdings,
-                prices=prices,
+                holdings=eff_holdings,
+                prices=eff_prices,
                 dt_now=dt_now,
                 live_p=live_p,
             )
@@ -1766,8 +1826,8 @@ async def execute_seed_protected_buy_gate_plugin(
             )
             sub_res_after_pass = await _execute_sub_grid_buy_engine_plugin(
                 context=context,
-                holdings=holdings,
-                prices=prices,
+                holdings=eff_holdings,
+                prices=eff_prices,
                 dt_now=dt_now,
                 live_p=fresh_live_p,
             )
@@ -2341,8 +2401,8 @@ async def execute_seed_protected_buy_gate_plugin(
     if not is_gate_open:
         sub_res_wait = await _execute_sub_grid_buy_engine_plugin(
             context=context,
-            holdings=holdings,
-            prices=prices,
+            holdings=eff_holdings,
+            prices=eff_prices,
             dt_now=dt_now,
             live_p=live_p,
         )
@@ -2413,8 +2473,8 @@ async def execute_seed_protected_buy_gate_plugin(
             )
             sub_res_dep = await _execute_sub_grid_buy_engine_plugin(
                 context=context,
-                holdings=holdings,
-                prices=prices,
+                holdings=eff_holdings,
+                prices=eff_prices,
                 dt_now=dt_now,
                 live_p=fresh_live_p,
             )
@@ -2443,8 +2503,8 @@ async def execute_seed_protected_buy_gate_plugin(
         # 🛡️ [Case 88 핵심 : 본 그리드가 10분 게이트를 패스한 즉시 Default-ON 3층 서브 그리드 엔진 가동!]
         sub_res_gate = await _execute_sub_grid_buy_engine_plugin(
             context=context,
-            holdings=holdings,
-            prices=prices,
+            holdings=eff_holdings,
+            prices=eff_prices,
             dt_now=dt_now,
             live_p=fresh_live_p,
         )

@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-# MODIFIED: sniper_plugin_core.py (황금시간 07:00~07:50 RSI<=19 올인 골든포켓·GOLDEN_L1 정산/가드/주석 전면 영구 소각 & Case 91 무제한 예비시드 수혈 횟수 카운트 및 복리/단리 모드 연동 & Case 92 실시간 1분봉 Wilder RSI(14) 추출기 _get_live_soxl_rsi_14 탑재)
-인피니트 스노우볼 (Infinite Snowball) v3.0 — 스나이퍼 매수 코어 Part 1 / 2 (Step 06 / 13)
+# MODIFIED: sniper_plugin_core.py (Part 1/2 — _get_live_soxl_price 및 sync_pending_buy_order_plugin 내 holdings·prices 선택 인자 안전 기본값 및 context 자동 복원 탑재로 TypeError 예외 원천 차단 · 황금시간 07:00~07:50 RSI<=19 올인 골든포켓·GOLDEN_L1 정산/가드/주석 전면 영구 소각 & Case 91 무제한 예비시드 수혈 횟수 카운트 및 복리/단리 모드 연동 & Case 92 실시간 1분봉 Wilder RSI(14) 추출기 _get_live_soxl_rsi_14 탑재)
+인피니트 스노우볼 (Infinite Snowball) v3.0 — 스나이퍼 매수 코어 Part 1 / 2 (Step 06 / 14)
 역할:
 1) 스나이퍼 매수 전역 상수 락온 (DEFAULT_GRID_MERGE_MODE = "L2_L7_MERGE_SORT" [Case 87] ·
    SUB_MERGE_MODE_L1_L3 = "SUB_L1_L3_MERGE" / SUB_MAX_TIERS_3 = 3 / SUB_MAX_TOTAL_LOTS_4 = 4 [Case 88] ·
@@ -17,7 +17,7 @@
    (mark_sub_reentry_monitor_60s_cycle_shield, is_within_sub_reentry_monitor_time_shield · Case 88)
 4) 시드고갈 입금 대기(waiting_reserve_deposit) 중 60.0초 주기 확인 타임쉴드 관리기
    (mark_reserve_deposit_check_shield, is_within_reserve_deposit_check_shield · Case 77)
-5) 실시간 SOXL 현재가 추출 · 60초 타임쉴드 경과 직후 최신 현재가 직접 재조회기 및
+5) 실시간 SOXL 현재가 추출(holdings·prices 선택 인자 안전 폴백 포함) · 60초 타임쉴드 경과 직후 최신 현재가 직접 재조회기 및
    1층 공석 +1.00% 상승돌파 필터용 실시간 1분봉 Wilder RSI(14) 추출기
    (_get_live_soxl_price, _fetch_fresh_current_soxl_price, _get_live_soxl_rsi_14 · Case 65, 73, 92)
 6) 💉 GUARD30 & 무제한 예비수혈 (30% 자투리 1주 승격 방지 가드 · 계좌별 동적 왕복 수수료율 연동[Case 86] ·
@@ -33,7 +33,7 @@
    STEP2X_15PCT_C20 스텝업 잠금 저가/회차 갱신(Case 76, 87) ·
    15:30 EST 경계 미체결 취소 시 본·서브 0주 신규 진입 및 1층 공석 +1.0% 돌파 추격 동시 안전 취소(Case 84, Case 88) 및
    미체결 매수 주문 60.0초 동기화/안전 취소기 (_commit_filled_buy_to_stratum_ledger, sync_pending_buy_order_plugin · Case 19, 24, 59 ~ 92)
-- 제1헌법 ~ 제6헌법 및 Case 01 ~ 92 완벽 준수
+- 제1헌법 ~ 제6헌법 및 Case 01 ~ 93 완벽 준수
 """
 
 from __future__ import annotations
@@ -572,26 +572,53 @@ def is_within_reserve_deposit_check_shield(
 
 def _get_live_soxl_price(
     context: Any,
-    prices: Dict[str, float],
-    holdings: Dict[str, Dict[str, Any]],
-    now_est: datetime,
+    prices: Optional[Dict[str, float]] = None,
+    holdings: Optional[Dict[str, Dict[str, Any]]] = None,
+    now_est: Optional[datetime] = None,
 ) -> float:
     """
-    실시간 가격 딕셔너리(prices) -> 캔들 캐시 -> 보유 잔고 현재가 순으로 SOXL 현재가를 추출한다.
+    # MODIFIED [인자 누락 방어 및 context 자동 복원]:
+    실시간 가격 딕셔너리(prices) -> context.latest_prices -> context.last_soxl_live_price -> 캔들 캐시 -> 보유 잔고 현재가 순으로 SOXL 현재가를 추출한다.
     """
-    lp = safe_float((prices or {}).get(TARGET_SYMBOL), 0.0)
+    dt = now_est.astimezone(EST_TZ) if now_est else datetime.now(EST_TZ)
+    eff_prices = (
+        prices
+        if isinstance(prices, dict) and prices
+        else (
+            getattr(context, "latest_prices", {})
+            if context is not None
+            else {}
+        )
+    )
+    lp = safe_float((eff_prices or {}).get(TARGET_SYMBOL), 0.0)
     if lp > 0.0:
         return lp
+
+    if context is not None:
+        last_lp = safe_float(getattr(context, "last_soxl_live_price", 0.0), 0.0)
+        if last_lp > 0.0:
+            return last_lp
+
     raw_cache = getattr(context, "candle_metrics_cache", {})
     base_met = (
         raw_cache.get(TARGET_SYMBOL) if isinstance(raw_cache, dict) else None
     )
     if isinstance(base_met, dict):
-        met = refresh_metrics_with_live_tick(base_met, 0.0, now_est=now_est)
+        met = refresh_metrics_with_live_tick(base_met, 0.0, now_est=dt)
         lp = safe_float(met.get("live_price"), 0.0)
         if lp > 0.0:
             return lp
-    h_info = (holdings or {}).get(TARGET_SYMBOL, {})
+
+    eff_holdings = (
+        holdings
+        if isinstance(holdings, dict) and holdings
+        else (
+            getattr(context, "latest_holdings", {})
+            if context is not None
+            else {}
+        )
+    )
+    h_info = (eff_holdings or {}).get(TARGET_SYMBOL, {})
     return safe_float(h_info.get("last_price"), 0.0)
 
 
@@ -610,6 +637,8 @@ async def _fetch_fresh_current_soxl_price(
         if fresh_p > 0.0:
             if isinstance(getattr(context, "latest_prices", None), dict):
                 context.latest_prices[TARGET_SYMBOL] = fresh_p
+            setattr(context, "last_soxl_live_price", fresh_p)
+            setattr(context, "last_soxl_live_price_mono", time.monotonic())
             if isinstance(getattr(context, "candle_metrics_cache", None), dict):
                 base_met = context.candle_metrics_cache.get(TARGET_SYMBOL)
                 if isinstance(base_met, dict):
@@ -904,6 +933,12 @@ async def _check_and_execute_guard30_or_reserve_injection(
         )
 
     return False, now_free_cash, eff_bp_for_order, guard_eval
+# -*- coding: utf-8 -*-
+"""
+# MODIFIED: sniper_plugin_core.py (Part 2/2 — sync_pending_buy_order_plugin 의 holdings·prices 선택 인자 안전 기본값 및 **kwargs 수용 방어벽 장착 · 본 그리드 L2_L7_MERGE_SORT 및 Default-ON 3층 서브 그리드 SUB_L1_L3_MERGE 체결 커밋 · Case 78 부분체결 비례 자투리 정산 · Case 84 15:30 컷오프 미체결 안전 취소 완비)
+"""
+
+
 # ---------------------------------------------------------------------------
 # [핵심 1] 매수 체결(FILLED) 커밋 · 비례 자투리 정산(Case 78) · 현재 사이클 자투리 절약금(cycle_leftover_saved_usd) 누적 · Default-ON 3층 서브 그리드 SUB_L1_L3_MERGE(Case 88) · 1~7층 본 그리드 L2+L7 중간합병 및 최고도달회차 잠금(Case 87) · 매수 후 60초 타임쉴드 각인
 # ---------------------------------------------------------------------------
@@ -1477,13 +1512,14 @@ async def _commit_filled_buy_to_stratum_ledger(
 
 async def sync_pending_buy_order_plugin(
     context: Any,
-    holdings: Dict[str, Dict[str, Any]],
-    prices: Dict[str, float],
+    holdings: Optional[Dict[str, Dict[str, Any]]] = None,
+    prices: Optional[Dict[str, float]] = None,
     now_est: Optional[datetime] = None,
     force_settle: bool = False,
+    **kwargs: Any,
 ) -> Dict[str, Any]:
     """
-    # MODIFIED [🎯 1 & 🎯 5 & Case 19, 24, 59, 60, 61, 65, 66, 71, 72, 73, 76, 77, 78, Case 84, Case 87 & Case 88]:
+    # MODIFIED [🎯 1 & 🎯 5 & Case 19, 24, 59, 60, 61, 65, 66, 71, 72, 73, 76, 77, 78, Case 84, Case 87 & Case 88 — holdings·prices 선택 인자 안전 기본값 및 **kwargs 수용 방어벽 장착]:
     장부에 대기 중인 미체결 매수 주문(buy_order_id : 본 그리드 / 서브 그리드)이 존재할 때 체결/부분체결/취소를 동기화한다.
     - 15:30 EST 경계 도래 시 미체결 안전 취소(should_abort_late_cutoff)는:
       ① 본 그리드 및 서브 그리드 0주 새 사이클 첫 1층 진입 주문(is_zero_grid_reentry / is_zero_sub_reentry) 및

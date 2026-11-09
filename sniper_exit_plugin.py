@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-# MODIFIED: sniper_exit_plugin.py (황금시간 07:00~07:50 RSI<=19 올인 골든포켓 익절·스윕·정산·문구 전면 영구 소각 & Case 91 무제한 예비수혈 상환 카운트 및 인출형[단리] 당일 수익 인출 안내 탑재)
+# MODIFIED: sniper_exit_plugin.py (Part 1/2 — holdings·prices 선택 인자 안전 기본값 및 context 자동 폴백 탑재로 목표가 초과 시 미매도 TypeError 원천 차단 · 황금시간 07:00~07:50 RSI<=19 올인 골든포켓 익절·스윕·정산·문구 전면 영구 소각 & Case 91 무제한 예비수혈 상환 카운트 및 인출형[단리] 당일 수익 인출 안내 탑재)
 순수 롱(SOXL) 전용 '매수 체결 후 최초 60초 강제 타임쉴드(POST_BUY_TO_SELL_SHIELD_SEC = 60.0) &
 매수 후 60초 경과 시점부터 프리마켓·정규장·애프터마켓(16:00 ~ 19:59 EST)·데이마켓(20:00 ~ 03:59 EST) 24시간 전 세션에서
 보유 중 60초 블라인드 대기 락 없이 매 1.5초 실시간 다중 익절(7층 본 그리드 + Default-ON 3층 서브 그리드) 타점 스나이퍼 매도 모니터(Case 70, Case 71, Case 72, Case 79, Case 82, Case 83, Case 84, Case 87, Case 88, Case 91) ·
@@ -34,8 +34,8 @@ l1_target_quota_qty / sub_l1_target_quota_qty = 0 자동 클리어 및 1층 부�
 본·서브 모두 0주 전량 졸업 시 무제한 온디맨드 예비시드 원금 자동 상환 및 잔여 수혈 횟수 정산(compute_reserve_repayment_on_zero · Case 77, Case 88, Case 91) ·
 매도 체결 즉시 기정산 주문 ID(last_settled_order_ids) 등록 및
 60초 매도타임쉴드(last_sell_fill_ts / last_cycle_end_ts) & 1층 공석 재장전 타임쉴드 클리어(last_reentry_eval_ts / last_sub_reentry_eval_ts = 0.0) &
-15초 잔고 인덱싱 그레이스 쉴드(last_auto_fill_ts) 동시 각인' 코어 플러그인 (Step 08 / 13)
-- 제1헌법 ~ 제6헌법 및 Case 01 ~ 91 완벽 준수
+15초 잔고 인덱싱 그레이스 쉴드(last_auto_fill_ts) 동시 각인' 코어 플러그인 (Step 08 / 14)
+- 제1헌법 ~ 제6헌법 및 Case 01 ~ 93 완벽 준수
 """
 
 from __future__ import annotations
@@ -170,19 +170,40 @@ def is_within_extended_sell_restriction_cooldown(
 
 def _get_live_soxl_price(
     context: Any,
-    prices: Dict[str, float],
-    holdings: Dict[str, Dict[str, Any]],
+    prices: Optional[Dict[str, float]],
+    holdings: Optional[Dict[str, Dict[str, Any]]],
     now_est: datetime,
     allow_stale_fallback: bool = True,
 ) -> float:
     """
-    # [Case 79]:
-    - 프리장/정규장(allow_stale_fallback=True)에서는 prices -> 캔들 캐시 -> 보유 잔고 last_price 순으로 폴백한다.
-    - 데이마켓/애프터마켓(allow_stale_fallback=False)에서는 오직 실시간 시세 API(prices)에서 조회된 가격만 인정한다.
+    # MODIFIED [Case 79 & 인자 누락 자동 폴백 강화]:
+    - prices 또는 holdings 가 None 으로 전달되더라도 context.latest_prices / context.latest_holdings 로 자동 복원한다.
+    - 프리장/정규장(allow_stale_fallback=True)에서는 prices -> context.latest_prices -> 캔들 캐시 -> 보유 잔고 last_price 순으로 폴백한다.
+    - 데이마켓/애프터마켓(allow_stale_fallback=False)에서는 실시간 시세 API(prices 또는 최근 10초 내 갱신된 context.latest_prices)에서 조회된 가격만 인정한다.
     """
-    lp = safe_float((prices or {}).get(TARGET_SYMBOL), 0.0)
+    eff_prices = (
+        prices
+        if isinstance(prices, dict) and prices
+        else (
+            getattr(context, "latest_prices", {})
+            if context is not None
+            else {}
+        )
+    )
+    lp = safe_float((eff_prices or {}).get(TARGET_SYMBOL), 0.0)
     if lp > 0.0:
         return lp
+
+    if context is not None:
+        last_lp = safe_float(getattr(context, "last_soxl_live_price", 0.0), 0.0)
+        last_m = safe_float(
+            getattr(context, "last_soxl_live_price_mono", 0.0), 0.0
+        )
+        if last_lp > 0.0 and (
+            allow_stale_fallback or (time.monotonic() - last_m) <= 10.0
+        ):
+            return last_lp
+
     if not allow_stale_fallback:
         return 0.0
 
@@ -195,7 +216,17 @@ def _get_live_soxl_price(
         lp = safe_float(met.get("live_price"), 0.0)
         if lp > 0.0:
             return lp
-    h_info = (holdings or {}).get(TARGET_SYMBOL, {})
+
+    eff_holdings = (
+        holdings
+        if isinstance(holdings, dict) and holdings
+        else (
+            getattr(context, "latest_holdings", {})
+            if context is not None
+            else {}
+        )
+    )
+    h_info = (eff_holdings or {}).get(TARGET_SYMBOL, {})
     return safe_float(h_info.get("last_price"), 0.0)
 
 
@@ -214,6 +245,8 @@ async def _fetch_fresh_current_soxl_price(
         if fresh_p > 0.0:
             if isinstance(getattr(context, "latest_prices", None), dict):
                 context.latest_prices[TARGET_SYMBOL] = fresh_p
+            setattr(context, "last_soxl_live_price", fresh_p)
+            setattr(context, "last_soxl_live_price_mono", time.monotonic())
             if isinstance(getattr(context, "candle_metrics_cache", None), dict):
                 base_met = context.candle_metrics_cache.get(TARGET_SYMBOL)
                 if isinstance(base_met, dict):
@@ -771,14 +804,29 @@ async def execute_bulletproof_sell_sweep(
                 "reason": reason_tag,
             }
 
-        latest_open = await context.api.find_latest_open_order_id(
-            sym, side="SELL"
-        )
-        if latest_open:
-            try:
-                await context.api.cancel_order(latest_open)
-            except Exception:
-                pass
+        # 잔류 미체결 SELL 주문이 복수 개 존재하더라도 전량 취소하여 매도가능수량 잠김을 원천 방지
+        try:
+            open_ords = await context.api.get_open_orders(symbol=sym)
+            for o_item in open_ords or []:
+                if (
+                    isinstance(o_item, dict)
+                    and str(o_item.get("side") or "").upper().strip() == "SELL"
+                ):
+                    oid_open = str(o_item.get("orderId") or "").strip()
+                    if oid_open:
+                        try:
+                            await context.api.cancel_order(oid_open)
+                        except Exception:
+                            pass
+        except Exception:
+            latest_open = await context.api.find_latest_open_order_id(
+                sym, side="SELL"
+            )
+            if latest_open:
+                try:
+                    await context.api.cancel_order(latest_open)
+                except Exception:
+                    pass
 
         # [Case 82 & Case 88 : 목표 매도 수량(target_sell_qty) 전량 반영까지 최대 2.0초 정량 폴링 대기]
         sellable_q = 0
@@ -928,8 +976,14 @@ async def execute_bulletproof_sell_sweep(
                 exc,
             )
             return {"status": "SWEEP_FAILED", "symbol": sym, "error": str(exc)}
+# -*- coding: utf-8 -*-
+"""
+# MODIFIED: sniper_exit_plugin.py (Part 2/2 — sync_pending_sell_order_plugin 및 execute_1m_sniper_sell_and_reanchor_plugin 의 holdings·prices 선택 인자 기본값 및 context 자동 복원 방어벽 장착 · 본+서브 다중 익절 정산 · 0주 졸업 시 무제한 예비시드 원금 자동 상환 및 사이클 수익 자동 리셋 · Case 01 ~ Case 93 완비)
+"""
+
+
 # ---------------------------------------------------------------------------
-# [핵심 2] 실물 매도 FILLED 정산 · 서브그리드/본그리드 분리 정산(Case 88) · 최고도달회차 잠금 유지(Case 87, 88) · 현재 사이클 단위 실현수익 누적 및 0주 졸업 시 자동 리셋(📌 ③) · 실측/동적 수수료 차감 세후 순익 산입 · 0주 졸업 시 무제한 예비시드 원금 자동 상환 및 인출형(단리) 당일 수익 안내 (Case 91)
+# [핵심 2] 실물 매도 FILLED 정산 · 서브그리드/본그리드 분리 정산(Case 88) · 최고도달회차 잠금 유지(Case 87, 88) · 현재 사이클 단위 실현수익 누적 및 0주 졸업 시 자동 리셋(Case 80) · 실측/동적 수수료 차감 세후 순익 산입 · 0주 졸업 시 무제한 예비시드 원금 자동 상환 및 인출형(단리) 당일 수익 안내 (Case 91)
 # ---------------------------------------------------------------------------
 async def _commit_filled_sell_and_reanchor_ledger(
     context: Any,
@@ -940,7 +994,7 @@ async def _commit_filled_sell_and_reanchor_ledger(
     actual_sell_fee_usd: Optional[float] = None,
 ) -> Dict[str, Any]:
     """
-    # MODIFIED [🎯 1 ~ 🎯 4 & Case 19, 59 ~ 91 & 본/서브 최고 도달 회차 잠금 유지 · Default-ON 3층 서브 그리드 분리 정산 · 현재 사이클 단위 실현수익(cycle_realized_net_usd) 누적 및 0주 전량 졸업 시 직전 사이클 수익(last_cycle_realized_net_usd) 박제 후 $0.00 자동 리셋(📌 ③) · 상단 순수 통합이평 +1.00% 도달 시 1층 포함 전량 매도 사이클 종료 · 무제한 예비시드 상환 카운트 · 인출형(단리) 당일 수익 인출 안내 연동]:
+    # MODIFIED [🎯 1 ~ 🎯 4 & Case 19, 59 ~ 91 & 본/서브 최고 도달 회차 잠금 유지 · Default-ON 3층 서브 그리드 분리 정산 · 현재 사이클 단위 실현수익(cycle_realized_net_usd) 누적 및 0주 전량 졸업 시 직전 사이클 수익(last_cycle_realized_net_usd) 박제 후 $0.00 자동 리셋(Case 80) · 상단 순수 통합이평 +1.00% 도달 시 1층 포함 전량 매도 사이클 종료 · 무제한 예비시드 상환 카운트 · 인출형(단리) 당일 수익 인출 안내 연동]:
     7층 골디락스 본 그리드 및 Default-ON 3층 서브 그리드 스나이퍼 매도 주문이 체결(FILLED 또는 부분 체결 후 취소 종료)되었을 때:
     1) pending_sub_sell_indices, pending_sell_indices 에 해당하는 순수 매수 원금과 실제 매도 체결가(avg_fill_price)에 대해,
        토스 execution.commission + tax 실측값(actual_sell_fee_usd) 및 계좌별 왕복 수수료율(eff_rt_pct : 0.14% 또는 0.20%)을 적용하여
@@ -950,7 +1004,7 @@ async def _commit_filled_sell_and_reanchor_ledger(
        해당 그리드가 0주 졸업했을 때만 0으로 리셋!]
     4) 🚨 [Case 78 : 본·서브 1층 부분 익절 시 l1_target_quota_qty / sub_l1_target_quota_qty 잔여 수량 동기화로 허위 TOPUP_1FL 재매수 원천 차단]
     5) 🚨 [Case 77, Case 88 & Case 91 : 본·서브 모두 0주 전량 졸업 시 무제한 예비시드 원금 자동 상환 및 잔여 수혈 횟수 카운트 정산]
-    6) 🔄 [📌 ③ 현재 사이클 단위 수익 추적 및 0주 졸업 시 자동 리셋 : 부분 익절 시에는 cycle_realized_net_usd 에 누적하고,
+    6) 🔄 [Case 80 현재 사이클 단위 수익 추적 및 0주 졸업 시 자동 리셋 : 부분 익절 시에는 cycle_realized_net_usd 에 누적하고,
        is_graduated_zero == True 순간 이번 사이클 최종 확정수익을 last_cycle_realized_net_usd 에 박제한 뒤 cycle_realized_net_usd = 0.0 으로 자동 리셋!]
     """
     st = context.ledger.get_state(TARGET_SYMBOL)
@@ -1515,7 +1569,7 @@ async def _commit_filled_sell_and_reanchor_ledger(
         safe_float(st.get("daily_realized_net_usd"), 0.0) + net_pnl, 4
     )
 
-    # [📌 ③ 현재 사이클 단위 실현수익 누적 및 0주 졸업(is_graduated_zero) 시 직전 사이클 박제 후 $0.00 자동 리셋]
+    # [Case 80 현재 사이클 단위 실현수익 누적 및 0주 졸업(is_graduated_zero) 시 직전 사이클 박제 후 $0.00 자동 리셋]
     cur_cyc_gross = round(
         safe_float(st.get("cycle_realized_gross_usd"), 0.0) + gross_pnl, 4
     )
@@ -1880,13 +1934,14 @@ def _extract_actual_sell_fee_from_exec(
 
 async def sync_pending_sell_order_plugin(
     context: Any,
-    holdings: Dict[str, Dict[str, Any]],
-    prices: Dict[str, float],
+    holdings: Optional[Dict[str, Dict[str, Any]]] = None,
+    prices: Optional[Dict[str, float]] = None,
     now_est: Optional[datetime] = None,
     force_settle: bool = False,
+    **kwargs: Any,
 ) -> Dict[str, Any]:
     """
-    # [🚨 Case 19, Case 24, Case 65, Case 66, Case 70, Case 71, Case 72, Case 78, Case 79, Case 82, Case 86 & Case 88 실측 수수료 및 서브 그리드 연동]:
+    # MODIFIED [🚨 Case 19, Case 24, Case 65, Case 66, Case 70, Case 71, Case 72, Case 78, Case 79, Case 82, Case 86 & Case 88 — holdings·prices 선택 인자 안전 기본값 처리 및 실측 수수료/서브 그리드 연동]:
     장부에 대기 중인 미체결 매도 주문(sell_order_id)이 존재할 때:
     1) GET /api/v1/orders/{orderId} 로 FILLED 여부를 조회하여 체결 완료 시
        execution.commission + tax 실측값과 함께 _commit_filled_sell_and_reanchor_ledger() 로 복리 정산을 수행한다.
@@ -2067,17 +2122,41 @@ async def sync_pending_sell_order_plugin(
 # ---------------------------------------------------------------------------
 async def execute_1m_sniper_sell_and_reanchor_plugin(
     context: Any,
-    holdings: Dict[str, Dict[str, Any]],
-    prices: Dict[str, float],
+    holdings: Optional[Dict[str, Dict[str, Any]]] = None,
+    prices: Optional[Dict[str, float]] = None,
     now_est: Optional[datetime] = None,
+    **kwargs: Any,
 ) -> Dict[str, Any]:
     """
-    # MODIFIED [🎯 2 Step 2 & Case 24, 44, 46 ~ 91 (방안 C 오버나이트 통합이평 사수 하이브리드 & 2~7층 순수 통합이평 +1.00% 도달 시 1층 물량 무조건 동일 가격 포함 전량 매도 & 본+서브 다중 익절 & 2차 재조회 시 순수 fresh_live_p 우선 평가)]:
+    # MODIFIED [🎯 2 Step 2 & Case 24, 44, 46 ~ 91 — holdings·prices 선택 인자 안전 기본값 및 context 자동 폴백 탑재 (방안 C 오버나이트 통합이평 사수 하이브리드 & 2~7층 순수 통합이평 +1.00% 도달 시 1층 물량 무조건 동일 가격 포함 전량 매도 & 본+서브 다중 익절 & 2차 재조회 시 순수 fresh_live_p 우선 평가)]:
     """
     global _LAST_CONSUMED_WICK_TRADE_TS
 
     dt_now = now_est.astimezone(EST_TZ) if now_est else datetime.now(EST_TZ)
     hm = dt_now.hour * 100 + dt_now.minute
+
+    eff_holdings = (
+        holdings
+        if isinstance(holdings, dict) and holdings
+        else (
+            getattr(context, "latest_holdings", {})
+            if context is not None
+            else {}
+        )
+    )
+    eff_prices = (
+        dict(prices)
+        if isinstance(prices, dict) and prices
+        else (
+            dict(getattr(context, "latest_prices", {}))
+            if context is not None
+            and isinstance(getattr(context, "latest_prices", None), dict)
+            else {}
+        )
+    )
+    kw_lp = safe_float(kwargs.get("live_price"), 0.0)
+    if kw_lp > 0.0 and safe_float(eff_prices.get(TARGET_SYMBOL), 0.0) <= 0.0:
+        eff_prices[TARGET_SYMBOL] = kw_lp
 
     st = context.ledger.get_state(TARGET_SYMBOL)
 
@@ -2085,8 +2164,8 @@ async def execute_1m_sniper_sell_and_reanchor_plugin(
     if str(st.get("sell_order_id") or "").strip():
         return await sync_pending_sell_order_plugin(
             context=context,
-            holdings=holdings,
-            prices=prices,
+            holdings=eff_holdings,
+            prices=eff_prices,
             now_est=dt_now,
         )
 
@@ -2133,8 +2212,8 @@ async def execute_1m_sniper_sell_and_reanchor_plugin(
     is_ext_sell_only = is_extended_sell_only_window(hm, now_est=dt_now)
     live_p = _get_live_soxl_price(
         context,
-        prices,
-        holdings,
+        eff_prices,
+        eff_holdings,
         dt_now,
         allow_stale_fallback=(not is_ext_sell_only),
     )
@@ -2152,7 +2231,7 @@ async def execute_1m_sniper_sell_and_reanchor_plugin(
             "did_sell_or_ratchet": False,
         }
 
-    h_info = (holdings or {}).get(TARGET_SYMBOL, {})
+    h_info = (eff_holdings or {}).get(TARGET_SYMBOL, {})
     ledger_total_qty = sum(b.qty for b in buckets) + sum(
         sb.qty for sb in sub_buckets
     )
