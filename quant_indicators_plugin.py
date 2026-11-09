@@ -1,12 +1,13 @@
 # -*- coding: utf-8 -*-
 """
-# MODIFIED: quant_indicators_plugin.py (Part 1/2 — 1분봉 400봉 상한 락온 · Pandas 2.2+/NumPy 2.0 Read-Only View copy=True 크래시 원천 차단 · 일봉 1d 명목거래일 추출 · 전날 23:59 EST 야간봉 오인 폴백 삭제 · 프리장 데이터 부재 시 정규장 시가/정규VWAP 가짜 폴백 영구 제거 및 0.0 무오염 반환 · 진성 4대 앵커 래치 보존 · Case 92, Case 93)
+# MODIFIED: quant_indicators_plugin.py (Part 1/2 — 1분봉 400봉 상한 락온 · Pandas 2.2+/NumPy 2.0 Read-Only View copy=True 크래시 원천 차단 · 일봉 1d 명목거래일 추출 · 전날 23:59 EST 야간봉 오인 폴백 삭제 · 프리장 데이터 부재 시 정규장 시가/정규VWAP 가짜 폴백 영구 제거 및 0.0 무오염 반환 · 진성 4대 앵커 래치 보존 · DL10/DL_G6/SMART_WAIT 전용 5분 변화율 vel_5m_pct 및 프리장 고점 대비 낙폭 dd_from_pre_high_pct 벡터 산출 탑재 · Case 92, Case 93)
 인피니트 스노우볼 (Infinite Snowball) v3.0 — 순수 롱(SOXL) 매수 04:07 ~ 16:00 EST 제한
 (정규장 마감 30분 전 15:30 ~ 16:00 EST 본·서브 그리드 0주 새 사이클 첫 1층 진입 및 상단층 보유 중 1층 공석 +1.0% 돌파 추격 동시 차단 ·
 04:07 ~ 15:29 EST 1층 공석 +1.0% 돌파 시 RSI(14) <= 50.0 필터 결합 · 2층 단가 이하 -1.0% 눌림목 재장전 및 10분 게이트 추매/잔량보충 100% 허용 · Case 84, Case 88, Case 92) &
 익절 매도 24시간 전 세션(프리마켓 + 정규장 + 애프터마켓 + 데이마켓 · 방안 C 오버나이트 통합이평 사수) 확장 오버나이트 지층관리 스나이퍼 +
-🗡️ [모의 ⇄ 실전 Dual-Ready] 암살자(Assassin) 정찰병 4대 지표(① RSI14 · ② 프리장/정규장 VWAP · ③ 전날 정규장 종가 · ④ 당일 04:07 프리장 시가) 및
-나스닥(QQQ) 방향성 인지 3단계 안전망(1분/3분/10분 변화율 · 순수 하락 진폭) 100% 벡터화 지표 엔진 코어 모듈 (Step 03 / 14 · Case 93)
+🗡️ [모의 ⇄ 실전 Dual-Ready] 암살자(Assassin) 정찰병 4대 지표(① RSI14 · ② 프리장/정규장 VWAP · ③ 전날 정규장 종가 · ④ 당일 04:07 프리장 시가),
+정책 4 (SMART_WAIT + DL_G6 + DL10) 전용 5분 변화율(vel_5m_pct) · 프리장 고점 대비 낙폭(dd_from_pre_high_pct) 및
+나스닥(QQQ) 방향성 인지 지표(1분/3분/5분/10분 변화율 · 순수 하락 진폭) 100% 벡터화 지표 엔진 코어 모듈 (Step 03 / 14 · Case 93)
 """
 
 from __future__ import annotations
@@ -667,9 +668,10 @@ def _compute_vectorized_heikin_ashi_and_rsi(
     closes: np.ndarray,
 ) -> Dict[str, Any]:
     """
-    Wilder's RSI(14), Heikin-Ashi(HA_Open, HA_Close), 및 단기 변화율(1분/3분/10분) 벡터화 연산기:
+    # MODIFIED [Case 93 : Wilder's RSI(14), Heikin-Ashi(HA_Open, HA_Close), 및 단기 변화율(1분/3분/5분/10분) 벡터화 연산기]:
     100% 벡터화(np.diff + Wilder's EWM) 연산으로 n >= 2 이상이면 첫 봉 NaN 왜곡 없이
-    직전 완성봉 종가(prev_bar_close)와 직전 완성봉까지의 평균 상승/하락폭(prev_avg_gain, prev_avg_loss)을 산출한다.
+    직전 완성봉 종가(prev_bar_close), 3분 전(close_3m_ago), 5분 전(close_5m_ago · DL10 전용), 10분 전(close_10m_ago) 종가와
+    직전 완성봉까지의 평균 상승/하락폭(prev_avg_gain, prev_avg_loss)을 산출한다.
     """
     n = len(closes)
     if n == 0:
@@ -680,9 +682,11 @@ def _compute_vectorized_heikin_ashi_and_rsi(
             "candle_count": 0,
             "prev_bar_close": 0.0,
             "close_3m_ago": 0.0,
+            "close_5m_ago": 0.0,
             "close_10m_ago": 0.0,
             "vel_1m_pct": 0.0,
             "vel_3m_pct": 0.0,
+            "vel_5m_pct": 0.0,
             "vel_10m_pct": 0.0,
             "vel_max_3m_10m_pct": 0.0,
             "prev_avg_gain": 0.0,
@@ -721,6 +725,7 @@ def _compute_vectorized_heikin_ashi_and_rsi(
     cur_c = float(closes[-1])
     prev_bar_close = float(closes[-2]) if n >= 2 else cur_c
     c_3m_ago = float(closes[-4]) if n >= 4 else float(closes[0])
+    c_5m_ago = float(closes[-6]) if n >= 6 else float(closes[0])
     c_10m_ago = float(closes[-11]) if n >= 11 else float(closes[0])
 
     vel_1m_pct = (
@@ -730,6 +735,9 @@ def _compute_vectorized_heikin_ashi_and_rsi(
     )
     vel_3m_pct = (
         ((cur_c - c_3m_ago) / c_3m_ago) * 100.0 if c_3m_ago > 0.0 else 0.0
+    )
+    vel_5m_pct = (
+        ((cur_c - c_5m_ago) / c_5m_ago) * 100.0 if c_5m_ago > 0.0 else 0.0
     )
     vel_10m_pct = (
         ((cur_c - c_10m_ago) / c_10m_ago) * 100.0 if c_10m_ago > 0.0 else 0.0
@@ -780,9 +788,11 @@ def _compute_vectorized_heikin_ashi_and_rsi(
         "candle_count": int(n),
         "prev_bar_close": round(prev_bar_close, 4),
         "close_3m_ago": round(c_3m_ago, 4),
+        "close_5m_ago": round(c_5m_ago, 4),
         "close_10m_ago": round(c_10m_ago, 4),
         "vel_1m_pct": round(vel_1m_pct, 4),
         "vel_3m_pct": round(vel_3m_pct, 4),
+        "vel_5m_pct": round(vel_5m_pct, 4),
         "vel_10m_pct": round(vel_10m_pct, 4),
         "vel_max_3m_10m_pct": round(max(vel_3m_pct, vel_10m_pct), 4),
         "prev_avg_gain": round(prev_avg_g, 6),
@@ -863,7 +873,7 @@ def _recompute_ha_rsi_from_memory_store(
         return None
 # -*- coding: utf-8 -*-
 """
-# MODIFIED: quant_indicators_plugin.py (Part 2/2 — 프리장 04:00~09:29 EST 데이터 부재 시 정규장 시가/정규VWAP 가짜 폴백 영구 소각 및 0.0 무오염 반환 · 당일 프리장 진성 래치 보존 · Case 92, Case 93)
+# MODIFIED: quant_indicators_plugin.py (Part 2/2 — 프리장 04:00~09:29 EST 데이터 부재 시 정규장 시가/정규VWAP 가짜 폴백 영구 소각 및 0.0 무오염 반환 · 당일 프리장 진성 래치 보존 · DL10/DL_G6/SMART_WAIT 전용 5분 변화율 vel_5m_pct 및 프리장 고점 대비 낙폭 dd_from_pre_high_pct 실시간 O(1) 합성 탑재 · Case 92, Case 93)
 """
 
 
@@ -1136,14 +1146,14 @@ def compute_soxl_quant_metrics_1m(
     symbol: str = TARGET_SYMBOL,
 ) -> Dict[str, Any]:
     """
-    🎯 2 & Case 01, 15, 79, 84, 88, 92, 93 & 암살자 4대 지표 통합 연산기:
+    🎯 2 & Case 01, 15, 79, 84, 88, 92, 93 & 암살자 정책 4(SMART_WAIT + DL_G6 + DL10) 통합 연산기:
     토스 Open API 1분봉(candles), 인메모리 실시간 합성 1분봉(_LIVE_1M_BAR_STORE) 및 일봉(daily_candles)을 입력받아:
-    1) 당일 프리장(04:07 ~ 09:29 EST) 누적 VWAP · 고/저가 진폭 · 예상 변동 밴드
+    1) 당일 프리장(04:07 ~ 09:29 EST) 누적 VWAP · 고/저가 진폭 · 프리장 고점 대비 낙폭(dd_from_pre_high_pct) · 예상 변동 밴드
        (프리장 중 산출된 값은 당일 진성 래치에 보존하며, 장 마감 후 최초 가동 등으로 프리장 캔들이 없을 때는 정규VWAP 복사 없이 0.0 반환!)
     2) 당일 정규장(09:30 ~ 16:00 EST) 누적 VWAP · 고/저가 진폭 · 예상 변동 밴드
     3) 최근 5영업일 평균 진폭(5MA) · 실시간 하이킨 아시 추세 배지(🕯️HA양봉 / 🌑HA음봉) · Wilder's RSI(14)
     4) 암살자 4대 필수 조건(① rsi_14/rsi · ② premarket_vwap/vwap · ③ prev_reg_close/prev_day_close · ④ pre_open_price) 및
-       단기 변화율(vel_1m_pct, vel_3m_pct, vel_10m_pct) · 시가 대비 순수 하락 진폭(bear_drop_amp_pct)
+       단기 변화율(vel_1m_pct, vel_3m_pct, vel_5m_pct, vel_10m_pct) · 시가 대비 순수 하락 진폭(bear_drop_amp_pct) · 프리장 고점 대비 낙폭(dd_from_pre_high_pct)
     5) 04:07 ~ 16:00 EST 10분 고정 매수 게이트 버킷 · 장마감 30분전 0주 신규 및 1층 공석 돌파 컷오프(15:30 ~ 16:00 EST) 정보
     를 100% 벡터화 연산(copy=True 쓰기 가능 배열 강제)으로 산출하여 반환한다.
     """
@@ -1165,8 +1175,10 @@ def compute_soxl_quant_metrics_1m(
 
     default_out: Dict[str, Any] = {
         "symbol": sym,
+        "is_valid": bool(lp > 0.0),
         "live_price": round(lp, 4),
         "current_price": round(lp, 4),
+        "close": round(lp, 4),
         "ma5_amp_pct": 6.50,
         "rsi_14": 50.0,
         "rsi": 50.0,
@@ -1181,12 +1193,15 @@ def compute_soxl_quant_metrics_1m(
         "cur_bar_minute_key": cur_min_key,
         "prev_bar_close": 0.0,
         "close_3m_ago": 0.0,
+        "close_5m_ago": 0.0,
         "close_10m_ago": 0.0,
         "vel_1m_pct": 0.0,
         "vel_3m_pct": 0.0,
+        "vel_5m_pct": 0.0,
         "vel_10m_pct": 0.0,
         "vel_max_3m_10m_pct": 0.0,
         "bear_drop_amp_pct": 0.0,
+        "dd_from_pre_high_pct": 0.0,
         "prev_avg_gain": 0.0,
         "prev_avg_loss": 0.0,
         "ha_open": round(lp, 4),
@@ -1196,6 +1211,7 @@ def compute_soxl_quant_metrics_1m(
         "cur_bar_open": round(lp, 4),
         "cur_bar_high": round(lp, 4),
         "cur_bar_low": round(lp, 4),
+        "is_bull_bar": True,
         "ha_bull": True,
         "is_ha_bull": True,
         "ha_badge": "🕯️HA양봉",
@@ -1215,6 +1231,7 @@ def compute_soxl_quant_metrics_1m(
         "regular_est_low": round(lp, 2),
         "regular_est_high": round(lp, 2),
         "day_vwap": round(lp, 4),
+        "active_vwap": round(lp, 4),
         "vwap": round(lp, 4),
         "day_high": round(lp, 4),
         "day_low": round(lp, 4),
@@ -1353,7 +1370,9 @@ def compute_soxl_quant_metrics_1m(
             df_all=df,
             target_date=target_date,
             daily_candles=daily_candles,
-            explicit_prev_close=init_prev_c,
+            explicit_prev_close=init_prev_close
+            if (init_prev_close := init_prev_c) > 0.0
+            else 0.0,
             fallback_price=lp,
             symbol=sym,
         )
@@ -1429,6 +1448,13 @@ def compute_soxl_quant_metrics_1m(
             else 0.0
         )
 
+        eff_pre_high = safe_float(pre_stats.get("high"), 0.0)
+        if eff_pre_high > 0.0 and lp > 0.0:
+            eff_pre_high = max(eff_pre_high, lp) if hm_now <= 929 else eff_pre_high
+            dd_from_pre_high = ((lp - eff_pre_high) / eff_pre_high) * 100.0
+        else:
+            dd_from_pre_high = 0.0
+
         is_collapsed = _is_collapsed_anchor_triplet(
             prev_reg_c, pre_open_p, eff_pre_vwap
         )
@@ -1446,8 +1472,10 @@ def compute_soxl_quant_metrics_1m(
         out.update(ha_rsi_info)
         out.update(
             {
+                "is_valid": bool(lp > 0.0),
                 "live_price": round(lp, 4),
                 "current_price": round(lp, 4),
+                "close": round(lp, 4),
                 "ma5_amp_pct": ma5_amp,
                 "anchors_ready": anchors_ready,
                 "found_true_prev_close": found_true_prev_close,
@@ -1459,6 +1487,7 @@ def compute_soxl_quant_metrics_1m(
                 "prev_day_close": prev_reg_c,
                 "pre_open_price": pre_open_p,
                 "bear_drop_amp_pct": round(bear_drop_amp, 4),
+                "dd_from_pre_high_pct": round(dd_from_pre_high, 4),
                 "premarket_vwap": eff_pre_vwap,
                 "premarket_high": pre_stats["high"],
                 "premarket_low": pre_stats["low"],
@@ -1476,6 +1505,7 @@ def compute_soxl_quant_metrics_1m(
                 "regular_est_low": reg_stats["est_low"],
                 "regular_est_high": reg_stats["est_high"],
                 "day_vwap": active_vwap,
+                "active_vwap": active_vwap,
                 "vwap": (
                     eff_pre_vwap
                     if (hm_now <= 929 and eff_pre_vwap > 0.0)
@@ -1523,9 +1553,9 @@ def compute_qqq_macro_metrics_1m(
     now_est: Optional[datetime] = None,
 ) -> Dict[str, Any]:
     """
-    # NEW: 나스닥 100 추종 QQQ 1분봉 기반 방향성 인지 3단계 안전망 지표 산출기
+    # MODIFIED: 나스닥 100 추종 QQQ 1분봉 기반 방향성 인지 지표(1분/3분/5분/10분 변화율) 산출기
     """
-    return compute_soxl_quant_metrics_1m(
+    res = compute_soxl_quant_metrics_1m(
         candles=candles,
         live_price=live_price,
         now_est=now_est,
@@ -1533,6 +1563,18 @@ def compute_qqq_macro_metrics_1m(
         prev_day_close=0.0,
         symbol="QQQ",
     )
+    q_lp = safe_float(
+        res.get("live_price") or res.get("current_price"), live_price
+    )
+    res["qqq_live_price"] = round(q_lp, 4)
+    res["qqq_vel_1m_pct"] = round(safe_float(res.get("vel_1m_pct"), 0.0), 3)
+    res["qqq_vel_3m_pct"] = round(safe_float(res.get("vel_3m_pct"), 0.0), 3)
+    res["qqq_vel_5m_pct"] = round(safe_float(res.get("vel_5m_pct"), 0.0), 3)
+    res["qqq_vel_10m_pct"] = round(safe_float(res.get("vel_10m_pct"), 0.0), 3)
+    res["qqq_bear_drop_amp_pct"] = round(
+        max(2.00, safe_float(res.get("bear_drop_amp_pct"), 2.00)), 2
+    )
+    return res
 
 
 # ---------------------------------------------------------------------------
@@ -1545,14 +1587,15 @@ def refresh_metrics_with_live_tick(
     symbol: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
-    # MODIFIED [Case 84, Case 88, Case 92, Case 93 & 암살자 4대 지표 실시간 O(1) 틱 합성]:
+    # MODIFIED [Case 84, Case 88, Case 92, Case 93 & 암살자 정책 4(SMART_WAIT + DL_G6 + DL10) 실시간 O(1) 틱 합성]:
     1) 실시간 현재가(live_price)를 인메모리 1분봉 저장소(_LIVE_1M_BAR_STORE)에 즉시 반영한다.
     2) 당일 인메모리 래치(_DAILY_SESSION_ANCHOR_STORE)에 진성으로 보존된 전일 정규장 종가(prev_reg_close),
        당일 04:07 프리장 시가(pre_open_price), 프리장 누적 VWAP(premarket_vwap)이 있으면 우선 복원하며,
        장 마감 후(또는 정규장 중) 프리장 기록이 없어 pre_open_price / premarket_vwap 이 0.0 인 경우에는
        절대로 현재가(lp)로 덮어쓰지 않고 0.0 을 유지한다!
     3) prev_bar_close > 0.0 이면 매 1.5초(또는 0.4초) 실시간 틱 변동을 Wilder's RSI(14)와
-       단기 변화율(vel_1m_pct, vel_3m_pct, vel_10m_pct), 하이킨 아시(ha_bull / is_ha_bull)에 즉시 합성한다!
+       단기 변화율(vel_1m_pct, vel_3m_pct, vel_5m_pct, vel_10m_pct), 프리장 고점 대비 낙폭(dd_from_pre_high_pct),
+       1분봉 양봉(is_bull_bar) 및 하이킨 아시(ha_bull / is_ha_bull)에 즉시 합성한다!
     """
     dt_now = now_est.astimezone(EST_TZ) if now_est else datetime.now(EST_TZ)
     dt = dt_now
@@ -1576,6 +1619,9 @@ def refresh_metrics_with_live_tick(
     else:
         met["live_price"] = round(lp, 4)
         met["current_price"] = round(lp, 4)
+        met["close"] = round(lp, 4)
+
+    met["is_valid"] = bool(lp > 0.0)
 
     cur_min_key, mem_bar_cnt = _record_live_tick_to_memory_bar(
         sym, lp, now_est=dt_now
@@ -1616,6 +1662,14 @@ def refresh_metrics_with_live_tick(
                 safe_float(latched_pre_stats.get("vwap"), 0.0), 4
             )
             met["found_true_pre_vwap"] = True
+        if safe_float(met.get("premarket_high"), 0.0) <= 0.0:
+            met["premarket_high"] = round(
+                safe_float(latched_pre_stats.get("high"), 0.0), 4
+            )
+        if safe_float(met.get("premarket_low"), 0.0) <= 0.0:
+            met["premarket_low"] = round(
+                safe_float(latched_pre_stats.get("low"), 0.0), 4
+            )
 
     ma5_amp = max(1.0, safe_float(met.get("ma5_amp_pct"), 6.50))
     amp_ratio = ma5_amp / 100.0
@@ -1632,9 +1686,11 @@ def refresh_metrics_with_live_tick(
         live_ha_open = (prev_ho + prev_hc) * 0.5
         live_ha_close = (cur_o + cur_h + cur_l + lp) * 0.25
         is_bull = bool(live_ha_close >= live_ha_open)
+        is_bull_bar = bool(lp >= cur_o)
         met["cur_bar_open"] = round(cur_o, 4)
         met["cur_bar_high"] = round(cur_h, 4)
         met["cur_bar_low"] = round(cur_l, 4)
+        met["is_bull_bar"] = is_bull_bar
         met["ha_open"] = round(live_ha_open, 4)
         met["ha_close"] = round(live_ha_close, 4)
         met["ha_bull"] = is_bull
@@ -1660,9 +1716,12 @@ def refresh_metrics_with_live_tick(
             )
 
         c_3m = safe_float(met.get("close_3m_ago"), prev_b_close)
-        c_10m = safe_float(met.get("close_10m_ago"), prev_b_close)
+        c_5m = safe_float(met.get("close_5m_ago"), c_3m)
+        c_10m = safe_float(met.get("close_10m_ago"), c_5m)
         if c_3m > 0.0:
             met["vel_3m_pct"] = round(((lp - c_3m) / c_3m) * 100.0, 4)
+        if c_5m > 0.0:
+            met["vel_5m_pct"] = round(((lp - c_5m) / c_5m) * 100.0, 4)
         if c_10m > 0.0:
             met["vel_10m_pct"] = round(((lp - c_10m) / c_10m) * 100.0, 4)
         met["vel_max_3m_10m_pct"] = round(
@@ -1735,10 +1794,36 @@ def refresh_metrics_with_live_tick(
             met["regular_vwap"] = round(lp, 4)
         met["vwap"] = met["regular_vwap"]
 
+    eff_pre_h = safe_float(met.get("premarket_high"), 0.0)
+    if eff_pre_h > 0.0 and lp > 0.0:
+        met["dd_from_pre_high_pct"] = round(
+            ((lp - eff_pre_h) / eff_pre_h) * 100.0, 4
+        )
+    else:
+        met["dd_from_pre_high_pct"] = 0.0
+
     if safe_float(met.get("vwap"), 0.0) <= 0.0 and lp > 0.0:
         met["vwap"] = round(
             safe_float(met.get("day_vwap"), lp),
             4,
+        )
+    met["active_vwap"] = safe_float(
+        met.get("regular_vwap")
+        if safe_float(met.get("regular_vwap"), 0.0) > 0.0
+        else met.get("vwap"),
+        lp,
+    )
+
+    if sym == "QQQ":
+        met["qqq_live_price"] = round(lp, 4)
+        met["qqq_vel_1m_pct"] = round(safe_float(met.get("vel_1m_pct"), 0.0), 3)
+        met["qqq_vel_3m_pct"] = round(safe_float(met.get("vel_3m_pct"), 0.0), 3)
+        met["qqq_vel_5m_pct"] = round(safe_float(met.get("vel_5m_pct"), 0.0), 3)
+        met["qqq_vel_10m_pct"] = round(
+            safe_float(met.get("vel_10m_pct"), 0.0), 3
+        )
+        met["qqq_bear_drop_amp_pct"] = round(
+            max(2.00, safe_float(met.get("bear_drop_amp_pct"), 2.00)), 2
         )
 
     met["bucket_10m"] = cur_bucket_id
