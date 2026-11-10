@@ -1,29 +1,19 @@
 # -*- coding: utf-8 -*-
 """
-# MODIFIED: quant_engine_core.py (황금시간 07:00~07:50 RSI<=19 올인 클래스·함수·상수 전면 영구 소각 & Case 91 무제한 예비수혈 카운트 및 인출형[단리]/자산증식형[복리] 정량 산출기 & Case 92 1층 공석 +1.00% 상승돌파 시 RSI(14) <= 50.0 필터 탑재)
-인피니트 스노우볼 (Infinite Snowball) v3.0 — 퀀트 엔진 코어 Part 1 / 2 (Step 04 / 13)
+# MODIFIED: quant_engine_core.py (Part 1/2 — 황금시간 07:00~07:50 RSI<=19 올인 전면 영구 소각 &
+# Case 91 무제한 예비수혈 카운트 · 복리[COMP_08PCT] ➔ 단리[SIMPLE_08PCT] ➔ 바벨모드[BARBELL_60_30_10 · SOXL 60% 코어 예산 산출] 확장 &
+# Case 92 1층 공석 +1.00% 상승돌파 시 RSI(14) <= 50.0 필터 탑재)
+인피니트 스노우볼 (Infinite Snowball) v3.0 — 퀀트 엔진 코어 Part 1 / 2
 역할:
 1) 전역 퀀트 상수 락온 (본 그리드 8% 황금비율 · 7-Layer 골디락스 그리드 · DEFAULT_GRID_MERGE_MODE = "L2_L7_MERGE_SORT" [Case 87] ·
    🛡️ 스위치 없는 100% 기본 상시 적용[Default ON] 3-Layer 서브 그리드 4% 정량 · 0.5회분 보호예수 · 최대 4회분[16%] 상한 캡 · SUB_L1_L3_MERGE [Case 88] ·
-   📈 자산증식형[복리 · COMP_08PCT] ⇄ 💵 인출형[단리 · SIMPLE_08PCT] 운용 모드 [Case 91] ·
-   STEP2X_15PCT_C20 · GUARD30 무제한 예비수혈[실계좌 30% 가드 이상 시 횟수 제한 없이 미할당 여유달러 즉시 수혈 및 횟수 카운트 Case 89, Case 91] ·
+   📈 자산증식형[복리 · COMP_08PCT] ➔ 💵 인출형[단리 · SIMPLE_08PCT] ➔ ⚖️ 바벨모드[BARBELL_60_30_10 · SOXL 60% 코어] 3단 운용 모드 [Case 91] ·
+   STEP2X_15PCT_C20 · GUARD30 무제한 예비수혈[Case 89, Case 91] ·
    Case 84 15:30 0주 신규진입 및 1층 공석 돌파추격 차단 ·
    Case 92 1층 공석 +1.00% 상승돌파 시 1분봉 Wilder RSI(14) <= 50.0 필터 REENTRY_BREAKOUT_MAX_RSI_50 = 50.0)
-2) 계좌별 미국 주식 매매 수수료율(GET /api/v1/commissions : 편도 0.07% -> 왕복 0.14% / 편도 0.10% -> 왕복 0.20%) 런타임 동적 동기화 브릿지 탑재 (Case 86)
+2) 계좌별 미국 주식 매매 수수료율 런타임 동적 동기화 브릿지 탑재 (Case 86)
 3) 순수 실물 매수 원가(book_price == actual_avg_price) 구조체 (StratumBucket) ·
-   본 그리드 상단(7층 초과 시 구 1층[새 2층 후보] 보존 + 구 2층 + 구 7층 가중평균 통합 후 평단 오름차순 중간층 재배치 L2_L7_MERGE_SORT · Case 87) 번호 정규화·합병기(relabel_upper_grid_tiers) 및
-   서브 그리드 상단(3층 초과 시 서브 구 1층 + 구 3층 양끝 가중평균 통합 후 오름차순 재배치 SUB_L1_L3_MERGE · Case 88) 번호 정규화·합병기(relabel_sub_upper_grid_tiers)
-4) 본 그리드 8%(12.5분할) & 서브 그리드 4%(25분할) 황금비율 정액 기반 정량 산출기(복리 COMP_08PCT vs 단리 SIMPLE_08PCT 연동 & min(1회분 예산 상한 주수, 기준가 고정 정량) 이중 캡핑 Case 67, Case 88, Case 91) 및
-   본 그리드 0.5회분(4.0%) 보호예수금 차감 서브 가용 유휴 현금 산출기(compute_sub_grid_available_idle_cash · Case 88, Case 91)
-5) 30% 자투리 1주 승격 방지 가드(GUARD30) & 토스 실계좌 주문가능금액이 30% 가드 이상일 때 횟수 제한 없이 미할당 여유자금 즉시 온디맨드 예비시드 자동 수혈 판정기(Case 77, Case 89, Case 91) 및
-   0주 전량 졸업 시 예비시드 원금 자동 상환 연산기(Case 77, Case 91)
-6) 사이클 최고 도달 회차(eff_lots = max(held_lots, cycle_ratchet_max_lots)) 잠금 기반 4단 와이드 점진 활주로(1~4회 -1.0% / 5~8회 -2.0% / 9~10회 -3.5% / 11회+ -5.5% · Case 87, Case 88) ·
-   1층 공석 시 2층 단가 상한 역전 차단(HOLD_PREVENT_INVERSION · Case 73) 기반 눌림목(-1.00% 무필터)/상승돌파(+1.00% & RSI(14) <= 50.0 필터 · Case 92) 하이브리드 재장전 판정기
-   (Case 84: 15:30 ~ 16:00 EST 구간에서는 1층 공석 +1.00% 상승돌파 추격을 HOLD_LATE_SESSION_BREAKOUT_CUTOFF 로 원천 차단하고,
-    Case 92: 04:07 ~ 15:29 EST 구간에서 +1.00% 상승돌파 도달 시 RSI(14) > 50.0 과열 구간이면 HOLD_BREAKOUT_RSI_OVER_50 으로 차단하여 저점 -1.00% 눌림목으로 유도!) ·
-   본 그리드 3중 안전문(보유 2층 이하 & 현금비중 20%+ & 저점대비 2.0배+ 반등) 통과 시 -15.0% 스텝업 저가 해금 판정기(Case 76) 및
-   서브 그리드 최대 4회분(16%) 상한 캡 검문 & 10영업일 무매매·서브 1층 대비 -10.0% 저가 해금 판정기(evaluate_sub_grid_dip_signal · Case 88)
-- 제1헌법 ~ 제6헌법 및 Case 01 ~ 92 완벽 준수
+   본 그리드 상단(L2_L7_MERGE_SORT · Case 87) 및 서브 그리드 상단(SUB_L1_L3_MERGE · Case 88) 번호 정규화·합병기
 """
 
 from __future__ import annotations
@@ -38,7 +28,6 @@ from toss_api import safe_float, safe_int
 
 logger = logging.getLogger("toss_sniper.quant_engine_core")
 
-# toss_api.py 내부 상수 존재 여부와 무관하게 100% 안전하게 작동하는 자립형 폴백 상수 정의
 DEFAULT_INITIAL_SEED_USD: float = float(
     getattr(toss_api, "DEFAULT_INITIAL_SEED_USD", 10000.0)
 )
@@ -55,12 +44,25 @@ ROUND_TRIP_FEE_RATE_PCT: float = float(
     getattr(toss_api, "ROUND_TRIP_FEE_RATE_PCT", 0.14)
 )
 
-# NEW [Case 91 : 📈 자산증식형(복리 · COMP_08PCT) vs 💵 인출형(단리 · SIMPLE_08PCT) 운용 모드 상수]
+# MODIFIED [Case 91 + 바벨 확장 : 📈 복리(COMP_08PCT) ➔ 💵 단리(SIMPLE_08PCT) ➔ ⚖️ 바벨(BARBELL_60_30_10) 상수]
 PORTION_MODE_COMPOUND: str = "COMP_08PCT"
 PORTION_MODE_SIMPLE: str = "SIMPLE_08PCT"
+PORTION_MODE_BARBELL: str = "BARBELL_60_30_10"
+
+BARBELL_SOXL_WEIGHT: float = float(
+    getattr(toss_api, "BARBELL_SOXL_WEIGHT", 0.60)
+)
+BARBELL_SGOV_WEIGHT: float = float(
+    getattr(toss_api, "BARBELL_SGOV_WEIGHT", 0.30)
+)
+BARBELL_CASH_WEIGHT: float = float(
+    getattr(toss_api, "BARBELL_CASH_WEIGHT", 0.10)
+)
+
 VALID_PORTION_MODES: Tuple[str, ...] = (
     "COMP_08PCT",
     "SIMPLE_08PCT",
+    "BARBELL_60_30_10",
     "FIXED_800",
 )
 
@@ -68,7 +70,6 @@ VALID_PORTION_MODES: Tuple[str, ...] = (
 BASE_MAX_LOTS_8PCT: int = 12
 MAX_GRID_TIERS_7: int = int(getattr(toss_api, "MAX_GRID_TIERS_7", 7))
 MAX_GRID_TIERS: int = MAX_GRID_TIERS_7
-# 타 모듈 AST 심볼 임포트 호환을 위해 MAX_GRID_TIERS_12 별칭을 7 로 동시 유지
 MAX_GRID_TIERS_12: int = MAX_GRID_TIERS_7
 
 # [Case 87 : 👑 06_L2L7_RATCHET_8PCT — 7층 초과(8층 발생) 시 구 1층 보존 + 구 2층 + 구 7층 통합 후 평단 오름차순 중간층 재배치 모드]
@@ -109,7 +110,6 @@ SUB_UNLOCK_DROP_FROM_L1_PCT: float = float(
 # 🎯 4 & Case 59, Case 71, Case 72, Case 73, Case 84, Case 88, Case 92: 상단 그리드 보유 중 1층 공석 시 60초 주기 눌림목/상승돌파 임계치(%) 및 돌파 RSI 상한(50.0)
 REENTRY_PULLBACK_DROP_PCT: float = -1.00
 REENTRY_BREAKOUT_RISE_PCT: float = 1.00
-# NEW [Case 92 : 1층 공석 +1.00% 상승돌파(BREAKOUT_RELOAD) 전용 1분봉 Wilder RSI(14) <= 50.0 필터 상한 상수]
 REENTRY_BREAKOUT_MAX_RSI_50: float = float(
     getattr(toss_api, "REENTRY_BREAKOUT_MAX_RSI_50", 50.0)
 )
@@ -152,11 +152,23 @@ RESERVE_DEPOSIT_TOLERANCE_RATIO: float = float(
 
 
 # ---------------------------------------------------------------------------
-# [핵심 0 · Case 86 & Case 91] 계좌별 미국 주식 수수료율 런타임 브릿지 및 운용 모드(복리/단리) 예산 기준자산 리졸버
+# [핵심 0 · Case 86, Case 91 & 바벨 확장] 계좌별 미국 주식 수수료율 브릿지 및 3단 운용 모드(복리/단리/바벨) 예산 기준자산 리졸버
 # ---------------------------------------------------------------------------
+def is_barbell_mode(portion_mode: Any) -> bool:
+    """
+    # NEW:
+    현재 운용 모드가 ⚖️ 바벨 모드(BARBELL_60_30_10 · SOXL 60% / SGOV 30% / 현금 10%)인지 판별한다.
+    """
+    return str(portion_mode or "").upper().strip() in (
+        "BARBELL_60_30_10",
+        "BARBELL",
+        "BARBELL_04PCT",
+    )
+
+
 def is_simple_income_mode(portion_mode: Any) -> bool:
     """
-    # NEW [Case 91]:
+    # [Case 91]:
     현재 운용 모드가 💵 인출형(단리 · 설정 기준시드의 8% / 서브 4% 고정 · 채굴 수익 현금 적립 및 일일 인출)인지 판별한다.
     """
     return str(portion_mode or PORTION_MODE_COMPOUND).upper().strip() in (
@@ -167,30 +179,43 @@ def is_simple_income_mode(portion_mode: Any) -> bool:
     )
 
 
+def next_cycled_portion_mode(cur_mode: Any) -> str:
+    """
+    # NEW:
+    운용 정량모드 3단 순환기:
+    COMP_08PCT(복리) ➔ SIMPLE_08PCT(단리) ➔ BARBELL_60_30_10(바벨) ➔ COMP_08PCT(복리)
+    """
+    if is_barbell_mode(cur_mode):
+        return PORTION_MODE_COMPOUND
+    if is_simple_income_mode(cur_mode):
+        return PORTION_MODE_BARBELL
+    return PORTION_MODE_SIMPLE
+
+
 def resolve_portion_budget_base_equity(
     initial_seed_usd: float,
     core_equity_usd: float,
     portion_mode: str = PORTION_MODE_COMPOUND,
 ) -> float:
     """
-    # NEW [Case 91]:
-    - 💵 인출형(단리 · SIMPLE_08PCT / FIXED_800) 모드일 때는 누적 수익과 무관하게 항상 설정 기준 시드(initial_seed_usd)를 반환하여
-      1회분 예산(본 8% / 서브 4% / 보호예수 4%)을 고정하고, 채굴된 수익금은 현금 금고(자체 수혈 탄창 및 일일 인출 재원)로 보존한다.
+    # MODIFIED [Case 91 + 바벨 모드 확장]:
+    - ⚖️ 바벨 모드(BARBELL_60_30_10)일 때는 설정 기준 시드(initial_seed_usd)의 60%(BARBELL_SOXL_WEIGHT)를
+      SOXL 코어 기준자산으로 고정 반환하여 본 1회분(8% = 전체의 4.8%) / 서브 1회분(4% = 전체의 2.4%) / 보호예수(4%)를 산출한다.
+    - 💵 인출형(단리 · SIMPLE_08PCT / FIXED_800) 모드일 때는 설정 기준 시드(initial_seed_usd)를 반환한다.
     - 📈 자산증식형(복리 · COMP_08PCT) 모드일 때는 순수 코어 총자산(core_equity_usd)을 반환하여 1회분 예산을 복리 증액한다.
     """
     init_s = max(
         100.0, safe_float(initial_seed_usd, DEFAULT_INITIAL_SEED_USD)
     )
     core_eq = max(init_s, safe_float(core_equity_usd, init_s))
+    if is_barbell_mode(portion_mode):
+        return round(init_s * BARBELL_SOXL_WEIGHT, 4)
     if is_simple_income_mode(portion_mode):
         return round(init_s, 4)
     return round(core_eq, 4)
 
 
 def get_runtime_us_commission_rate() -> float:
-    """
-    현재 프로세스에 락온된 미국 주식 편도 수수료율(소수 비율, 기본 0.0007)을 반환한다.
-    """
     fn = getattr(toss_api, "get_runtime_us_commission_rate", None)
     if callable(fn):
         return safe_float(fn(), DEFAULT_US_COMMISSION_RATE)
@@ -198,9 +223,6 @@ def get_runtime_us_commission_rate() -> float:
 
 
 def get_runtime_round_trip_fee_rate_pct() -> float:
-    """
-    현재 프로세스에 락온된 미국 주식 왕복 수수료율(%, 기본 0.14 / 0.10% 계좌는 0.20)을 반환한다.
-    """
     fn = getattr(toss_api, "get_runtime_round_trip_fee_rate_pct", None)
     if callable(fn):
         val = safe_float(fn(), ROUND_TRIP_FEE_RATE_PCT)
@@ -213,9 +235,6 @@ def set_runtime_round_trip_fee_rate_pct(
     round_trip_pct: float,
     us_commission_rate: Optional[float] = None,
 ) -> float:
-    """
-    계좌별 왕복 수수료율(%)을 런타임 메모리에 동기화한다.
-    """
     fn = getattr(toss_api, "set_runtime_round_trip_fee_rate_pct", None)
     if callable(fn):
         return safe_float(
@@ -229,10 +248,6 @@ def resolve_effective_round_trip_fee_rate_pct(
     explicit_rate_pct: Optional[float] = None,
     state_dict: Optional[Dict[str, Any]] = None,
 ) -> float:
-    """
-    명시적 인자 -> 원장 상태(state_dict["round_trip_fee_rate_pct"]) -> 런타임 메모리 -> 기본 상수(0.14%) 순으로
-    유효 왕복 수수료율(%)을 결정한다.
-    """
     if explicit_rate_pct is not None:
         v = safe_float(explicit_rate_pct, 0.0)
         if 0.0 < v <= 2.0:
@@ -252,12 +267,6 @@ def resolve_effective_round_trip_fee_rate_pct(
 # ---------------------------------------------------------------------------
 @dataclass
 class StratumBucket:
-    """
-    🎯 3 & Case 46 ~ 88:
-    SOXL 본 그리드(1층 ~ 7층 골디락스 멀티 그리드 : 1층 공격수 L1 / 2층 ~ 7층 개별 완충층 및 구 2층+구 7층 중간합병 본대 GRID_L2 ~ GRID_L7) 및
-    Default-ON 서브 그리드(1층 ~ 3층 멀티 그리드 : 서브 1층 공격수 SUB_L1 / 2층 ~ 3층 완충층 및 구 1층+구 3층 양끝합병 본대 GRID_L2 ~ GRID_L3) 공용 데이터 구조체.
-    """
-
     qty: int
     book_price: float
     book_invested_usd: float
@@ -356,9 +365,6 @@ def buckets_to_dicts(
 # [핵심 1-B · Case 69, Case 71, Case 72, Case 87 & Case 88] 그리드 층 판별기 · 본 그리드 구 2층+구 7층 통합 중간배치기 · 서브 그리드 구 1층+구 3층 양끝 합병기 & 진성 손익분기점 하한선 정규화기
 # ---------------------------------------------------------------------------
 def is_upper_grid_tier(bucket_or_lot_type: Any) -> bool:
-    """
-    🚨 [Case 71, Case 72 & Case 88 상단 그리드(본 2층 ~ 7층 / 서브 2층 ~ 3층) 여부 결정론적 판별기]:
-    """
     if isinstance(bucket_or_lot_type, StratumBucket):
         tag = str(bucket_or_lot_type.lot_type or "").upper().strip()
     elif isinstance(bucket_or_lot_type, dict):
@@ -376,9 +382,6 @@ def is_upper_grid_tier(bucket_or_lot_type: Any) -> bool:
 
 
 def has_active_l1_bucket(buckets: Sequence[StratumBucket]) -> bool:
-    """
-    🚨 [Case 71, Case 72 & Case 88 활성 1층 공격수 보유 여부 판별기 (본 그리드 및 서브 그리드 공용)]:
-    """
     valid = [
         b
         for b in (buckets or [])
@@ -394,18 +397,6 @@ def relabel_upper_grid_tiers(
     max_tiers: int = MAX_GRID_TIERS_7,
     merge_mode: str = DEFAULT_GRID_MERGE_MODE,
 ) -> List[StratumBucket]:
-    """
-    # [Case 53, Case 71, Case 72 & Case 87 : 👑 06_L2L7_RATCHET_8PCT — 구 1층 보존 + 구 2층 + 구 7층 통합 후 평단 오름차순 중간층 재배치]:
-    본 그리드 상단 지층 배열(valid)의 개수가 max_upper_cnt (6개 : GRID_L2 ~ GRID_L7)를 초과할 때:
-    1) merge_mode == "L2_L7_MERGE_SORT" (기본 확정 챔피언) 이고 len(valid) >= 3 인 경우:
-       - 가장 저렴한 최하단 상단층인 valid[0] (구 1층 -> 새 2층 후보)은 합병하지 않고 온전히 보존(kept_lowest_upper = [valid[0]])하여
-         Case 73 (1층 > 2층 단가 역전 차단 상한 가드)을 촘촘하게 사수한다.
-       - 이미 상단으로 한 칸 올라간 low_b = valid[1] (구 2층)과 최상단 high_b = valid[-1] (구 7층)의 수량·원금·회차를 가중평균 합산하고
-         Case 53 상한 하드 캡핑(min(raw_upper_p, overall_book_avg))을 적용하여 합병 본대(merged_bucket)를 생성한다.
-       - kept_lowest_upper + valid[2:-1] + [merged_bucket] 총 6개 상단 지층 후보를 단가(book_price) 오름차순으로 정렬하여
-         고점 물량이 중간층(3층 ~ 6층)으로 내려와 중간 반등(+1.00%)에서 개별 익절로 조기 탈출하도록 가속한다!
-    2) 모든 상단 지층을 GRID_L2 ~ GRID_L7 로 정규화하여 반환한다.
-    """
     valid = [
         b
         for b in (upper_buckets or [])
@@ -488,9 +479,6 @@ def relabel_sub_upper_grid_tiers_with_flag(
     max_tiers: int = SUB_MAX_TIERS_3,
     merge_mode: str = SUB_MERGE_MODE_L1_L3,
 ) -> Tuple[List[StratumBucket], bool]:
-    """
-    # [Case 88 : 🛡️ 13_SUB_L1L3_RESV05_CAP4L — 3층 서브 그리드 초과(4층 발생) 시 서브 구 1층 + 구 3층 양끝 합병(SUB_L1_L3_MERGE) 및 오름차순 재배치]:
-    """
     valid = [
         b
         for b in (sub_upper_buckets or [])
@@ -586,9 +574,6 @@ def enforce_true_breakeven_floor_on_buckets(
     buckets: Sequence[StratumBucket],
     max_allowed_discount_usd: Optional[float] = None,
 ) -> List[StratumBucket]:
-    """
-    🚨 [Case 69, Case 71, Case 72 & Case 88 진성 손익분기점(순수 매수 원가) 하한선 강제]:
-    """
     valid = [
         b
         for b in (buckets or [])
@@ -613,7 +598,7 @@ def enforce_true_breakeven_floor_on_buckets(
         )
     return adjusted
 # ---------------------------------------------------------------------------
-# [핵심 2] 본 그리드 8%(12.5분할) & 서브 그리드 4%(25분할) 정량 주수(복리/단리 연동) · 유휴현금(0.5회분 보호예수) · GUARD30 판정 · 무제한 온디맨드 수혈/상환기 (🎯 1 & Case 25 ~ 35, 67, 77, 86, 88, 89, 91)
+# [핵심 2] 본 그리드 8%(12.5분할) & 서브 그리드 4%(25분할) 정량 주수(복리/단리/바벨 연동) · 유휴현금(0.5회분 보호예수) · GUARD30 판정 · 무제한 온디맨드 수혈/상환기
 # ---------------------------------------------------------------------------
 def compute_golden8_quota_qty(
     anchor_price: float,
@@ -624,37 +609,50 @@ def compute_golden8_quota_qty(
     portion_ratio: Optional[float] = None,
 ) -> Tuple[int, float]:
     """
-    # MODIFIED [🎯 1 & Case 25 ~ 35, Case 67, Case 77, Case 88 & Case 91]:
+    # MODIFIED [🎯 1 & Case 25 ~ 35, Case 67, Case 77, Case 88, Case 91 & 바벨 모드 확장]:
     직전 매매 기준가(anchor_price)를 기반으로 황금비율(본 그리드 8% / 서브 그리드 4%) 1회분 예산(portion_budget)과
     고정 목표 매수 주수(anchor_quota_qty)를 산출한다.
-    - 💵 인출형(단리 · SIMPLE_08PCT / FIXED_800) 모드일 때는 누적 수익과 무관하게 항상 설정 기준 시드(init_seed)의 8%(서브 4%)로
-      1회분 예산(portion_budget)을 고정한다.
-    - 📈 자산증식형(복리 · COMP_08PCT) 모드일 때는 순수 코어 총자산(tot_eq)의 8%(서브 4%)로 1회분 예산을 동적 복리 증액한다.
-    - 실제 매수 지정가(exec_price)가 제공된 경우 상승 돌파 등으로 인해 1회분 예산을 초과하지 않도록
-      min(budget_cap_qty, anchor_quota_qty)로 캡핑한다.
+    - ⚖️ 바벨 모드(BARBELL_60_30_10): 설정 시드의 60%(SOXL 코어 시드)에 대해 8%(서브 4%) 고정 산출.
+    - 💵 인출형(단리 · SIMPLE_08PCT / FIXED_800): 설정 시드(100%)의 8%(서브 4%) 고정 산출.
+    - 📈 자산증식형(복리 · COMP_08PCT): 순수 코어 총자산(tot_eq)의 8%(서브 4%) 동적 복리 증액.
     반환값: (target_qty, portion_budget)
     """
     init_seed = max(
         100.0, safe_float(initial_seed_usd, DEFAULT_INITIAL_SEED_USD)
     )
-    tot_eq = max(init_seed, safe_float(current_total_equity, init_seed))
     mode = str(portion_mode or PORTION_MODE_COMPOUND).upper().strip()
+    min_eq_floor = (
+        init_seed * BARBELL_SOXL_WEIGHT
+        if is_barbell_mode(mode)
+        else init_seed
+    )
+    tot_eq = max(
+        min_eq_floor, safe_float(current_total_equity, min_eq_floor)
+    )
 
     if portion_ratio is not None and safe_float(portion_ratio, 0.0) > 0.0:
         eff_ratio = safe_float(portion_ratio, PORTION_RATIO_LOCKED)
-    elif mode in ("SUB_04PCT", "COMP_04PCT", "SIMPLE_04PCT"):
+    elif mode in (
+        "SUB_04PCT",
+        "COMP_04PCT",
+        "SIMPLE_04PCT",
+        "BARBELL_04PCT",
+    ):
         eff_ratio = SUB_PORTION_RATIO_4PCT
     else:
         eff_ratio = PORTION_RATIO_LOCKED
 
+    if is_barbell_mode(mode):
+        eff_p_mode = PORTION_MODE_BARBELL
+    elif is_simple_income_mode(mode) or mode == "SIMPLE_04PCT":
+        eff_p_mode = PORTION_MODE_SIMPLE
+    else:
+        eff_p_mode = PORTION_MODE_COMPOUND
+
     base_eq = resolve_portion_budget_base_equity(
         initial_seed_usd=init_seed,
         core_equity_usd=tot_eq,
-        portion_mode=(
-            PORTION_MODE_SIMPLE
-            if (is_simple_income_mode(mode) or mode == "SIMPLE_04PCT")
-            else PORTION_MODE_COMPOUND
-        ),
+        portion_mode=eff_p_mode,
     )
     portion_budget = round(base_eq * eff_ratio, 4)
 
@@ -681,15 +679,17 @@ def compute_sub4_quota_qty(
     portion_mode: str = PORTION_MODE_COMPOUND,
 ) -> Tuple[int, float]:
     """
-    # MODIFIED [Case 88 & Case 91 : 🛡️ 13_SUB_L1L3_RESV05_CAP4L — 3층 서브 그리드 전용 4.0%(25분할) 정량 주수 산출기 (복리/단리 모드 연동)]:
-    - 📈 자산증식형(복리 · COMP_08PCT): 순수 코어 총자산(current_core_equity)의 4.0%를 서브 1회분 예산으로 산출한다.
-    - 💵 인출형(단리 · SIMPLE_08PCT): 설정 기준 시드(initial_seed_usd)의 4.0%를 서브 1회분 예산으로 고정 산출한다.
+    # MODIFIED [Case 88, Case 91 & 바벨 모드 확장 : 3층 서브 그리드 전용 4.0%(25분할) 정량 주수 산출기]:
+    - 📈 자산증식형(복리 · COMP_08PCT): 순수 코어 총자산의 4.0% 산출
+    - 💵 인출형(단리 · SIMPLE_08PCT): 설정 기준 시드(100%)의 4.0% 고정 산출
+    - ⚖️ 바벨 모드(BARBELL_60_30_10): SOXL 코어 시드(60%)의 4.0% 고정 산출
     """
-    sub_mode = (
-        "SIMPLE_04PCT"
-        if is_simple_income_mode(portion_mode)
-        else "SUB_04PCT"
-    )
+    if is_barbell_mode(portion_mode):
+        sub_mode = "BARBELL_04PCT"
+    elif is_simple_income_mode(portion_mode):
+        sub_mode = "SIMPLE_04PCT"
+    else:
+        sub_mode = "SUB_04PCT"
     return compute_golden8_quota_qty(
         anchor_price=sub_anchor_price,
         current_total_equity=current_core_equity,
@@ -709,20 +709,24 @@ def compute_sub_grid_available_idle_cash(
     portion_mode: str = PORTION_MODE_COMPOUND,
 ) -> Dict[str, Any]:
     """
-    # MODIFIED [Case 88 & Case 91 : 본 그리드 보호예수금 0.5회분(4.0%) 차감 후 서브 그리드 가용 유휴 현금(avail_idle_cash_usd) 산출기 (복리/단리 연동)]:
+    # MODIFIED [Case 88, Case 91 & 바벨 모드 확장 : 본 그리드 보호예수금 0.5회분(4.0%) 차감 후 서브 그리드 가용 유휴 현금 산출기]:
     """
     f_cash = max(0.0, safe_float(free_cash_usd, 0.0))
-    c_eq = max(
-        DEFAULT_INITIAL_SEED_USD,
-        safe_float(core_equity_usd, DEFAULT_INITIAL_SEED_USD),
-    )
     init_s = max(
         100.0,
         safe_float(
-            initial_seed_usd if initial_seed_usd is not None else c_eq,
+            initial_seed_usd
+            if initial_seed_usd is not None
+            else core_equity_usd,
             DEFAULT_INITIAL_SEED_USD,
         ),
     )
+    min_core_floor = (
+        init_s * BARBELL_SOXL_WEIGHT
+        if is_barbell_mode(portion_mode)
+        else init_s
+    )
+    c_eq = max(min_core_floor, safe_float(core_equity_usd, min_core_floor))
     res_mult = max(
         0.0, safe_float(reserve_main_portions, SUB_RESERVE_MAIN_PORTIONS)
     )
@@ -766,9 +770,6 @@ def resolve_affordable_buy_qty(
     max_portion_budget_usd: Optional[float] = None,
     round_trip_fee_rate_pct: Optional[float] = None,
 ) -> Tuple[int, float]:
-    """
-    # [Case 25 ~ 35, Case 67, Case 86, Case 88 & Case 91 계좌별 동적 왕복 수수료율 및 실계좌 예수금 캡핑 연동]:
-    """
     t_qty = max(0, safe_int(target_qty, 0))
     exec_p = safe_float(price_t, 0.0)
     if t_qty <= 0 or exec_p <= 0.0:
@@ -819,20 +820,16 @@ def evaluate_guard30_and_reserve_injection(
     round_trip_fee_rate_pct: Optional[float] = None,
 ) -> Dict[str, Any]:
     """
-    # MODIFIED [Case 77, Case 86, Case 89 & Case 91 : 💉 GUARD30 — 30% 자투리 1주 승격 방지 가드 & 6회 수혈 제한 전면 해제(실계좌 30% 가드 이상 보유 시 횟수 제한 없이 미할당 여유자금 즉시 온디맨드 자동 수혈 및 수혈 횟수 카운트)]:
-    - 장부 가용현금(f_cash)이 30% 가드(min_req_cash) 미만이더라도,
-      토스 실계좌 주문가능금액(eff_bp)이 30% 가드(min_req_cash) 이상이고
-      미할당 여유 달러(unallocated_deposit_usd = eff_bp - f_cash > 0)가 존재하여
-      (f_cash + unallocated_deposit_usd) >= min_req_cash 를 충족하면,
-      수혈 횟수 상한(구 6회 제한)에 가로막히지 않고 현재 계좌의 미할당 여유 달러를 즉시 무제한 자동 수혈(INJECT_AND_PROCEED)하고
-      누적/현재 수혈 횟수만 카운트하여 1회분의 30% 이상 자금 보유 시 매수가 절대 누락되지 않도록 보장한다!
+    # [Case 77, Case 86, Case 89 & Case 91 : 💉 GUARD30 — 30% 자투리 1주 승격 방지 가드 & 무제한 온디맨드 수혈 판정기]
     """
     f_cash = max(0.0, safe_float(free_cash_usd, 0.0))
     ex_p = max(0.01, safe_float(exec_price, 0.01))
     p_bud = max(0.01, safe_float(portion_budget, 800.0))
     l1_cost = max(0.0, safe_float(l1_actual_cost_usd, 0.0))
     used_cnt = max(0, safe_int(used_reserve_portions_cnt, 0))
-    max_res = max(used_cnt + 1, safe_int(max_reserve_portions, MAX_RESERVE_PORTIONS))
+    max_res = max(
+        used_cnt + 1, safe_int(max_reserve_portions, MAX_RESERVE_PORTIONS)
+    )
     rem_portions = max(0, max_res - used_cnt)
 
     eff_rt_pct = resolve_effective_round_trip_fee_rate_pct(
@@ -894,7 +891,6 @@ def evaluate_guard30_and_reserve_injection(
     )
     required_inj_usd = round(float(needed_portions) * p_bud, 4)
 
-    # MODIFIED [Case 89 & Case 91 : 6회 한도 제한 제거 — 토스 실계좌 주문가능금액(eff_bp)이 30% 가드 이상이고 미할당 여유 달러로 가드 충족 시 횟수 제한 없이 즉시 수혈 승인]
     if (
         eff_bp >= min_req_cash
         and unallocated_deposit_usd > 0.0
@@ -956,19 +952,33 @@ def compute_reserve_repayment_on_zero(
     used_reserve_portions_cnt: int,
     max_reserve_portions: int = MAX_RESERVE_PORTIONS,
     portion_mode: str = PORTION_MODE_COMPOUND,
+    vaulted_profit_locked_usd: float = 0.0,
 ) -> Dict[str, Any]:
     """
-    # MODIFIED [Case 77, Case 88 & Case 91 : 0주 전량 졸업 시 온디맨드 예비시드 원금 자동 상환 및 잔여 수혈 횟수 정산기 (무제한 수혈 카운트 호환)]:
+    # MODIFIED [Case 77, Case 88, Case 91 & 바벨 모드 확장 : 0주 전량 졸업 시 예비시드 원금 자동 상환 및 잔여 수혈 횟수 정산기]:
     """
     init_seed = max(
         100.0, safe_float(initial_seed_usd, DEFAULT_INITIAL_SEED_USD)
     )
     cum_net = round(safe_float(cumulative_realized_net_usd, 0.0), 4)
     inj_usd = round(max(0.0, safe_float(injected_reserve_usd, 0.0)), 4)
+    v_locked = round(max(0.0, safe_float(vaulted_profit_locked_usd, 0.0)), 4)
     used_cnt = max(0, safe_int(used_reserve_portions_cnt, 0))
     max_res = max(1, safe_int(max_reserve_portions, MAX_RESERVE_PORTIONS))
 
-    total_cash_before = round(max(0.0, init_seed + cum_net + inj_usd), 4)
+    if is_barbell_mode(portion_mode):
+        soxl_core_60 = round(init_seed * BARBELL_SOXL_WEIGHT, 4)
+        return {
+            "did_repay": bool(inj_usd > 0.0),
+            "repaid_usd": inj_usd,
+            "rem_injected_reserve_usd": 0.0,
+            "rem_used_reserve_portions_cnt": 0,
+            "avail_reserve_portions": max_res,
+            "free_cash_after_repay_usd": soxl_core_60,
+        }
+
+    eff_realized = cum_net - v_locked
+    total_cash_before = round(max(0.0, init_seed + eff_realized + inj_usd), 4)
     if inj_usd <= 0.0:
         return {
             "did_repay": False,
@@ -989,7 +999,7 @@ def compute_reserve_repayment_on_zero(
     else:
         base_eq = resolve_portion_budget_base_equity(
             initial_seed_usd=init_seed,
-            core_equity_usd=(init_seed + max(0.0, cum_net)),
+            core_equity_usd=(init_seed + max(0.0, eff_realized)),
             portion_mode=portion_mode,
         )
         est_portion_unit = max(1.0, base_eq * PORTION_RATIO_LOCKED)
@@ -998,7 +1008,9 @@ def compute_reserve_repayment_on_zero(
             min(used_cnt, est_cnt) if used_cnt > 0 else est_cnt
         )
 
-    free_cash_after = round(max(0.0, init_seed + cum_net + rem_inj_usd), 4)
+    free_cash_after = round(
+        max(0.0, init_seed + eff_realized + rem_inj_usd), 4
+    )
     return {
         "did_repay": bool(repaid_usd > 0.0),
         "repaid_usd": repaid_usd,
@@ -1010,21 +1022,13 @@ def compute_reserve_repayment_on_zero(
 
 
 # ---------------------------------------------------------------------------
-# [핵심 3] 사이클 최고 도달 회차 잠금 기반 4단 와이드 점진 단차(Case 87, 88) · 하이브리드 1층 재장전(Case 84 돌파차단 & Case 92 돌파 RSI(14) <= 50.0 필터) · 본 그리드 STEP2X_15PCT_C20 스텝업 해금(Case 76) · 서브 그리드 최대 4회분 캡 및 10일/-10% 저가 해금 판정기 (Case 36 ~ 92)
+# [핵심 3] 사이클 최고 도달 회차 잠금 기반 4단 와이드 점진 단차(Case 87, 88) · 하이브리드 1층 재장전(Case 84 돌파차단 & Case 92 돌파 RSI<=50) · STEP2X 스텝업 해금 · 서브 4회분 캡 판정기
 # ---------------------------------------------------------------------------
 def get_golden8_prog_thresholds(
     held_lots: int,
     threshold_mode: Any = "WIDE_RUNWAY",
     cycle_ratchet_max_lots: int = 0,
 ) -> Tuple[float, float, float]:
-    """
-    # [🎯 2 & Case 36 ~ 45, 60, 71, 72, Case 87 & Case 88 : 사이클 최고 도달 회차(cycle_ratchet_max_lots / sub_ratchet_max_lots) 잠금 기반 4단 와이드 점진 활주로]:
-    중간 합병층이나 하단 완충층이 개별 익절로 먼저 빠져나가 현재 보유 회차(held_lots)가 줄어들더라도,
-    0주 졸업(또는 STEP2X / SUB_UNLOCK 저가 해금) 전까지는 이번 사이클 최고 도달 회차(cycle_ratchet_max_lots)를 기준으로
-    eff_lots = max(1, held_lots, cycle_ratchet_max_lots) 를 산출하여 4단 와이드 단차가 풀리는 현상을 원천 봉쇄한다!
-    (get_golden8_prog_thresholds(held_lots, "WIDE_RUNWAY", cycle_ratchet_max_lots) 및
-     get_golden8_prog_thresholds(held_lots, cycle_ratchet_max_lots) 양방향 호출 시그니처 100% 호환)
-    """
     if isinstance(threshold_mode, (int, float)) and not isinstance(
         threshold_mode, bool
     ):
@@ -1062,18 +1066,6 @@ def evaluate_l2_only_hybrid_reentry_signal(
     rsi_14: Optional[float] = None,
     breakout_max_rsi: float = REENTRY_BREAKOUT_MAX_RSI_50,
 ) -> Dict[str, Any]:
-    """
-    # MODIFIED [🎯 4 & Case 59, Case 67, Case 71, Case 72, Case 73, Case 84, Case 88 & Case 92]:
-    본 그리드 상단 2층 ~ 7층(GRID_L2 ~ GRID_L7) 또는 서브 그리드 상단 2층 ~ 3층(GRID_L2 ~ GRID_L3) 지층이 존재하는 상태에서 1층이 공석일 때:
-    - 현재가 > 2층 단가(ceil_p) 시에는 1층 > 2층 단가 역전을 막기 위해 HOLD_PREVENT_INVERSION 으로 차단(Case 73)하고,
-    - 현재가 <= 2층 단가 안전 영역 내에서는:
-      1) 직전 익절가 대비 -1.00% 이하 눌림목(PULLBACK_RELOAD)은 무필터(RSI 무관)로 04:07 ~ 16:00 EST 전 매수 구간에서 100% 정상 승인하고,
-      2) 직전 익절가 대비 +1.00% 이상 상승돌파(BREAKOUT_RELOAD)는:
-         - 정규장 마감 30분 전(15:30 ~ 16:00 EST, late_cutoff == True) 구간에서는 HOLD_LATE_SESSION_BREAKOUT_CUTOFF 로 원천 차단(Case 84)하며,
-         - 04:07 ~ 15:29 EST 구간에서는 1분봉 Wilder RSI(14) <= 50.0 (breakout_max_rsi) 조건을 결합하여,
-           단기 과열 구간(RSI(14) > 50.0) 돌파는 HOLD_BREAKOUT_RSI_OVER_50 으로 차단해 저점 -1.00% 눌림목 진입으로 유도하고
-           과매도 회복 초입(RSI(14) <= 50.0) 진성 추세 전환 돌파만 승인한다! (Case 92)
-    """
     lp = safe_float(live_price, 0.0)
     anc = safe_float(anchor_price, 0.0)
     b2_p = safe_float(l2_book_price, 0.0)
@@ -1134,7 +1126,6 @@ def evaluate_l2_only_hybrid_reentry_signal(
 
     chg_from_exit_pct = ((lp - ref_anchor) / ref_anchor) * 100.0
 
-    # 🚨 [Case 73 핵심 방어 : 현재가 > 2층 단가(ceil_p) 시 1층 > 2층 단가 역전 원천 차단 (후자)]
     if ceil_p > 0.0 and lp > (ceil_p + 1e-6):
         return {
             "should_buy": False,
@@ -1150,7 +1141,6 @@ def evaluate_l2_only_hybrid_reentry_signal(
             "breakout_rsi_blocked": is_breakout_rsi_blocked,
         }
 
-    # 조건 A : -1.00% 이하 눌림목 재장전 (무필터 · 04:07 ~ 16:00 EST 전 매수 구간 100% 정상 허용)
     if chg_from_exit_pct <= REENTRY_PULLBACK_DROP_PCT:
         return {
             "should_buy": True,
@@ -1166,7 +1156,6 @@ def evaluate_l2_only_hybrid_reentry_signal(
             "breakout_rsi_blocked": False,
         }
 
-    # 조건 B : +1.00% 이상 상승돌파 재장전 (Case 84 15:30 돌파 차단 & Case 92 RSI(14) <= 50.0 필터 결합)
     if chg_from_exit_pct >= REENTRY_BREAKOUT_RISE_PCT:
         if late_cutoff:
             return {
@@ -1182,7 +1171,6 @@ def evaluate_l2_only_hybrid_reentry_signal(
                 "breakout_max_rsi": round(max_rsi_cap, 2),
                 "breakout_rsi_blocked": is_breakout_rsi_blocked,
             }
-        # 🚨 [Case 92 핵심 방어 : +1.00% 상승돌파 시 1분봉 Wilder RSI(14) > 50.0 과열 구간이면 고점 추격 차단 -> -1.00% 눌림목 유도]
         if is_breakout_rsi_blocked:
             return {
                 "should_buy": False,
@@ -1239,9 +1227,6 @@ def evaluate_step_up_2x_dip_signal(
     min_rebound_mult: float = STEP_UP_2X_MIN_REBOUND_MULT,
     max_tiers_for_unlock: int = STEP_UP_2X_MAX_TIERS,
 ) -> Dict[str, Any]:
-    """
-    # [🎯 2 Step 1 & Case 60, Case 72, Case 76, Case 87 : 🔓 06_STEP2X_15PCT_C20 3중 안전문 기반 조건부 스텝업 저가 해금 판정기]:
-    """
     valid = [
         b
         for b in (buckets or [])
@@ -1326,7 +1311,6 @@ def evaluate_step_up_2x_dip_signal(
             "next_cycle_min_price": round(eff_min_p, 4),
         }
 
-    # 1) 제1경로 : 기본 정적 최저가 대비 4단 와이드(최고도달회차 잠금 반영) 신저가 도달 시 최우선 승인
     if chg_static_pct <= req_drop:
         return {
             "should_buy": True,
@@ -1378,7 +1362,6 @@ def evaluate_step_up_2x_dip_signal(
             "next_cycle_min_price": round(eff_min_p, 4),
         }
 
-    # 2) 제2경로 : 3중 안전문(step_up_eligible) 통과 & 현재가가 활성 1층 대비 -15.0%(stepped_min_p) 이하 도달 시 스텝업 해금 승인!
     if step_up_eligible and stepped_min_p > 0.0 and lp <= stepped_min_p:
         tag_str = (
             f"UNLOCK_STEP2X_{int(round(s_drop))}P_"
@@ -1428,9 +1411,6 @@ def evaluate_sub_grid_dip_signal(
     unlock_frozen_days: int = SUB_UNLOCK_FROZEN_DAYS_10,
     unlock_drop_pct: float = SUB_UNLOCK_DROP_FROM_L1_PCT,
 ) -> Dict[str, Any]:
-    """
-    # [Case 88 : 🛡️ 13_SUB_L1L3_RESV05_CAP4L — 3층 서브 그리드 10분 게이트 추매 & 최대 4회분(16%) 상한 캡 & 10영업일/-10% 저가 해금 판정기]:
-    """
     valid = [
         sb
         for sb in (sub_buckets or [])
@@ -1490,7 +1470,6 @@ def evaluate_sub_grid_dip_signal(
         else 0.0
     )
 
-    # 🛡️ 최대 누적 합병 회차 상한 캡(4회분 = 코어시드의 16%) 도달 시 서브 추매 원천 차단!
     if sub_cur_total_lots >= max_lots_cap:
         return {
             "should_buy": False,
@@ -1523,7 +1502,6 @@ def evaluate_sub_grid_dip_signal(
             "next_sub_cycle_min_price": round(eff_min_p, 4),
         }
 
-    # 1) 제1경로 : 서브 정적 최저가 대비 4단 와이드 신저가 도달 시 승인
     if chg_static_pct <= req_drop:
         return {
             "should_buy": True,
@@ -1540,7 +1518,6 @@ def evaluate_sub_grid_dip_signal(
             "next_sub_cycle_min_price": round(min(eff_min_p, lp), 4),
         }
 
-    # 2) 제2경로 : 서브 10영업일 이상 무매매 & 서브 1층 대비 -10.0% 이하 도달 시 저가 해금 승인
     if (
         sub_unlock_eligible
         and sub_stepped_min_p > 0.0

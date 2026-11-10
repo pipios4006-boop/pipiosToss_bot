@@ -1,20 +1,14 @@
 # -*- coding: utf-8 -*-
 """
-# MODIFIED: main_runtime.py (Part 1/2 — _call_plugin_adaptive 내 holdings·prices·now_est 자동 보충 방어벽 탑재로 필수 위치 인자 누락 TypeError 원천 봉쇄 · get_candles_1m count/total_count 양방향 호환 및 최대 400분봉[2페이지] 상한 하드 락온 · 일봉 1d 자동 보충 · Case 91 ~ 93 완벽 연동)
-인피니트 스노우볼 (Infinite Snowball) v3.0 — 메인 런타임 서포트 브릿지 (메인 코드 2분할 리팩토링 Part 1 / 2 · Step 13 / 14)
+# MODIFIED: main_runtime.py (Part 1/2 — 바벨 모드[barbell_plugin · SGOV 잔고 정규화 및 /barbell 관제] &
+# [모의 ⇄ 0주예약 ⇄ 실전] 암살자 승격 컨트롤러 결속 · get_candles_1m 최대 400분봉[2페이지] 상한 락온 유지 · Case 86 ~ 93)
+인피니트 스노우볼 (Infinite Snowball) v3.0 — 메인 런타임 서포트 브릿지 (Part 1 / 2)
 - 역할:
-  1) 적응형 비동기 플러그인 호출기(_call_plugin_adaptive : holdings / prices / now_est 누락 시 context 기반 자동 보충 안전망 탑재) 및 동적 심볼 리졸버(_resolve_module_attr) (Case 13)
+  1) 적응형 비동기 플러그인 호출기(_call_plugin_adaptive) 및 동적 심볼 리졸버(_resolve_module_attr) (Case 13)
   2) TossApiClient 런타임 메서드 호환성 폴리필 어댑터(_install_toss_api_compatibility_patches ·
-     get_candles_1m count/total_count 호환 및 최대 400분봉[2페이지] nextBefore 역추적 강제 래핑 ·
-     get_commissions / ensure_us_commission_rate 런타임 수수료 폴백 보존 포함 · Case 86, Case 93)
-  3) 폴더별 3중 원장 인스턴스 팩토리(_instantiate_stratum_ledger · Case 68, Case 87, Case 88, Case 91) 및 주말 휴장 판별(_check_weekend_nyse_closed_dynamic · Case 01, 79, 83)
-  4) 100% 벡터화 1분봉/일봉 지표 및 실시간 틱 Wilder's RSI(14) · 암살자 4대 지표(전일종가·04:07프리시가·프리VWAP) · QQQ 방향성 안전망 지표 무손실 직결(_compute_candle_metrics_dynamic, _compute_qqq_metrics_dynamic)
-  5) 폴더 위치(base_dir) 전용 텔레그램 토큰·채팅방 ID 자동 탐색기(_discover_telegram_credentials · Case 68)
-  6) 내장형 사용자 중심 초슬림 텔레그램 불사조 롱폴링/관제탑 브릿지(_AdaptiveTelegramBridge · tg_ui_plugin 4버튼 단일 렌더러 직결 ·
-     층별 자산($)·10칸 배분 게이지(🟦🟨🟩)·현재 사이클 단위 실현수익 vs 전체 누적 수익·재고 평가착시 3단 해부·전량졸업 예정자산(🎓) ·
-     🗡️ [모의] 암살자 실시간 관제 요약 및 /assassin · /reset_assassin · /mode 명령어 탑재 ·
-     Case 75 httpx/httpcore INFO 로그 묵음화 & Case 81 전용 httpx.AsyncClient 자동 재생성 불사조 폴링 · 오프셋 파일 선행 영속화 · os.execv 인플레이스 자가 교체 · Case 84 ~ 93 완벽 준수)
-- 제1헌법 ~ 제6헌법 및 Case 01 ~ 93 전수 락온
+     SOXL + SGOV 잔고 정규화 · get_candles_1m 최대 400분봉[2페이지] 상한 래핑 · 수수료 폴백 보존 · Case 86, Case 93)
+  3) 폴더별 3중 원장 인스턴스 팩토리(_instantiate_stratum_ledger) 및 주말 휴장 판별(_check_weekend_nyse_closed_dynamic)
+  4) 100% 벡터화 1분봉/일봉 지표 및 QQQ 방향성 안전망 지표 무손실 직결(_compute_candle_metrics_dynamic, _compute_qqq_metrics_dynamic)
 """
 
 from __future__ import annotations
@@ -46,6 +40,7 @@ except Exception:
     _HTTPX_AVAILABLE = False
 
 import assassin_plugin
+import barbell_plugin
 import defense_plugin
 import plugin_updater
 import quant_engine
@@ -53,10 +48,23 @@ import quant_indicators_plugin
 import tg_ui_plugin
 import toss_api
 from assassin_plugin import (
+    ASSASSIN_MODE_SIMULATED,
     build_assassin_detail_dashboard_html,
     ensure_assassin_ledger,
     format_assassin_slim_radar_block,
+    is_live_assassin_standalone_active,
     run_assassin_plugin_tdd,
+    toggle_assassin_live_promotion,
+)
+from barbell_plugin import (
+    BARBELL_SAFE_SYMBOL,
+    PORTION_MODE_BARBELL,
+    build_barbell_detail_dashboard_html,
+    ensure_barbell_ledger,
+    format_barbell_slim_radar_block,
+    initialize_or_sync_barbell_on_mode_enter,
+    is_barbell_mode,
+    run_barbell_plugin_tdd,
 )
 from defense_plugin import reconcile_stratum_with_broker_holdings_plugin
 from plugin_updater import (
@@ -70,6 +78,7 @@ from plugin_updater import (
 from quant_engine import (
     get_runtime_round_trip_fee_rate_pct,
     get_runtime_us_commission_rate,
+    next_cycled_portion_mode,
     set_runtime_round_trip_fee_rate_pct,
     summarize_stratum_portfolio,
 )
@@ -87,6 +96,7 @@ from tg_ui_plugin import (
     _build_settlement_inline_keyboard,
     _format_case67_quota_badge,
     _format_sub_quota_badge,
+    _is_barbell_portion_mode,
     _is_simple_portion_mode,
     build_avwap_radar_message,
     build_settlement_control_message,
@@ -110,7 +120,6 @@ logger = logging.getLogger("toss_sniper.main_runtime")
 
 KRW_PER_USD_DEFAULT: float = 1380.0
 
-# URL("https://...") 오매칭을 100% 차단하는 엄격한 텔레그램 봇 토큰 정규식
 _TG_TOKEN_STRICT_RE = re.compile(r"\b(\d{8,12}:[A-Za-z0-9_-]{25,60})\b")
 
 
@@ -119,39 +128,12 @@ def _escape_html(val: Any) -> str:
 
 
 # ---------------------------------------------------------------------------
-# [핵심 1] Case 13 & Case 62 : 적응형 비동기 플러그인 호출기(필수 인자 자동 보충 탑재) 및 동적 심볼 리졸버
+# [핵심 1] Case 13 & Case 62 : 적응형 비동기 플러그인 호출기 및 동적 심볼 리졸버
 # ---------------------------------------------------------------------------
 async def _call_plugin_adaptive(
     func: Callable[..., Any],
     **kwargs: Any,
 ) -> Any:
-    """
-    🚨 Case 13 (강화판):
-    플러그인 함수의 시그니처(인자 목록 및 **kwargs 수용 여부)를 동적으로 검사하여
-    허용된 인자만 안전하게 주입하고 동기/비동기 함수를 모두 실행한다.
-    - 특히 호출부에서 holdings, prices, now_est 인자를 누락하더라도 context 객체로부터
-      자동으로 복원·주입하여 missing required positional argument (TypeError)를 원천 봉쇄한다!
-    """
-    ctx = kwargs.get("context")
-    if ctx is not None:
-        if "holdings" not in kwargs or kwargs.get("holdings") is None:
-            ctx_h = getattr(ctx, "latest_holdings", None)
-            kwargs["holdings"] = ctx_h if isinstance(ctx_h, dict) else {}
-        if "prices" not in kwargs or kwargs.get("prices") is None:
-            lp_val = safe_float(kwargs.get("live_price"), 0.0)
-            ctx_p = getattr(ctx, "latest_prices", None)
-            if isinstance(ctx_p, dict) and ctx_p:
-                merged_p = dict(ctx_p)
-                if lp_val > 0.0:
-                    merged_p[TARGET_SYMBOL] = lp_val
-                kwargs["prices"] = merged_p
-            elif lp_val > 0.0:
-                kwargs["prices"] = {TARGET_SYMBOL: lp_val}
-            else:
-                kwargs["prices"] = {}
-    if "now_est" not in kwargs or kwargs.get("now_est") is None:
-        kwargs["now_est"] = datetime.now(EST_TZ)
-
     sig = inspect.signature(func)
     accepts_var_kw = any(
         p.kind == inspect.Parameter.VAR_KEYWORD
@@ -175,9 +157,6 @@ def _resolve_module_attr(
     candidate_names: Tuple[str, ...],
     predicate: Optional[Callable[[Any], bool]] = None,
 ) -> Any:
-    """
-    주어진 모듈 목록에서 후보 심볼명을 순차 탐색하거나 조건(predicate)에 부합하는 객체를 반환한다.
-    """
     for mod in modules:
         for name in candidate_names:
             obj = getattr(mod, name, None)
@@ -198,11 +177,12 @@ def _resolve_module_attr(
 
 
 # ---------------------------------------------------------------------------
-# [핵심 2] TossApiClient 런타임 메서드 호환성 폴리필 어댑터 (get_candles_1m 400봉 2페이지 상한 강제 래핑 포함)
+# [핵심 2] TossApiClient 런타임 메서드 호환성 폴리필 어댑터 (SOXL + SGOV 잔고 정규화 및 400봉 락온)
 # ---------------------------------------------------------------------------
-def _empty_soxl_holding_entry() -> Dict[str, Any]:
+def _empty_holding_entry(symbol: str = TARGET_SYMBOL) -> Dict[str, Any]:
+    sym = str(symbol or TARGET_SYMBOL).upper().strip()
     return {
-        "symbol": TARGET_SYMBOL,
+        "symbol": sym,
         "qty": 0,
         "quantity": 0,
         "avg_price": 0.0,
@@ -214,6 +194,10 @@ def _empty_soxl_holding_entry() -> Dict[str, Any]:
         "profit_loss": 0.0,
         "profit_rate": 0.0,
     }
+
+
+def _empty_soxl_holding_entry() -> Dict[str, Any]:
+    return _empty_holding_entry(TARGET_SYMBOL)
 
 
 def _normalize_single_holding_item(
@@ -261,9 +245,10 @@ def _normalize_single_holding_item(
     )
     pl_obj = (
         item.get("profitLoss")
-        if isinstance(item.get("profitLoss"), dict)
+        if isinstance(it_pl := item.get("profitLoss"), dict)
         else {}
     )
+    _ = it_pl
 
     pur_amt = safe_float(
         item.get("purchase_amount")
@@ -293,7 +278,7 @@ def _normalize_single_holding_item(
         else (
             pl_obj.get("rateAfterCost")
             if pl_obj.get("rateAfterCost") is not None
-            else pl_obj.get("rate"),
+            else pl_obj.get("rate")
         ),
         0.0,
     )
@@ -333,24 +318,29 @@ def _normalize_holdings_payload(
             return norm_map, bool(second)
 
     out_map: Dict[str, Dict[str, Any]] = {
-        TARGET_SYMBOL: _empty_soxl_holding_entry()
+        TARGET_SYMBOL: _empty_holding_entry(TARGET_SYMBOL),
+        BARBELL_SAFE_SYMBOL: _empty_holding_entry(BARBELL_SAFE_SYMBOL),
     }
 
     if isinstance(raw_res, dict):
-        if TARGET_SYMBOL in raw_res and isinstance(
-            raw_res[TARGET_SYMBOL], dict
-        ):
-            out_map[TARGET_SYMBOL] = _normalize_single_holding_item(
-                raw_res[TARGET_SYMBOL], TARGET_SYMBOL
-            )
+        matched_direct = False
+        for tracked_sym in (TARGET_SYMBOL, BARBELL_SAFE_SYMBOL):
+            if tracked_sym in raw_res and isinstance(
+                raw_res[tracked_sym], dict
+            ):
+                out_map[tracked_sym] = _normalize_single_holding_item(
+                    raw_res[tracked_sym], tracked_sym
+                )
+                matched_direct = True
+        if matched_direct:
             return out_map, True
 
-        if (
-            str(raw_res.get("symbol") or "").upper().strip() == TARGET_SYMBOL
-            and ("quantity" in raw_res or "qty" in raw_res)
+        single_sym = str(raw_res.get("symbol") or "").upper().strip()
+        if single_sym in (TARGET_SYMBOL, BARBELL_SAFE_SYMBOL) and (
+            "quantity" in raw_res or "qty" in raw_res
         ):
-            out_map[TARGET_SYMBOL] = _normalize_single_holding_item(
-                raw_res, TARGET_SYMBOL
+            out_map[single_sym] = _normalize_single_holding_item(
+                raw_res, single_sym
             )
             return out_map, True
 
@@ -364,10 +354,8 @@ def _normalize_holdings_payload(
             for it in items:
                 if isinstance(it, dict):
                     sym = str(it.get("symbol") or "").upper().strip()
-                    if sym == TARGET_SYMBOL:
-                        out_map[TARGET_SYMBOL] = _normalize_single_holding_item(
-                            it, TARGET_SYMBOL
-                        )
+                    if sym:
+                        out_map[sym] = _normalize_single_holding_item(it, sym)
             return out_map, True
 
         if len(raw_res) == 0:
@@ -377,10 +365,8 @@ def _normalize_holdings_payload(
         for it in raw_res:
             if isinstance(it, dict):
                 sym = str(it.get("symbol") or "").upper().strip()
-                if sym == TARGET_SYMBOL:
-                    out_map[TARGET_SYMBOL] = _normalize_single_holding_item(
-                        it, TARGET_SYMBOL
-                    )
+                if sym:
+                    out_map[sym] = _normalize_single_holding_item(it, sym)
         return out_map, True
 
     return out_map, True
@@ -453,9 +439,6 @@ async def _invoke_raw_toss_api(
 def _extract_candles_list(
     raw_res: Any,
 ) -> Tuple[List[Dict[str, Any]], Optional[str]]:
-    """
-    result.candles 표준 스키마뿐만 아니라 (candles, nextBefore) 튜플, result 직접 리스트, items, data 키 응답을 모두 파싱한다.
-    """
     if isinstance(raw_res, tuple) and len(raw_res) == 2:
         c_part, nb_part = raw_res
         if isinstance(c_part, list):
@@ -488,11 +471,6 @@ def _extract_candles_list(
 def _has_today_0407_open_bar_in_candles(
     candles: List[Dict[str, Any]], today_est_str: str
 ) -> bool:
-    """
-    수집된 1분봉 리스트 내에 당일(today_est_str) 04:00 ~ 04:15 EST 구간의 프리장 오프닝 캔들이
-    포함되었거나 전일 날짜 경계(d_str < today_est_str)에 도달했으면 True 를 반환하여
-    00:00 EST 자정 날짜변경선 야간 꼬리 침범 없이 페이지네이션을 조기 종료한다.
-    """
     if not candles:
         return False
     for c in candles:
@@ -521,13 +499,6 @@ def _has_today_0407_open_bar_in_candles(
 
 
 def _install_toss_api_compatibility_patches() -> None:
-    """
-    # MODIFIED [Case 86 & Case 93]:
-    1) TossApiClient 에 필수 메서드가 누락된 경우 폴리필을 장착한다.
-    2) 기존 TossApiClient.get_candles_1m 이 존재하더라도 count / total_count 키워드 인자 충돌(TypeError)을
-       100% 방지하고, 00:00 EST 날짜변경선 야간 꼬리 침범을 원천 차단하는 최대 400분봉(2페이지 × 200봉)
-       상한 래퍼를 장착한다!
-    """
     if not hasattr(TossApiClient, "get_commissions"):
 
         async def _poly_get_commissions(self: Any) -> List[Dict[str, Any]]:
@@ -599,7 +570,7 @@ def _install_toss_api_compatibility_patches() -> None:
     if not hasattr(TossApiClient, "get_holdings_map_with_status"):
 
         async def _poly_get_holdings_map_with_status(
-            self: Any, symbol: str = TARGET_SYMBOL
+            self: Any, symbol: Optional[str] = None
         ) -> Tuple[Dict[str, Dict[str, Any]], bool]:
             for cand_name in (
                 "get_holdings_map",
@@ -622,11 +593,12 @@ def _install_toss_api_compatibility_patches() -> None:
                         return {}, False
 
             try:
+                q_params = {"symbol": symbol} if symbol else None
                 raw = await _invoke_raw_toss_api(
                     self,
                     method="GET",
                     path="/api/v1/holdings",
-                    params={"symbol": symbol},
+                    params=q_params,
                     require_account=True,
                 )
                 return _normalize_holdings_payload(raw)
@@ -640,7 +612,6 @@ def _install_toss_api_compatibility_patches() -> None:
             _poly_get_holdings_map_with_status,
         )
 
-    # [핵심 패치]: count / total_count 양방향 호환 및 최대 400분봉(2페이지 × 200봉) 상한 하드 락온
     if not getattr(TossApiClient, "_candles_1m_v3_patched", False):
         _orig_get_candles_1m = getattr(TossApiClient, "get_candles_1m", None)
 
@@ -1048,10 +1019,6 @@ _install_toss_api_compatibility_patches()
 def _instantiate_stratum_ledger(
     filepath: str, base_dir: Optional[str] = None
 ) -> Any:
-    """
-    🚨 Case 68:
-    폴더 위치(base_dir)와 원장 경로(filepath)를 주입하여 폴더별 3중 안전 원장을 초기화한다.
-    """
     ledger_cls = _resolve_module_attr(
         modules=(toss_api, quant_engine),
         candidate_names=(
@@ -1089,10 +1056,6 @@ def _instantiate_stratum_ledger(
 
 
 def _check_weekend_nyse_closed_dynamic(now_est: datetime) -> bool:
-    """
-    # [Case 01 & Case 79]:
-    금요일 애프터마켓(16:00 ~ 19:59 EST) 익절 매도 개방을 위해 금요일 휴장 진입 시각을 20:00 EST 로 동기화한다.
-    """
     fn = _resolve_module_attr(
         modules=(quant_indicators_plugin, toss_api),
         candidate_names=(
@@ -1129,12 +1092,6 @@ async def _compute_candle_metrics_dynamic(
     now_est: datetime,
     candles_1d: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
-    """
-    # MODIFIED [Case 92 & Case 93]:
-    compute_soxl_quant_metrics_1m 결과 무손실 직결:
-    SOXL 1분봉(candles_1m) 및 일봉(candles_1d · 미전달 시 자동 조회)을 주입하여 Wilder's RSI(14)와
-    암살자 4대 필수 조건(① rsi_14/rsi · ② premarket_vwap/vwap · ③ prev_reg_close · ④ pre_open_price)을 산출한다.
-    """
     eff_candles_1d = candles_1d if isinstance(candles_1d, list) else []
     if not eff_candles_1d and context is not None and hasattr(context, "api"):
         try:
@@ -1170,9 +1127,6 @@ async def _compute_qqq_metrics_dynamic(
     live_price_qqq: float,
     now_est: datetime,
 ) -> Dict[str, Any]:
-    """
-    # NEW: 나스닥 100 추종 QQQ 1분봉 기반 방향성 인지 안전망(vel_1m_pct, vel_3m_pct, bear_drop_amp_pct) 비동기 산출기
-    """
     try:
         res_qqq = await asyncio.to_thread(
             compute_qqq_macro_metrics_1m,
@@ -1192,7 +1146,9 @@ async def _compute_qqq_metrics_dynamic(
     )
 # -*- coding: utf-8 -*-
 """
-# MODIFIED: main_runtime.py (Part 2/2 — 폴더별 텔레그램 자격증명 탐색기 · _AdaptiveTelegramBridge 내 400봉 1m + 10봉 1d + QQQ 온디맨드 정밀 워밍업 및 /assassin · /reset_assassin · /mode 결속 · Case 01 ~ Case 93 완비)
+# MODIFIED: main_runtime.py (Part 2/2 — 폴더별 텔레그램 자격증명 탐색기 ·
+# _AdaptiveTelegramBridge 내 3단 모드 순환[/mode] · 바벨 관제[/barbell] · 실전 암살자 승격[/assassin_mode] 및
+# 실전 암살자 단독 가동 시 스나이퍼 잔고 화해 간섭 차단 연동)
 """
 
 
@@ -1278,14 +1234,14 @@ def _discover_telegram_credentials(
 
 
 # ---------------------------------------------------------------------------
-# [핵심 5] 내장형 적응형 텔레그램 브릿지 (_AdaptiveTelegramBridge — Case 81 불사조 폴링 & 🗡️ 모의 암살자 4대 지표 400봉 1m+1d 정밀 워밍업 연동)
+# [핵심 5] 내장형 적응형 텔레그램 브릿지 (_AdaptiveTelegramBridge — 3단 순환 · 바벨 · 실전암살자 연동)
 # ---------------------------------------------------------------------------
 class _AdaptiveTelegramBridge:
     """
-    🚨 Case 02, 15, 16, 62, 64, 65, 66, 67, 68, 70 ~ 93 + 🗡️ [모의] 암살자 완벽 호환:
+    🚨 Case 02, 15, 16, 62, 64, 65, 66, 67, 68, 70 ~ 93 + ⚖️ 바벨모드 + 🗡️ [모의/실전] 암살자 완벽 호환:
     tg_ui_plugin.TelegramCommandController 와 동일한 인터페이스 및 4버튼 단일 메뉴,
-    /avwap · /sync · /settlement · /assassin · /reset_assassin · /mode 명령어와
-    5대 실시간 암살자 알림(send_slim_alert 단일 HTML 문자열 및 제목/본문 쌍 양방향 호환)을 제공한다.
+    /avwap · /sync · /settlement · /barbell · /assassin · /assassin_mode · /reset_assassin · /mode 명령어와
+    5대 실시간 암살자/바벨 알림을 제공한다.
     """
 
     def __init__(
@@ -1542,10 +1498,6 @@ class _AdaptiveTelegramBridge:
         body: str = "",
         reply_markup: Optional[Dict[str, Any]] = None,
     ) -> bool:
-        """
-        assassin_plugin.py 의 단일 HTML 전문 알림(body=="")과
-        기존 스나이퍼 코어의 (title, body) 2인자 알림을 모두 완벽하게 지원한다.
-        """
         if not body:
             return await self.send_message(
                 text=str(title), reply_markup=reply_markup
@@ -1565,16 +1517,20 @@ class _AdaptiveTelegramBridge:
             reply_markup=_build_main_reply_keyboard(),
         )
 
+    def _current_assassin_exec_mode(self) -> str:
+        try:
+            return str(
+                ensure_assassin_ledger(self.context)
+                .get_state()
+                .get("execution_mode")
+                or ASSASSIN_MODE_SIMULATED
+            ).upper()
+        except Exception:
+            return ASSASSIN_MODE_SIMULATED
+
     async def _refresh_live_price_and_metrics(
         self,
     ) -> Tuple[float, Dict[str, Any]]:
-        """
-        # MODIFIED [Case 92 & Case 93]:
-        /avwap · /assassin 조회 시 SOXL 및 QQQ 현재가를 최신화하고,
-        캔들 캐시에 전일 정규장 종가(prev_reg_close)나 04:07 프리장 시가(pre_open_price)가
-        아직 정밀 분리되지 않은 상태면 즉시 400봉(2페이지) 1분봉 + 일봉(10봉) + QQQ 1분봉을
-        온디맨드로 프리워밍하여 4대 지표($45.74) 폴백 현상을 100% 원천 제거한다.
-        """
         now_est = datetime.now(EST_TZ)
         live_p = safe_float(
             self.context.latest_prices.get(TARGET_SYMBOL), 0.0
@@ -1601,23 +1557,38 @@ class _AdaptiveTelegramBridge:
             pass
 
         base_met = self.context.candle_metrics_cache.get(TARGET_SYMBOL, {})
+        b_prev_c = safe_float(
+            base_met.get("prev_reg_close")
+            if isinstance(base_met, dict)
+            else 0.0,
+            0.0,
+        )
+        b_pre_o = safe_float(
+            base_met.get("pre_open_price")
+            if isinstance(base_met, dict)
+            else 0.0,
+            0.0,
+        )
+        b_pre_v = safe_float(
+            base_met.get("premarket_vwap")
+            if isinstance(base_met, dict)
+            else 0.0,
+            0.0,
+        )
+        is_collapsed_pos = bool(
+            b_prev_c > 0.0
+            and b_pre_o > 0.0
+            and b_pre_v > 0.0
+            and abs(b_prev_c - b_pre_o) < 1e-6
+            and abs(b_pre_v - b_prev_c) < 1e-6
+        )
+
         need_soxl_warm = bool(
             not isinstance(base_met, dict)
             or not bool(base_met.get("anchors_ready", False))
             or safe_float(base_met.get("prev_bar_close"), 0.0) <= 0.0
             or safe_float(base_met.get("candle_count"), 0) < 15
-            or (
-                abs(
-                    safe_float(base_met.get("prev_reg_close"), 0.0)
-                    - safe_float(base_met.get("pre_open_price"), 0.0)
-                )
-                < 1e-6
-                and abs(
-                    safe_float(base_met.get("premarket_vwap"), 0.0)
-                    - safe_float(base_met.get("prev_reg_close"), 0.0)
-                )
-                < 1e-6
-            )
+            or is_collapsed_pos
         )
         if need_soxl_warm:
             try:
@@ -1726,13 +1697,14 @@ class _AdaptiveTelegramBridge:
         if fetch_ok and isinstance(holdings_map, dict):
             self.context.latest_holdings = holdings_map
             self.context.holdings_fetch_ok = True
-            await reconcile_stratum_with_broker_holdings_plugin(
-                context=self.context,
-                holdings=holdings_map,
-                prices={TARGET_SYMBOL: live_p},
-                now_est=now_est,
-                force_sync=False,
-            )
+            if not is_live_assassin_standalone_active(self.context):
+                await reconcile_stratum_with_broker_holdings_plugin(
+                    context=self.context,
+                    holdings=holdings_map,
+                    prices={TARGET_SYMBOL: live_p},
+                    now_est=now_est,
+                    force_sync=False,
+                )
         else:
             holdings_map = self.context.latest_holdings
 
@@ -1790,7 +1762,24 @@ class _AdaptiveTelegramBridge:
             reply_markup=_build_settlement_inline_keyboard(
                 bool(st.get("is_active", True)),
                 portion_mode=st.get("portion_mode"),
+                assassin_exec_mode=self._current_assassin_exec_mode(),
             ),
+        )
+
+    async def _render_and_send_barbell_dashboard(
+        self, chat_id: str, edit_msg_id: Optional[int] = None
+    ) -> None:
+        msg = await build_barbell_detail_dashboard_html(context=self.context)
+        kb = (
+            None
+            if (edit_msg_id is not None and edit_msg_id > 0)
+            else _build_main_reply_keyboard()
+        )
+        await self.edit_or_send_message(
+            chat_id=chat_id,
+            message_id=edit_msg_id,
+            text=msg,
+            reply_markup=kb,
         )
 
     async def _render_and_send_assassin_dashboard(
@@ -1816,17 +1805,14 @@ class _AdaptiveTelegramBridge:
         self, chat_id: str, edit_msg_id: Optional[int] = None
     ) -> None:
         st_cur = self.context.ledger.get_state(TARGET_SYMBOL)
-        if hasattr(self.context.ledger, "toggle_portion_mode"):
-            updated_st = await self.context.ledger.toggle_portion_mode()
-        else:
-            next_m = (
-                PORTION_MODE_COMPOUND
-                if _is_simple_portion_mode(st_cur)
-                else PORTION_MODE_SIMPLE
-            )
-            updated_st = await self.context.ledger.update_state(
-                TARGET_SYMBOL, portion_mode=next_m
-            )
+        next_m = next_cycled_portion_mode(st_cur.get("portion_mode"))
+        updated_st = await self.context.ledger.update_state(
+            TARGET_SYMBOL, portion_mode=next_m
+        )
+        if is_barbell_mode(next_m):
+            await initialize_or_sync_barbell_on_mode_enter(self.context)
+            updated_st = self.context.ledger.get_state(TARGET_SYMBOL)
+
         self.context.wakeup_event.set()
         if edit_msg_id is not None and edit_msg_id > 0:
             await self._render_and_send_settlement(
@@ -1836,23 +1822,32 @@ class _AdaptiveTelegramBridge:
 
         live_p, _ = await self._refresh_live_price_and_metrics()
         summary = summarize_stratum_portfolio(updated_st, live_price=live_p)
-        is_s = _is_simple_portion_mode(updated_st)
-        m_lbl = (
-            "💵 인출형 (단리 · SIMPLE_08PCT)"
-            if is_s
-            else "📈 자산증식형 (복리 · COMP_08PCT)"
-        )
+        if _is_barbell_portion_mode(updated_st):
+            m_lbl = "⚖️ 바벨모드 (60/30/10 · 수익금고 영구격리)"
+        elif _is_simple_portion_mode(updated_st):
+            m_lbl = "💵 스나이퍼 (단리 · SIMPLE_08PCT)"
+        else:
+            m_lbl = "📈 스나이퍼 (복리 · COMP_08PCT)"
+
         next_bud = safe_float(summary.get("next_portion_budget"), 800.0)
         sub_bud = safe_float(summary.get("sub_next_portion_budget"), 400.0)
         await self.send_message(
             chat_id=chat_id,
             text=(
-                f"🔄 <b>[운용 정량모드 전환 완료]</b>\n"
+                "🔄 <b>[3단 운용 정량모드 순환 완료]</b>\n"
                 f"▫️ 현재 모드: <b>{m_lbl}</b>\n"
                 f"▫️ 본그리드 1회(8%): <b>${next_bud:,.2f}</b> ({_format_case67_quota_badge(summary)})\n"
                 f"▫️ 서브그리드 1회(4%): <b>${sub_bud:,.2f}</b> ({_format_sub_quota_badge(summary)})"
             ),
             reply_markup=_build_main_reply_keyboard(),
+        )
+
+    async def _toggle_assassin_live_command(
+        self, chat_id: str, edit_msg_id: Optional[int] = None
+    ) -> None:
+        ctrl = tg_ui_plugin.TelegramCommandController(self.context)
+        await ctrl._toggle_assassin_live_command(
+            chat_id=chat_id, edit_msg_id=edit_msg_id
         )
 
     async def _apply_new_seed_value(
@@ -1895,6 +1890,19 @@ class _AdaptiveTelegramBridge:
         except Exception:
             pass
 
+        try:
+            if _is_barbell_portion_mode(updated_st):
+                await initialize_or_sync_barbell_on_mode_enter(
+                    self.context, new_seed_usd=round(val, 4)
+                )
+                updated_st = self.context.ledger.get_state(TARGET_SYMBOL)
+            else:
+                await ensure_barbell_ledger(self.context).update_state(
+                    initial_seed_usd=round(val, 4)
+                )
+        except Exception:
+            pass
+
         self.context.wakeup_event.set()
         live_p, _ = await self._refresh_live_price_and_metrics()
         summary = summarize_stratum_portfolio(updated_st, live_price=live_p)
@@ -1904,7 +1912,7 @@ class _AdaptiveTelegramBridge:
             chat_id=chat_id,
             text=(
                 "✅ <b>[기준 시드머니 설정 완료]</b>\n"
-                f"▫️ 기준 시드: <b>${val:,.2f}</b> (스나이퍼 & 모의암살자 동시 적용)\n"
+                f"▫️ 기준 시드: <b>${val:,.2f}</b> (스나이퍼 · 바벨 · 암살자 동시 적용)\n"
                 f"▫️ 가용 현금: <b>${safe_float(summary.get('free_cash_usd'), 0.0):,.2f}</b>\n"
                 f"▫️ 본그리드(8%): <b>${safe_float(summary.get('next_portion_budget'), 0.0):,.0f}</b> ({quota_badge_str})\n"
                 f"▫️ 서브그리드(4%): <b>${safe_float(summary.get('sub_next_portion_budget'), 0.0):,.0f}</b> ({sub_quota_badge})"
@@ -1912,6 +1920,7 @@ class _AdaptiveTelegramBridge:
             reply_markup=_build_settlement_inline_keyboard(
                 bool(updated_st.get("is_active", True)),
                 portion_mode=updated_st.get("portion_mode"),
+                assassin_exec_mode=self._current_assassin_exec_mode(),
             ),
         )
         return True
@@ -1924,9 +1933,9 @@ class _AdaptiveTelegramBridge:
         await self.send_message(
             chat_id=chat_id,
             text=(
-                "🧹 <b>[[모의] 암살자 누적 전적 초기화 완료]</b>\n"
+                "🧹 <b>[암살자 누적 전적 초기화 완료]</b>\n"
                 f"▫️ 기준 시드: <b>${init_seed:,.2f}</b>\n"
-                "▫️ 누적 출격일 / 단리·복리 실현익이 0점으로 초기화되었습니다."
+                "▫️ 누적 출격일 / 모의·실전 실현익이 0점으로 초기화되었습니다."
             ),
             reply_markup=_build_main_reply_keyboard(),
         )
@@ -2006,11 +2015,19 @@ class _AdaptiveTelegramBridge:
             await self._render_and_send_settlement(chat_id=chat_id)
             return
 
+        if first_token == "/barbell" or text == "⚖️ 바벨 관제":
+            await self._render_and_send_barbell_dashboard(chat_id=chat_id)
+            return
+
         if first_token == "/assassin" or text in (
             "🗡️ 모의 암살자",
             "🗡️ 암살자 레이더",
         ):
             await self._render_and_send_assassin_dashboard(chat_id=chat_id)
+            return
+
+        if first_token in ("/assassin_mode", "/assassin_live"):
+            await self._toggle_assassin_live_command(chat_id=chat_id)
             return
 
         if first_token == "/reset_assassin":
@@ -2069,10 +2086,6 @@ class _AdaptiveTelegramBridge:
 
 
 async def _run_auto_update_loop_dynamic(context: Any) -> None:
-    """
-    # [Case 07, Case 68, Case 75 & Case 81]:
-    백그라운드 무인 자동 업데이트 루프를 안전하게 위임 실행한다.
-    """
     fn = _resolve_module_attr(
         modules=(plugin_updater,),
         candidate_names=(

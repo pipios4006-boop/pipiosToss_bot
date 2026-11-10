@@ -1,19 +1,20 @@
 # -*- coding: utf-8 -*-
 """
-# MODIFIED: toss_api.py (Part 1/2 — 황금시간 07:00~07:50 RSI<=19 올인 관련 상수 재익스포트 및 주석 전면 소각 & Case 91 복리/단리 심볼 재익스포트 & Case 93 get_candles_1m count/total_count 양방향 호환 및 최대 400분봉[2페이지] 상한 하드 락온으로 00:00 EST 날짜변경선 침범 원천 차단)
-인피니트 스노우볼 (Infinite Snowball) v3.0 — 토스증권 Open API (v1.2.14) 방탄 통신 통제소 (Part 2 / 2 · Step 02 / 14)
+# MODIFIED: toss_api.py (Part 1/2 — 바벨 모드 상수/3단 순환 심볼 재익스포트 &
+# Case 09 SOXS 등 제3종목 물리적 차단 유지 하에 바벨 정규장[09:30~16:00 EST] SGOV 지정가 주문 허용 확장 &
+# Case 93 get_candles_1m 최대 400분봉[2페이지] 상한 하드 락온 유지)
+인피니트 스노우볼 (Infinite Snowball) v3.0 — 토스증권 Open API (v1.2.14) 방탄 통신 통제소
 - 역할:
-  1) toss_api_core.py (Part 1 / 2) 의 모든 상수(DEFAULT_GRID_MERGE_MODE · Case 88 서브 그리드 상수 · Case 91 복리/단리 모드 상수 포함)·유틸리티·폴더격리·디스크치유·
-     GlobalThrottle·SoxlStratumLedger 심볼을 명시적으로 재익스포트(Facade Re-export)하여 타 모듈 AST 심볼 임포트 무결성 100% 보장
+  1) toss_api_core.py 의 모든 상수(바벨 모드 상수 · Case 88 서브 그리드 상수 · Case 91 3단 순환 상수 포함) · 유틸리티 · 폴더격리 · 디스크치유 ·
+     GlobalThrottle · SoxlStratumLedger 심볼을 명시적으로 재익스포트(Facade Re-export)하여 타 모듈 AST 심볼 임포트 무결성 100% 보장
   2) 제1헌법 ~ 제6헌법 및 API.txt (v1.2.14) 100% 준수 TossApiClient 구현:
      - OAuth2 토큰 자동 발급 및 만료 전 선제 갱신 (POST /oauth2/token)
      - 종합매매 계좌(BROKERAGE) accountSeq 자동 락온 및 X-Tossinvest-Account 헤더 원자적 주입 (GET /api/v1/accounts)
      - 계좌별 미국 주식(US) 실제 매매 수수료율 조회·락온 및 일시 통신 실패 시 원장/런타임 수수료율 보존 폴백 (GET /api/v1/commissions · Case 86)
-     - REAL_ALLOWED_SYMBOLS = ("SOXL",) 단일 롱 화이트리스트 물리적 강제 (인버스 숏 SOXS 원천 차단 · Case 09)
+     - REAL_ALLOWED_SYMBOLS = ("SOXL",) 단일 롱 화이트리스트 강제 및 바벨 모드 전용 정규장 SGOV 지정가 주문(allow_barbell_sgov=True) 제한 허용 (Case 09)
      - 1분봉 윗꼬리(Upper-Wick) 슈팅 포착용 최근 5.0초 내 유효 체결 최고가 추출기 (get_recent_wick_high_price · Case 82)
      - 날짜변경선(00:00 EST) 야간 꼬리 침범을 원천 차단하는 최대 400분봉(2페이지 × 200봉) 1분봉 수집기 (get_candles_1m · Case 93) 및 일봉 수집기 (get_candles_1d)
-     - 토스 CLOSED 주문 원장 역추적기 (probe_latest_manual_fill_price : 실측 수수료 commission + tax 추출 포함 · Case 19, Case 63, Case 86, Case 88)
-     - 모든 파일/네트워크 I/O 의 asyncio.to_thread 비동기 격리 및 GlobalThrottle 중앙 통제
+     - 토스 CLOSED 주문 원장 역추적기 (probe_latest_manual_fill_price : 실측 수수료 commission + tax 추출 포함)
 """
 
 from __future__ import annotations
@@ -33,6 +34,11 @@ from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 from toss_api_core import (
     ALLOWED_SYMBOLS,
     AssassinLedger,
+    BARBELL_ALLOWED_SYMBOLS,
+    BARBELL_CASH_WEIGHT,
+    BARBELL_SAFE_SYMBOL,
+    BARBELL_SGOV_WEIGHT,
+    BARBELL_SOXL_WEIGHT,
     BASE_MAX_LOTS_8PCT,
     DEFAULT_GRID_MERGE_MODE,
     DEFAULT_INITIAL_SEED_USD,
@@ -52,6 +58,7 @@ from toss_api_core import (
     MIN_DIP_BUDGET_RATIO,
     MIN_DIP_VS_L1_RATIO,
     NEW_CYCLE_BUY_CUTOFF_HM,
+    PORTION_MODE_BARBELL,
     PORTION_MODE_COMPOUND,
     PORTION_MODE_SIMPLE,
     PORTION_RATIO_LOCKED,
@@ -90,7 +97,9 @@ from toss_api_core import (
     get_folder_slug,
     get_runtime_round_trip_fee_rate_pct,
     get_runtime_us_commission_rate,
+    is_barbell_mode,
     is_simple_income_mode,
+    next_cycled_portion_mode,
     resolve_folder_isolated_ledger_paths,
     safe_float,
     safe_int,
@@ -109,11 +118,11 @@ class TossApiClient:
     - OAuth2 토큰 자동 발급 및 만료 전 선제 갱신 (`POST /oauth2/token`)
     - 종합매매 계좌(`BROKERAGE`) `accountSeq` 자동 락온 및 `X-Tossinvest-Account` 헤더 원자적 주입 (`GET /api/v1/accounts`)
     - 계좌별 미국 주식(`US`) 매매 수수료율 조회 및 왕복 수수료율 자동 락온 (`GET /api/v1/commissions` · `Case 86`)
-    - `REAL_ALLOWED_SYMBOLS = ("SOXL",)` 외 제3종목(SOXS 등) 주문 물리적 차단 (`Case 09`)
-    - 외부 패키지(`httpx`/`aiohttp`) 유무에 영향받지 않는 표준 `urllib.request` + `asyncio.to_thread` 방탄 비동기 엔진
+    - `REAL_ALLOWED_SYMBOLS = ("SOXL",)` 외 제3종목(SOXS 등) 주문 물리적 차단 및 바벨 모드 정규장 `SGOV` 제한 허용 (`Case 09`)
     """
 
     REAL_ALLOWED_SYMBOLS: Tuple[str, ...] = ("SOXL",)
+    BARBELL_ALLOWED_SYMBOLS: Tuple[str, ...] = ("SOXL", "SGOV")
 
     def __init__(
         self,
@@ -157,7 +166,6 @@ class TossApiClient:
         self.account_seq: Optional[int] = None
         self._account_lock: asyncio.Lock = asyncio.Lock()
 
-        # [Case 86]: 하드코딩 0.0007/0.14 대신 원장 또는 .env 로부터 런타임에 동기화된 수수료율로 초기화
         self.us_commission_rate: float = get_runtime_us_commission_rate()
         self.round_trip_fee_rate_pct: float = (
             get_runtime_round_trip_fee_rate_pct()
@@ -169,11 +177,15 @@ class TossApiClient:
         self._fx_cache_rate: float = KRW_PER_USD_DEFAULT
         self._fx_cache_mono: float = 0.0
 
-    def _assert_real_order_symbol(self, symbol: str) -> str:
+    def _assert_real_order_symbol(
+        self, symbol: str, allow_barbell_sgov: bool = False
+    ) -> str:
         sym = str(symbol or "").upper().strip()
+        if allow_barbell_sgov and sym == BARBELL_SAFE_SYMBOL:
+            return sym
         if sym not in self.REAL_ALLOWED_SYMBOLS:
             raise ValueError(
-                f"🚨 [Case 09 물리적 주문 차단] 허용되지 않은 종목 주문 시도: {sym} (오직 SOXL 만 허용)"
+                f"🚨 [Case 09 물리적 주문 차단] 허용되지 않은 종목 주문 시도: {sym} (오직 SOXL 및 바벨 정규장 SGOV 만 허용)"
             )
         return sym
 
@@ -296,10 +308,6 @@ class TossApiClient:
             return self._access_token
 
     async def ensure_account_seq(self) -> int:
-        """
-        🚨 제2헌법:
-        GET /api/v1/accounts 를 호출하여 BROKERAGE(종합매매) 계좌의 accountSeq 를 메모리에 락온한다.
-        """
         if self.account_seq is not None and self.account_seq > 0:
             return self.account_seq
 
@@ -340,11 +348,6 @@ class TossApiClient:
             return self.account_seq
 
     async def get_commissions(self) -> List[Dict[str, Any]]:
-        """
-        # [API.txt v1.2.14 정식 규격 & Case 86]:
-        GET /api/v1/commissions (X-Tossinvest-Account 헤더 포함)를 호출하여
-        현재 계좌의 시장별(KR, US) 매매 수수료율 배열을 반환한다.
-        """
         try:
             res = await self._request(
                 method="GET",
@@ -362,15 +365,6 @@ class TossApiClient:
     async def ensure_us_commission_rate(
         self, force_refresh: bool = False
     ) -> Tuple[float, float]:
-        """
-        # [Case 86 : 계좌별 미국 주식 실제 수수료율 자동 락온 및 일시 조회 실패 시 원장/런타임 수수료율 보존]:
-        GET /api/v1/commissions 를 호출하여 "marketCountry": "US" 항목의 "commissionRate" (소수 비율)를 추출한다.
-        - 예: pipiosToss 계좌("0.0007") -> 편도 0.0007 (0.07%) / 왕복 0.14% 자동 락온
-        - 예: wonToss 계좌("0.001")     -> 편도 0.0010 (0.10%) / 왕복 0.20% 자동 락온
-        - 일시 통신 장애로 빈 배열이 반환될 경우 하드코딩 0.14% 로 덮어쓰지 않고
-          런타임 메모리(원장 또는 .env)에 보존된 수수료율을 그대로 유지하여 반환한다!
-        반환값: (us_commission_rate_decimal, round_trip_fee_rate_pct)
-        """
         if not force_refresh and self._commission_locked:
             return self.us_commission_rate, self.round_trip_fee_rate_pct
 
@@ -398,7 +392,6 @@ class TossApiClient:
                 )
                 return self.us_commission_rate, self.round_trip_fee_rate_pct
 
-            # API 일시 조회 실패 시 런타임(원장/.env)에 보존된 수수료율 동기화 반환
             rt_fallback = get_runtime_round_trip_fee_rate_pct()
             one_fallback = get_runtime_us_commission_rate()
             if 0.0 < one_fallback <= 0.01 and 0.0 < rt_fallback <= 2.0:
@@ -417,10 +410,6 @@ class TossApiClient:
         timeout_sec: float = 10.0,
         max_retries: int = 2,
     ) -> Dict[str, Any]:
-        """
-        🚨 제1헌법, 제2헌법 & Case 20, 21:
-        모든 토스 Open API 요청을 처리하는 중앙 비동기 디스패처.
-        """
         clean_path = path if path.startswith("/") else f"/{path}"
         url = f"{self.base_url}{clean_path}"
         if params:
@@ -534,14 +523,11 @@ class TossApiClient:
         return {}
 
     # -----------------------------------------------------------------------
-    # [Market Data 그룹] 현재가 · 호가 · 최근체결 · 윗꼬리 체결최고가 · 1분봉/일봉 차트 (API.txt v1.2.14)
+    # [Market Data 그룹] 현재가 · 호가 · 최근체결 · 윗꼬리 체결최고가 · 1분봉/일봉 차트
     # -----------------------------------------------------------------------
     async def get_current_prices_batch(
         self, symbols: Iterable[str] = (TARGET_SYMBOL,)
     ) -> Dict[str, float]:
-        """
-        GET /api/v1/prices?symbols=SOXL
-        """
         sym_list = [
             str(s).upper().strip() for s in symbols if str(s).strip()
         ]
@@ -575,10 +561,6 @@ class TossApiClient:
     async def get_recent_trades(
         self, symbol: str = TARGET_SYMBOL, count: int = 50
     ) -> List[Dict[str, Any]]:
-        """
-        # [API.txt v1.2.14 & Case 82]:
-        GET /api/v1/trades?symbol=SOXL&count=50
-        """
         q_cnt = max(1, min(50, safe_int(count, 50)))
         try:
             res = await self._request(
@@ -630,9 +612,6 @@ class TossApiClient:
         min_after_ts: float = 0.0,
         count: int = 15,
     ) -> Tuple[float, float]:
-        """
-        # [Case 82 : 1분봉 윗꼬리(Upper-Wick) 슈팅 포착용 최근 체결 최고가 추출기 (서버 시차 -5.0s 허용)]:
-        """
         trades = await self.get_recent_trades(
             symbol=symbol, count=max(1, min(50, safe_int(count, 15)))
         )
@@ -683,9 +662,6 @@ class TossApiClient:
     async def get_orderbook(
         self, symbol: str = TARGET_SYMBOL
     ) -> Dict[str, Any]:
-        """
-        GET /api/v1/orderbook?symbol=SOXL
-        """
         try:
             res = await self._request(
                 method="GET",
@@ -831,10 +807,7 @@ class TossApiClient:
         today_est_str: str,
     ) -> bool:
         """
-        # NEW [Case 93 : 400봉(2페이지) 수집 시 당일 04:07 EST 시초봉 도달 또는 자정(00:00 EST) 경계 감지 조기 종료 판별기]:
-        수집된 1분봉 배열에 당일 04:00 ~ 04:15 EST 프리장 오프닝 봉이 이미 포함되었거나
-        전날 날짜(d_str < today_est_str) 경계에 도달했으면 즉시 추가 페이지네이션을 중단하여
-        전날 밤 23:59 EST 데이마켓 야간 꼬리 침범을 차단한다.
+        # [Case 93 : 400봉(2페이지) 수집 시 당일 04:07 EST 시초봉 도달 또는 자정(00:00 EST) 경계 감지 조기 종료 판별기]
         """
         if not candles:
             return False
@@ -872,10 +845,7 @@ class TossApiClient:
         **kwargs: Any,
     ) -> List[Dict[str, Any]]:
         """
-        # MODIFIED [Case 93 : count / total_count 양방향 호환 및 최대 400분봉(2페이지 × 200봉) 상한 하드 락온]:
-        - 미국 프리장(04:07 ~ 09:29 EST, 323봉) 및 정규장(09:30 ~ 16:00 EST, 390봉)을
-          00:00 EST 자정 날짜변경선 야간 꼬리 침범 없이 가장 깔끔하게 커버하도록
-          최대 조회 상한을 400봉(최대 2페이지)으로 고정한다.
+        # [Case 93 : count / total_count 양방향 호환 및 최대 400분봉(2페이지 × 200봉) 상한 하드 락온]
         """
         sym_clean = str(symbol or TARGET_SYMBOL).upper().strip()
         now_est = datetime.now(EST_TZ)
@@ -1075,11 +1045,14 @@ class TossApiClient:
         self, symbol: Optional[str] = None
     ) -> Tuple[Dict[str, Dict[str, Any]], bool]:
         out_map: Dict[str, Dict[str, Any]] = {
-            TARGET_SYMBOL: self._empty_holding_dict(TARGET_SYMBOL)
+            TARGET_SYMBOL: self._empty_holding_dict(TARGET_SYMBOL),
+            BARBELL_SAFE_SYMBOL: self._empty_holding_dict(BARBELL_SAFE_SYMBOL),
         }
         params: Dict[str, Any] = {}
         if symbol:
-            params["symbol"] = str(symbol).upper().strip()
+            sym_req = str(symbol).upper().strip()
+            params["symbol"] = sym_req
+            out_map.setdefault(sym_req, self._empty_holding_dict(sym_req))
 
         try:
             res = await self._request(
@@ -1193,9 +1166,6 @@ class TossApiClient:
     async def get_buying_power_usd(
         self, safety_buffer_pct: float = 0.2
     ) -> float:
-        """
-        GET /api/v1/buying-power?currency=USD
-        """
         try:
             res = await self._request(
                 method="GET",
@@ -1222,12 +1192,17 @@ class TossApiClient:
         return 0.0
 
     async def get_sellable_quantity(
-        self, symbol: str = TARGET_SYMBOL
+        self,
+        symbol: str = TARGET_SYMBOL,
+        allow_barbell_sgov: bool = False,
     ) -> int:
-        """
-        GET /api/v1/sellable-quantity?symbol=SOXL
-        """
-        sym = self._assert_real_order_symbol(symbol)
+        sym_clean = str(symbol or TARGET_SYMBOL).upper().strip()
+        sym = self._assert_real_order_symbol(
+            sym_clean,
+            allow_barbell_sgov=(
+                allow_barbell_sgov or sym_clean == BARBELL_SAFE_SYMBOL
+            ),
+        )
         try:
             res = await self._request(
                 method="GET",
@@ -1273,19 +1248,33 @@ class TossApiClient:
         time_in_force: str = "DAY",
         client_order_id: Optional[str] = None,
         enforce_daymarket_block: bool = False,
+        allow_barbell_sgov: bool = False,
     ) -> Dict[str, Any]:
         """
-        🎯 5 & 제5헌법 & Case 01, 09, 18, 79:
-        POST /api/v1/orders (오직 SOXL LIMIT 지정가 주문만 허용)
+        🎯 5 & 제5헌법 & Case 01, 09, 18, 79 + 바벨 모드 SGOV 정규장 전용 가드:
+        POST /api/v1/orders
+        - SOXL 지정가 주문 허용
+        - allow_barbell_sgov=True 일 때 SGOV 지정가 주문을 허용하되,
+          SGOV는 매수/매도 모두 반드시 평일 미국 정규장(09:30 ~ 16:00 EST)에서만 발주 허용!
         """
-        sym = self._assert_real_order_symbol(symbol)
+        sym = self._assert_real_order_symbol(
+            symbol, allow_barbell_sgov=allow_barbell_sgov
+        )
         clean_side = str(side or "BUY").upper().strip()
         if clean_side not in ("BUY", "SELL"):
             raise ValueError(f"유효하지 않은 주문 방향: {clean_side}")
 
-        if enforce_daymarket_block and clean_side == "BUY":
-            now_est = datetime.now(EST_TZ)
-            hm = now_est.hour * 100 + now_est.minute
+        now_est = datetime.now(EST_TZ)
+        hm = now_est.hour * 100 + now_est.minute
+
+        if sym == BARBELL_SAFE_SYMBOL:
+            if now_est.weekday() >= 5 or not (930 <= hm <= 1600):
+                raise _NonRetryableApiError(
+                    422,
+                    "sgov-regular-hours-only",
+                    f"바벨 SGOV 주문은 평일 정규장(09:30 ~ 16:00 EST)에만 허용됩니다 (현재 요일={now_est.weekday()}, {hm:04d} EST)",
+                )
+        elif enforce_daymarket_block and clean_side == "BUY":
             if now_est.weekday() >= 5 or not (407 <= hm <= 1600):
                 raise _NonRetryableApiError(
                     422,
@@ -1328,10 +1317,8 @@ class TossApiClient:
         time_in_force: str = "DAY",
         client_order_id: Optional[str] = None,
         enforce_daymarket_block: bool = False,
+        allow_barbell_sgov: bool = False,
     ) -> Dict[str, Any]:
-        """
-        # NEW [Case 93 : assassin_plugin.py Dual-Ready 주문 어댑터 호환 메서드]:
-        """
         return await self.create_order(
             symbol=symbol,
             side=side,
@@ -1341,6 +1328,7 @@ class TossApiClient:
             time_in_force=time_in_force,
             client_order_id=client_order_id,
             enforce_daymarket_block=enforce_daymarket_block,
+            allow_barbell_sgov=allow_barbell_sgov,
         )
 
     async def modify_order(
@@ -1451,7 +1439,9 @@ class TossApiClient:
                     o for o in r_obj["orders"] if isinstance(o, dict)
                 ]
         except Exception as exc:
-            logger.debug("종료 주문 목록 조회(/api/v1/orders?status=CLOSED) 예외: %s", exc)
+            logger.debug(
+                "종료 주문 목록 조회(/api/v1/orders?status=CLOSED) 예외: %s", exc
+            )
         return []
 
     async def probe_latest_manual_fill_price(
@@ -1462,9 +1452,6 @@ class TossApiClient:
         fallback_price: float = 0.0,
         symbol: str = TARGET_SYMBOL,
     ) -> Tuple[float, List[str]]:
-        """
-        # [Case 19, Case 63, Case 86 & Case 88 수동 매수·매도 실체결가 및 실측 수수료 역추적기]:
-        """
         target_side = str(side or "SELL").upper().strip()
         need_q = max(1, safe_int(target_qty, 1))
         settled_set: Set[str] = {

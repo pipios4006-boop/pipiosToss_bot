@@ -1,18 +1,10 @@
 # -*- coding: utf-8 -*-
 """
-# MODIFIED: plugin_updater.py (Part 1/2 — REQUIRED_CORE_MODULES 내 assassin_plugin.py 등록 · 원장 스냅샷 보호 · Case 81/85 자가 치유)
-인피니트 스노우볼 (Infinite Snowball) v3.0 — 순수 롱(🐂 SOXL 단독) 매수 04:07 ~ 16:00 EST 제한
-(정규장 마감 30분 전 15:30 ~ 16:00 EST 본·서브 0주 새 사이클 첫 1층 진입 및 상단층 보유 중 1층 공석 +1.0% 돌파 추격 동시 차단 ·
-04:07 ~ 15:29 EST 1층 공석 +1.0% 돌파 시 1분봉 Wilder RSI(14) <= 50.0 필터 결합 ·
-2층 단가 이하 -1.0% 무필터 눌림목 재장전 및 10분 게이트 무필터 추매/잔량보충 100% 허용 · Case 84, Case 88, Case 92) &
-익절 매도 24시간 전 세션 확장(Case 83 방안 C 오버나이트 통합이평 사수 하이브리드) 오버나이트 7층 골디락스 본 그리드(L2_L7_MERGE_SORT · Case 87) +
-스위치 없는 100% 기본 상시 적용(Default ON) 3층 서브 그리드(SUB_L1_L3_MERGE · 최대 4회분[16%] 상한 캡 · Case 88) +
-🗡️ [모의 ⇄ 실전 Dual-Ready] 암살자(assassin_plugin.py) 독립 플러그인 결속
-코어 모듈(toss_api_core.py + toss_api.py · quant_engine_core.py + quant_engine.py ·
-sniper_plugin_core.py + sniper_plugin.py · assassin_plugin.py · main_runtime.py + main.py 포함)
-무디스크 인메모리 프리플라이트 컴파일 · AST 심볼 교차 검증 · Case 85 f-string 중괄호 정규식 자동 치유 및 4배수 선제 스냅 치유기 ·
-텔레그램 잔류 큐 소각 · 폴더별 원장(본 그리드 + 서브 그리드 + 모의 암살자 원장 + 동적 수수료율)/환경변수/오프셋 스냅샷 Dirty-Check 철벽 보존 · 무인 Git 업데이트 및
-Case 81 커널 레벨 인플레이스 프로세스 자가 교체(os.execv + 3.5초 하드 워치독) 코어 모듈
+# MODIFIED: plugin_updater.py (Part 1/2 — REQUIRED_CORE_MODULES 내 barbell_plugin.py 및 assassin_plugin.py 15대 코어 모듈 등록 ·
+# 스나이퍼/바벨[별도수익금고]/암살자 3중 원장 스냅샷 철벽 보호 · Case 81 os.execv 자가 교체 및 Case 85 자동 치유)
+인피니트 스노우볼 (Infinite Snowball) v3.0 — 15대 코어 모듈 무디스크 인메모리 프리플라이트 컴파일 ·
+AST 심볼 교차 검증 · 폴더별 원장(본 그리드 + 서브 그리드 + 바벨 원장/별도수익금고 + 암살자 원장)/환경변수/오프셋 스냅샷 보존 ·
+무인 Git 업데이트 및 Case 81 커널 레벨 인플레이스 프로세스 자가 교체(os.execv + 3.5초 하드 워치독) 코어 모듈
 """
 
 from __future__ import annotations
@@ -49,7 +41,7 @@ from toss_api import (
 logger = logging.getLogger("toss_sniper.plugin_updater")
 
 # ---------------------------------------------------------------------------
-# [핵심 상수] 코어 모듈(assassin_plugin.py 포함) 및 영구 폐기 레거시 파일 목록 (제3헌법)
+# [핵심 상수] 15대 코어 모듈(barbell_plugin.py · assassin_plugin.py 포함) 및 영구 폐기 레거시 파일 목록 (제3헌법)
 # ---------------------------------------------------------------------------
 REQUIRED_CORE_MODULES: Tuple[str, ...] = (
     "toss_api_core.py",
@@ -61,6 +53,7 @@ REQUIRED_CORE_MODULES: Tuple[str, ...] = (
     "sniper_plugin.py",
     "sniper_exit_plugin.py",
     "defense_plugin.py",
+    "barbell_plugin.py",
     "assassin_plugin.py",
     "tg_ui_plugin.py",
     "plugin_updater.py",
@@ -186,7 +179,7 @@ def write_persisted_tg_offset_sync(
 
 def perform_self_restart_execv(reason: str = "AUTO_UPDATE") -> None:
     """
-    🚨 [Case 81 핵심 : 커널 레벨 인플레이스 프로세스 자가 교체기]:
+    🚨 [Case 81 핵심 : 커널 레벨 인플레이스 프로세스 자가 교체기]
     """
     with _RESTART_EXEC_LOCK:
         target_dir = get_bot_base_dir()
@@ -247,7 +240,7 @@ def arm_hard_restart_watchdog(
     reason: str = "AUTO_UPDATE",
 ) -> threading.Timer:
     """
-    🚨 [Case 81 핵심 : 비동기 종료 데드락(Deaf Zombie Process) 타파용 3.5초 데몬 하드 워치독]:
+    🚨 [Case 81 핵심 : 비동기 종료 데드락(Deaf Zombie Process) 타파용 3.5초 데몬 하드 워치독]
     """
     global _RESTART_WATCHDOG_TIMER
     safe_delay = max(1.0, min(15.0, float(delay_sec)))
@@ -279,7 +272,7 @@ def trigger_graceful_restart(
     watchdog_delay_sec: float = 3.5,
 ) -> None:
     """
-    🚨 [Case 81 : 재기동 플래그 설정 + 3.5초 하드 워치독 가동 + 이벤트 루프 즉시 깨우기 통합 점화기]:
+    🚨 [Case 81 : 재기동 플래그 설정 + 3.5초 하드 워치독 가동 + 이벤트 루프 즉시 깨우기 통합 점화기]
     """
     if context is not None:
         try:
@@ -315,11 +308,6 @@ def trigger_graceful_restart(
 # [핵심 0-B] 폴더 위치(base_dir) 전용 텔레그램 적체 큐 선제 강제 소각기 (Case 68, Case 75 & Case 81)
 # ---------------------------------------------------------------------------
 def _discover_bot_token_sync(base_dir: Optional[str] = None) -> str:
-    """
-    🚨 Case 68:
-    "/home/pipiosToss" 고정 경로 폴백을 100% 폐기하고, 오직 현재 봇이 위치한 폴더(target_dir)의
-    .env 및 환경변수에서만 텔레그램 봇 토큰을 추출한다.
-    """
     target_dir = get_bot_base_dir(base_dir)
     if os.path.isdir(target_dir):
         env_fp = os.path.join(target_dir, ".env")
@@ -349,9 +337,6 @@ def _discover_bot_token_sync(base_dir: Optional[str] = None) -> str:
 
 
 def _update_ledger_tg_offset_sync(ledger_fp: str, max_uid: int) -> None:
-    """
-    # [Case 75 & Case 81]:
-    """
     if not ledger_fp or not os.path.isfile(ledger_fp) or max_uid <= 0:
         return
     target_dir = os.path.dirname(os.path.abspath(ledger_fp))
@@ -410,13 +395,6 @@ def _update_ledger_tg_offset_sync(ledger_fp: str, max_uid: int) -> None:
 def _flush_telegram_pending_updates_sync(
     base_dir: Optional[str] = None,
 ) -> int:
-    """
-    # [Case 81]:
-    데몬 기동 전(ExecStartPre) 또는 실제 원격 신규 커밋이 감지(remote_ahead > 0)되어
-    재기동이 확정된 시점에 텔레그램 서버 큐에 남아 있는 미확인 메시지의 최대 update_id 를 조회하여
-    `offset = max_update_id + 1` 로 소비 확정(Ack)하고
-    폴더별 오프셋 파일(`.tg_update_offset_<folder_slug>.dat`) 및 3중 원장의 `last_tg_update_id` 에 동시 기록한다.
-    """
     target_dir = get_bot_base_dir(base_dir)
     bot_token = _discover_bot_token_sync(target_dir)
     if not bot_token:
@@ -474,13 +452,13 @@ def _flush_telegram_pending_updates_sync(
 
 
 # ---------------------------------------------------------------------------
-# [핵심 0-C · Case 68, Case 75, Case 81, Case 86, Case 87, Case 88 & Case 91] git reset --hard 실행 전후 폴더별 원장(스나이퍼 + 모의 암살자) · .env · 오프셋 철벽 보호기
+# [핵심 0-C] git reset --hard 실행 전후 폴더별 원장(스나이퍼 + 바벨 별도수익금고 + 암살자) · .env · 오프셋 철벽 보호기
 # ---------------------------------------------------------------------------
 def _snapshot_protected_local_files_sync(target_dir: str) -> Dict[str, bytes]:
     """
-    🚨 Case 68, Case 75, Case 81, Case 86, Case 87, Case 88 & Case 91:
-    git reset --hard 가 실행되기 직전(remote_ahead > 0 확인 후)에 현재 폴더(target_dir) 내의
-    모든 원장(본 그리드·3층 서브 그리드·모의 암살자 원장 assassin_sim_ledger*.json·수수료율 포함), 백업, .env, .tg_update_offset 파일을 메모리에 스냅샷 보존한다.
+    🚨 Case 68, Case 75, Case 81, Case 86, Case 87, Case 88, Case 91 & 바벨 확장:
+    git reset --hard 직전에 폴더 내 모든 원장(*ledger*.json : soxl_stratum_ledger*.json,
+    barbell_ledger*.json, assassin_sim_ledger*.json 포함), 백업, .env, .tg_update_offset 파일을 메모리에 스냅샷 보존한다.
     """
     abs_dir = get_bot_base_dir(target_dir)
     emergency_free_disk_space_sync(
@@ -526,10 +504,6 @@ def _snapshot_protected_local_files_sync(target_dir: str) -> Dict[str, bytes]:
 def _restore_protected_local_files_sync(
     target_dir: str, snapshots: Dict[str, bytes]
 ) -> int:
-    """
-    🚨 Case 68, Case 75, Case 87 & Case 88:
-    git reset --hard 실행 직후 메모리에 보존해 둔 스냅샷 바이트를 Dirty-Check 후 원자적으로 복원한다.
-    """
     abs_dir = get_bot_base_dir(target_dir)
     restored_cnt = 0
     for fp, raw_bytes in (snapshots or {}).items():
@@ -588,15 +562,11 @@ def _restore_protected_local_files_sync(
 
 
 # ---------------------------------------------------------------------------
-# [핵심 1] 구버전 폐기 파일 및 고아 임시 파일 자동 청소기 (purge_deprecated_legacy_files — Case 75)
+# [핵심 1] 구버전 폐기 파일 및 고아 임시 파일 자동 청소기
 # ---------------------------------------------------------------------------
 def purge_deprecated_legacy_files(
     base_dir: Optional[str] = None,
 ) -> List[str]:
-    """
-    🚨 제3헌법 & Case 75:
-    구버전 데드코드 파일 및 고아 임시 파일을 즉시 청소한다.
-    """
     target_dir = get_bot_base_dir(base_dir)
     removed: List[str] = []
     for fname in DEPRECATED_LEGACY_FILES:
@@ -615,26 +585,17 @@ def purge_deprecated_legacy_files(
     return removed
 # -*- coding: utf-8 -*-
 """
-# MODIFIED: plugin_updater.py (Part 2/2 — Case 85 자동 치유 · 무디스크 인메모리 AST 교차 검증 · 스나이퍼 & 모의 암살자 원장 보호 Git 업데이트 · Case 81 무중단 자가 재기동)
+# MODIFIED: plugin_updater.py (Part 2/2 — Case 85 자동 치유 · 15대 코어 모듈 무디스크 인메모리 AST 교차 검증 ·
+# 스나이퍼/바벨[barbell_ledger.json]/암살자 원장 보호 Git 업데이트 · 장외 업데이트 시 SGOV/실전암살자 미결 주문 보호 · Case 81 무중단 자가 재기동)
 """
 
 
 # ---------------------------------------------------------------------------
-# [핵심 2] Case 85 f-string 닫는 중괄호 정규식 치유 & 삼항식 walrus 정규식 치유 & 4배수 선제 스냅 자동 치유기 (_auto_heal_indentation_glitches)
+# [핵심 2] Case 85 f-string 닫는 중괄호 정규식 치유 & 삼항식 walrus 정규식 치유 & 4배수 선제 스냅 자동 치유기
 # ---------------------------------------------------------------------------
 def _auto_heal_indentation_glitches(
     filepath: str, max_passes: int = 6
 ) -> bool:
-    r"""
-    # [Case 75 & Case 85 역방향 들여쓰기 오염 · f-string 닫는 중괄호('}' -> '>') 오기 · 삼항식 walrus 선제 정규식 자동 치유기]:
-    1) [Case 85 핵심]: 외부 편집 과정에서 f"...{var}.ext" 닫는 중괄호 자리에 '>' 가 혼입된 패턴이나
-       삼항식 조건절 내 비괄호 walrus 패턴이 유입되었을 경우, ast.parse() 실행 전에
-       정규식(_FSTRING_BROKEN_BRACE_RE 및 _TERNARY_WALRUS_GLITCH_RE)으로 즉시 정상 구문으로 선제 치유한다!
-    2) 파일 상단에 복사 시 섞여 들어간 텍스트나 마크다운 코드펜스(```)를 제거하고,
-       홀수 공백(1칸 -> 0칸, 9칸 -> 8칸)을 4의 배수로 일괄 선제 스냅 교정한다.
-    3) 치유본 저장 시 OSError(errno.ENOSPC == 28)가 발생하면 미완성 .heal.tmp 를 삭제하고
-       emergency_free_disk_space_sync() 로 공간을 확보한 뒤 재시도한다.
-    """
     if not os.path.isfile(filepath):
         return False
 
@@ -647,19 +608,16 @@ def _auto_heal_indentation_glitches(
             with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
                 orig_src = f.read()
 
-            # 0단계 [Case 85]: f-string 닫는 중괄호 '>' 오기 및 삼항식 내 비괄호 walrus 정규식 선제 치유
             src = _FSTRING_BROKEN_BRACE_RE.sub(r"\1}\2", orig_src)
             src = _TERNARY_WALRUS_GLITCH_RE.sub(
                 r"if res_obj.get(\1) is not None", src
             )
 
-            # 이미 문법적으로 완벽하고 변경 사항이 없으면 디스크 쓰기 없이 즉시 통과
             try:
                 ast.parse(src, filename=filepath)
                 if src == orig_src:
                     return False
             except (IndentationError, SyntaxError):
-                # 1단계: 상단 불필요 프리픽스 및 마크다운 코드펜스 제거 + 홀수 공백(1칸, 9칸 등) 4배수 선제 스냅
                 if coding_marker in src and not src.lstrip().startswith(
                     coding_marker
                 ):
@@ -688,7 +646,6 @@ def _auto_heal_indentation_glitches(
                     r"if res_obj.get(\1) is not None", src
                 )
 
-                # 2단계: 선제 스냅 후에도 남은 IndentationError 미세 교정
                 for _ in range(max_passes):
                     try:
                         ast.parse(src, filename=filepath)
@@ -775,12 +732,9 @@ def _auto_heal_indentation_glitches(
 
 
 # ---------------------------------------------------------------------------
-# [핵심 3] AST 최상위 익스포트 심볼 추출기 및 코어 모듈 무디스크 인메모리 교차 검증기 (Case 75 & Case 85)
+# [핵심 3] AST 최상위 익스포트 심볼 추출기 및 15대 코어 모듈 무디스크 인메모리 교차 검증기
 # ---------------------------------------------------------------------------
 def _extract_module_exported_symbols(tree: ast.AST) -> Set[str]:
-    """
-    AST 트리에서 모듈 최상위 레벨(또는 조건문 내부)에 정의된 모든 함수, 클래스, 변수, 임포트 별칭을 추출한다.
-    """
     exported: Set[str] = set()
 
     for node in ast.walk(tree):
@@ -813,16 +767,6 @@ def _extract_module_exported_symbols(tree: ast.AST) -> Set[str]:
 def verify_all_modules_compile(
     base_dir: Optional[str] = None,
 ) -> Tuple[bool, str]:
-    """
-    🚨 Case 11, Case 62, Case 75 & Case 85 [디스크 쓰기 0 Byte 순수 인메모리 컴파일 검증]:
-    1) 검증 시작 전 emergency_free_disk_space_sync(remove_pycache=False) 로 고아 .tmp.* 파일을 청소한다.
-    2) 필수 코어 모듈(REQUIRED_CORE_MODULES : assassin_plugin.py 포함)이 디스크에 모두 존재하는지 확인한다.
-    3) Case 85 f-string 중괄호 및 홀수 공백 들여쓰기 자동 치유(_auto_heal_indentation_glitches) 후
-       디스크에 단 1바이트도 쓰지 않는 파이썬 내장 인메모리 바이트코드 컴파일러
-       `compile(src, fpath, "exec", dont_inherit=True)` 및 `ast.parse(src, filename=fpath)` 로
-       문법 및 바이트코드 생성 무결성을 100% 검증한다!
-    4) 코어 모듈 간 `from <local_module> import <symbol>` 구문을 전수 대조한다.
-    """
     target_dir = get_bot_base_dir(base_dir)
     emergency_free_disk_space_sync(
         base_dir=target_dir, keep_backup_days=14, remove_pycache=False
@@ -859,7 +803,9 @@ def verify_all_modules_compile(
                 if getattr(syn_err, "lineno", None)
                 else ""
             )
-            errors.append(f"문법/컴파일 오류 [{fname}]{line_info}: {syn_err.msg}")
+            errors.append(
+                f"문법/컴파일 오류 [{fname}]{line_info}: {syn_err.msg}"
+            )
         except Exception as exc:
             errors.append(f"컴파일/AST 파싱 예외 [{fname}]: {exc}")
 
@@ -895,7 +841,7 @@ def verify_all_modules_compile(
 
 
 # ---------------------------------------------------------------------------
-# [핵심 4] 스마트 Git 동기화 · Case 68/81/88/91 원장(스나이퍼 + 모의 암살자)·오프셋 철벽 보존 쉴드 · Case 75/81 HTTP 409 및 불필요 복원 쓰기 원천 차단
+# [핵심 4] 스마트 Git 동기화 · 스나이퍼/바벨/암살자 원장 및 오프셋 철벽 보존 쉴드
 # ---------------------------------------------------------------------------
 def _run_cmd_sync(
     cmd: List[str], cwd: str, timeout_sec: float = 30.0
@@ -917,11 +863,6 @@ def _run_cmd_sync(
 def _execute_git_pull_and_preflight_sync(
     base_dir: Optional[str] = None,
 ) -> Tuple[bool, str, bool]:
-    """
-    🚨 Case 62, Case 68, Case 75, Case 81, Case 85, Case 86, Case 87, Case 88 & Case 91:
-    원격 신규 커밋이 없을 때(remote_ahead == 0)는 getUpdates 호출(HTTP 409 유발)이나
-    SoxlStratumLedger 재초기화 없이 즉시 인메모리 검증만 수행한다.
-    """
     target_dir = get_bot_base_dir(base_dir)
     protected_snapshots: Dict[str, bytes] = {}
     did_git_reset = False
@@ -1015,6 +956,7 @@ def _execute_git_pull_and_preflight_sync(
         )
         for ledger_ignore_name in (
             "soxl_stratum_ledger.json",
+            "barbell_ledger.json",
             "assassin_sim_ledger.json",
         ):
             try:
@@ -1114,9 +1056,6 @@ def _execute_git_pull_and_preflight_sync(
 async def execute_git_pull_and_preflight(
     base_dir: Optional[str] = None,
 ) -> Tuple[bool, str, bool]:
-    """
-    제1헌법: 동기 Git 및 서브프로세스 검증을 백그라운드 스레드로 격리 실행한다.
-    """
     return await asyncio.wait_for(
         asyncio.to_thread(_execute_git_pull_and_preflight_sync, base_dir),
         timeout=60.0,
@@ -1124,13 +1063,9 @@ async def execute_git_pull_and_preflight(
 
 
 # ---------------------------------------------------------------------------
-# [핵심 5] 백그라운드 무인 자동 업데이트 루프 (Case 07: 장중 재기동 차단 & Case 81: os.execv 인플레이스 교체)
+# [핵심 5] 백그라운드 무인 자동 업데이트 루프 (Case 07: 장중 재기동 차단 & 미결주문 보호 & Case 81: os.execv 인플레이스 교체)
 # ---------------------------------------------------------------------------
 def _is_weekday_market_busy_est(now_est: Optional[datetime] = None) -> bool:
-    """
-    🚨 Case 07:
-    평일(월~금) 04:00 ~ 16:05 EST 장중에는 무인 자동 업데이트로 인한 프로세스 재기동을 원천 차단한다.
-    """
     dt = now_est.astimezone(EST_TZ) if now_est else datetime.now(EST_TZ)
     if dt.weekday() >= 5:
         return False
@@ -1142,10 +1077,6 @@ async def run_auto_update_loop(
     context: Any,
     interval_sec: float = 3600.0,
 ) -> None:
-    """
-    # [Case 07, Case 68, Case 75 & Case 81]:
-    백그라운드 무인 자동 업데이트 워커 (main_runtime.py / main.py 에서 정식 임포트).
-    """
     wait_s = max(300.0, float(interval_sec or 3600.0))
     base_dir = get_bot_base_dir(getattr(context, "base_dir", None))
 
@@ -1171,6 +1102,30 @@ async def run_auto_update_loop(
                 st.get("sell_order_id") or ""
             ).strip():
                 continue
+        except Exception:
+            pass
+
+        try:
+            if hasattr(context, "barbell_ledger"):
+                bst = context.barbell_ledger.get_state()
+                if str(bst.get("sgov_buy_order_id") or "").strip() or str(
+                    bst.get("sgov_sell_order_id") or ""
+                ).strip():
+                    continue
+        except Exception:
+            pass
+
+        try:
+            if hasattr(context, "assassin_ledger"):
+                ast_st = context.assassin_ledger.get_state()
+                if (
+                    bool(ast_st.get("is_live_position", False))
+                    or str(ast_st.get("pending_buy_order_id") or "").strip()
+                    or str(
+                        ast_st.get("pending_exit_sell_order_id") or ""
+                    ).strip()
+                ):
+                    continue
         except Exception:
             pass
 
@@ -1208,7 +1163,7 @@ async def run_auto_update_loop(
             logger.debug("무인 업데이트 점검 루프 예외: %s", exc)
 
 
-# 하위 호환 별칭 (타 모듈 및 프롬프트 심볼 완벽 호환)
+# 하위 호환 별칭
 auto_update_loop = run_auto_update_loop
 start_auto_update_loop = run_auto_update_loop
 background_auto_update_loop = run_auto_update_loop
@@ -1216,7 +1171,7 @@ purge_obsolete_files_sync = purge_deprecated_legacy_files
 
 
 # ---------------------------------------------------------------------------
-# CLI 엔트리포인트 (`--verify-only` 독립 검증 및 `systemd ExecStartPre` Case 07/68/75/81/85 호환)
+# CLI 엔트리포인트 (`--verify-only` 독립 검증 및 `systemd ExecStartPre` 호환)
 # ---------------------------------------------------------------------------
 def _cli_main() -> int:
     parser = argparse.ArgumentParser(
@@ -1225,7 +1180,7 @@ def _cli_main() -> int:
     parser.add_argument(
         "--verify-only",
         action="store_true",
-        help="디스크의 코어 모듈 인메모리 컴파일 및 AST 심볼 정합성만 검증하고 종료합니다.",
+        help="디스크의 15대 코어 모듈 인메모리 컴파일 및 AST 심볼 정합성만 검증하고 종료합니다.",
     )
     parser.add_argument(
         "--base-dir",

@@ -1,15 +1,10 @@
 # -*- coding: utf-8 -*-
 """
-# MODIFIED: main.py (Part 1/2 — 🗡️ [모의] 암살자 실주문 100% 물리적 차단 및 상시 작동 결속 · 실전 스나이퍼 STEP 1/4/6/8/9 holdings·prices 필수 인자 완비로 목표가 초과 시 미매도 TypeError 원천 소각 · STEP 6 last_closing_report_date 키 정합성 교정 · Case 01 ~ Case 93)
-인피니트 스노우볼 (Infinite Snowball) v3.0 — 순수 롱(🐂 SOXL 단독) 매수 04:07 ~ 16:00 EST 제한
-(정규장 마감 30분 전 15:30 ~ 16:00 EST 본·서브 0주 새 사이클 1층 진입 및 1층 공석 +1.0% 돌파 추격 차단 ·
-04:07 ~ 15:29 EST 1층 공석 +1.0% 돌파 시 1분봉 Wilder RSI(14) <= 50.0 필터 결합 · Case 84, Case 88, Case 92) &
-익절 매도 24시간 전 세션(프리마켓 + 정규장 + 애프터마켓 + 데이마켓 · 방안 C 오버나이트 통합이평 사수 · Case 83) 확장
-오버나이트 7층 골디락스 본 그리드(👑 06_L2L7_RATCHET_8PCT · Case 87) +
-🛡️ 스위치 없는 100% 기본 상시 적용(Default ON) 3층 서브 그리드(13_SUB_L1L3_RESV05_CAP4L · 최대 4회분[16%] 상한 캡 · Case 88) +
-🗡️ 스나이퍼 ON/OFF 및 보유 수량과 무관하게 24시간 상시 작동하며 5대 실시간 알림을 타전하는 [모의 ⇄ 실전 Dual-Ready] 암살자(assassin_plugin.py · ASSASSIN_LIVE_ORDER_HARD_LOCK = True 실주문 100% 잠금 · Case 93)
-경량화 메인 오케스트레이터 코어 모듈 (메인 코드 2분할 리팩토링 Part 2 / 2 · Step 14 / 14)
-- 제1헌법 ~ 제6헌법 및 Case 01 ~ 93 전수 락온
+# MODIFIED: main.py (15대 코어 모듈 완전체 오케스트레이터 —
+# ⚖️ 바벨 모드[BARBELL_60_30_10 : SOXL 60% / SGOV 30% 정규장 매매 / 현금 10% 선행수혈 / 실현수익 별도금고 격리] 결속 ·
+# 🗡️ [모의 ⇄ 0주전환예약 ⇄ 실전] 암살자 분리 승격 및 실전 암살자 단독 모드 시 스나이퍼/바벨 간섭 100% 차단[SGOV 수동매도 위임] ·
+# 부팅 시 3대 TDD[QuantEngine · Barbell · Assassin] 전수 검증 · Case 01 ~ Case 93 락온)
+인피니트 스노우볼 (Infinite Snowball) v3.0 — 메인 오케스트레이터 코어 모듈
 """
 
 from __future__ import annotations
@@ -21,13 +16,22 @@ import signal
 import sys
 import time
 from datetime import datetime
-from typing import Any, Awaitable, Dict, Optional
+from typing import Any, Dict, Optional
 
 from assassin_plugin import (
     MACRO_REF_SYMBOL,
     ensure_assassin_ledger,
     execute_simulated_assassin_tick_plugin,
+    is_live_assassin_standalone_active,
     run_assassin_plugin_tdd,
+)
+from barbell_plugin import (
+    BARBELL_SAFE_SYMBOL,
+    ensure_barbell_ledger,
+    execute_barbell_sgov_tick_plugin,
+    initialize_or_sync_barbell_on_mode_enter,
+    is_barbell_mode,
+    run_barbell_plugin_tdd,
 )
 from defense_plugin import (
     execute_0400_premarket_stabilization_plugin,
@@ -41,6 +45,7 @@ from main_runtime import (
     _check_weekend_nyse_closed_dynamic,
     _compute_candle_metrics_dynamic,
     _compute_qqq_metrics_dynamic,
+    _empty_holding_entry,
     _empty_soxl_holding_entry,
     _install_toss_api_compatibility_patches,
     _instantiate_stratum_ledger,
@@ -99,25 +104,26 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
 )
-# [Case 75]: 매 1.5초 시세 조회 시 systemd-journald 디스크 쓰기를 유발하는 httpx / httpcore INFO 로그 묵음화
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 logger = logging.getLogger("toss_sniper.main")
 
-# 메인 루프 주기 상수 (평시 1.5초 실시간 타점 감시 / 미체결 주문 및 암살자 트레일링 부스터 0.4초 / 장외 0주 무포지션 대기 5.0초)
+# 메인 루프 주기 상수 (평시 1.5초 / 미체결 주문 및 암살자 트레일링 부스터 0.4초 / 장외 0주 대기 5.0초)
 NORMAL_LOOP_INTERVAL_SEC: float = 1.50
 FAST_SHIELD_LOOP_INTERVAL_SEC: float = 0.40
 EXTENDED_ZERO_HOLD_INTERVAL_SEC: float = 5.00
 
 
 # ---------------------------------------------------------------------------
-# [핵심 1] 스나이퍼 & [모의] 암살자 전역 컨텍스트 (SniperAppContext — Case 68 폴더별 3중 원장 & 계좌 수수료 복원 & Case 81 자가 재기동 결속)
+# [핵심 1] 스나이퍼 · 바벨(60/30/10) · 암살자 전역 컨텍스트 (SniperAppContext)
 # ---------------------------------------------------------------------------
 class SniperAppContext:
     """
-    코어 모듈이 공유하는 단일 런타임 상태 컨텍스트 (Case 68 폴더 위치 기반 격리 · 계좌별 수수료율 동기화 ·
-    🗡️ [모의] 암살자 독립 원장 결속 · Case 81 무중단 자가 교체 플래그 적용).
+    15대 코어 모듈이 공유하는 단일 런타임 상태 컨텍스트:
+    - 스나이퍼 3중 원장 (soxl_stratum_ledger_{folder_slug}.json)
+    - 바벨 전용 3중 원장 (barbell_ledger_{folder_slug}.json · 별도 실현수익금고 포함)
+    - 암살자 전용 3중 원장 (assassin_sim_ledger_{folder_slug}.json · 모의/0주예약/실전 상태 포함)
     """
 
     def __init__(self, base_dir: Optional[str] = None) -> None:
@@ -134,10 +140,9 @@ class SniperAppContext:
         self.ledger: Any = _instantiate_stratum_ledger(
             filepath=self.ledger_path, base_dir=self.base_dir
         )
-        # 🗡️ [모의] 암살자 전용 독립 3중 원장 초기화 및 장착 (스나이퍼 원장·예수금 간섭 0%)
+        self.barbell_ledger: Any = ensure_barbell_ledger(self)
         self.assassin_ledger: Any = ensure_assassin_ledger(self)
 
-        # 원장에 저장된 계좌별 수수료율을 런타임 메모리에 선행 동기화
         try:
             st_init = self.ledger.get_state(TARGET_SYMBOL)
             init_rt_pct = safe_float(
@@ -157,13 +162,13 @@ class SniperAppContext:
         self.wakeup_event: asyncio.Event = asyncio.Event()
         self.shutdown_event: asyncio.Event = asyncio.Event()
 
-        # [Case 81]: 장외 무인 자동 업데이트 및 /update 재기동 요청 플래그
         self.restart_requested: bool = False
         self.restart_reason: str = ""
 
         self.latest_prices: Dict[str, float] = {
             TARGET_SYMBOL: 0.0,
             MACRO_REF_SYMBOL: 0.0,
+            BARBELL_SAFE_SYMBOL: 0.0,
         }
         self.last_soxl_live_price: float = 0.0
         self.last_soxl_live_price_mono: float = 0.0
@@ -172,7 +177,8 @@ class SniperAppContext:
         self.assassin_high_freq_active: bool = False
 
         self.latest_holdings: Dict[str, Dict[str, Any]] = {
-            TARGET_SYMBOL: _empty_soxl_holding_entry()
+            TARGET_SYMBOL: _empty_soxl_holding_entry(),
+            BARBELL_SAFE_SYMBOL: _empty_holding_entry(BARBELL_SAFE_SYMBOL),
         }
         self.holdings_fetch_ok: bool = False
         self.candle_metrics_cache: Dict[str, Dict[str, Any]] = {}
@@ -197,7 +203,6 @@ class SniperAppContext:
         message: str,
         cooldown_sec: float = 1800.0,
     ) -> None:
-        # Case 79: 데이마켓/애프터마켓 시세 결측이나 거래 제한 관련 사유는 절대 알림을 보내지 않고 100% 묵음 처리
         r_lower = str(reason_key or "").lower()
         if any(
             k in r_lower
@@ -224,16 +229,9 @@ class SniperAppContext:
 
 
 # ---------------------------------------------------------------------------
-# [핵심 2] 백그라운드 태스크 1 : SOXL 1분봉/일봉 · Wilder's RSI(14) · 암살자 4대 지표 및 QQQ 안전망 레이더 (candle_radar_loop)
+# [핵심 2] 백그라운드 태스크 1 : SOXL 1분봉/일봉 · Wilder's RSI(14) · 암살자 4대 지표 및 QQQ 안전망 레이더
 # ---------------------------------------------------------------------------
 async def candle_radar_loop(context: SniperAppContext) -> None:
-    """
-    # MODIFIED [Case 79, Case 92, Case 93 & 🗡️ 모의 암살자 4대 지표 · QQQ 안전망 레이더]:
-    1) SOXL 1분봉(최대 400봉 상한) 및 일봉(10봉)을 수집하여 VWAP, 전일 정규장 종가(prev_reg_close),
-       당일 04:07 프리장 시가(pre_open_price), 5MA 진폭, Heikin-Ashi 추세, Wilder's RSI(14) 기저값을 산출한다.
-    2) 프리장·정규장(04:00 ~ 16:05 EST) 구간에서는 QQQ 1분봉도 함께 수집하여
-       순수 롱 방향성 인지 안전망(vel_1m_pct, vel_3m_pct, bear_drop_amp_pct) 지표를 갱신한다.
-    """
     while not context.shutdown_event.is_set():
         now_est = datetime.now(EST_TZ)
         if _check_weekend_nyse_closed_dynamic(now_est):
@@ -282,7 +280,6 @@ async def candle_radar_loop(context: SniperAppContext) -> None:
                 context.last_soxl_live_price = fetched_lp
                 context.last_soxl_live_price_mono = time.monotonic()
 
-            # 04:00 ~ 16:05 EST 구간에서 QQQ 1분봉 방향성 안전망 지표 갱신
             if in_market:
                 try:
                     candles_qqq_1m = await context.api.get_candles_1m(
@@ -311,19 +308,14 @@ async def candle_radar_loop(context: SniperAppContext) -> None:
             )
         except asyncio.TimeoutError:
             pass
-# -*- coding: utf-8 -*-
-"""
-# MODIFIED: main.py (Part 2/2 — 🗡️ [모의] 암살자 상시 작동 루프 결속 · 실전 스나이퍼 STEP 1/4/6/8/9 holdings·prices 인자 100% 완비 및 STEP 6 last_closing_report_date 키 정합성 교정으로 목표가 도달 즉시 익절 매도 보장 · Case 01 ~ Case 93 완비)
-"""
 
 
 def _evaluate_fast_shield_mode(
     context: SniperAppContext, st: Dict[str, Any]
 ) -> bool:
     """
-    미체결 주문 존재 시, 매수/매도 직후 60초 타임쉴드 구간, 또는
-    🗡️ 암살자(Assassin) +1.00% 트레일링 점화(assassin_high_freq_active) 시
-    루프 주기를 0.40초(FAST_SHIELD_LOOP_INTERVAL_SEC)로 가속한다.
+    미체결 주문(SOXL · 바벨 SGOV · 실전 암살자), 매수/매도 직후 60초 타임쉴드, 또는
+    🗡️ 암살자 +1.00% 트레일링 점화(assassin_high_freq_active) 시 루프를 0.40초로 가속한다.
     """
     if bool(getattr(context, "assassin_high_freq_active", False)):
         return True
@@ -331,6 +323,15 @@ def _evaluate_fast_shield_mode(
         st.get("sell_order_id") or ""
     ).strip():
         return True
+    if hasattr(context, "barbell_ledger"):
+        try:
+            bst = context.barbell_ledger.get_state()
+            if str(bst.get("sgov_buy_order_id") or "").strip() or str(
+                bst.get("sgov_sell_order_id") or ""
+            ).strip():
+                return True
+        except Exception:
+            pass
     in_b, _ = is_within_post_buy_time_shield(context, st, TARGET_SYMBOL)
     if in_b:
         return True
@@ -341,19 +342,21 @@ def _evaluate_fast_shield_mode(
 
 
 # ---------------------------------------------------------------------------
-# [핵심 3] 백그라운드 태스크 2 : 메인 스나이퍼 & 상시 가동 [모의] 암살자 루프 (main_sniper_loop)
+# [핵심 3] 백그라운드 태스크 2 : 메인 스나이퍼 · 바벨(60/30/10) · [모의/실전] 암살자 통합 루프
 # ---------------------------------------------------------------------------
 async def main_sniper_loop(context: SniperAppContext) -> None:
     """
-    🚨 제1헌법 ~ 제6헌법 & Case 01 ~ Case 93 + 🗡️ [모의] 암살자 상시 작동 루프:
-    1) 평일 04:00 ~ 04:06 EST 오프닝 안정화 (미결 주문 선행 정산 · 수수료율 최신화 · 일일 카운터 롤오버)
-    2) 실시간 SOXL (및 04:00 ~ 16:05 EST 구간 QQQ) 현재가 다건 조회 및 1분봉 Wilder RSI(14) · VWAP · HA O(1) 틱 합성
-    3) 🗡️ [모의] 암살자 상시 실행 (execute_simulated_assassin_tick_plugin):
-       실전 스나이퍼의 ON/OFF 여부 및 보유 수량과 무관하게 매 틱 독립 작동하며(실주문 100% 물리적 차단) 5대 실시간 알림을 타전한다!
-    4) 실전 스나이퍼 미결 매수/매도 주문 선행 동기화 (Case 66) 및 실잔고 무결성 화해 (Case 61, 63, 69, 89)
-    5) 실전 스나이퍼 매도 모니터 (매수 후 60초 타임쉴드 뒤 24시간 전 세션 1.5초 다중 익절 + 5초 윗꼬리 감지 + 방안 C 오버나이트 통합이평 사수 · Case 70, 79, 82, 83, 88, 89)
-    6) 실전 스나이퍼 매수 게이트 (평일 04:07 ~ 16:00 EST · 15:30 0주/돌파 차단 · 1층 공석 돌파 RSI<=50 필터 · 10분 와이드 & STEP2X · Default-ON 3층 서브 그리드 · Case 67, 73, 76, 77, 78, 84, 87, 88, 91, 92)
-    7) 평일 16:00 ~ 16:59 EST 일일 마감 결산 브리핑 (인출형 당일 실현수익 현금 인출 가이드 포함 · Case 88, 91)
+    🚨 제1헌법 ~ 제6헌법 & Case 01 ~ Case 93 + 바벨(60/30/10) + [모의/실전] 암살자 분리 오케스트레이션:
+    1) 평일 04:00 ~ 04:06 EST 오프닝 안정화 (실전 암살자 단독 모드 시에는 수수료/일일 롤오버만 수행하여 포지션 혼입 방지)
+    2) 실시간 SOXL + QQQ 시세 배치 조회 및 1분봉 지표 O(1) 합성
+    3) 🗡️ [모의 ⇄ 실전] 암살자 틱 엔진 실행:
+       - 만약 현재 [실전(LIVE)] 암살자 단독 모드가 활성화된 상태(is_live_assassin_standalone_active == True)라면,
+         스나이퍼(복리/단리) 및 바벨(SOXL/SGOV) 루프를 즉시 건너뛰어 100% 물리적 분리 운용을 보장한다! (SGOV는 수동 매도 위임)
+    4) 스나이퍼 미결 매수/매도 선행 정산 (0주 졸업 시 예약된 실전 암살자 자동 승격 확인 포함)
+    5) 주기적 브로커 실잔고 화해 (SOXL 및 바벨 SGOV 수동 잔고 무결성 동기화)
+    6) ⚖️ 바벨 모드(BARBELL_60_30_10) 가동 시 정규장(09:31 ~ 15:55 EST) 전용 SGOV 10% 매도 / 30% 리밸런싱 매수 실행
+    7) 평일 16:00 EST 정규장 마감 일일 결산 보고
+    8) 실시간 스나이퍼 다중 익절 매도 모니터 (오팔 최우선) 및 시드보호 매수 게이트 (떨사 · 바벨 4단계 자동수혈 포함)
     """
     last_reconcile_mono: float = 0.0
 
@@ -379,14 +382,33 @@ async def main_sniper_loop(context: SniperAppContext) -> None:
             # STEP 1: 04:00 ~ 04:06 EST 프리장 오프닝 안정화 (일 1회)
             # ---------------------------------------------------------------
             if 400 <= hm <= 406 and context.last_0400_sync_date != today_str:
-                await _call_plugin_adaptive(
-                    execute_0400_premarket_stabilization_plugin,
-                    context=context,
-                    holdings=context.latest_holdings,
-                    prices=context.latest_prices,
-                    now_est=now_est,
-                )
-                context.last_0400_sync_date = today_str
+                if is_live_assassin_standalone_active(context):
+                    try:
+                        us_c, rt_p = await context.api.ensure_us_commission_rate(
+                            force_refresh=True
+                        )
+                        if us_c > 0.0 and rt_p > 0.0:
+                            await context.ledger.update_state(
+                                TARGET_SYMBOL,
+                                us_commission_rate=us_c,
+                                round_trip_fee_rate_pct=rt_p,
+                            )
+                            await context.assassin_ledger.update_state(
+                                us_commission_rate=us_c,
+                                round_trip_fee_rate_pct=rt_p,
+                            )
+                    except Exception:
+                        pass
+                    context.last_0400_sync_date = today_str
+                else:
+                    await _call_plugin_adaptive(
+                        execute_0400_premarket_stabilization_plugin,
+                        context=context,
+                        holdings=context.latest_holdings,
+                        prices=context.latest_prices,
+                        now_est=now_est,
+                    )
+                    context.last_0400_sync_date = today_str
 
             # ---------------------------------------------------------------
             # STEP 2: 실시간 SOXL (및 장중 QQQ) 현재가 조회 & 1분봉 지표 O(1) 합성
@@ -444,13 +466,8 @@ async def main_sniper_loop(context: SniperAppContext) -> None:
                     )
                 )
 
-            live_prices_dict: Dict[str, float] = {TARGET_SYMBOL: live_p}
-            if qqq_p > 0.0:
-                live_prices_dict[MACRO_REF_SYMBOL] = qqq_p
-
             # ---------------------------------------------------------------
-            # STEP 3: 🗡️ [모의] 암살자 상시 가동 엔진 호출
-            # (ASSASSIN_LIVE_ORDER_HARD_LOCK = True 실주문 100% 차단 · 실전 스나이퍼와 물리적 완전 격리)
+            # STEP 3: 🗡️ [모의 ⇄ 실전] 암살자 틱 엔진 실행 및 실전 단독 모드 분리 게이트
             # ---------------------------------------------------------------
             try:
                 await execute_simulated_assassin_tick_plugin(
@@ -461,9 +478,25 @@ async def main_sniper_loop(context: SniperAppContext) -> None:
                 raise
             except Exception as assn_exc:
                 logger.warning(
-                    "⚠️ [Assassin Plugin 예외 격리 · 실전 스나이퍼 무중단 유지]: %s",
+                    "⚠️ [Assassin Plugin 예외 격리 · 메인 루프 무중단 유지]: %s",
                     assn_exc,
                 )
+
+            # [핵심 분리 아키텍처] 실전 암살자(LIVE) 단독 모드일 때는 스나이퍼/바벨 신규 매매 및 화해를 100% 정지!
+            if is_live_assassin_standalone_active(context):
+                loop_sleep_live = (
+                    FAST_SHIELD_LOOP_INTERVAL_SEC
+                    if bool(getattr(context, "assassin_high_freq_active", False))
+                    else NORMAL_LOOP_INTERVAL_SEC
+                )
+                try:
+                    await asyncio.wait_for(
+                        context.wakeup_event.wait(), timeout=loop_sleep_live
+                    )
+                    context.wakeup_event.clear()
+                except asyncio.TimeoutError:
+                    pass
+                continue
 
             # ---------------------------------------------------------------
             # STEP 4: 실전 스나이퍼 미결 매수/매도 주문 선행 정산 (Case 66)
@@ -477,11 +510,13 @@ async def main_sniper_loop(context: SniperAppContext) -> None:
                     sync_pending_sell_order_plugin,
                     context=context,
                     holdings=context.latest_holdings,
-                    prices=live_prices_dict,
+                    prices={TARGET_SYMBOL: live_p},
                     symbol=TARGET_SYMBOL,
                     live_price=live_p,
                     now_est=now_est,
                 )
+                if is_live_assassin_standalone_active(context):
+                    continue
                 st = context.ledger.get_state(TARGET_SYMBOL)
 
             if pending_buy_oid:
@@ -489,7 +524,7 @@ async def main_sniper_loop(context: SniperAppContext) -> None:
                     sync_pending_buy_order_plugin,
                     context=context,
                     holdings=context.latest_holdings,
-                    prices=live_prices_dict,
+                    prices={TARGET_SYMBOL: live_p},
                     symbol=TARGET_SYMBOL,
                     live_price=live_p,
                     now_est=now_est,
@@ -497,7 +532,7 @@ async def main_sniper_loop(context: SniperAppContext) -> None:
                 st = context.ledger.get_state(TARGET_SYMBOL)
 
             # ---------------------------------------------------------------
-            # STEP 5: 주기적 브로커 실잔고 조회 및 무결성 화해 (Case 61, 63, 66, 69, 89)
+            # STEP 5: 주기적 브로커 실잔고 조회 및 무결성 화해 (SOXL + 바벨 SGOV)
             # ---------------------------------------------------------------
             now_mono = time.monotonic()
             reconcile_interval = (
@@ -522,21 +557,39 @@ async def main_sniper_loop(context: SniperAppContext) -> None:
                     if live_p <= 0.0 and h_lp > 0.0:
                         live_p = h_lp
                         context.latest_prices[TARGET_SYMBOL] = live_p
-                        live_prices_dict[TARGET_SYMBOL] = live_p
                         context.last_soxl_live_price = live_p
                         context.last_soxl_live_price_mono = now_mono
                     await _call_plugin_adaptive(
                         reconcile_stratum_with_broker_holdings_plugin,
                         context=context,
                         holdings=holdings_map,
-                        prices=live_prices_dict,
+                        prices={TARGET_SYMBOL: live_p},
                         now_est=now_est,
                         force_sync=False,
                     )
+                    if is_live_assassin_standalone_active(context):
+                        continue
                     st = context.ledger.get_state(TARGET_SYMBOL)
 
             # ---------------------------------------------------------------
-            # STEP 6: 평일 16:00 ~ 16:59 EST 정규장 마감 일일 결산 보고 (일 1회 · Case 88, 91)
+            # STEP 5-B: ⚖️ 바벨 모드(BARBELL_60_30_10) 정규장 전용 SGOV 매매/체결 동기화
+            # ---------------------------------------------------------------
+            if is_barbell_mode(st.get("portion_mode")):
+                try:
+                    await execute_barbell_sgov_tick_plugin(
+                        context=context,
+                        now_est=now_est,
+                    )
+                    st = context.ledger.get_state(TARGET_SYMBOL)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as bb_exc:
+                    logger.warning(
+                        "⚠️ [Barbell SGOV 플러그인 예외 격리]: %s", bb_exc
+                    )
+
+            # ---------------------------------------------------------------
+            # STEP 6: 평일 16:00 EST 정규장 마감 일일 결산 보고 (일 1회)
             # ---------------------------------------------------------------
             if (
                 1600 <= hm <= 1659
@@ -546,13 +599,13 @@ async def main_sniper_loop(context: SniperAppContext) -> None:
                     execute_1600_daily_closing_settlement_plugin,
                     context=context,
                     holdings=context.latest_holdings,
-                    prices=live_prices_dict,
+                    prices={TARGET_SYMBOL: live_p},
                     now_est=now_est,
                 )
                 st = context.ledger.get_state(TARGET_SYMBOL)
 
             # ---------------------------------------------------------------
-            # STEP 7: 실전 스나이퍼 작동 ON/OFF 확인 (OFF 시 실전 매매만 보류)
+            # STEP 7: 실전 스나이퍼 작동 ON/OFF 확인 (OFF 시 실전 매매 보류)
             # ---------------------------------------------------------------
             if not bool(st.get("is_active", True)):
                 context.fast_shield_mode = _evaluate_fast_shield_mode(
@@ -573,7 +626,7 @@ async def main_sniper_loop(context: SniperAppContext) -> None:
                 continue
 
             # ---------------------------------------------------------------
-            # STEP 8: 실시간 스나이퍼 다중 익절 매도 모니터 (오팔 최우선 · Case 45, 70, 79, 82, 83, 88, 89)
+            # STEP 8: 실시간 스나이퍼 다중 익절 매도 모니터 (오팔 최우선)
             # ---------------------------------------------------------------
             did_sell_action = False
             has_any_holdings = bool(
@@ -588,17 +641,19 @@ async def main_sniper_loop(context: SniperAppContext) -> None:
                     execute_1m_sniper_sell_and_reanchor_plugin,
                     context=context,
                     holdings=context.latest_holdings,
-                    prices=live_prices_dict,
                     symbol=TARGET_SYMBOL,
                     live_price=live_p,
+                    prices={TARGET_SYMBOL: live_p},
                     now_est=now_est,
                 )
+                if is_live_assassin_standalone_active(context):
+                    continue
                 st = context.ledger.get_state(TARGET_SYMBOL)
                 if (
                     str(st.get("sell_order_id") or "").strip()
                     or (
                         isinstance(sell_res, dict)
-                        and bool(sell_res.get("did_sell_or_ratchet", False))
+                        and bool(sell_res.get("did_sell_or_ratchet"))
                     )
                     or (
                         isinstance(sell_res, str)
@@ -609,7 +664,6 @@ async def main_sniper_loop(context: SniperAppContext) -> None:
                                 "SUBMITTED",
                                 "SETTLED",
                                 "SOLD",
-                                "ORDERED",
                             )
                         )
                     )
@@ -618,10 +672,10 @@ async def main_sniper_loop(context: SniperAppContext) -> None:
 
             # ---------------------------------------------------------------
             # STEP 9: 실시간 스나이퍼 시드보호 매수 게이트 (떨사 · 평일 04:07 ~ 16:00 EST)
-            # (동일 틱에서 매도가 발생하지 않았을 때만 진입하여 자전거래 원천 차단 · Case 45)
             # ---------------------------------------------------------------
             if (
                 not did_sell_action
+                and not is_live_assassin_standalone_active(context)
                 and is_active_buy_window(hm, now_est=now_est)
                 and not str(st.get("sell_order_id") or "").strip()
                 and not str(st.get("buy_order_id") or "").strip()
@@ -630,9 +684,9 @@ async def main_sniper_loop(context: SniperAppContext) -> None:
                     execute_seed_protected_buy_gate_plugin,
                     context=context,
                     holdings=context.latest_holdings,
-                    prices=live_prices_dict,
                     symbol=TARGET_SYMBOL,
                     live_price=live_p,
+                    prices={TARGET_SYMBOL: live_p},
                     metrics=context.candle_metrics_cache.get(
                         TARGET_SYMBOL, {}
                     ),
@@ -677,11 +731,6 @@ async def main_sniper_loop(context: SniperAppContext) -> None:
 # [핵심 4] 백그라운드 태스크 3 : 일일 17:00 EST GC · 백업 스냅샷 및 환율 갱신 루프
 # ---------------------------------------------------------------------------
 async def daily_gc_and_rollover_loop(context: SniperAppContext) -> None:
-    """
-    # [Case 22, Case 68, Case 74 & Case 75]:
-    매일 17:00 EST 에 일일 가비지 컬렉션(GC) 및 원장 백업 스냅샷을 수행하고,
-    주기적으로 USD/KRW 표시 환율(context.last_fx_rate)을 갱신한다.
-    """
     last_gc_date: str = ""
     while not context.shutdown_event.is_set():
         now_est = datetime.now(EST_TZ)
@@ -715,18 +764,17 @@ async def daily_gc_and_rollover_loop(context: SniperAppContext) -> None:
 
 
 # ---------------------------------------------------------------------------
-# [핵심 5] 부팅 시퀀스 · TDD 검증 · 계좌/수수료 락온 및 5대 태스크 오케스트레이터 (async_main)
+# [핵심 5] 부팅 시퀀스 · 3대 TDD 검증 · 계좌/수수료 락온 및 5대 태스크 오케스트레이터 (async_main)
 # ---------------------------------------------------------------------------
 async def async_main() -> int:
     """
-    🚨 제1헌법 ~ 제6헌법 & Case 01 ~ Case 93 부팅 시퀀스:
-    1) 구버전 데드코드 파일 청소 및 14대 코어 모듈(assassin_plugin.py 포함) 무디스크 인메모리 컴파일 검증
-    2) 스나이퍼 퀀트 엔진 TDD(run_quant_engine_tdd) + 🗡️ 암살자 14대 진성 게이트 TDD(run_assassin_plugin_tdd) 실행
-    3) SniperAppContext 초기화 (스나이퍼 3중 원장 + [모의] 암살자 전용 3중 원장 동시 장착)
+    🚨 제1헌법 ~ 제6헌법 & Case 01 ~ Case 93 + 바벨(60/30/10) + 실전 암살자 분리 부팅 시퀀스:
+    1) 구버전 데드코드 청소 및 15대 코어 모듈(barbell_plugin.py, assassin_plugin.py 포함) 무디스크 인메모리 컴파일 검증
+    2) 스나이퍼 TDD(run_quant_engine_tdd) + 바벨 60/30/10 TDD(run_barbell_plugin_tdd) + 암살자 14대 게이트 TDD(run_assassin_plugin_tdd) 실행
+    3) SniperAppContext 초기화 (스나이퍼 원장 + 바벨 원장 + 암살자 원장 동시 장착)
     4) 토스 종합매매 계좌(accountSeq) 및 미국 주식 실제 수수료율(GET /api/v1/commissions · Case 86) 락온
-    5) 초기 실잔고 무결성 대조 및 "✅ 서버가 정상 작동 중입니다." 생존 배너 타전 (Case 16)
-    6) 5대 비동기 워커(main_sniper_loop · candle_radar_loop · daily_gc_and_rollover_loop · tg.run_polling_loop · _run_auto_update_loop_dynamic) 가동
-    7) 종료/업데이트 시 3.5초 하드 워치독 및 os.execv 인플레이스 무중단 자가 교체 (Case 81)
+    5) 초기 실잔고 무결성 대조(실전 암살자 단독 모드 시 제외) 및 "✅ 서버가 정상 작동 중입니다." 생존 배너 타전
+    6) 5대 비동기 워커 가동 및 종료/업데이트 시 3.5초 하드 워치독 · os.execv 인플레이스 무중단 자가 교체 (Case 81)
     """
     base_dir = get_bot_base_dir()
     purge_deprecated_legacy_files(base_dir)
@@ -737,11 +785,12 @@ async def async_main() -> int:
         return 1
     logger.info("🛡️ %s", comp_msg)
 
-    # 스나이퍼 코어 TDD & 암살자 플러그인 TDD 자가 검증
+    # 3대 코어 엔진 TDD 자가 검증
     run_quant_engine_tdd()
+    run_barbell_plugin_tdd()
     run_assassin_plugin_tdd()
     logger.info(
-        "✅ [Quant Engine TDD & Assassin 14 Truth Gates TDD] 전수 검증 통과!"
+        "✅ [QuantEngine TDD · Barbell 60/30/10 TDD · Assassin 14 Truth Gates TDD] 전수 검증 통과!"
     )
 
     context = SniperAppContext(base_dir=base_dir)
@@ -753,7 +802,6 @@ async def async_main() -> int:
         except Exception:
             pass
 
-    # 제2헌법 & Case 86: 종합매매 accountSeq 및 계좌별 미국 주식 수수료율 락온
     try:
         if hasattr(context.api, "ensure_account_seq"):
             acc_res = context.api.ensure_account_seq()
@@ -807,14 +855,24 @@ async def async_main() -> int:
         if fetch_ok and isinstance(holdings_map, dict):
             context.latest_holdings = holdings_map
             context.holdings_fetch_ok = True
-            await _call_plugin_adaptive(
-                reconcile_stratum_with_broker_holdings_plugin,
-                context=context,
-                holdings=holdings_map,
-                prices={TARGET_SYMBOL: init_lp},
-                now_est=now_est,
-                force_sync=True,
-            )
+            if not is_live_assassin_standalone_active(context):
+                await _call_plugin_adaptive(
+                    reconcile_stratum_with_broker_holdings_plugin,
+                    context=context,
+                    holdings=holdings_map,
+                    prices={TARGET_SYMBOL: init_lp},
+                    now_est=now_est,
+                    force_sync=True,
+                )
+                st_boot = context.ledger.get_state(TARGET_SYMBOL)
+                if is_barbell_mode(st_boot.get("portion_mode")) and not bool(
+                    context.barbell_ledger.get_state().get(
+                        "is_initialized", False
+                    )
+                ):
+                    await initialize_or_sync_barbell_on_mode_enter(
+                        context=context, holdings_map=holdings_map
+                    )
     except Exception as init_exc:
         logger.debug("부팅 초기 잔고 동기화 스킵: %s", init_exc)
 
