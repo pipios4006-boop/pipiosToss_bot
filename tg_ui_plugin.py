@@ -961,8 +961,11 @@ def build_avwap_radar_message(
         ]
     )
     if used_res_cnt > 0:
+        repay_timing_lbl = (
+            "지층익절 즉시환수" if is_barbell else "졸업시 원복"
+        )
         lines.append(
-            f"💉 자동수혈: <b>{used_res_cnt}회분</b> 사용 (${inj_res_usd:,.2f} · 졸업시 원복)"
+            f"💉 자동수혈: <b>{used_res_cnt}회분</b> 사용 (${inj_res_usd:,.2f} · {repay_timing_lbl})"
         )
     lines.extend(
         [

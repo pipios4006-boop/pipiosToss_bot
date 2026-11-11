@@ -198,7 +198,29 @@ async def _sync_barbell_sgov_holdings_if_idle(
         upd_sg["sgov_last_price"] = round(sg_last, 4)
 
     if h_sg_qty != l_sg_qty:
+        old_sg_inv = (
+            safe_float(bst.get("sgov_invested_usd"), 0.0)
+            if l_sg_qty > 0
+            else 0.0
+        )
+        cur_cash_b = max(0.0, safe_float(bst.get("cash_bucket_usd"), 0.0))
+        cur_pend_b = max(
+            0.0, safe_float(bst.get("pending_sgov_buy_budget_usd"), 0.0)
+        )
+        st_soxl_sg = context.ledger.get_state(TARGET_SYMBOL)
+        init_seed_sg = max(
+            100.0,
+            safe_float(
+                st_soxl_sg.get("initial_seed_usd"),
+                safe_float(bst.get("initial_seed_usd"), DEFAULT_INITIAL_SEED_USD),
+            ),
+        )
+        sgov_30_sg = round(init_seed_sg * 0.30, 4)
+        cash_10_sg = round(init_seed_sg * 0.10, 4)
+        guard_floor_sg = round(init_seed_sg * 0.60 * 0.08 * 0.30, 4)
+
         if h_sg_qty <= 0:
+            new_sg_inv = 0.0
             upd_sg["sgov_held_qty"] = 0
             upd_sg["sgov_avg_price"] = 0.0
             upd_sg["sgov_invested_usd"] = 0.0
@@ -208,11 +230,46 @@ async def _sync_barbell_sgov_holdings_if_idle(
             sg_pur = safe_float(
                 sg_h.get("purchase_amount"), float(h_sg_qty) * sg_avg
             )
+            new_sg_inv = round(max(1.0, sg_pur), 4)
             upd_sg["sgov_held_qty"] = h_sg_qty
-            upd_sg["sgov_invested_usd"] = round(max(1.0, sg_pur), 4)
+            upd_sg["sgov_invested_usd"] = new_sg_inv
             upd_sg["sgov_avg_price"] = round(
-                upd_sg["sgov_invested_usd"] / float(h_sg_qty), 4
+                new_sg_inv / float(h_sg_qty), 4
             )
+
+        if h_sg_qty < l_sg_qty:
+            freed_sg_usd = max(0.0, old_sg_inv - new_sg_inv)
+            max_liq_sg = max(
+                0.0, (cash_10_sg + sgov_30_sg) - new_sg_inv - cur_pend_b
+            )
+            next_cash_sg = round(min(max_liq_sg, cur_cash_b + freed_sg_usd), 4)
+            upd_sg["cash_bucket_usd"] = next_cash_sg
+            if next_cash_sg >= guard_floor_sg:
+                upd_sg["pending_sgov_tranche_sells"] = 0
+                upd_sg["sgov_wait_alert_sent"] = False
+        else:
+            added_sg_usd = max(0.0, new_sg_inv - old_sg_inv)
+            take_pend = min(cur_pend_b, added_sg_usd)
+            rem_take = max(0.0, added_sg_usd - take_pend)
+            next_pend_sg = round(
+                min(
+                    max(0.0, cur_pend_b - take_pend),
+                    max(0.0, sgov_30_sg - new_sg_inv),
+                ),
+                4,
+            )
+            next_cash_sg = round(max(0.0, cur_cash_b - rem_take), 4)
+            ref_sg_p = (
+                sg_last
+                if sg_last > 1.0
+                else max(1.0, safe_float(bst.get("sgov_last_price"), 100.30))
+            )
+            if 0.0 < next_pend_sg < (ref_sg_p * 1.002):
+                next_cash_sg = round(next_cash_sg + next_pend_sg, 4)
+                next_pend_sg = 0.0
+            upd_sg["pending_sgov_buy_budget_usd"] = next_pend_sg
+            upd_sg["cash_bucket_usd"] = next_cash_sg
+
     if upd_sg:
         await b_ledger.update_state(**upd_sg)
 
@@ -517,7 +574,7 @@ async def reconcile_stratum_with_broker_holdings_plugin(
         next_inj_res_usd = cur_inj_res_usd
         next_used_res_cnt = cur_used_res_cnt
 
-        if cur_inj_res_usd > 0.0:
+        if (not is_barbell) and cur_inj_res_usd > 0.0:
             repay_info = compute_reserve_repayment_on_zero(
                 initial_seed_usd=init_seed,
                 cumulative_realized_net_usd=cum_net,
@@ -646,10 +703,18 @@ async def reconcile_stratum_with_broker_holdings_plugin(
         barbell_vault_total = next_vault_locked
         if is_barbell:
             b_rec = await record_barbell_realized_profit(
-                context=context, net_pnl_usd=net_pnl, is_graduated_zero=True
+                context=context,
+                net_pnl_usd=net_pnl,
+                is_graduated_zero=True,
+                prev_soxl_injected_usd=cur_inj_res_usd,
+                prev_soxl_used_portions_cnt=cur_used_res_cnt,
+                cycle_realized_net_override=final_cyc_net,
             )
             barbell_vault_total = safe_float(
                 b_rec.get("vault_realized_profit_usd"), next_vault_locked
+            )
+            repaid_this_time = safe_float(
+                b_rec.get("repaid_from_soxl_usd"), 0.0
             )
             updated_st = context.ledger.get_state(TARGET_SYMBOL)
 
@@ -1649,13 +1714,32 @@ async def reconcile_stratum_with_broker_holdings_plugin(
     )
 
     barbell_vault_part = next_vault_locked_p
+    repaid_part_soxl = 0.0
+    added_part_sgov = 0.0
+    cash_b_part = 0.0
     if is_barbell:
         b_rec_p = await record_barbell_realized_profit(
-            context=context, net_pnl_usd=net_pnl, is_graduated_zero=False
+            context=context,
+            net_pnl_usd=net_pnl,
+            is_graduated_zero=False,
+            prev_soxl_injected_usd=safe_float(
+                st.get("injected_reserve_usd"), 0.0
+            ),
+            prev_soxl_used_portions_cnt=safe_int(
+                st.get("used_reserve_portions_cnt"), 0
+            ),
+            cycle_realized_net_override=cur_cyc_net,
         )
         barbell_vault_part = safe_float(
             b_rec_p.get("vault_realized_profit_usd"), next_vault_locked_p
         )
+        repaid_part_soxl = safe_float(
+            b_rec_p.get("repaid_from_soxl_usd"), 0.0
+        )
+        added_part_sgov = safe_float(
+            b_rec_p.get("added_sgov_buy_budget_usd"), 0.0
+        )
+        cash_b_part = safe_float(b_rec_p.get("cash_bucket_usd"), 0.0)
         updated_st = context.ledger.get_state(TARGET_SYMBOL)
 
     free_cash_now = safe_float(updated_st.get("free_cash_usd"), 0.0)
@@ -1675,8 +1759,18 @@ async def reconcile_stratum_with_broker_holdings_plugin(
             else ""
         )
         if is_barbell:
+            rt_part_note = (
+                f" · ⚡실시간환수 ${repaid_part_soxl:,.0f}(현금 ${cash_b_part:,.0f}"
+                + (
+                    f"·SGOV예약 +${added_part_sgov:,.0f})"
+                    if added_part_sgov > 0.0
+                    else ")"
+                )
+                if repaid_part_soxl > 0.0
+                else ""
+            )
             part_credit_note = (
-                f"별도 수익금고 격리(⚖️바벨 · 누적금고 +${barbell_vault_part:,.2f})"
+                f"별도 수익금고 격리(⚖️바벨 · 누적금고 +${barbell_vault_part:,.2f}){rt_part_note}"
             )
         elif is_simple_mode:
             part_credit_note = (

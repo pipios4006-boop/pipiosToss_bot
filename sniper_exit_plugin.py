@@ -1500,7 +1500,7 @@ async def _commit_filled_sell_and_reanchor_ledger(
     next_inj_res_usd = cur_inj_res_usd
     next_used_res_cnt = cur_used_res_cnt
 
-    if is_graduated_zero and cur_inj_res_usd > 0.0:
+    if (not is_barbell) and is_graduated_zero and cur_inj_res_usd > 0.0:
         repay_info = compute_reserve_repayment_on_zero(
             initial_seed_usd=init_seed,
             cumulative_realized_net_usd=cum_net,
@@ -1618,24 +1618,44 @@ async def _commit_filled_sell_and_reanchor_ledger(
         TARGET_SYMBOL, **update_kwargs
     )
 
-    # [바벨 모드 전용 훅] 별도 수익금고 영구 격리 및 0주 졸업 시 60 / 30 / 10 자동 리밸런싱 실행
+    # [바벨 모드 전용 훅] 별도 수익금고 영구 격리 및 전 구간(부분 익절 · 0주 졸업) 실시간 60/30/10 리밸런싱 실행
     barbell_vault_total = next_vault_locked
     repaid_to_vault_usd = 0.0
     pending_sgov_reb_usd = 0.0
+    added_sgov_reb_usd = 0.0
+    barbell_cash_b_usd = 0.0
     if is_barbell:
         barbell_rec = await record_barbell_realized_profit(
             context=context,
             net_pnl_usd=net_pnl,
             is_graduated_zero=is_graduated_zero,
+            prev_soxl_injected_usd=cur_inj_res_usd,
+            prev_soxl_used_portions_cnt=cur_used_res_cnt,
+            cycle_realized_net_override=cur_cyc_net,
         )
         barbell_vault_total = safe_float(
             barbell_rec.get("vault_realized_profit_usd"), next_vault_locked
+        )
+        repaid_this_time = safe_float(
+            barbell_rec.get("repaid_from_soxl_usd"), 0.0
+        )
+        next_inj_res_usd = safe_float(
+            barbell_rec.get("rem_soxl_injected_usd"), 0.0
+        )
+        next_used_res_cnt = safe_int(
+            barbell_rec.get("rem_soxl_used_portions_cnt"), 0
         )
         repaid_to_vault_usd = safe_float(
             barbell_rec.get("repaid_to_vault_usd"), 0.0
         )
         pending_sgov_reb_usd = safe_float(
             barbell_rec.get("pending_sgov_buy_budget_usd"), 0.0
+        )
+        added_sgov_reb_usd = safe_float(
+            barbell_rec.get("added_sgov_buy_budget_usd"), 0.0
+        )
+        barbell_cash_b_usd = safe_float(
+            barbell_rec.get("cash_bucket_usd"), 0.0
         )
         updated_st = context.ledger.get_state(TARGET_SYMBOL)
 
@@ -1684,8 +1704,24 @@ async def _commit_filled_sell_and_reanchor_ledger(
         sess_tag = " · 🌃장외익절" if is_ext_sell else ""
 
         if is_barbell:
+            rt_reb_note = ""
+            if not is_graduated_zero and repaid_this_time > 0.0:
+                sgov_add_note = (
+                    f"➔SGOV예약 +${added_sgov_reb_usd:,.0f}(총 ${pending_sgov_reb_usd:,.0f})"
+                    if added_sgov_reb_usd > 0.0
+                    else ""
+                )
+                vault_rep_note = (
+                    f"·금고원복 ${repaid_to_vault_usd:,.0f}"
+                    if repaid_to_vault_usd > 0.0
+                    else ""
+                )
+                rt_reb_note = (
+                    f" · ⚡실시간환수 ${repaid_this_time:,.0f}"
+                    f"(현금버킷 ${barbell_cash_b_usd:,.0f}{sgov_add_note}{vault_rep_note})"
+                )
             credit_mode_desc = (
-                f"별도 수익금고 영구격리!(⚖️바벨 · 누적금고 +${barbell_vault_total:,.2f})"
+                f"별도 수익금고 영구격리!(⚖️바벨 · 누적금고 +${barbell_vault_total:,.2f}){rt_reb_note}"
             )
             cash_lbl = "바벨SOXL현금"
         elif is_simple_mode:
