@@ -14,6 +14,7 @@ import json
 import logging
 import math
 import os
+import re
 import sys
 import time
 import urllib.error
@@ -118,8 +119,41 @@ PORTION_MODE_SIMPLE: str = "SIMPLE_08PCT"
 # ---------------------------------------------------------------------------
 # [유틸리티] HTML 이스케이프 · 3단 모드 판별 · DST 배지 · 폴더 식별자 및 안전 시드 추출
 # ---------------------------------------------------------------------------
+_VALID_TG_HTML_TAG_RE = re.compile(
+    r"(</?(?:b|strong|i|em|u|ins|s|strike|del|code|pre)>"
+    r"|<a\s+href=['\"][^'\"]+['\"]>|</a>)",
+    re.IGNORECASE,
+)
+_RAW_AMP_RE = re.compile(
+    r"&(?!amp;|lt;|gt;|quot;|apos;|#\d+;|#x[0-9a-fA-F]+;)"
+)
+
+
 def escape_html(val: Any) -> str:
     return html.escape(str(val if val is not None else ""), quote=False)
+
+
+def sanitize_telegram_html(text: Any) -> str:
+    raw = str(text if text is not None else "")
+    if not raw:
+        return ""
+    parts = _VALID_TG_HTML_TAG_RE.split(raw)
+    out: List[str] = []
+    for idx, part in enumerate(parts):
+        if idx % 2 == 1:
+            out.append(part)
+        else:
+            cleaned = _RAW_AMP_RE.sub("&amp;", part)
+            cleaned = cleaned.replace("<", "&lt;").replace(">", "&gt;")
+            out.append(cleaned)
+    return "".join(out)
+
+
+def strip_telegram_html(text: Any) -> str:
+    raw = str(text if text is not None else "")
+    if not raw:
+        return ""
+    return html.unescape(_VALID_TG_HTML_TAG_RE.sub("", raw))
 
 
 def _is_barbell_portion_mode(st_or_mode: Any) -> bool:
@@ -314,7 +348,7 @@ def build_start_schedule_message(
         "🔄 <b>잔고 동기화</b> : 잔고 · 예수금 · 수익금고 해부",
         "⚙️ <b>전술 제어반</b> : 전원 · 복리/단리/바벨 · 암살자승격",
         "🚀 <b>시스템 업데이트</b> : 최신 코드 무중단 동기화",
-        "⚖️ <code>/barbell</code> : 바벨(60/30/10) & 별도수익금고 상세",
+        "⚖️ <code>/barbell</code> : 바벨(60/30/10) &amp; 별도수익금고 상세",
         "🗡️ <code>/assassin</code> : [모의/실전] 암살자 순수 10G 상세",
     ]
     return "\n".join(lines)
@@ -391,11 +425,11 @@ def _format_multi_grid_stratum_lines(
             )
         elif live_rsi_14 > 50.0:
             lines.append(
-                f"⚡ <b>[1층: 공석]</b> 눌림(-1%)/🛡️돌파과열차단(RSI {live_rsi_14:.1f}>50){cap_note}"
+                f"⚡ <b>[1층: 공석]</b> 눌림(-1%)/🛡️돌파과열차단(RSI {live_rsi_14:.1f}&gt;50){cap_note}"
             )
         else:
             lines.append(
-                f"⚡ <b>[1층: 공석]</b> 1분주기 눌림(-1%)/돌파(RSI<=50){cap_note}"
+                f"⚡ <b>[1층: 공석]</b> 1분주기 눌림(-1%)/돌파(RSI&lt;=50){cap_note}"
             )
 
     if upper_buckets:
@@ -545,11 +579,11 @@ def _format_sub_grid_stratum_lines(
             )
         elif live_rsi_14 > 50.0:
             lines.append(
-                f"  ⚡ <b>[서브1층: 공석]</b> 눌림(-1%)/🛡️돌파차단(RSI {live_rsi_14:.1f}>50){s_cap_note}"
+                f"  ⚡ <b>[서브1층: 공석]</b> 눌림(-1%)/🛡️돌파차단(RSI {live_rsi_14:.1f}&gt;50){s_cap_note}"
             )
         else:
             lines.append(
-                f"  ⚡ <b>[서브1층: 공석]</b> 1분주기 눌림(-1%)/돌파(RSI<=50){s_cap_note}"
+                f"  ⚡ <b>[서브1층: 공석]</b> 1분주기 눌림(-1%)/돌파(RSI&lt;=50){s_cap_note}"
             )
 
     if sub_upper_buckets:
@@ -804,9 +838,9 @@ def build_avwap_radar_message(
         if is_late_cutoff:
             brk_str = "돌파차단(15:30~)"
         elif rsi_14 > 50.0:
-            brk_str = f"돌파차단(RSI {rsi_14:.1f}>50)"
+            brk_str = f"돌파차단(RSI {rsi_14:.1f}&gt;50)"
         else:
-            brk_str = f"돌파 <b>${brk_p:.2f}</b>(RSI<=50)"
+            brk_str = f"돌파 <b>${brk_p:.2f}</b>(RSI&lt;=50)"
         cap_str = f" · 상한 ${l2_cap_p:.2f}" if l2_cap_p > 0.0 else ""
         gate_cond_lines.append(
             f"▫️ 눌림 <b>${pull_p:.2f}</b> / {brk_str} 시 {quota_badge_str} 매수"
@@ -1502,18 +1536,24 @@ class TelegramCommandController:
         target_chat = str(chat_id or self.chat_id or "").strip()
         if not self.bot_token or not target_chat:
             return False
+        is_html = str(parse_mode or "").upper().strip() == "HTML"
+        clean_text = (
+            sanitize_telegram_html(text) if is_html else str(text or "")
+        )
         payload: Dict[str, Any] = {
             "chat_id": target_chat,
-            "text": text,
-            "parse_mode": parse_mode,
+            "text": clean_text,
             "disable_web_page_preview": True,
         }
+        if parse_mode:
+            payload["parse_mode"] = parse_mode
         if reply_markup is not None:
             payload["reply_markup"] = reply_markup
 
         res = await self._call_tg("sendMessage", payload, timeout_sec=10.0)
         if not bool(res.get("ok")):
             payload.pop("parse_mode", None)
+            payload["text"] = strip_telegram_html(clean_text)
             res = await self._call_tg("sendMessage", payload, timeout_sec=10.0)
         return bool(res.get("ok"))
 
@@ -1524,11 +1564,12 @@ class TelegramCommandController:
         text: str,
         reply_markup: Optional[Dict[str, Any]] = None,
     ) -> bool:
+        clean_text = sanitize_telegram_html(text)
         if message_id is not None and message_id > 0:
             payload: Dict[str, Any] = {
                 "chat_id": str(chat_id),
                 "message_id": int(message_id),
-                "text": text,
+                "text": clean_text,
                 "parse_mode": "HTML",
                 "disable_web_page_preview": True,
             }
@@ -1542,7 +1583,7 @@ class TelegramCommandController:
             ):
                 return True
         return await self.send_message(
-            text=text, chat_id=chat_id, reply_markup=reply_markup
+            text=clean_text, chat_id=chat_id, reply_markup=reply_markup
         )
 
     async def send_slim_alert(
@@ -2086,7 +2127,7 @@ class TelegramCommandController:
         await self.send_message(
             chat_id=chat_id,
             text=(
-                "🧹 <b>[스나이퍼 & 바벨 수익금고 0점 초기화 완료]</b>\n"
+                "🧹 <b>[스나이퍼 &amp; 바벨 수익금고 0점 초기화 완료]</b>\n"
                 "▫️ 이번사이클 / 누적 실현익 / 별도금고: <b>$0.00</b>\n"
                 f"▫️ 복귀 기준시드: <b>${init_seed:,.2f}</b>\n"
                 f"▫️ 현재 가용현금: <b>${free_cash:,.2f}</b>\n"

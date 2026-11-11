@@ -102,6 +102,8 @@ from tg_ui_plugin import (
     build_settlement_control_message,
     build_start_schedule_message,
     build_sync_instruction_message,
+    sanitize_telegram_html,
+    strip_telegram_html,
 )
 from toss_api import (
     EST_TZ,
@@ -1475,17 +1477,23 @@ class _AdaptiveTelegramBridge:
         target_chat = str(chat_id or self.chat_id or "").strip()
         if not self.bot_token or not target_chat:
             return False
+        is_html = str(parse_mode or "").upper().strip() == "HTML"
+        clean_text = (
+            sanitize_telegram_html(text) if is_html else str(text or "")
+        )
         payload: Dict[str, Any] = {
             "chat_id": target_chat,
-            "text": text,
-            "parse_mode": parse_mode,
+            "text": clean_text,
             "disable_web_page_preview": True,
         }
+        if parse_mode:
+            payload["parse_mode"] = parse_mode
         if reply_markup is not None:
             payload["reply_markup"] = reply_markup
         res = await self._call_tg("sendMessage", payload, timeout_sec=10.0)
         if not bool(res.get("ok")):
             payload.pop("parse_mode", None)
+            payload["text"] = strip_telegram_html(clean_text)
             res = await self._call_tg("sendMessage", payload, timeout_sec=10.0)
         return bool(res.get("ok"))
 
@@ -1496,11 +1504,12 @@ class _AdaptiveTelegramBridge:
         text: str,
         reply_markup: Optional[Dict[str, Any]] = None,
     ) -> bool:
+        clean_text = sanitize_telegram_html(text)
         if message_id is not None and message_id > 0:
             payload: Dict[str, Any] = {
                 "chat_id": str(chat_id),
                 "message_id": int(message_id),
-                "text": text,
+                "text": clean_text,
                 "parse_mode": "HTML",
                 "disable_web_page_preview": True,
             }
@@ -1514,7 +1523,7 @@ class _AdaptiveTelegramBridge:
             ):
                 return True
         return await self.send_message(
-            text=text, chat_id=chat_id, reply_markup=reply_markup
+            text=clean_text, chat_id=chat_id, reply_markup=reply_markup
         )
 
     async def send_slim_alert(
