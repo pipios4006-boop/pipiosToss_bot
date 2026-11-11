@@ -779,8 +779,22 @@ async def reconcile_stratum_with_broker_holdings_plugin(
             )
             vault_seed = _resolve_valid_seed_from_state(vault_st)
 
-            if vault_qty == h_qty and (
-                len(vault_buckets) > 0 or len(vault_sub_buckets) > 0
+            is_fresh_empty_ledger = bool(
+                safe_int(st.get("total_buy_events"), 0) == 0
+                and safe_int(st.get("total_sell_events"), 0) == 0
+                and safe_int(st.get("completed_main_cycles"), 0) == 0
+                and safe_float(st.get("last_cycle_end_ts"), 0.0) <= 0.0
+            )
+            vault_not_older = bool(
+                safe_int(vault_st.get("total_sell_events"), 0)
+                >= safe_int(st.get("total_sell_events"), 0)
+                and safe_int(vault_st.get("completed_main_cycles"), 0)
+                >= safe_int(st.get("completed_main_cycles"), 0)
+            )
+            if (
+                (is_fresh_empty_ledger or vault_not_older)
+                and vault_qty == h_qty
+                and (len(vault_buckets) > 0 or len(vault_sub_buckets) > 0)
             ):
                 vault_lots = sum(max(1, b.lot_count) for b in vault_buckets)
                 vault_ratchet_lots = (
@@ -981,9 +995,14 @@ async def reconcile_stratum_with_broker_holdings_plugin(
             "last_reentry_eval_ts": 0.0,
             "last_sub_reentry_eval_ts": 0.0,
         }
-        if isinstance(vault_st, dict):
+        is_ledger_brand_new = bool(
+            safe_int(st.get("total_buy_events"), 0) == 0
+            and safe_int(st.get("total_sell_events"), 0) == 0
+            and safe_int(st.get("completed_main_cycles"), 0) == 0
+            and safe_float(st.get("last_cycle_end_ts"), 0.0) <= 0.0
+        )
+        if isinstance(vault_st, dict) and is_ledger_brand_new:
             for stat_k in (
-                "portion_mode",
                 "vaulted_profit_locked_usd",
                 "us_commission_rate",
                 "round_trip_fee_rate_pct",
@@ -992,12 +1011,6 @@ async def reconcile_stratum_with_broker_holdings_plugin(
                 "cumulative_realized_fee_usd",
                 "cumulative_leftover_saved_usd",
                 "cumulative_reanchor_drop_usd",
-                "cycle_realized_gross_usd",
-                "cycle_realized_fee_usd",
-                "cycle_realized_net_usd",
-                "cycle_sub_realized_net_usd",
-                "cycle_sell_events",
-                "cycle_leftover_saved_usd",
                 "last_cycle_realized_net_usd",
                 "last_cycle_sell_events",
                 "completed_main_cycles",
@@ -1005,9 +1018,7 @@ async def reconcile_stratum_with_broker_holdings_plugin(
                 "indiv_grid_sell_cnt",
                 "wma_grad_sell_cnt",
                 "seed_protect_pass_cnt",
-                "daily_seed_protect_pass_cnt",
                 "cond_unlock_buy_events",
-                "daily_unlock_buy_events",
                 "sub_buy_events",
                 "sub_buy_shares",
                 "sub_sell_events",
@@ -1019,22 +1030,15 @@ async def reconcile_stratum_with_broker_holdings_plugin(
                 "sub_realized_gross_usd",
                 "sub_realized_fee_usd",
                 "sub_realized_net_usd",
-                "used_reserve_portions_cnt",
-                "injected_reserve_usd",
                 "total_reserve_injected_cnt",
-                "daily_reserve_injected_cnt",
                 "cumulative_reserve_repaid_usd",
                 "dust_guard_blocked_cnt",
-                "daily_dust_guard_blocked_cnt",
                 "extra_13plus_buy_events",
                 "total_buy_events",
                 "total_sell_events",
                 "win_sell_events",
             ):
-                if stat_k == "portion_mode":
-                    if vault_st.get("portion_mode"):
-                        update_kw["portion_mode"] = vault_st["portion_mode"]
-                elif safe_float(st.get(stat_k), 0.0) == 0.0 and safe_float(
+                if safe_float(st.get(stat_k), 0.0) == 0.0 and safe_float(
                     vault_st.get(stat_k), 0.0
                 ) != 0.0:
                     update_kw[stat_k] = vault_st[stat_k]
@@ -1882,20 +1886,32 @@ async def execute_0400_premarket_stabilization_plugin(
     ):
         snap_map[TARGET_SYMBOL]["ext_sell_restrict_until_mono"] = 0.0
 
+    st_post_0400 = context.ledger.get_state(TARGET_SYMBOL)
+    has_rem_0400_ord = bool(
+        str(st_post_0400.get("buy_order_id") or "").strip()
+        or str(st_post_0400.get("sell_order_id") or "").strip()
+    )
+    clear_0400_ord_kw: Dict[str, Any] = (
+        {}
+        if has_rem_0400_ord
+        else {
+            "buy_order_id": "",
+            "sell_order_id": "",
+            "ordered_qty": 0,
+            "target_sell_price": 0.0,
+            "pending_sell_mode": "",
+            "pending_sell_indices": [],
+            "pending_sub_sell_indices": [],
+            "pending_lot_type": "",
+            "pending_step_up_min_price": 0.0,
+            "pending_sub_step_up_min_price": 0.0,
+        }
+    )
     await context.ledger.update_state(
         TARGET_SYMBOL,
         us_commission_rate=us_comm_r,
         round_trip_fee_rate_pct=rt_fee_pct,
-        buy_order_id="",
-        sell_order_id="",
-        ordered_qty=0,
-        target_sell_price=0.0,
-        pending_sell_mode="",
-        pending_sell_indices=[],
-        pending_sub_sell_indices=[],
-        pending_lot_type="",
-        pending_step_up_min_price=0.0,
-        pending_sub_step_up_min_price=0.0,
+        **clear_0400_ord_kw,
         daily_seed_protect_pass_cnt=0,
         daily_unlock_buy_events=0,
         daily_sub_buy_cnt=0,
@@ -2067,22 +2083,33 @@ async def execute_1600_daily_closing_settlement_plugin(
         next_main_frozen = cur_main_frozen if cur_buckets else 0
         next_sub_frozen = cur_sub_frozen if cur_sub_buckets else 0
 
+    has_rem_1600_ord = bool(
+        str(st_final.get("buy_order_id") or "").strip()
+        or str(st_final.get("sell_order_id") or "").strip()
+    )
+    clear_1600_ord_kw: Dict[str, Any] = (
+        {}
+        if has_rem_1600_ord
+        else {
+            "buy_order_id": "",
+            "sell_order_id": "",
+            "ordered_qty": 0,
+            "target_sell_price": 0.0,
+            "pending_sell_mode": "",
+            "pending_sell_indices": [],
+            "pending_sub_sell_indices": [],
+            "pending_lot_type": "",
+            "pending_step_up_min_price": 0.0,
+            "pending_sub_step_up_min_price": 0.0,
+        }
+    )
     updated_st = await context.ledger.update_state(
         TARGET_SYMBOL,
         main_consec_frozen_days=next_main_frozen,
         sub_consec_frozen_days=next_sub_frozen,
         last_frozen_eval_date=today_str,
-        buy_order_id="",
-        sell_order_id="",
-        ordered_qty=0,
-        target_sell_price=0.0,
-        pending_sell_mode="",
-        pending_sell_indices=[],
-        pending_sub_sell_indices=[],
-        pending_lot_type="",
-        pending_step_up_min_price=0.0,
-        pending_sub_step_up_min_price=0.0,
         last_closing_report_date=today_str,
+        **clear_1600_ord_kw,
     )
 
     snap_fn = getattr(context.ledger, "create_daily_backup_snapshot", None)
@@ -2282,27 +2309,17 @@ async def execute_daily_1700_gc_and_backup_plugin(
     mark_sub_reentry_monitor_60s_cycle_shield(
         context=context, symbol=TARGET_SYMBOL, clear_shield=True
     )
-    await context.ledger.update_state(
-        TARGET_SYMBOL,
-        daily_seed_protect_pass_cnt=0,
-        daily_unlock_buy_events=0,
-        daily_sub_buy_cnt=0,
-        daily_sub_buy_events=0,
-        daily_sub_sell_cnt=0,
-        daily_sub_sell_events=0,
-        daily_sub_unlock_events=0,
-        daily_sub_realized_net_usd=0.0,
-        daily_main_buy_cnt=0,
-        daily_main_sell_cnt=0,
-        daily_reserve_injected_cnt=0,
-        daily_dust_guard_blocked_cnt=0,
-        pending_step_up_min_price=0.0,
-        pending_sub_step_up_min_price=0.0,
-        last_evaluated_buy_bucket_id=-1,
-        sub_last_evaluated_buy_bucket_id=-1,
-        last_reentry_eval_ts=0.0,
-        last_sub_reentry_eval_ts=0.0,
-    )
+    st_gc = context.ledger.get_state(TARGET_SYMBOL)
+    if not str(st_gc.get("buy_order_id") or "").strip():
+        await context.ledger.update_state(
+            TARGET_SYMBOL,
+            pending_step_up_min_price=0.0,
+            pending_sub_step_up_min_price=0.0,
+            last_evaluated_buy_bucket_id=-1,
+            sub_last_evaluated_buy_bucket_id=-1,
+            last_reentry_eval_ts=0.0,
+            last_sub_reentry_eval_ts=0.0,
+        )
     collected = gc.collect()
     logger.info(
         "🧹 [17:00 EST 일일 GC 및 원장 금고 백업 완료] date=%s · snapshot=%s · gc_collected=%d",

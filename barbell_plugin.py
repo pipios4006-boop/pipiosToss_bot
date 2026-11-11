@@ -992,17 +992,20 @@ async def evaluate_and_execute_barbell_guard30_or_injection(
         min_req_cash = max(one_share_cost, unit_8pct * MIN_DIP_BUDGET_RATIO)
 
     raw_bp = max(0.0, safe_float(raw_bp_usd, 0.0))
+    vault_avail = max(0.0, safe_float(bst.get("vault_available_usd"), 0.0))
+    bp_excl_vault = round(max(0.0, raw_bp - vault_avail), 4)
     masked_bp = get_masked_soxl_buying_power_usd(
-        context=context, raw_bp_usd=raw_bp, st_now_override=None, st_soxl=st_now, bst=bst
-    ) if False else get_masked_soxl_buying_power_usd(
         context=context, raw_bp_usd=raw_bp, st_soxl=st_now, bst=bst
     )
 
-    # [정상 통과] SOXL 60% 코어 가용현금이 충분한 경우
-    if now_free_cash >= min_req_cash and raw_bp >= min_req_cash:
-        eff_bp_order = round(
-            min(raw_bp, max(now_free_cash, masked_bp)) * 0.998, 4
+    # [정상 통과] SOXL 60% 코어 가용현금 및 별도수익금고 제외 예수금이 충분한 경우
+    if now_free_cash >= min_req_cash and bp_excl_vault >= min_req_cash:
+        eff_cap_bp = (
+            min(now_free_cash, masked_bp)
+            if masked_bp >= min_req_cash
+            else min(now_free_cash, bp_excl_vault)
         )
+        eff_bp_order = round(eff_cap_bp * 0.998, 4)
         return (
             True,
             now_free_cash,
@@ -1020,16 +1023,15 @@ async def evaluate_and_execute_barbell_guard30_or_injection(
 
     cash_bucket = max(0.0, safe_float(bst.get("cash_bucket_usd"), 0.0))
     sgov_qty = max(0, safe_int(bst.get("sgov_held_qty"), 0))
-    vault_avail = max(0.0, safe_float(bst.get("vault_available_usd"), 0.0))
     pending_sgov_buy = max(
         0.0, safe_float(bst.get("pending_sgov_buy_budget_usd"), 0.0)
     )
 
     # -----------------------------------------------------------------------
-    # [1순위] 현금 10% 대기 버킷에서 1회분(8% = unit_8pct) 단위 즉시 자동수혈
+    # [1순위] 현금 10% 대기 버킷에서 1회분(8% = unit_8pct) 단위 즉시 자동수혈 (수익금고 차감 보호)
     # -----------------------------------------------------------------------
     usable_from_cash_bucket = min(
-        cash_bucket, max(0.0, raw_bp - now_free_cash)
+        cash_bucket, max(0.0, bp_excl_vault - now_free_cash)
     )
     if (
         usable_from_cash_bucket > 0.0
@@ -1120,10 +1122,16 @@ async def evaluate_and_execute_barbell_guard30_or_injection(
     # 프리장/장중 급락 시 아직 사지 않은 SGOV 예약 현금에서 10% 트랜치를 우선 현금버킷으로 전환해 즉시 수혈!
     # -----------------------------------------------------------------------
     if (
-        sgov_qty <= 0
-        and pending_sgov_buy > 0.0
-        and raw_bp >= min_req_cash
-        and (now_free_cash + cash_bucket + pending_sgov_buy) >= min_req_cash
+        pending_sgov_buy > 0.0
+        and bp_excl_vault >= min_req_cash
+        and (
+            now_free_cash
+            + min(
+                cash_bucket + pending_sgov_buy,
+                max(0.0, bp_excl_vault - now_free_cash),
+            )
+        )
+        >= min_req_cash
     ):
         splits = compute_barbell_seed_splits(
             safe_float(st_now.get("initial_seed_usd"), DEFAULT_INITIAL_SEED_USD)
@@ -1459,6 +1467,19 @@ async def _sync_pending_sgov_orders(
         except Exception:
             pass
         det2 = await context.api.get_order_detail(oid)
+        st2 = (
+            str(det2.get("status") or "").upper().strip()
+            if isinstance(det2, dict)
+            else ""
+        )
+        if not isinstance(det2, dict) or st2 in (
+            "PENDING",
+            "PARTIAL_FILLED",
+            "PENDING_CANCEL",
+            "PENDING_REPLACE",
+        ):
+            await asyncio.sleep(0.35)
+            det2 = await context.api.get_order_detail(oid)
         if isinstance(det2, dict):
             ord_status = str(det2.get("status") or ord_status).upper().strip()
             ex2 = (
@@ -1470,6 +1491,15 @@ async def _sync_pending_sgov_orders(
             p2 = safe_float(ex2.get("averageFilledPrice"), 0.0)
             if p2 > 0.0:
                 avg_fill_p = p2
+            if ord_status in (
+                "PENDING",
+                "PARTIAL_FILLED",
+                "PENDING_CANCEL",
+                "PENDING_REPLACE",
+            ):
+                return {"status": "SGOV_CANCEL_IN_FLIGHT", "orderId": oid}
+        elif not force_settle and elapsed < (SGOV_ORDER_MAX_WAIT_SEC + 30.0):
+            return {"status": "SGOV_CANCEL_VERIFY_RETRY", "orderId": oid}
         is_done_fill = bool(filled_q > 0)
 
     if is_done_fill:
@@ -1712,10 +1742,20 @@ async def execute_barbell_sgov_tick_plugin(
 
     # 2) [1순위] SGOV 10% 상당 정수 수량(소수점 내림) 지정가 매도
     if pending_sells > 0 and sgov_qty > 0:
-        sell_q = compute_sgov_10pct_sell_qty(
-            initial_seed_usd=init_seed,
-            sgov_live_price=sgov_lp,
-            sgov_held_qty=sgov_qty,
+        sellable_sgov = await context.api.get_sellable_quantity(
+            BARBELL_SAFE_SYMBOL, allow_barbell_sgov=True
+        )
+        eff_held_sgov = (
+            min(sgov_qty, sellable_sgov) if sellable_sgov > 0 else sgov_qty
+        )
+        sell_q = (
+            compute_sgov_10pct_sell_qty(
+                initial_seed_usd=init_seed,
+                sgov_live_price=sgov_lp,
+                sgov_held_qty=eff_held_sgov,
+            )
+            if sellable_sgov > 0
+            else 0
         )
         if sell_q > 0:
             bid_p = await context.api.get_best_bid_price(
@@ -1777,11 +1817,11 @@ async def execute_barbell_sgov_tick_plugin(
                 logger.warning("바벨 SGOV 매도 예외: %s", exc)
                 return {"status": "SGOV_SELL_ERROR"}
 
-    # 3) [2순위] SGOV 30% 목표 예산 범위 내 지정가 매수 (수혈 진행 중이 아닐 때만 실행)
+    # 3) [2순위] SGOV 30% 목표 예산 범위 내 지정가 매수 (SGOV 매도 대기나 시드고갈 대기가 아닐 때 실행)
     if (
         pending_buy_bud > 0.0
         and pending_sells == 0
-        and safe_float(bst.get("cash_injected_to_soxl_usd"), 0.0) <= 0.0
+        and not bool(st_soxl.get("waiting_reserve_deposit", False))
     ):
         ask_p = await context.api.get_best_ask_price(
             BARBELL_SAFE_SYMBOL, fallback_price=sgov_lp

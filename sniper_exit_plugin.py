@@ -1697,7 +1697,7 @@ async def _commit_filled_sell_and_reanchor_ledger(
             credit_mode_desc = "시드 복리산입!"
             cash_lbl = "가용현금"
 
-        if is_sub_without_main_sell:
+        if is_sub_without_main_sell and not is_graduated_zero:
             grid_sh = sum(b.qty for b in rem_buckets)
             sub_sh = sum(sb.qty for sb in rem_sub_buckets)
             if is_sub_empty:
@@ -1927,23 +1927,49 @@ async def sync_pending_sell_order_plugin(
                 except Exception:
                     pass
                 final_det = await context.api.get_order_detail(sell_oid)
-                if isinstance(final_det, dict):
-                    f_ex = (
-                        final_det.get("execution")
-                        if isinstance(final_det.get("execution"), dict)
-                        else {}
+                f_st2 = (
+                    str(final_det.get("status") or "").upper().strip()
+                    if isinstance(final_det, dict)
+                    else ""
+                )
+                if not isinstance(final_det, dict) or f_st2 in (
+                    "PENDING",
+                    "PARTIAL_FILLED",
+                    "PENDING_CANCEL",
+                    "PENDING_REPLACE",
+                ):
+                    await asyncio.sleep(0.35)
+                    final_det = await context.api.get_order_detail(sell_oid)
+                    f_st2 = (
+                        str(final_det.get("status") or "").upper().strip()
+                        if isinstance(final_det, dict)
+                        else ""
                     )
-                    f_q2 = safe_int(f_ex.get("filledQuantity"), filled_q)
-                    f_p2 = safe_float(
-                        f_ex.get("averageFilledPrice"), avg_fill_p
-                    )
-                    f_fee2 = _extract_actual_sell_fee_from_exec(f_ex)
-                    if f_q2 > 0:
-                        filled_q = f_q2
-                    if f_p2 > 0.0:
-                        avg_fill_p = f_p2
-                    if f_fee2 is not None:
-                        actual_fee_val = f_fee2
+                if not isinstance(final_det, dict) or f_st2 in (
+                    "PENDING",
+                    "PARTIAL_FILLED",
+                    "PENDING_CANCEL",
+                    "PENDING_REPLACE",
+                ):
+                    return {
+                        "status": "SELL_PARTIAL_CANCEL_CONFIRMING",
+                        "did_sell_or_ratchet": True,
+                        "orderId": sell_oid,
+                    }
+                f_ex = (
+                    final_det.get("execution")
+                    if isinstance(final_det.get("execution"), dict)
+                    else {}
+                )
+                f_q2 = safe_int(f_ex.get("filledQuantity"), filled_q)
+                f_p2 = safe_float(f_ex.get("averageFilledPrice"), avg_fill_p)
+                f_fee2 = _extract_actual_sell_fee_from_exec(f_ex)
+                if f_q2 > 0:
+                    filled_q = f_q2
+                if f_p2 > 0.0:
+                    avg_fill_p = f_p2
+                if f_fee2 is not None:
+                    actual_fee_val = f_fee2
                 if filled_q > 0:
                     eff_p = avg_fill_p if avg_fill_p > 0.0 else target_p
                     return await _commit_filled_sell_and_reanchor_ledger(
@@ -1962,7 +1988,10 @@ async def sync_pending_sell_order_plugin(
                     "ordered_qty": ordered_qty,
                 }
 
-        if ord_status in ("CANCELED", "REJECTED") and filled_q == 0:
+        if (
+            ord_status in ("CANCELED", "REJECTED", "REPLACED")
+            and filled_q == 0
+        ):
             if ord_status == "REJECTED":
                 mark_extended_sell_restriction_cooldown(
                     context,
@@ -1992,8 +2021,51 @@ async def sync_pending_sell_order_plugin(
             pass
 
         final_detail = await context.api.get_order_detail(sell_oid)
+        f_status = (
+            str(final_detail.get("status") or "").upper().strip()
+            if isinstance(final_detail, dict)
+            else ""
+        )
+        if not isinstance(final_detail, dict) or f_status in (
+            "PENDING",
+            "PARTIAL_FILLED",
+            "PENDING_CANCEL",
+            "PENDING_REPLACE",
+        ):
+            await asyncio.sleep(0.35)
+            final_detail = await context.api.get_order_detail(sell_oid)
+            f_status = (
+                str(final_detail.get("status") or "").upper().strip()
+                if isinstance(final_detail, dict)
+                else ""
+            )
+
+        if not isinstance(final_detail, dict) and elapsed_mod >= (
+            SELL_ORDER_MAX_WAIT_SEC + 15.0
+        ):
+            closed_cands = await context.api.get_closed_orders(
+                symbol=TARGET_SYMBOL, limit=25
+            )
+            for c_item in closed_cands:
+                if str(c_item.get("orderId") or "").strip() == sell_oid:
+                    final_detail = c_item
+                    f_status = (
+                        str(c_item.get("status") or "").upper().strip()
+                    )
+                    break
+
         if isinstance(final_detail, dict):
-            f_status = str(final_detail.get("status") or "").upper().strip()
+            if f_status in (
+                "PENDING",
+                "PARTIAL_FILLED",
+                "PENDING_CANCEL",
+                "PENDING_REPLACE",
+            ):
+                return {
+                    "status": "SELL_CANCEL_IN_FLIGHT",
+                    "did_sell_or_ratchet": True,
+                    "orderId": sell_oid,
+                }
             f_exec = (
                 final_detail.get("execution")
                 if isinstance(final_detail.get("execution"), dict)
@@ -2011,6 +2083,12 @@ async def sync_pending_sell_order_plugin(
                     settled_order_id=sell_oid,
                     actual_sell_fee_usd=f_fee,
                 )
+        elif elapsed_mod < (SELL_ORDER_MAX_WAIT_SEC + 30.0):
+            return {
+                "status": "SELL_CANCEL_VERIFY_RETRY",
+                "did_sell_or_ratchet": True,
+                "orderId": sell_oid,
+            }
 
         await context.ledger.update_state(
             TARGET_SYMBOL,

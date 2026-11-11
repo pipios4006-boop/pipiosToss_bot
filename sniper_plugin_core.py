@@ -596,24 +596,37 @@ async def _get_live_soxl_rsi_14(
         raw_cache.get(TARGET_SYMBOL) if isinstance(raw_cache, dict) else None
     )
 
+    last_warm_m = safe_float(getattr(context, "_last_rsi_warm_mono", 0.0), 0.0)
     if (
         not isinstance(base_met, dict)
+        or not bool(base_met.get("rsi_ready", False))
         or safe_float(base_met.get("prev_bar_close"), 0.0) <= 0.0
-    ):
+    ) and (time.monotonic() - last_warm_m) >= 10.0:
+        if context is not None:
+            setattr(context, "_last_rsi_warm_mono", time.monotonic())
         api_obj = getattr(context, "api", None)
         if api_obj is not None and hasattr(api_obj, "get_candles_1m"):
             try:
                 c_1m = await api_obj.get_candles_1m(
-                    symbol=TARGET_SYMBOL, total_count=100
+                    symbol=TARGET_SYMBOL, total_count=400
                 )
-                if c_1m:
-                    base_met = compute_soxl_quant_metrics_1m(
-                        candles=c_1m,
-                        live_price=lp,
-                        now_est=dt_now,
+                c_1d = (
+                    await api_obj.get_candles_1d(
+                        symbol=TARGET_SYMBOL, count=10
+                    )
+                    if hasattr(api_obj, "get_candles_1d")
+                    else []
+                )
+                if c_1m or c_1d:
+                    base_met = await asyncio.to_thread(
+                        compute_soxl_quant_metrics_1m,
+                        c_1m or [],
+                        lp,
+                        dt_now,
+                        c_1d or [],
                     )
             except Exception as exc:
-                logger.debug("RSI(14) 온디맨드 1분봉 프리워밍 폴백: %s", exc)
+                logger.debug("RSI(14) 온디맨드 400봉 프리워밍 폴백: %s", exc)
 
     met = refresh_metrics_with_live_tick(
         base_met if isinstance(base_met, dict) else {},
@@ -1534,9 +1547,7 @@ async def sync_pending_buy_order_plugin(
     is_vacant_l1_now = bool(len(buckets_now) > 0 and not has_active_l1_now)
     cur_target_q = max(0, safe_int(st.get("l1_target_quota_qty"), 0))
     fallback_target_q_on_zero_cancel = (
-        max(buckets_now[0].qty, cur_target_q)
-        if ((lot_type == "TOPUP_1FL" or is_sub_lot) and has_active_l1_now)
-        else (buckets_now[0].qty if has_active_l1_now else 0)
+        max(buckets_now[0].qty, cur_target_q) if has_active_l1_now else 0
     )
 
     sub_buckets_now = buckets_from_dicts(st.get("sub_buckets", []))
@@ -1547,11 +1558,8 @@ async def sync_pending_buy_order_plugin(
     cur_sub_target_q = max(0, safe_int(st.get("sub_l1_target_quota_qty"), 0))
     fallback_sub_target_q_on_zero_cancel = (
         max(sub_buckets_now[0].qty, cur_sub_target_q)
-        if (
-            (lot_type == "SUB_TOPUP_1FL" or not is_sub_lot)
-            and has_sub_active_l1_now
-        )
-        else (sub_buckets_now[0].qty if has_sub_active_l1_now else 0)
+        if has_sub_active_l1_now
+        else 0
     )
 
     is_zero_grid_reentry = bool(
@@ -1654,20 +1662,46 @@ async def sync_pending_buy_order_plugin(
                 except Exception:
                     pass
                 final_det = await context.api.get_order_detail(buy_oid)
-                if isinstance(final_det, dict):
-                    f_ex = (
-                        final_det.get("execution")
-                        if isinstance(final_det.get("execution"), dict)
-                        else {}
+                f_st2 = (
+                    str(final_det.get("status") or "").upper().strip()
+                    if isinstance(final_det, dict)
+                    else ""
+                )
+                if not isinstance(final_det, dict) or f_st2 in (
+                    "PENDING",
+                    "PARTIAL_FILLED",
+                    "PENDING_CANCEL",
+                    "PENDING_REPLACE",
+                ):
+                    await asyncio.sleep(0.35)
+                    final_det = await context.api.get_order_detail(buy_oid)
+                    f_st2 = (
+                        str(final_det.get("status") or "").upper().strip()
+                        if isinstance(final_det, dict)
+                        else ""
                     )
-                    f_q2 = safe_int(f_ex.get("filledQuantity"), filled_q)
-                    f_p2 = safe_float(
-                        f_ex.get("averageFilledPrice"), avg_fill_p
-                    )
-                    if f_q2 > 0:
-                        filled_q = f_q2
-                    if f_p2 > 0.0:
-                        avg_fill_p = f_p2
+                if not isinstance(final_det, dict) or f_st2 in (
+                    "PENDING",
+                    "PARTIAL_FILLED",
+                    "PENDING_CANCEL",
+                    "PENDING_REPLACE",
+                ):
+                    return {
+                        "status": "BUY_PARTIAL_CANCEL_CONFIRMING",
+                        "orderId": buy_oid,
+                        "filled_qty": filled_q,
+                    }
+                f_ex = (
+                    final_det.get("execution")
+                    if isinstance(final_det.get("execution"), dict)
+                    else {}
+                )
+                f_q2 = safe_int(f_ex.get("filledQuantity"), filled_q)
+                f_p2 = safe_float(f_ex.get("averageFilledPrice"), avg_fill_p)
+                if f_q2 > 0:
+                    filled_q = f_q2
+                if f_p2 > 0.0:
+                    avg_fill_p = f_p2
                 if filled_q > 0:
                     eff_p = avg_fill_p if avg_fill_p > 0.0 else ord_price
                     return await _commit_filled_buy_to_stratum_ledger(
@@ -1686,7 +1720,7 @@ async def sync_pending_buy_order_plugin(
                     "ordered_qty": ordered_qty,
                 }
 
-        if ord_status in ("CANCELED", "REJECTED") and filled_q == 0:
+        if ord_status in ("CANCELED", "REJECTED", "REPLACED") and filled_q == 0:
             re_epoch = (
                 mark_reentry_monitor_60s_cycle_shield(
                     context=context, symbol=TARGET_SYMBOL, eval_price=ord_price
@@ -1728,8 +1762,50 @@ async def sync_pending_buy_order_plugin(
             pass
 
         final_detail = await context.api.get_order_detail(buy_oid)
+        f_status = (
+            str(final_detail.get("status") or "").upper().strip()
+            if isinstance(final_detail, dict)
+            else ""
+        )
+        if not isinstance(final_detail, dict) or f_status in (
+            "PENDING",
+            "PARTIAL_FILLED",
+            "PENDING_CANCEL",
+            "PENDING_REPLACE",
+        ):
+            await asyncio.sleep(0.35)
+            final_detail = await context.api.get_order_detail(buy_oid)
+            f_status = (
+                str(final_detail.get("status") or "").upper().strip()
+                if isinstance(final_detail, dict)
+                else ""
+            )
+
+        if not isinstance(final_detail, dict) and elapsed_mod >= (
+            BUY_ORDER_MAX_WAIT_SEC + 15.0
+        ):
+            closed_cands = await context.api.get_closed_orders(
+                symbol=TARGET_SYMBOL, limit=25
+            )
+            for c_item in closed_cands:
+                if str(c_item.get("orderId") or "").strip() == buy_oid:
+                    final_detail = c_item
+                    f_status = (
+                        str(c_item.get("status") or "").upper().strip()
+                    )
+                    break
+
         if isinstance(final_detail, dict):
-            f_status = str(final_detail.get("status") or "").upper().strip()
+            if f_status in (
+                "PENDING",
+                "PARTIAL_FILLED",
+                "PENDING_CANCEL",
+                "PENDING_REPLACE",
+            ):
+                return {
+                    "status": "BUY_CANCEL_IN_FLIGHT",
+                    "orderId": buy_oid,
+                }
             f_exec = (
                 final_detail.get("execution")
                 if isinstance(final_detail.get("execution"), dict)
@@ -1747,6 +1823,11 @@ async def sync_pending_buy_order_plugin(
                     settled_order_id=buy_oid,
                     ordered_qty=ordered_qty,
                 )
+        elif elapsed_mod < (BUY_ORDER_MAX_WAIT_SEC + 30.0):
+            return {
+                "status": "BUY_CANCEL_VERIFY_RETRY",
+                "orderId": buy_oid,
+            }
 
         re_epoch = (
             mark_reentry_monitor_60s_cycle_shield(

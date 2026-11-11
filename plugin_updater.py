@@ -70,7 +70,21 @@ DEPRECATED_LEGACY_FILES: Tuple[str, ...] = (
     "soxs_stratum_ledger.json",
 )
 
-_TG_TOKEN_STRICT_RE = re.compile(r"\b(\d{8,12}:[A-Za-z0-9_-]{25,60})\b")
+_TG_TOKEN_STRICT_RE = re.compile(r"\b(\d{7,15}:[A-Za-z0-9_-]{25,60})\b")
+
+
+def _extract_ledger_updated_at_bytes(raw_bytes: bytes) -> str:
+    try:
+        parsed = json.loads(raw_bytes.decode("utf-8"))
+        if not isinstance(parsed, dict):
+            return ""
+        for k in ("SOXL", "BARBELL"):
+            sub = parsed.get(k)
+            if isinstance(sub, dict) and sub.get("updated_at"):
+                return str(sub.get("updated_at") or "")
+        return str(parsed.get("updated_at") or "")
+    except Exception:
+        return ""
 
 # [Case 85]: f-string 내 닫는 중괄호 '}' 가 '>' 로 오기된 패턴 자동 치유 정규식
 _FSTRING_BROKEN_BRACE_RE = re.compile(
@@ -464,10 +478,6 @@ def _snapshot_protected_local_files_sync(target_dir: str) -> Dict[str, bytes]:
     emergency_free_disk_space_sync(
         base_dir=abs_dir, keep_backup_days=14, remove_pycache=True
     )
-    try:
-        SoxlStratumLedger(base_dir=abs_dir)
-    except Exception as exc:
-        logger.debug("업데이트 전 원장 선행 동기화 예외(무시): %s", exc)
 
     snapshots: Dict[str, bytes] = {}
     patterns = (
@@ -517,6 +527,16 @@ def _restore_protected_local_files_sync(
                             existing_bytes = rf.read()
                         if existing_bytes == raw_bytes:
                             continue
+                        bname_l = os.path.basename(fp).lower()
+                        if "ledger" in bname_l and bname_l.endswith(".json"):
+                            disk_ts = _extract_ledger_updated_at_bytes(
+                                existing_bytes
+                            )
+                            snap_ts = _extract_ledger_updated_at_bytes(
+                                raw_bytes
+                            )
+                            if disk_ts and snap_ts and disk_ts > snap_ts:
+                                continue
                     except Exception:
                         pass
 
@@ -552,11 +572,6 @@ def _restore_protected_local_files_sync(
                         raise
         except Exception as exc:
             logger.error("보호 파일 복원 예외(%s): %s", fp, exc)
-
-    try:
-        SoxlStratumLedger(base_dir=abs_dir)
-    except Exception as exc:
-        logger.debug("복원 후 원장 재검증 예외(무시): %s", exc)
 
     return restored_cnt
 
@@ -734,10 +749,10 @@ def _auto_heal_indentation_glitches(
 # ---------------------------------------------------------------------------
 # [핵심 3] AST 최상위 익스포트 심볼 추출기 및 15대 코어 모듈 무디스크 인메모리 교차 검증기
 # ---------------------------------------------------------------------------
-def _extract_module_exported_symbols(tree: ast.AST) -> Set[str]:
-    exported: Set[str] = set()
-
-    for node in ast.walk(tree):
+def _collect_top_level_module_stmts(
+    stmts: List[ast.stmt], exported: Set[str]
+) -> None:
+    for node in stmts:
         if isinstance(
             node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
         ):
@@ -760,7 +775,26 @@ def _extract_module_exported_symbols(tree: ast.AST) -> Set[str]:
             for alias in node.names:
                 if alias.name != "*":
                     exported.add(alias.asname or alias.name)
+        elif isinstance(node, ast.If):
+            _collect_top_level_module_stmts(node.body, exported)
+            _collect_top_level_module_stmts(node.orelse, exported)
+        elif isinstance(node, ast.Try):
+            _collect_top_level_module_stmts(node.body, exported)
+            _collect_top_level_module_stmts(node.orelse, exported)
+            _collect_top_level_module_stmts(node.finalbody, exported)
+            for h in node.handlers:
+                if isinstance(h.name, str) and h.name:
+                    exported.add(h.name)
+                _collect_top_level_module_stmts(h.body, exported)
+        elif isinstance(node, (ast.With, ast.AsyncWith)):
+            _collect_top_level_module_stmts(node.body, exported)
 
+
+def _extract_module_exported_symbols(tree: ast.AST) -> Set[str]:
+    exported: Set[str] = set()
+    body_list = getattr(tree, "body", None)
+    if isinstance(body_list, list):
+        _collect_top_level_module_stmts(body_list, exported)
     return exported
 
 
@@ -1132,6 +1166,14 @@ async def run_auto_update_loop(
         try:
             ok, msg, changed = await execute_git_pull_and_preflight(base_dir)
             if ok and changed:
+                st_chk = context.ledger.get_state("SOXL")
+                if str(st_chk.get("buy_order_id") or "").strip() or str(
+                    st_chk.get("sell_order_id") or ""
+                ).strip():
+                    logger.info(
+                        "⏳ [Case 81 재기동 유예] 업데이트 도중 신규 SOXL 미결주문 감지 -> 정산 완료 후 차기 주기 재기동"
+                    )
+                    continue
                 logger.warning(
                     "🚀 [Case 81 장외 무인 자동 업데이트 검증 통과] %s -> 3.5초 워치독 및 os.execv 인플레이스 자가 재기동 개시",
                     msg,

@@ -2,3 +2,13 @@
 venv/
 __pycache__/
 *.log
+.env.*
+*ledger*.json
+*config*.json
+secrets.json
+.tg_update_offset*.dat
+ledger_backups/
+patch_backups/
+*.pyc
+*.tmp*
+apply_v3_audit_patches.py

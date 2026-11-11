@@ -315,7 +315,7 @@ def build_start_schedule_message(
         "⚙️ <b>전술 제어반</b> : 전원 · 복리/단리/바벨 · 암살자승격",
         "🚀 <b>시스템 업데이트</b> : 최신 코드 무중단 동기화",
         "⚖️ <code>/barbell</code> : 바벨(60/30/10) & 별도수익금고 상세",
-        "🗡️ <code>/assassin</code> : [모의/실전] 암살자 14대게이트 상세",
+        "🗡️ <code>/assassin</code> : [모의/실전] 암살자 순수 10G 상세",
     ]
     return "\n".join(lines)
 
@@ -452,6 +452,7 @@ def _format_sub_grid_stratum_lines(
     live_price: float,
     is_ext_sell_only: bool = False,
     is_late_cutoff: bool = False,
+    live_rsi_14: float = 50.0,
 ) -> List[str]:
     held_sh_main = safe_int(summary.get("held_shares"), 0)
     sub_sh = safe_int(summary.get("sub_held_shares"), 0)
@@ -538,9 +539,17 @@ def _format_sub_grid_stratum_lines(
             lines.append(
                 f"  ⚡ <b>[서브1층: 공석]</b> 🔒장외잠금 · 04:07 재장전{s_cap_note}"
             )
+        elif is_late_cutoff:
+            lines.append(
+                f"  ⚡ <b>[서브1층: 공석]</b> 🛡️돌파차단 · 눌림(-1%) 감시{s_cap_note}"
+            )
+        elif live_rsi_14 > 50.0:
+            lines.append(
+                f"  ⚡ <b>[서브1층: 공석]</b> 눌림(-1%)/🛡️돌파차단(RSI {live_rsi_14:.1f}>50){s_cap_note}"
+            )
         else:
             lines.append(
-                f"  ⚡ <b>[서브1층: 공석]</b> 1분주기 재장전 감시{s_cap_note}"
+                f"  ⚡ <b>[서브1층: 공석]</b> 1분주기 눌림(-1%)/돌파(RSI<=50){s_cap_note}"
             )
 
     if sub_upper_buckets:
@@ -617,7 +626,9 @@ def build_avwap_radar_message(
     )
     rsi_14 = safe_float(met.get("rsi_14"), 50.0)
 
-    summary = summarize_stratum_portfolio(st, live_price=lp, now_est=dt_now)
+    summary = summarize_stratum_portfolio(
+        st, live_price=lp, now_est=dt_now, rsi_14=rsi_14
+    )
     is_active = bool(st.get("is_active", True))
     is_barbell = _is_barbell_portion_mode(st)
     is_simple = _is_simple_portion_mode(st)
@@ -747,6 +758,7 @@ def build_avwap_radar_message(
         lp,
         is_ext_sell_only=is_ext_sell_only,
         is_late_cutoff=is_late_cutoff,
+        live_rsi_14=rsi_14,
     )
 
     _, _, _, gate_info = evaluate_buy_gate_bucket_status(
@@ -768,7 +780,7 @@ def build_avwap_radar_message(
     if live_assn_active:
         gate_header_line = "🎯 <b>[다음 매수 타점 · 실전 암살자 위임]</b>"
         gate_cond_lines.append(
-            "▫️ 04:07 ~ 08:14 EST 14대 진성 게이트 포착 시 단발 타격"
+            "▫️ 04:07 ~ 08:14 EST 순수 10대 급락 게이트 포착 시 단발 타격"
         )
     elif held_sh <= 0:
         gate_header_line = "🎯 <b>[다음 매수 타점 · 0주 첫 진입]</b>"
@@ -1261,19 +1273,26 @@ def build_settlement_control_message(
 # [핵심 2] 텔레그램 명령어 및 콜백 비동기 컨트롤러 (TelegramCommandController)
 # ---------------------------------------------------------------------------
 class TelegramCommandController:
-    def __init__(self, context: Any) -> None:
+    def __init__(
+        self,
+        context: Any,
+        bot_token: Optional[str] = None,
+        chat_id: Optional[str] = None,
+    ) -> None:
         self.context: Any = context
         self.base_dir: str = get_bot_base_dir(
             getattr(context, "base_dir", None)
         )
-        self.bot_token: str = (
-            os.environ.get("TELEGRAM_BOT_TOKEN")
+        self.bot_token: str = str(
+            bot_token
+            or os.environ.get("TELEGRAM_BOT_TOKEN")
             or os.environ.get("TG_BOT_TOKEN")
             or os.environ.get("BOT_TOKEN")
             or ""
         ).strip()
         self.chat_id: str = str(
-            os.environ.get("TELEGRAM_CHAT_ID")
+            chat_id
+            or os.environ.get("TELEGRAM_CHAT_ID")
             or os.environ.get("TG_CHAT_ID")
             or os.environ.get("CHAT_ID")
             or ""
@@ -1583,17 +1602,23 @@ class TelegramCommandController:
         base_met = self.context.candle_metrics_cache.get(TARGET_SYMBOL, {})
         if (
             not isinstance(base_met, dict)
+            or not bool(base_met.get("anchors_ready", False))
             or safe_float(base_met.get("prev_bar_close"), 0.0) <= 0.0
         ):
             try:
                 c_1m = await self.context.api.get_candles_1m(
-                    symbol=TARGET_SYMBOL, total_count=200
+                    symbol=TARGET_SYMBOL, total_count=400
                 )
-                if c_1m:
-                    base_met = compute_soxl_quant_metrics_1m(
-                        candles=c_1m,
-                        live_price=live_p,
-                        now_est=now_est,
+                c_1d = await self.context.api.get_candles_1d(
+                    symbol=TARGET_SYMBOL, count=10
+                )
+                if c_1m or c_1d:
+                    base_met = await asyncio.to_thread(
+                        compute_soxl_quant_metrics_1m,
+                        c_1m or [],
+                        live_p,
+                        now_est,
+                        c_1d or [],
                     )
             except Exception:
                 pass
@@ -1777,10 +1802,15 @@ class TelegramCommandController:
             TARGET_SYMBOL, portion_mode=next_m
         )
 
-        # 바벨 모드로 진입한 즉시 현재 보유 SOXL 원금(<=60% / 60~100% / >=100%)을 자동 분류 동기화!
+        # 바벨 모드 진입 시 동기화 (단, 실전 암살자 단독 가동 중에는 복귀 첫 틱까지 유예)
         if is_barbell_mode(next_m):
-            await initialize_or_sync_barbell_on_mode_enter(self.context)
-            updated_st = self.context.ledger.get_state(TARGET_SYMBOL)
+            if is_live_assassin_standalone_active(self.context):
+                await ensure_barbell_ledger(self.context).update_state(
+                    is_initialized=False
+                )
+            else:
+                await initialize_or_sync_barbell_on_mode_enter(self.context)
+                updated_st = self.context.ledger.get_state(TARGET_SYMBOL)
 
         self.context.wakeup_event.set()
         if edit_msg_id is not None and edit_msg_id > 0:
@@ -1891,14 +1921,23 @@ class TelegramCommandController:
             pass
 
         try:
-            if _is_barbell_portion_mode(updated_st):
+            if _is_barbell_portion_mode(
+                updated_st
+            ) and not is_live_assassin_standalone_active(self.context):
                 await initialize_or_sync_barbell_on_mode_enter(
                     self.context, new_seed_usd=round(val, 4)
                 )
                 updated_st = self.context.ledger.get_state(TARGET_SYMBOL)
             else:
-                await ensure_barbell_ledger(self.context).update_state(
-                    initial_seed_usd=round(val, 4)
+                b_led = ensure_barbell_ledger(self.context)
+                keep_init = (
+                    False
+                    if is_live_assassin_standalone_active(self.context)
+                    else bool(b_led.get_state().get("is_initialized", False))
+                )
+                await b_led.update_state(
+                    initial_seed_usd=round(val, 4),
+                    is_initialized=keep_init,
                 )
         except Exception:
             pass

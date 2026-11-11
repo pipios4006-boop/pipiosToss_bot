@@ -421,8 +421,14 @@ def _load_env_files_into_environ(
             except Exception:
                 pass
 
-    env_one, env_rt = _read_env_us_commission_rates()
-    set_runtime_round_trip_fee_rate_pct(env_rt, us_commission_rate=env_one)
+    if (
+        os.environ.get("US_COMMISSION_RATE") is not None
+        or os.environ.get("ROUND_TRIP_FEE_RATE_PCT") is not None
+    ):
+        env_one, env_rt = _read_env_us_commission_rates()
+        set_runtime_round_trip_fee_rate_pct(
+            env_rt, us_commission_rate=env_one
+        )
     return target_dir
 
 
@@ -430,25 +436,47 @@ _load_env_files_into_environ()
 
 
 # ---------------------------------------------------------------------------
-# [제1헌법] _HybridFileLock 및 GlobalThrottle (동기/비동기 양방향 호환 중앙 통제)
+# [제1헌법 · MODIFIED] _HybridFileLock(스레드/태스크 비종속 재진입 안전 락) 및 GlobalThrottle
 # ---------------------------------------------------------------------------
 class _HybridFileLock:
     def __init__(self) -> None:
-        self._thread_lock = threading.RLock()
+        self._cond = threading.Condition(threading.Lock())
+        self._owner: Optional[Tuple[str, int]] = None
+        self._count: int = 0
+
+    def _acquire_token(self, token: Tuple[str, int]) -> None:
+        with self._cond:
+            while self._owner is not None and self._owner != token:
+                self._cond.wait()
+            self._owner = token
+            self._count += 1
+
+    def _release_token(self, token: Tuple[str, int]) -> None:
+        with self._cond:
+            if self._count > 0:
+                self._count -= 1
+            if self._count <= 0:
+                self._count = 0
+                self._owner = None
+                self._cond.notify()
 
     def __enter__(self) -> "_HybridFileLock":
-        self._thread_lock.acquire()
+        self._acquire_token(("THREAD", threading.get_ident()))
         return self
 
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
-        self._thread_lock.release()
+        self._release_token(("THREAD", threading.get_ident()))
 
     async def __aenter__(self) -> "_HybridFileLock":
-        await asyncio.to_thread(self._thread_lock.acquire)
+        task = asyncio.current_task()
+        tok = ("TASK", id(task) if task is not None else threading.get_ident())
+        await asyncio.to_thread(self._acquire_token, tok)
         return self
 
     async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
-        self._thread_lock.release()
+        task = asyncio.current_task()
+        tok = ("TASK", id(task) if task is not None else threading.get_ident())
+        self._release_token(tok)
 
 
 class GlobalThrottle:
@@ -479,10 +507,11 @@ class GlobalThrottle:
         with cls._api_lock:
             now_m = time.monotonic()
             last_m = cls._last_call_mono.get(grp, 0.0)
-            wait_s = min_gap - (now_m - last_m)
-            if wait_s > 0.0:
-                time.sleep(wait_s)
-            cls._last_call_mono[grp] = time.monotonic()
+            target_m = max(now_m, last_m + min_gap)
+            wait_s = target_m - now_m
+            cls._last_call_mono[grp] = target_m
+        if wait_s > 0.0:
+            time.sleep(wait_s)
 
     @classmethod
     async def wait_api(cls, group: str = "DEFAULT") -> None:
@@ -1689,6 +1718,22 @@ class SoxlStratumLedger:
     ) -> bool:
         if not target_path:
             return False
+        with GlobalThrottle.get_file_lock(target_path):
+            return cls._atomic_write_json_body_sync(
+                target_path=target_path,
+                payload=payload,
+                force_write=force_write,
+            )
+
+    @classmethod
+    def _atomic_write_json_body_sync(
+        cls,
+        target_path: str,
+        payload: Dict[str, Any],
+        force_write: bool = False,
+    ) -> bool:
+        if not target_path:
+            return False
 
         new_soxl = cls._extract_raw_soxl_dict(payload)
         if (
@@ -1904,8 +1949,9 @@ class SoxlStratumLedger:
     async def update_state(
         self, symbol: str = TARGET_SYMBOL, **kwargs: Any
     ) -> Dict[str, Any]:
-        return await asyncio.to_thread(
-            self.update_state_sync, symbol, **kwargs
+        return await asyncio.wait_for(
+            asyncio.to_thread(self.update_state_sync, symbol, **kwargs),
+            timeout=10.0,
         )
 
     async def reset_stratum_only(

@@ -917,6 +917,11 @@ class AssassinSimLedger:
             no_trade_days=0,
             total_scouts_dispatched=0,
             total_scout_win_exits=0,
+            today_gt_gate_dispatches=0,
+            today_gt_gate_win_exits=0,
+            today_gt_gate_stop_exits=0,
+            today_gt_gate_cutoff_exits=0,
+            today_gt_gate_history=[],
             cum_gt_gate_dispatches=0,
             cum_gt_gate_win_exits=0,
             cum_gt_gate_stop_exits=0,
@@ -1012,24 +1017,57 @@ async def activate_live_assassin_on_zero_soxl_if_armed(
     st_sp = context.ledger.get_state(TARGET_SYMBOL)
     buckets = buckets_from_dicts(st_sp.get("buckets", []))
     sub_buckets = buckets_from_dicts(st_sp.get("sub_buckets", []))
-    if buckets or sub_buckets:
+    if (
+        buckets
+        or sub_buckets
+        or str(st_sp.get("buy_order_id") or "").strip()
+        or str(st_sp.get("sell_order_id") or "").strip()
+    ):
         return False
 
     if hasattr(context, "api"):
         try:
+            open_soxl = await context.api.get_open_orders(symbol=TARGET_SYMBOL)
+            if open_soxl:
+                return False
+        except Exception:
+            pass
+        try:
             await context.api.cancel_all_open_orders(
                 symbol=BARBELL_SAFE_SYMBOL
             )
+            if hasattr(context, "barbell_ledger"):
+                from barbell_plugin import _sync_pending_sgov_orders
+
+                await _sync_pending_sgov_orders(
+                    context=context,
+                    b_ledger=context.barbell_ledger,
+                    bst=context.barbell_ledger.get_state(),
+                    force_settle=True,
+                )
         except Exception:
             pass
 
     init_seed = safe_float(
         st_sp.get("initial_seed_usd"), DEFAULT_INITIAL_SEED_USD
     )
+    clear_sim_pos_kw: Dict[str, Any] = {}
+    if bool(st.get("has_position", False)) and not bool(
+        st.get("is_live_position", False)
+    ):
+        clear_sim_pos_kw = {
+            "has_position": False,
+            "is_live_position": False,
+            "alert_entry_sent": False,
+            "alert_arm_100_sent": False,
+            "alert_exit_sent": False,
+            "alert_live_bp_shortfall_sent": False,
+        }
     await assn_ledger.update_state(
         execution_mode=ASSASSIN_MODE_LIVE,
         demote_to_sim_after_exit=False,
         initial_seed_usd=round(max(100.0, init_seed), 4),
+        **clear_sim_pos_kw,
     )
     context.wakeup_event.set()
     logger.info(
@@ -1088,29 +1126,49 @@ async def toggle_assassin_live_promotion(
             or str(st_sp.get("sell_order_id") or "").strip()
         )
         broker_soxl_qty = 0
+        holdings_verified = not hasattr(context, "api")
         if hasattr(context, "api"):
             try:
+                open_soxl = await context.api.get_open_orders(
+                    symbol=TARGET_SYMBOL
+                )
+                if open_soxl:
+                    has_pending_soxl_ord = True
                 h_map, ok = await context.api.get_holdings_map_with_status(
                     symbol=TARGET_SYMBOL
                 )
                 if ok and isinstance(h_map, dict):
+                    holdings_verified = True
                     broker_soxl_qty = safe_int(
                         (h_map.get(TARGET_SYMBOL) or {}).get("qty"), 0
                     )
             except Exception:
-                broker_soxl_qty = 0
+                holdings_verified = False
 
         total_soxl_held = (
             sum(b.qty for b in buckets)
             + sum(sb.qty for sb in sub_buckets)
             + broker_soxl_qty
         )
-        if total_soxl_held == 0 and not has_pending_soxl_ord:
+        if (
+            holdings_verified
+            and total_soxl_held == 0
+            and not has_pending_soxl_ord
+        ):
             if hasattr(context, "api"):
                 try:
                     await context.api.cancel_all_open_orders(
                         symbol=BARBELL_SAFE_SYMBOL
                     )
+                    if hasattr(context, "barbell_ledger"):
+                        from barbell_plugin import _sync_pending_sgov_orders
+
+                        await _sync_pending_sgov_orders(
+                            context=context,
+                            b_ledger=context.barbell_ledger,
+                            bst=context.barbell_ledger.get_state(),
+                            force_settle=True,
+                        )
                 except Exception:
                     pass
             updated = await assn_ledger.update_state(
@@ -1119,6 +1177,10 @@ async def toggle_assassin_live_promotion(
                 initial_seed_usd=init_seed,
                 has_position=False,
                 is_live_position=False,
+                alert_entry_sent=False,
+                alert_arm_100_sent=False,
+                alert_exit_sent=False,
+                alert_live_bp_shortfall_sent=False,
             )
             context.wakeup_event.set()
             return {
@@ -3220,6 +3282,7 @@ async def _settle_assassin_exit_to_ledger(
     peak_p: float,
     min_p: float,
     dt_now: datetime,
+    actual_sell_fee_usd: Optional[float] = None,
 ) -> str:
     ep = safe_float(st.get("entry_price"), exec_xp)
     rt_fee = safe_float(
@@ -3256,8 +3319,32 @@ async def _settle_assassin_exit_to_ledger(
             sell_exec_price=exec_xp,
             sold_actual_cost_usd=l_inv,
             round_trip_fee_rate_pct=rt_fee,
+            actual_sell_fee_usd=actual_sell_fee_usd,
         )
         l_net = safe_float(l_pnl_info.get("net_pnl_usd"), 0.0)
+        if context is not None:
+            now_m_sh = time.monotonic()
+            now_e_sh = time.time()
+            for cache_attr in ("exit_snapshot_cache", "indexing_grace_cache"):
+                c_map = getattr(context, cache_attr, None)
+                if isinstance(c_map, dict):
+                    c_ent = dict(c_map.get(TARGET_SYMBOL) or {})
+                    c_ent["last_auto_fill_ts"] = now_m_sh
+                    c_ent["last_sell_fill_mono"] = now_m_sh
+                    c_ent["last_cycle_end_mono"] = now_m_sh
+                    c_ent["last_sell_fill_ts"] = now_e_sh
+                    c_ent["last_cycle_end_ts"] = now_e_sh
+                    c_ent["lot_type"] = "SELL_FILL"
+                    c_map[TARGET_SYMBOL] = c_ent
+            if hasattr(context, "ledger"):
+                try:
+                    await context.ledger.update_state(
+                        TARGET_SYMBOL,
+                        last_sell_fill_ts=now_e_sh,
+                        last_cycle_end_ts=now_e_sh,
+                    )
+                except Exception:
+                    pass
 
     gain_pct = ((exec_xp - ep) / ep) * 100.0 if ep > 0.0 else 0.0
     init_s = max(
@@ -3406,6 +3493,17 @@ async def _sync_live_pending_exit_order(
         else 0.0
     )
 
+    actual_fee: Optional[float] = None
+    if isinstance(det, dict) and isinstance(det.get("execution"), dict):
+        ex_f = det["execution"]
+        f_tot = round(
+            max(0.0, safe_float(ex_f.get("commission"), 0.0))
+            + max(0.0, safe_float(ex_f.get("tax"), 0.0)),
+            4,
+        )
+        if f_tot > 0.0:
+            actual_fee = f_tot
+
     if st_ord == "FILLED":
         return await _settle_assassin_exit_to_ledger(
             context=context,
@@ -3420,13 +3518,73 @@ async def _sync_live_pending_exit_order(
             peak_p=safe_float(st.get("peak_price"), fp),
             min_p=safe_float(st.get("post_entry_min_price"), fp),
             dt_now=dt_now,
+            actual_sell_fee_usd=actual_fee,
         )
+
+    if st_ord in ("CANCELED", "REJECTED", "REPLACED"):
+        h_map_chk, h_ok_chk = await context.api.get_holdings_map_with_status(
+            symbol=TARGET_SYMBOL
+        )
+        rem_broker_q = (
+            safe_int((h_map_chk.get(TARGET_SYMBOL) or {}).get("qty"), 0)
+            if (h_ok_chk and isinstance(h_map_chk, dict))
+            else max(0, safe_int(st.get("live_held_qty"), 1) - fq)
+        )
+        if h_ok_chk and rem_broker_q <= 0:
+            eff_p_end = fp
+            if fq <= 0 and hasattr(context.api, "probe_latest_manual_fill_price"):
+                probed_p, _ = await context.api.probe_latest_manual_fill_price(
+                    side="SELL",
+                    target_qty=max(1, safe_int(st.get("live_held_qty"), 1)),
+                    fallback_price=lp,
+                    symbol=TARGET_SYMBOL,
+                )
+                if probed_p > 0.0:
+                    eff_p_end = probed_p
+            return await _settle_assassin_exit_to_ledger(
+                context=context,
+                assn_ledger=assn_ledger,
+                st=st,
+                exec_xp=eff_p_end,
+                exit_code=str(st.get("pending_exit_code") or "EXIT"),
+                exit_desc=str(st.get("pending_exit_desc") or "실전 청산 체결"),
+                entry_qqq_p=eq_qqq,
+                cur_qqq_chg_pct=q_chg,
+                new_armed=bool(st.get("is_trailing_armed", False)),
+                peak_p=safe_float(st.get("peak_price"), eff_p_end),
+                min_p=safe_float(st.get("post_entry_min_price"), eff_p_end),
+                dt_now=dt_now,
+                actual_sell_fee_usd=actual_fee,
+            )
+        old_lq = max(1, safe_int(st.get("live_held_qty"), 1))
+        new_lq = max(1, rem_broker_q if h_ok_chk else max(1, old_lq - fq))
+        ep_cur = safe_float(st.get("entry_price"), lp)
+        await assn_ledger.update_state(
+            live_held_qty=new_lq,
+            live_invested_usd=round(float(new_lq) * ep_cur, 4),
+            safe_cap_sell_order_id="",
+            pending_exit_sell_order_id="",
+            pending_exit_code="",
+            pending_exit_desc="",
+            pending_exit_mono=0.0,
+        )
+        context.assassin_high_freq_active = True
+        return "ASSASSIN_LIVE_EXIT_RE_SWEEP_ARMED"
 
     elapsed = time.monotonic() - safe_float(
         st.get("pending_exit_mono"), time.monotonic()
     )
-    if elapsed >= 5.0 and lp > 0.0:
-        chase_p = round(max(0.01, lp * 0.996), 2)
+    hm_chk = dt_now.hour * 100 + dt_now.minute
+    wait_thr = 3.0 if hm_chk >= ASSASSIN_MOC_EXIT_HM else 5.0
+    if elapsed >= wait_thr and lp > 0.0:
+        if hm_chk >= ASSASSIN_MOC_EXIT_HM:
+            bid_p = await context.api.get_best_bid_price(
+                TARGET_SYMBOL, fallback_price=lp
+            )
+            ref_m_p = min(lp, bid_p) if bid_p > 0.0 else lp
+            chase_p = round(max(0.01, ref_m_p * 0.985), 2)
+        else:
+            chase_p = round(max(0.01, lp * 0.996), 2)
         try:
             mod_r = await context.api.modify_order(
                 order_id=sell_oid, new_price=chase_p
@@ -3437,13 +3595,7 @@ async def _sync_live_pending_exit_order(
                 pending_exit_mono=time.monotonic(),
             )
         except Exception:
-            if st_ord in ("CANCELED", "REJECTED") and fq <= 0:
-                await assn_ledger.update_state(
-                    pending_exit_sell_order_id="",
-                    pending_exit_code="",
-                    pending_exit_desc="",
-                    pending_exit_mono=0.0,
-                )
+            pass
     context.assassin_high_freq_active = True
     return "ASSASSIN_LIVE_EXIT_WAITING"
 # -*- coding: utf-8 -*-
@@ -4099,6 +4251,8 @@ async def execute_simulated_assassin_tick_plugin(
                 == ASSASSIN_MODE_ARMED_ON_ZERO
                 and not st_sp.get("buckets")
                 and not st_sp.get("sub_buckets")
+                and not str(st_sp.get("buy_order_id") or "").strip()
+                and not str(st_sp.get("sell_order_id") or "").strip()
             ):
                 await activate_live_assassin_on_zero_soxl_if_armed(context)
         except Exception:
@@ -4241,11 +4395,90 @@ async def execute_simulated_assassin_tick_plugin(
             except Exception:
                 pass
 
+        if (
+            is_live_pos
+            and hasattr(context, "api")
+            and (now_ts - safe_float(st.get("entry_ts"), 0.0)) >= 15.0
+            and (
+                now_ts
+                - safe_float(getattr(context, "_last_assn_h_chk_ts", 0.0), 0.0)
+            )
+            >= 6.0
+        ):
+            setattr(context, "_last_assn_h_chk_ts", now_ts)
+            try:
+                h_m_live, h_ok_live = (
+                    await context.api.get_holdings_map_with_status(
+                        symbol=TARGET_SYMBOL
+                    )
+                )
+                if (
+                    h_ok_live
+                    and isinstance(h_m_live, dict)
+                    and safe_int(
+                        (h_m_live.get(TARGET_SYMBOL) or {}).get("qty"), 0
+                    )
+                    <= 0
+                ):
+                    if cap_oid_now:
+                        try:
+                            await context.api.cancel_order(cap_oid_now)
+                        except Exception:
+                            pass
+                    man_p = lp
+                    man_fee: Optional[float] = None
+                    if hasattr(context.api, "probe_latest_manual_fill_price"):
+                        man_p, _ = (
+                            await context.api.probe_latest_manual_fill_price(
+                                side="SELL",
+                                target_qty=max(
+                                    1, safe_int(st.get("live_held_qty"), 1)
+                                ),
+                                fallback_price=lp,
+                                symbol=TARGET_SYMBOL,
+                            )
+                        )
+                        f_probe = safe_float(
+                            getattr(
+                                context.api, "last_probed_manual_fee_usd", 0.0
+                            ),
+                            0.0,
+                        )
+                        if f_probe > 0.0:
+                            man_fee = f_probe
+                    return await _settle_assassin_exit_to_ledger(
+                        context=context,
+                        assn_ledger=assn_ledger,
+                        st=st,
+                        exec_xp=(man_p if man_p > 0.0 else lp),
+                        exit_code="MANUAL_EXIT_SYNC",
+                        exit_desc=f"🧹 실전 보유분 수동 전량청산 동기화(${man_p if man_p > 0.0 else lp:.2f})",
+                        entry_qqq_p=entry_qqq_p,
+                        cur_qqq_chg_pct=cur_qqq_chg_pct,
+                        new_armed=bool(st.get("is_trailing_armed", False)),
+                        peak_p=max(safe_float(st.get("peak_price"), lp), lp),
+                        min_p=safe_float(st.get("post_entry_min_price"), lp),
+                        dt_now=dt_now,
+                        actual_sell_fee_usd=man_fee,
+                    )
+            except Exception:
+                pass
+
+        entry_hm_prefix = str(st.get("entry_time_est") or "")[:5]
+        same_entry_min = bool(
+            entry_hm_prefix and dt_now.strftime("%H:%M") == entry_hm_prefix
+        )
+        eff_bar_high = (
+            lp
+            if same_entry_min
+            else max(lp, safe_float(feat.get("cur_bar_high"), lp))
+        )
+
         exit_eval = evaluate_assassin_ha_trailing_and_exits(
             hm=hm,
             entry_price=safe_float(st.get("entry_price"), lp),
             live_price=lp,
-            bar_high_price=safe_float(feat.get("cur_bar_high"), lp),
+            bar_high_price=eff_bar_high,
             is_trailing_armed=bool(st.get("is_trailing_armed", False)),
             peak_price=safe_float(st.get("peak_price"), lp),
             arm_100_price=safe_float(st.get("arm_100_price"), 0.0),
@@ -4369,20 +4602,85 @@ async def execute_simulated_assassin_tick_plugin(
             )
         )
 
-        if is_live_pos and ok_ex and not imm_ex_filled and active_sell_oid:
-            await assn_ledger.update_state(
-                pending_exit_sell_order_id=active_sell_oid,
-                pending_exit_code=exit_code,
-                pending_exit_desc=exit_desc,
-                pending_exit_mono=time.monotonic(),
-                is_trailing_armed=new_armed,
-                peak_price=safe_float(exit_eval.get("peak_price"), lp),
-                post_entry_min_price=safe_float(
-                    exit_eval.get("post_entry_min_price"), lp
-                ),
-            )
-            context.assassin_high_freq_active = True
-            return f"ASSASSIN_LIVE_EXIT_PENDING_{exit_code}"
+        if is_live_pos:
+            if not ok_ex:
+                if hasattr(context, "api"):
+                    try:
+                        open_chk = await context.api.get_open_orders(
+                            symbol=TARGET_SYMBOL
+                        )
+                        h_chk, h_ok2 = (
+                            await context.api.get_holdings_map_with_status(
+                                symbol=TARGET_SYMBOL
+                            )
+                        )
+                        if (
+                            not open_chk
+                            and h_ok2
+                            and safe_int(
+                                (h_chk.get(TARGET_SYMBOL) or {}).get("qty"), 0
+                            )
+                            <= 0
+                        ):
+                            p_man, _ = (
+                                await context.api.probe_latest_manual_fill_price(
+                                    side="SELL",
+                                    target_qty=eff_sell_q,
+                                    fallback_price=lp,
+                                    symbol=TARGET_SYMBOL,
+                                )
+                            )
+                            return await _settle_assassin_exit_to_ledger(
+                                context=context,
+                                assn_ledger=assn_ledger,
+                                st=st,
+                                exec_xp=(p_man if p_man > 0.0 else lp),
+                                exit_code=exit_code,
+                                exit_desc=exit_desc,
+                                entry_qqq_p=entry_qqq_p,
+                                cur_qqq_chg_pct=cur_qqq_chg_pct,
+                                new_armed=new_armed,
+                                peak_p=safe_float(
+                                    exit_eval.get("peak_price"), lp
+                                ),
+                                min_p=safe_float(
+                                    exit_eval.get("post_entry_min_price"), lp
+                                ),
+                                dt_now=dt_now,
+                            )
+                    except Exception:
+                        pass
+                await assn_ledger.update_state(
+                    safe_cap_sell_order_id=active_sell_oid,
+                    is_trailing_armed=new_armed,
+                    peak_price=safe_float(exit_eval.get("peak_price"), lp),
+                    post_entry_min_price=safe_float(
+                        exit_eval.get("post_entry_min_price"), lp
+                    ),
+                )
+                if context is not None:
+                    context.assassin_high_freq_active = True
+                logger.warning(
+                    "⚠️ [Case 95 실전 암살자 청산 스윕 일시 실패 -> 퇴근 보류 및 0.4s 즉시 재시도] code=%s",
+                    exit_code,
+                )
+                return f"ASSASSIN_LIVE_EXIT_RETRY_{exit_code}"
+
+            if not imm_ex_filled and active_sell_oid:
+                await assn_ledger.update_state(
+                    pending_exit_sell_order_id=active_sell_oid,
+                    pending_exit_code=exit_code,
+                    pending_exit_desc=exit_desc,
+                    pending_exit_mono=time.monotonic(),
+                    is_trailing_armed=new_armed,
+                    peak_price=safe_float(exit_eval.get("peak_price"), lp),
+                    post_entry_min_price=safe_float(
+                        exit_eval.get("post_entry_min_price"), lp
+                    ),
+                )
+                if context is not None:
+                    context.assassin_high_freq_active = True
+                return f"ASSASSIN_LIVE_EXIT_PENDING_{exit_code}"
 
         return await _settle_assassin_exit_to_ledger(
             context=context,

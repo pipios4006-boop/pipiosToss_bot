@@ -248,7 +248,9 @@ class TossApiClient:
                 return self._access_token
 
             if not self.client_id or not self.client_secret:
-                _load_env_files_into_environ(base_dir=self.base_dir)
+                await asyncio.to_thread(
+                    _load_env_files_into_environ, self.base_dir
+                )
                 self.client_id = (
                     os.environ.get("TOSS_CLIENT_ID")
                     or os.environ.get("TOSS_API_KEY")
@@ -344,8 +346,10 @@ class TossApiClient:
                 self.account_seq = env_seq
                 return self.account_seq
 
-            self.account_seq = 1
-            return self.account_seq
+            logger.warning(
+                "⚠️ [AccountSeq 조회 폴백] 계좌 응답이 비어 있어 고정 락온 없이 1 임시 반환(차기 재탐색)"
+            )
+            return 1
 
     async def get_commissions(self) -> List[Dict[str, Any]]:
         try:
@@ -373,14 +377,27 @@ class TossApiClient:
                 return self.us_commission_rate, self.round_trip_fee_rate_pct
 
             items = await self.get_commissions()
+            today_kst = datetime.now(KST_TZ).strftime("%Y-%m-%d")
             found_us_rate = 0.0
+            fallback_us_rate = 0.0
             for it in items:
                 mkt = str(it.get("marketCountry") or "").upper().strip()
                 if mkt == "US":
                     r_val = safe_float(it.get("commissionRate"), 0.0)
-                    if 0.0 < r_val <= 0.01:
-                        found_us_rate = round(r_val, 6)
-                        break
+                    if not (0.0 < r_val <= 0.01):
+                        continue
+                    s_dt = str(it.get("startDate") or "").strip()[:10]
+                    e_dt = str(it.get("endDate") or "").strip()[:10]
+                    if s_dt and len(s_dt) == 10 and today_kst < s_dt:
+                        continue
+                    if e_dt and len(e_dt) == 10 and today_kst > e_dt:
+                        if fallback_us_rate <= 0.0:
+                            fallback_us_rate = round(r_val, 6)
+                        continue
+                    found_us_rate = round(r_val, 6)
+                    break
+            if found_us_rate <= 0.0 and fallback_us_rate > 0.0:
+                found_us_rate = fallback_us_rate
 
             if found_us_rate > 0.0:
                 rt_pct = round(found_us_rate * 200.0, 4)
@@ -432,11 +449,13 @@ class TossApiClient:
             )
 
         last_exc: Optional[Exception] = None
+        force_token_refresh: bool = False
         for attempt in range(max_retries + 1):
             try:
                 token = await self._ensure_access_token(
-                    force_refresh=(attempt > 0 and last_exc is None)
+                    force_refresh=force_token_refresh
                 )
+                force_token_refresh = False
                 headers: Dict[str, str] = {
                     "Authorization": f"Bearer {token}",
                     "Accept": "application/json",
@@ -495,6 +514,7 @@ class TossApiClient:
 
                 if status_code == 401 and attempt < max_retries:
                     self._access_token = ""
+                    force_token_refresh = True
                     last_exc = None
                     continue
 
@@ -1268,11 +1288,11 @@ class TossApiClient:
         hm = now_est.hour * 100 + now_est.minute
 
         if sym == BARBELL_SAFE_SYMBOL:
-            if now_est.weekday() >= 5 or not (930 <= hm <= 1600):
+            if now_est.weekday() >= 5 or not (931 <= hm <= 1555):
                 raise _NonRetryableApiError(
                     422,
                     "sgov-regular-hours-only",
-                    f"바벨 SGOV 주문은 평일 정규장(09:30 ~ 16:00 EST)에만 허용됩니다 (현재 요일={now_est.weekday()}, {hm:04d} EST)",
+                    f"바벨 SGOV 주문은 평일 정규장(09:31 ~ 15:55 EST)에만 허용됩니다 (현재 요일={now_est.weekday()}, {hm:04d} EST)",
                 )
         elif enforce_daymarket_block and clean_side == "BUY":
             if now_est.weekday() >= 5 or not (407 <= hm <= 1600):
@@ -1283,9 +1303,17 @@ class TossApiClient:
                 )
 
         qty_int = max(1, safe_int(quantity, 1))
-        cid = str(
+        raw_cid = str(
             client_order_id or generate_client_order_id(prefix=clean_side)
-        ).strip()[:36]
+        ).strip()
+        clean_cid = "".join(
+            ch for ch in raw_cid if (ch.isalnum() or ch in ("-", "_"))
+        )[:36]
+        cid = (
+            clean_cid
+            if clean_cid
+            else generate_client_order_id(prefix=clean_side)
+        )
         price_str = self._format_us_limit_price(price)
 
         payload: Dict[str, Any] = {
@@ -1484,6 +1512,8 @@ class TossApiClient:
                 "FILLED",
                 "PARTIAL_FILLED",
                 "CANCELED",
+                "REPLACED",
+                "REJECTED",
             ):
                 continue
 

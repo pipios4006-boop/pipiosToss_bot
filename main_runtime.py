@@ -120,7 +120,7 @@ logger = logging.getLogger("toss_sniper.main_runtime")
 
 KRW_PER_USD_DEFAULT: float = 1380.0
 
-_TG_TOKEN_STRICT_RE = re.compile(r"\b(\d{8,12}:[A-Za-z0-9_-]{25,60})\b")
+_TG_TOKEN_STRICT_RE = re.compile(r"\b(\d{7,15}:[A-Za-z0-9_-]{25,60})\b")
 
 
 def _escape_html(val: Any) -> str:
@@ -243,12 +243,8 @@ def _normalize_single_holding_item(
         if isinstance(item.get("marketValue"), dict)
         else {}
     )
-    pl_obj = (
-        item.get("profitLoss")
-        if isinstance(it_pl := item.get("profitLoss"), dict)
-        else {}
-    )
-    _ = it_pl
+    raw_pl_obj = item.get("profitLoss")
+    pl_obj = raw_pl_obj if isinstance(raw_pl_obj, dict) else {}
 
     pur_amt = safe_float(
         item.get("purchase_amount")
@@ -282,7 +278,13 @@ def _normalize_single_holding_item(
         ),
         0.0,
     )
-    if pur_amt > 0.0 and abs(raw_rate) < 2.0 and abs(pnl_amt / pur_amt) > 0.005:
+    if item.get("profit_rate") is None and pl_obj:
+        profit_rate = round(raw_rate * 100.0, 2)
+    elif (
+        pur_amt > 0.0
+        and abs(raw_rate) < 2.0
+        and abs(pnl_amt / pur_amt) > 0.005
+    ):
         profit_rate = round((pnl_amt / pur_amt) * 100.0, 2)
     else:
         profit_rate = round(raw_rate, 2)
@@ -1272,6 +1274,29 @@ class _AdaptiveTelegramBridge:
         self._tg_http_client: Optional[Any] = None
         self._tg_client_lock: asyncio.Lock = asyncio.Lock()
         self._consecutive_poll_errors: int = 0
+        self._shared_ctrl: Optional[tg_ui_plugin.TelegramCommandController] = (
+            None
+        )
+
+    def _get_shared_ctrl(self) -> tg_ui_plugin.TelegramCommandController:
+        if self._shared_ctrl is None:
+            self._shared_ctrl = tg_ui_plugin.TelegramCommandController(
+                self.context,
+                bot_token=self.bot_token,
+                chat_id=self.chat_id,
+            )
+            self._shared_ctrl._awaiting_seed_input_chats = (
+                self._awaiting_seed_input_chats
+            )
+        return self._shared_ctrl
+
+    async def close(self) -> None:
+        if self._shared_ctrl is not None:
+            try:
+                await self._shared_ctrl._close_tg_http_client()
+            except Exception:
+                pass
+        await self._close_tg_http_client()
 
     def _api_url(self, method: str) -> str:
         return f"https://api.telegram.org/bot{self.bot_token}/{method}"
@@ -1810,8 +1835,13 @@ class _AdaptiveTelegramBridge:
             TARGET_SYMBOL, portion_mode=next_m
         )
         if is_barbell_mode(next_m):
-            await initialize_or_sync_barbell_on_mode_enter(self.context)
-            updated_st = self.context.ledger.get_state(TARGET_SYMBOL)
+            if is_live_assassin_standalone_active(self.context):
+                await ensure_barbell_ledger(self.context).update_state(
+                    is_initialized=False
+                )
+            else:
+                await initialize_or_sync_barbell_on_mode_enter(self.context)
+                updated_st = self.context.ledger.get_state(TARGET_SYMBOL)
 
         self.context.wakeup_event.set()
         if edit_msg_id is not None and edit_msg_id > 0:
@@ -1845,7 +1875,7 @@ class _AdaptiveTelegramBridge:
     async def _toggle_assassin_live_command(
         self, chat_id: str, edit_msg_id: Optional[int] = None
     ) -> None:
-        ctrl = tg_ui_plugin.TelegramCommandController(self.context)
+        ctrl = self._get_shared_ctrl()
         await ctrl._toggle_assassin_live_command(
             chat_id=chat_id, edit_msg_id=edit_msg_id
         )
@@ -1891,14 +1921,23 @@ class _AdaptiveTelegramBridge:
             pass
 
         try:
-            if _is_barbell_portion_mode(updated_st):
+            if _is_barbell_portion_mode(
+                updated_st
+            ) and not is_live_assassin_standalone_active(self.context):
                 await initialize_or_sync_barbell_on_mode_enter(
                     self.context, new_seed_usd=round(val, 4)
                 )
                 updated_st = self.context.ledger.get_state(TARGET_SYMBOL)
             else:
-                await ensure_barbell_ledger(self.context).update_state(
-                    initial_seed_usd=round(val, 4)
+                b_led = ensure_barbell_ledger(self.context)
+                keep_init = (
+                    False
+                    if is_live_assassin_standalone_active(self.context)
+                    else bool(b_led.get_state().get("is_initialized", False))
+                )
+                await b_led.update_state(
+                    initial_seed_usd=round(val, 4),
+                    is_initialized=keep_init,
                 )
         except Exception:
             pass
@@ -2049,7 +2088,7 @@ class _AdaptiveTelegramBridge:
             return
 
         if first_token == "/reset_profit":
-            ctrl = tg_ui_plugin.TelegramCommandController(self.context)
+            ctrl = self._get_shared_ctrl()
             await ctrl._reset_realized_profit_only(chat_id=chat_id)
             return
 
@@ -2069,19 +2108,21 @@ class _AdaptiveTelegramBridge:
             "🚀 시스템 업데이트",
             "🚀 업데이트",
         ):
-            ctrl = tg_ui_plugin.TelegramCommandController(self.context)
-            ctrl._last_update_id = self._last_update_id
+            ctrl = self._get_shared_ctrl()
+            ctrl._last_update_id = max(
+                ctrl._last_update_id, self._last_update_id
+            )
+            await self._close_tg_http_client()
             await ctrl._execute_manual_update_command(chat_id=chat_id)
             return
 
     async def _handle_callback_query(self, cb: Dict[str, Any]) -> None:
-        ctrl = tg_ui_plugin.TelegramCommandController(self.context)
-        ctrl._last_update_id = self._last_update_id
-        ctrl._awaiting_seed_input_chats = self._awaiting_seed_input_chats
+        ctrl = self._get_shared_ctrl()
+        ctrl._last_update_id = max(ctrl._last_update_id, self._last_update_id)
         await ctrl._handle_callback_query(cb)
 
     async def run_polling_loop(self) -> None:
-        ctrl = tg_ui_plugin.TelegramCommandController(self.context)
+        ctrl = self._get_shared_ctrl()
         await ctrl.run_polling_loop()
 
 

@@ -270,9 +270,19 @@ async def candle_radar_loop(context: SniperAppContext) -> None:
                 now_est=now_est,
                 candles_1d=candles_1d,
             )
+            newest_lp = safe_float(
+                context.latest_prices.get(TARGET_SYMBOL), live_p
+            )
+            if newest_lp > 0.0:
+                metrics = refresh_metrics_with_live_tick(
+                    metrics,
+                    newest_lp,
+                    now_est=datetime.now(EST_TZ),
+                    symbol=TARGET_SYMBOL,
+                )
             context.candle_metrics_cache[TARGET_SYMBOL] = metrics
             if (
-                live_p <= 0.0
+                newest_lp <= 0.0
                 and safe_float(metrics.get("live_price"), 0.0) > 0.0
             ):
                 fetched_lp = safe_float(metrics.get("live_price"), 0.0)
@@ -294,6 +304,16 @@ async def candle_radar_loop(context: SniperAppContext) -> None:
                         live_price_qqq=qqq_live_p,
                         now_est=now_est,
                     )
+                    newest_qqq_p = safe_float(
+                        context.latest_prices.get(MACRO_REF_SYMBOL), qqq_live_p
+                    )
+                    if newest_qqq_p > 0.0:
+                        qqq_metrics = refresh_metrics_with_live_tick(
+                            qqq_metrics,
+                            newest_qqq_p,
+                            now_est=datetime.now(EST_TZ),
+                            symbol=MACRO_REF_SYMBOL,
+                        )
                     context.candle_metrics_cache[MACRO_REF_SYMBOL] = qqq_metrics
                 except Exception as qqq_exc:
                     logger.debug("QQQ 캔들 레이더 폴백(묵음): %s", qqq_exc)
@@ -384,6 +404,18 @@ async def main_sniper_loop(context: SniperAppContext) -> None:
             if 400 <= hm <= 406 and context.last_0400_sync_date != today_str:
                 if is_live_assassin_standalone_active(context):
                     try:
+                        if hasattr(
+                            context.ledger, "rollover_daily_counters_if_needed"
+                        ):
+                            await context.ledger.rollover_daily_counters_if_needed(
+                                today_str
+                            )
+                        await context.barbell_ledger.rollover_daily_if_needed(
+                            today_str
+                        )
+                        await context.assassin_ledger.rollover_daily_session_if_needed(
+                            today_str
+                        )
                         us_c, rt_p = await context.api.ensure_us_commission_rate(
                             force_refresh=True
                         )
@@ -790,7 +822,7 @@ async def async_main() -> int:
     run_barbell_plugin_tdd()
     run_assassin_plugin_tdd()
     logger.info(
-        "✅ [QuantEngine TDD · Barbell 60/30/10 TDD · Assassin 14 Truth Gates TDD] 전수 검증 통과!"
+        "✅ [QuantEngine TDD · Barbell 60/30/10 TDD · Assassin 10 Truth Gates TDD] 전수 검증 통과!"
     )
 
     context = SniperAppContext(base_dir=base_dir)
@@ -917,6 +949,12 @@ async def async_main() -> int:
             await asyncio.wait_for(
                 asyncio.gather(*tasks, return_exceptions=True), timeout=2.0
             )
+        except Exception:
+            pass
+
+        try:
+            if hasattr(context.tg, "close"):
+                await asyncio.wait_for(context.tg.close(), timeout=1.5)
         except Exception:
             pass
 

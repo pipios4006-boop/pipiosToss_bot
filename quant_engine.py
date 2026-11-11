@@ -144,14 +144,21 @@ def vrev_add_quota_lot_and_merge_2tier(
         str(merge_mode or DEFAULT_GRID_MERGE_MODE).upper().strip()
     )
 
-    if not has_active_l1_bucket(existing) and tag in (
-        "REENTRY_1FL",
-        "TOPUP_1FL",
-    ):
-        preserved_uppers = relabel_upper_grid_tiers(
-            existing, max_tiers=eff_max_tiers, merge_mode=eff_merge_mode
+    if not has_active_l1_bucket(existing):
+        if tag in ("REENTRY_1FL", "TOPUP_1FL") or (
+            pure_p <= existing[0].book_price + 1e-6
+        ):
+            preserved_uppers = relabel_upper_grid_tiers(
+                existing, max_tiers=eff_max_tiers, merge_mode=eff_merge_mode
+            )
+            return [new_l1] + preserved_uppers
+        combined_uppers = list(existing) + [new_l1]
+        combined_uppers.sort(key=lambda b: round(b.book_price, 4))
+        return relabel_upper_grid_tiers(
+            combined_uppers,
+            max_tiers=eff_max_tiers,
+            merge_mode=eff_merge_mode,
         )
-        return [new_l1] + preserved_uppers
 
     if tag == "TOPUP_1FL" and has_active_l1_bucket(existing):
         old_b1 = existing[0]
@@ -1851,8 +1858,18 @@ def summarize_stratum_portfolio(
     realized_roi_pct = round((cum_realized / init_seed) * 100.0, 2)
     if is_barbell:
         soxl_mark_net = (free_cash + market_eval_usd) - injected_reserve_usd
+        cyc_loss_ref = min(
+            0.0, safe_float(st.get("cycle_realized_net_usd"), 0.0)
+        )
+        prior_unvaulted_adj = (
+            cum_realized - vaulted_profit_locked_usd
+        ) - cyc_loss_ref
         gross_mark_equity_usd = round(
-            free_cash + market_eval_usd + barbell_non_soxl_seed_usd + vaulted_profit_locked_usd,
+            free_cash
+            + market_eval_usd
+            + barbell_non_soxl_seed_usd
+            + vaulted_profit_locked_usd
+            + prior_unvaulted_adj,
             4,
         )
         total_mark_equity_usd = round(
@@ -1860,7 +1877,8 @@ def summarize_stratum_portfolio(
                 0.0,
                 soxl_mark_net
                 + barbell_non_soxl_seed_usd
-                + vaulted_profit_locked_usd,
+                + vaulted_profit_locked_usd
+                + prior_unvaulted_adj,
             ),
             4,
         )
@@ -1888,9 +1906,14 @@ def summarize_stratum_portfolio(
 
     proj_main_l1_net = 0.0
     if active_l1 and buckets and l1_target_price > 0.0:
+        eff_main_l1_grad_p = (
+            min(l1_target_price, upper_wma_target_price)
+            if (upper_qty > 0 and upper_wma_target_price > 0.0)
+            else l1_target_price
+        )
         proj_main_l1_net = calc_sell_realized_pnl(
             sold_qty=buckets[0].qty,
-            sell_exec_price=l1_target_price,
+            sell_exec_price=eff_main_l1_grad_p,
             sold_actual_cost_usd=buckets[0].actual_cost_usd,
             round_trip_fee_rate_pct=eff_rt_fee_pct,
         )["net_pnl_usd"]
@@ -1906,9 +1929,14 @@ def summarize_stratum_portfolio(
 
     proj_sub_l1_net = 0.0
     if sub_active_l1 and sub_buckets and sub_l1_target_price > 0.0:
+        eff_sub_l1_grad_p = (
+            min(sub_l1_target_price, sub_upper_wma_target_price)
+            if (sub_upper_qty > 0 and sub_upper_wma_target_price > 0.0)
+            else sub_l1_target_price
+        )
         proj_sub_l1_net = calc_sell_realized_pnl(
             sold_qty=sub_buckets[0].qty,
-            sell_exec_price=sub_l1_target_price,
+            sell_exec_price=eff_sub_l1_grad_p,
             sold_actual_cost_usd=sub_buckets[0].actual_cost_usd,
             round_trip_fee_rate_pct=eff_rt_fee_pct,
         )["net_pnl_usd"]
