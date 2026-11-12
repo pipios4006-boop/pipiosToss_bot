@@ -20,16 +20,23 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import logging
 import math
 import os
+import threading
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import datetime
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
+
+try:
+    import fcntl
+except ImportError:
+    fcntl = None  # type: ignore
 
 from toss_api_core import (
     ALLOWED_SYMBOLS,
@@ -108,6 +115,217 @@ from toss_api_core import (
 
 logger = logging.getLogger("toss_sniper.toss_api")
 
+# NEW: /dev/shm 프로세스 간 무계좌 시세·정찰 공유 버스 코어
+_SHM_BUS_DIR: str = os.environ.get(
+    "TOSS_SHM_BUS_DIR",
+    "/dev/shm/toss_sniper_bus_v3",
+)
+PRICE_SHM_TTL_SEC: float = 1.15
+CANDLE_1M_SHM_TTL_SEC: float = 4.20
+CANDLE_1D_SHM_TTL_SEC: float = 30.0
+
+
+def _resolve_shm_bus_dir_sync(
+    bus_dir: Optional[str] = None,
+) -> str:
+    cand = str(bus_dir or _SHM_BUS_DIR).strip()
+    if cand.startswith("/dev/shm/") and not (
+        os.path.isdir("/dev/shm")
+    ):
+        cand = "/tmp/toss_sniper_bus_v3"
+    if not os.path.isdir(cand):
+        old_u = os.umask(0)
+        try:
+            os.makedirs(
+                cand, mode=0o777, exist_ok=True
+            )
+            os.chmod(cand, 0o777)
+        except Exception:
+            pass
+        finally:
+            os.umask(old_u)
+    return cand
+
+
+def _open_shm_lock_fd_sync(lock_fp: str) -> int:
+    try:
+        return os.open(lock_fp, os.O_RDWR)
+    except FileNotFoundError:
+        tmp_lk = (
+            f"{lock_fp}.{os.getpid()}."
+            f"{threading.get_ident()}"
+        )
+        old_u = os.umask(0)
+        try:
+            fd_t = os.open(
+                tmp_lk,
+                os.O_CREAT | os.O_EXCL | os.O_RDWR,
+                0o666,
+            )
+            try:
+                os.fchmod(fd_t, 0o666)
+            except Exception:
+                pass
+            os.close(fd_t)
+            os.replace(tmp_lk, lock_fp)
+        except Exception:
+            try:
+                if os.path.exists(tmp_lk):
+                    os.remove(tmp_lk)
+            except Exception:
+                pass
+        finally:
+            os.umask(old_u)
+        return os.open(lock_fp, os.O_RDWR)
+
+
+PRICE_SHM_SNAPSHOT_TTL_SEC: float = 0.25
+
+
+def _unlock_shm_fd_now(fd: int) -> None:
+    if fd < 0:
+        return
+    try:
+        if fcntl is not None:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+    except Exception:
+        pass
+    try:
+        os.close(fd)
+    except Exception:
+        pass
+
+
+def _shm_read_json_sync(
+    fp: str,
+) -> Dict[str, Any]:
+    if not fp or not os.path.isfile(fp):
+        return {}
+    try:
+        with open(fp, "r", encoding="utf-8") as rf:
+            data = json.load(rf)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _shm_write_json_sync(
+    fp: str, data: Dict[str, Any]
+) -> None:
+    tmp_fp = (
+        f"{fp}.tmp.{os.getpid()}."
+        f"{threading.get_ident()}"
+    )
+    old_u = os.umask(0)
+    try:
+        with open(tmp_fp, "w", encoding="utf-8") as wf:
+            json.dump(data, wf, ensure_ascii=False)
+            wf.flush()
+        try:
+            os.chmod(tmp_fp, 0o666)
+        except Exception:
+            pass
+        os.replace(tmp_fp, fp)
+    except Exception:
+        try:
+            if os.path.exists(tmp_fp):
+                os.remove(tmp_fp)
+        except Exception:
+            pass
+    finally:
+        os.umask(old_u)
+
+
+def _shm_try_begin_prices_sync(
+    sym_list: List[str],
+    ttl_sec: float,
+    bypass_cache: bool,
+) -> Tuple[str, Dict[str, float], int]:
+    try:
+        bdir = _resolve_shm_bus_dir_sync()
+        data_fp = os.path.join(bdir, "prices_v3.json")
+        now_t = time.time()
+        if not bypass_cache:
+            cached = _shm_read_json_sync(data_fp)
+            hit: Dict[str, float] = {}
+            all_ok = True
+            for s in sym_list:
+                ent = cached.get(s)
+                if not isinstance(ent, dict):
+                    all_ok = False
+                    break
+                p_v = safe_float(ent.get("p"), 0.0)
+                ts_v = safe_float(ent.get("ts"), 0.0)
+                if p_v <= 0.0 or (now_t - ts_v) > ttl_sec:
+                    all_ok = False
+                    break
+                hit[s] = p_v
+            if all_ok and hit:
+                return "HIT", hit, -1
+        if bypass_cache or fcntl is None:
+            return "SOLO", {}, -1
+        lock_fp = os.path.join(bdir, "prices_v3.lock")
+        fd = _open_shm_lock_fd_sync(lock_fp)
+        try:
+            fcntl.flock(
+                fd, fcntl.LOCK_EX | fcntl.LOCK_NB
+            )
+            return "LEADER", {}, fd
+        except (BlockingIOError, OSError):
+            _unlock_shm_fd_now(fd)
+            return "FOLLOWER", {}, -1
+    except Exception:
+        return "SOLO", {}, -1
+
+
+def _shm_poll_follower_prices_sync(
+    sym_list: List[str], min_ts: float
+) -> Optional[Dict[str, float]]:
+    try:
+        bdir = _resolve_shm_bus_dir_sync()
+        data_fp = os.path.join(bdir, "prices_v3.json")
+        cached = _shm_read_json_sync(data_fp)
+        hit: Dict[str, float] = {}
+        for s in sym_list:
+            ent = cached.get(s)
+            if not isinstance(ent, dict):
+                return None
+            p_v = safe_float(ent.get("p"), 0.0)
+            ts_v = safe_float(ent.get("ts"), 0.0)
+            if p_v <= 0.0 or ts_v < min_ts:
+                return None
+            hit[s] = p_v
+        return hit if hit else None
+    except Exception:
+        return None
+
+
+def _shm_commit_prices_and_unlock_sync(
+    fd: int, fetched: Dict[str, float]
+) -> None:
+    try:
+        valid = {
+            k: v
+            for k, v in (fetched or {}).items()
+            if v > 0.0
+        }
+        if valid:
+            bdir = _resolve_shm_bus_dir_sync()
+            data_fp = os.path.join(bdir, "prices_v3.json")
+            cur = _shm_read_json_sync(data_fp)
+            now_t = time.time()
+            for k, v in valid.items():
+                cur[k] = {
+                    "p": round(float(v), 4),
+                    "ts": now_t,
+                }
+            _shm_write_json_sync(data_fp, cur)
+    except Exception:
+        pass
+    finally:
+        _unlock_shm_fd_now(fd)
+
+
 
 # ---------------------------------------------------------------------------
 # [핵심] 토스증권 Open API v1.2.14 방탄 클라이언트 (TossApiClient)
@@ -123,6 +341,8 @@ class TossApiClient:
 
     REAL_ALLOWED_SYMBOLS: Tuple[str, ...] = ("SOXL",)
     BARBELL_ALLOWED_SYMBOLS: Tuple[str, ...] = ("SOXL", "SGOV")
+    _candles_1m_v3_patched: bool = True
+    _candles_1d_v3_patched: bool = True
 
     def __init__(
         self,
@@ -545,7 +765,7 @@ class TossApiClient:
     # -----------------------------------------------------------------------
     # [Market Data 그룹] 현재가 · 호가 · 최근체결 · 윗꼬리 체결최고가 · 1분봉/일봉 차트
     # -----------------------------------------------------------------------
-    async def get_current_prices_batch(
+    async def _fetch_prices_batch_raw(
         self, symbols: Iterable[str] = (TARGET_SYMBOL,)
     ) -> Dict[str, float]:
         sym_list = [
@@ -574,9 +794,66 @@ class TossApiClient:
             logger.debug("get_current_prices_batch 예외: %s", exc)
         return out
 
-    async def get_current_price(self, symbol: str = TARGET_SYMBOL) -> float:
-        p_map = await self.get_current_prices_batch((symbol,))
-        return safe_float(p_map.get(str(symbol).upper().strip()), 0.0)
+    async def get_current_prices_batch(
+        self,
+        symbols: Iterable[str] = (TARGET_SYMBOL,),
+        bypass_shm_cache: bool = False,
+    ) -> Dict[str, float]:
+        sym_list = list(
+            dict.fromkeys(
+                str(s).upper().strip()
+                for s in symbols
+                if str(s).strip()
+            )
+        ) or [TARGET_SYMBOL]
+        role, hit_m, lfd = await asyncio.to_thread(
+            _shm_try_begin_prices_sync,
+            sym_list,
+            PRICE_SHM_TTL_SEC,
+            bool(bypass_shm_cache),
+        )
+        if role == "HIT":
+            return hit_m
+        if role == "FOLLOWER":
+            min_t = time.time() - PRICE_SHM_TTL_SEC
+            for _ in range(15):
+                await asyncio.sleep(0.02)
+                polled = await asyncio.to_thread(
+                    _shm_poll_follower_prices_sync,
+                    sym_list,
+                    min_t,
+                )
+                if polled is not None:
+                    return polled
+        out: Dict[str, float] = {
+            s: 0.0 for s in sym_list
+        }
+        try:
+            out = await self._fetch_prices_batch_raw(
+                sym_list
+            )
+            return out
+        finally:
+            try:
+                await asyncio.to_thread(
+                    _shm_commit_prices_and_unlock_sync,
+                    lfd,
+                    out,
+                )
+            except BaseException:
+                _unlock_shm_fd_now(lfd)
+
+    async def get_current_price(
+        self,
+        symbol: str = TARGET_SYMBOL,
+        bypass_shm_cache: bool = False,
+    ) -> float:
+        p_map = await self.get_current_prices_batch(
+            (symbol,),
+            bypass_shm_cache=bypass_shm_cache,
+        )
+        sym_k = str(symbol).upper().strip()
+        return safe_float(p_map.get(sym_k), 0.0)
 
     async def get_recent_trades(
         self, symbol: str = TARGET_SYMBOL, count: int = 50
@@ -855,7 +1132,170 @@ class TossApiClient:
                 continue
         return False
 
+    @staticmethod
+    def _shm_begin_candles_sync(
+        ckey: str, req_cnt: int, ttl_s: float
+    ) -> Tuple[str, List[Dict[str, Any]], int]:
+        try:
+            bdir = _resolve_shm_bus_dir_sync()
+            dfp = os.path.join(
+                bdir, f"candles_{ckey}.json"
+            )
+            now_t = time.time()
+            cur = _shm_read_json_sync(dfp)
+            ts_v = safe_float(cur.get("ts"), 0.0)
+            c_req = safe_int(cur.get("req_cnt"), 0)
+            items = cur.get("items")
+            if (
+                (now_t - ts_v) <= ttl_s
+                and c_req >= req_cnt
+                and isinstance(items, list)
+                and items
+            ):
+                sliced = [
+                    dict(x)
+                    for x in items[-req_cnt:]
+                    if isinstance(x, dict)
+                ]
+                if sliced:
+                    return "HIT", sliced, -1
+            if fcntl is None:
+                return "SOLO", [], -1
+            lfp = os.path.join(
+                bdir, f"candles_{ckey}.lock"
+            )
+            fd = _open_shm_lock_fd_sync(lfp)
+            try:
+                fcntl.flock(
+                    fd, fcntl.LOCK_EX | fcntl.LOCK_NB
+                )
+                return "LEADER", [], fd
+            except (BlockingIOError, OSError):
+                _unlock_shm_fd_now(fd)
+                return "FOLLOWER", [], -1
+        except Exception:
+            return "SOLO", [], -1
+
+    @staticmethod
+    def _shm_poll_candles_sync(
+        ckey: str, req_cnt: int, min_ts: float
+    ) -> Optional[List[Dict[str, Any]]]:
+        try:
+            bdir = _resolve_shm_bus_dir_sync()
+            dfp = os.path.join(
+                bdir, f"candles_{ckey}.json"
+            )
+            cur = _shm_read_json_sync(dfp)
+            ts_v = safe_float(cur.get("ts"), 0.0)
+            c_req = safe_int(cur.get("req_cnt"), 0)
+            items = cur.get("items")
+            if (
+                ts_v >= min_ts
+                and c_req >= req_cnt
+                and isinstance(items, list)
+                and items
+            ):
+                return [
+                    dict(x)
+                    for x in items[-req_cnt:]
+                    if isinstance(x, dict)
+                ]
+        except Exception:
+            pass
+        return None
+
+    @staticmethod
+    def _shm_end_candles_sync(
+        fd: int,
+        ckey: str,
+        req_cnt: int,
+        items: List[Dict[str, Any]],
+    ) -> None:
+        try:
+            if items:
+                bdir = _resolve_shm_bus_dir_sync()
+                dfp = os.path.join(
+                    bdir, f"candles_{ckey}.json"
+                )
+                _shm_write_json_sync(
+                    dfp,
+                    {
+                        "ts": time.time(),
+                        "req_cnt": int(req_cnt),
+                        "items": items,
+                    },
+                )
+        except Exception:
+            pass
+        finally:
+            _unlock_shm_fd_now(fd)
+
     async def get_candles_1m(
+        self,
+        symbol: str = TARGET_SYMBOL,
+        total_count: int = 400,
+        count: Optional[int] = None,
+        before: Optional[str] = None,
+        adjusted: bool = True,
+        **kwargs: Any,
+    ) -> List[Dict[str, Any]]:
+        sym_c = str(symbol or TARGET_SYMBOL).upper().strip()
+        rc = max(safe_int(total_count, 0), safe_int(count, 0))
+        t_cnt = max(1, min(400, rc if rc > 0 else 400))
+        if before or not adjusted or kwargs.get(
+            "bypass_shm_cache"
+        ):
+            return await self._fetch_candles_1m_raw(
+                symbol=sym_c,
+                total_count=t_cnt,
+                count=count,
+                before=before,
+                adjusted=adjusted,
+            )
+        ckey = f"1m_{sym_c}"
+        role, hit_c, lfd = await asyncio.to_thread(
+            self._shm_begin_candles_sync,
+            ckey,
+            t_cnt,
+            CANDLE_1M_SHM_TTL_SEC,
+        )
+        if role == "HIT":
+            return hit_c
+        if role == "FOLLOWER":
+            min_t = time.time() - CANDLE_1M_SHM_TTL_SEC
+            for _ in range(16):
+                await asyncio.sleep(0.025)
+                polled = await asyncio.to_thread(
+                    self._shm_poll_candles_sync,
+                    ckey,
+                    t_cnt,
+                    min_t,
+                )
+                if polled is not None:
+                    return polled
+        fetched: List[Dict[str, Any]] = []
+        try:
+            fetched = await self._fetch_candles_1m_raw(
+                symbol=sym_c,
+                total_count=t_cnt,
+                count=count,
+                before=None,
+                adjusted=adjusted,
+            )
+            return fetched
+        finally:
+            try:
+                await asyncio.to_thread(
+                    self._shm_end_candles_sync,
+                    lfd,
+                    ckey,
+                    t_cnt,
+                    fetched,
+                )
+            except BaseException:
+                _unlock_shm_fd_now(lfd)
+
+    async def _fetch_candles_1m_raw(
         self,
         symbol: str = TARGET_SYMBOL,
         total_count: int = 400,
@@ -964,11 +1404,22 @@ class TossApiClient:
         adjusted: bool = True,
         **kwargs: Any,
     ) -> List[Dict[str, Any]]:
+        sym_c = str(symbol or TARGET_SYMBOL).upper().strip()
+        t_cnt = max(2, min(200, safe_int(count, 10)))
+        ckey = f"1d_{sym_c}"
+        role, hit_d, lfd = await asyncio.to_thread(
+            self._shm_begin_candles_sync,
+            ckey,
+            t_cnt,
+            CANDLE_1D_SHM_TTL_SEC,
+        )
+        if role == "HIT":
+            return hit_d
         try:
             batch, _ = await self.get_candles(
-                symbol=symbol,
+                symbol=sym_c,
                 interval="1d",
-                count=max(2, min(200, safe_int(count, 10))),
+                count=t_cnt,
                 adjusted=adjusted,
             )
             batch.sort(
@@ -979,10 +1430,20 @@ class TossApiClient:
                     or ""
                 )
             )
+            await asyncio.to_thread(
+                self._shm_end_candles_sync,
+                lfd,
+                ckey,
+                t_cnt,
+                batch,
+            )
+            lfd = -1
             return batch
         except Exception as exc:
             logger.debug("get_candles_1d 조회 예외: %s", exc)
             return []
+        finally:
+            _unlock_shm_fd_now(lfd)
 
     # -----------------------------------------------------------------------
     # [Market Info 그룹] USD/KRW 환율 및 미국 장 캘린더 (API.txt v1.2.14)

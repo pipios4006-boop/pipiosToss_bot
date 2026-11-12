@@ -100,6 +100,253 @@ SCOUT_T03A_DIP_SCAN_INTERVAL_SEC: float = 60.0
 _LAST_T03A_DIP_SCAN_KEY: str = ""
 _LAST_T03A_DIP_SCAN_TS: float = 0.0
 
+# NEW: /dev/shm 골든타임 정찰 및 10대 급락 게이트 공유 버스
+ASSASSIN_SHM_SIGNAL_TTL_SEC: float = 15.0
+_CONSUMED_SHM_GATE_KEYS: Dict[str, str] = {}
+_SHM_SCOUT_SYNC_KEYS: Tuple[str, ...] = (
+    "day_scout_seq",
+    "prior_scout_wins_today",
+    "scout_units",
+    "day_scout_history",
+    "scout1_open_price",
+    "scout_anchor_price",
+    "scout_cycle_min_buy_price",
+    "scout_ratchet_max_lots",
+    "scout_has_active_l1",
+    "last_scout_buy_ts",
+    "last_scout_sell_ts",
+    "last_scout_reentry_eval_ts",
+    "last_scout_bucket_10m",
+    "today_pre_open_price",
+    "today_pre_open_verified",
+    "today_premarket_vwap",
+    "today_pre_vwap_verified",
+    "today_pre_high_price",
+)
+
+
+def _assn_shm_fp_sync() -> str:
+    bdir = str(
+        os.environ.get(
+            "TOSS_SHM_BUS_DIR", "/dev/shm/toss_sniper_bus_v3"
+        )
+    ).strip()
+    if bdir.startswith("/dev/shm/") and not os.path.isdir("/dev/shm"):
+        bdir = "/tmp/toss_sniper_bus_v3"
+    if not os.path.isdir(bdir):
+        old_u = os.umask(0)
+        try:
+            os.makedirs(bdir, mode=0o777, exist_ok=True)
+            os.chmod(bdir, 0o777)
+        except Exception:
+            pass
+        finally:
+            os.umask(old_u)
+    return os.path.join(bdir, "assassin_gt_bus_v3.json")
+
+
+def _assn_read_shm_bus_sync(today_str: str) -> Dict[str, Any]:
+    fp = _assn_shm_fp_sync()
+    if not os.path.isfile(fp):
+        return {}
+    try:
+        with open(fp, "r", encoding="utf-8") as rf:
+            d = json.load(rf)
+        if isinstance(d, dict) and d.get("date") == today_str:
+            return d
+    except Exception:
+        pass
+    return {}
+
+
+def _assn_write_shm_bus_sync(payload: Dict[str, Any]) -> None:
+    fp = _assn_shm_fp_sync()
+    tmp_p = f"{fp}.tmp.{os.getpid()}.{threading.get_ident()}"
+    old_u = os.umask(0)
+    try:
+        with open(tmp_p, "w", encoding="utf-8") as wf:
+            json.dump(payload, wf, ensure_ascii=False)
+            wf.flush()
+        try:
+            os.chmod(tmp_p, 0o666)
+        except Exception:
+            pass
+        os.replace(tmp_p, fp)
+    except Exception:
+        try:
+            if os.path.exists(tmp_p):
+                os.remove(tmp_p)
+        except Exception:
+            pass
+    finally:
+        os.umask(old_u)
+
+
+def _assn_pub_shm_scout_sync(st: Dict[str, Any]) -> None:
+    try:
+        d_str = str(st.get("current_session_date") or "").strip()
+        if not d_str:
+            return
+        cur = _assn_read_shm_bus_sync(d_str)
+        prev_sc = cur.get("scout_state") or {}
+        n_rk = (
+            safe_int(st.get("day_scout_seq"), 0),
+            safe_int(st.get("prior_scout_wins_today"), 0),
+        )
+        p_rk = (
+            safe_int(prev_sc.get("day_scout_seq"), 0),
+            safe_int(prev_sc.get("prior_scout_wins_today"), 0),
+        )
+        if n_rk < p_rk:
+            return
+        snap = {k: copy.deepcopy(st.get(k)) for k in _SHM_SCOUT_SYNC_KEYS}
+        snap["bus_ts"] = time.time()
+        cur["date"] = d_str
+        cur["scout_state"] = snap
+        _assn_write_shm_bus_sync(cur)
+    except Exception:
+        pass
+
+
+def _assn_pub_shm_gate_sync(
+    today_str: str,
+    min_key: str,
+    gate_id: str,
+    gate_desc: str,
+    trigger_mode: str,
+    entry_scout_seq: int,
+    feat: Dict[str, Any],
+) -> None:
+    try:
+        cur = _assn_read_shm_bus_sync(today_str)
+        cur["date"] = today_str
+        cur["last_gate_signal"] = {
+            "date": today_str,
+            "ts": time.time(),
+            "min_key": min_key,
+            "gate_id": gate_id,
+            "gate_desc": gate_desc,
+            "trigger_mode": trigger_mode,
+            "entry_scout_seq": int(entry_scout_seq),
+            "rsi_14": safe_float(feat.get("rsi_14"), 50.0),
+            "pre_vwap": safe_float(feat.get("pre_vwap"), 0.0),
+            "vs_vwap_pct": safe_float(feat.get("vs_vwap_pct"), 0.0),
+            "prev_reg_close": safe_float(feat.get("prev_reg_close"), 0.0),
+            "vs_prev_close_pct": safe_float(
+                feat.get("vs_prev_close_pct"), 0.0
+            ),
+            "pre_open_price": safe_float(feat.get("pre_open_price"), 0.0),
+            "vs_pre_open_pct": safe_float(
+                feat.get("vs_pre_open_pct"), 0.0
+            ),
+        }
+        _assn_write_shm_bus_sync(cur)
+    except Exception:
+        pass
+
+
+async def _sync_scout_from_shm_if_behind(
+    assn_ledger: Any,
+    st: Dict[str, Any],
+    today_str: str,
+    dt_now: datetime,
+    now_ts: float,
+) -> Dict[str, Any]:
+    bus = await asyncio.to_thread(_assn_read_shm_bus_sync, today_str)
+    sc = bus.get("scout_state")
+    if not isinstance(sc, dict):
+        return st
+    b_rk = (
+        safe_int(sc.get("day_scout_seq"), 0),
+        safe_int(sc.get("prior_scout_wins_today"), 0),
+    )
+    l_rk = (
+        safe_int(st.get("day_scout_seq"), 0),
+        safe_int(st.get("prior_scout_wins_today"), 0),
+    )
+    hm = dt_now.hour * 100 + dt_now.minute
+    bus_age = now_ts - safe_float(sc.get("bus_ts"), now_ts)
+    if b_rk > l_rk and (
+        bus_age >= 3.0 or (l_rk[0] == 0 and hm >= 408)
+    ):
+        upd = {k: sc[k] for k in _SHM_SCOUT_SYNC_KEYS if k in sc}
+        st = await assn_ledger.update_state(**upd)
+    return st
+
+
+async def _consume_shm_gate_if_fresh(
+    context: Any,
+    assn_ledger: Any,
+    st: Dict[str, Any],
+    feat: Dict[str, Any],
+    today_str: str,
+    dt_now: datetime,
+    now_ts: float,
+    allow_main_force_entry: bool,
+) -> Optional[str]:
+    bus = await asyncio.to_thread(_assn_read_shm_bus_sync, today_str)
+    sig = bus.get("last_gate_signal")
+    if not isinstance(sig, dict) or sig.get("date") != today_str:
+        return None
+    age = now_ts - safe_float(sig.get("ts"), 0.0)
+    if age < 0.0 or age > ASSASSIN_SHM_SIGNAL_TTL_SEC:
+        return None
+    gid = str(sig.get("gate_id") or "").strip()
+    mkey = str(sig.get("min_key") or "").strip()
+    if not gid or not mkey:
+        return None
+    skey = f"{mkey}:{gid}"
+    slug = str(getattr(assn_ledger, "folder_slug", "default"))
+    if _CONSUMED_SHM_GATE_KEYS.get(slug) == skey:
+        return None
+    s_seq = max(1, safe_int(sig.get("entry_scout_seq"), 1))
+    t_mode = str(sig.get("trigger_mode") or "SHM_SYNC_10G")
+    st, gt_d = await _try_dispatch_gt_multi_gate_scout(
+        assn_ledger=assn_ledger,
+        st=st,
+        feat=feat,
+        gate_id=gid,
+        trigger_mode=t_mode,
+        entry_scout_seq=s_seq,
+        now_est=dt_now,
+        now_ts=now_ts,
+    )
+    if not allow_main_force_entry:
+        _CONSUMED_SHM_GATE_KEYS[slug] = skey
+        return f"GT_SHM_SCOUT_DISPATCHED_{gid}" if gt_d else None
+    res_e = await _enter_assassin_main_force_from_gate(
+        context=context,
+        assn_ledger=assn_ledger,
+        st=st,
+        feat=feat,
+        gate_id=gid,
+        gate_desc=str(sig.get("gate_desc") or gid),
+        entry_scout_seq=s_seq,
+        entry_trigger_mode=t_mode,
+        now_est=dt_now,
+        now_ts=now_ts,
+        entry_rsi_14=safe_float(sig.get("rsi_14"), feat["rsi_14"]),
+        entry_vwap=safe_float(sig.get("pre_vwap"), feat["pre_vwap"]),
+        entry_vs_vwap_pct=safe_float(
+            sig.get("vs_vwap_pct"), feat["vs_vwap_pct"]
+        ),
+        entry_prev_close=safe_float(
+            sig.get("prev_reg_close"), feat["prev_reg_close"]
+        ),
+        entry_vs_prev_close_pct=safe_float(
+            sig.get("vs_prev_close_pct"), feat["vs_prev_close_pct"]
+        ),
+        entry_pre_open=safe_float(
+            sig.get("pre_open_price"), feat["pre_open_price"]
+        ),
+        entry_vs_pre_open_pct=safe_float(
+            sig.get("vs_pre_open_pct"), feat["vs_pre_open_pct"]
+        ),
+    )
+    if res_e not in ("ASSASSIN_BUY_FAILED", "ASSASSIN_BUY_NO_PRICE"):
+        _CONSUMED_SHM_GATE_KEYS[slug] = skey
+    return res_e
+
 ASSASSIN_SAFE_CAP_PCT: float = 5.00      # 본대 진입 직후 상단 안전 캡 (+5.00%)
 ASSASSIN_ARM_IGNITION_PCT: float = 1.00  # 트레일링 점화 및 최소 수익 보존선 (+1.00%)
 ASSASSIN_BOOST_TIER2_PCT: float = 2.00   # +2.00% 이상 구간 콜백 완화 기준
@@ -3154,6 +3401,15 @@ async def _enter_assassin_main_force_from_gate(
             pending_buy_meta=meta,
         )
         context.assassin_high_freq_active = True
+        if context is not None and hasattr(context, "send_slim_alert"):
+            await context.send_slim_alert(
+                title=(
+                    f"📡 [[실전] 암살자 [{gate_id}] "                    "지정가 매수 접수]"
+                ),
+                body=(
+                    f"{order_qty}주 @ 지정가 ${fill_p:.2f} "                    f"(예산 ${live_budget_usd:,.2f} · "                    f"60초 체결대기 · ID={buy_oid})"
+                ),
+            )
         return f"ASSASSIN_LIVE_BUY_PENDING_{gate_id}"
 
     return await _finalize_assassin_position_entry(
@@ -3263,6 +3519,21 @@ async def _sync_live_pending_buy_order(
             pending_buy_meta={},
         )
         context.assassin_high_freq_active = False
+        if context is not None and hasattr(context, "send_slim_alert"):
+            c_gid = str(meta.get("gate_id") or "10G")
+            c_why = (
+                "08:15 컷오프 도래"
+                if hm >= ASSASSIN_MACRO_CUTOFF_HM
+                else "60초 급반등 미체결"
+            )
+            await context.send_slim_alert(
+                title=(
+                    f"⏳ [[실전] 암살자 [{c_gid}] "                    "매수 미체결 안전취소]"
+                ),
+                body=(
+                    f"주문 {ord_q}주 @ ${ord_p:.2f} "                    f"(현재 ${feat['live_price']:.2f}) · "                    f"사유: {c_why} -> 추격매수 차단"
+                ),
+            )
         return "ASSASSIN_LIVE_BUY_CANCELED_SAFE"
 
     context.assassin_high_freq_active = True
@@ -3745,6 +4016,22 @@ async def _dispatch_new_scout_unit_and_check_gates(
         upd_kw["last_scout_bucket_10m"] = cur_bucket_10m
 
     st = await assn_ledger.update_state(**upd_kw)
+    await asyncio.to_thread(_assn_pub_shm_scout_sync, st)
+    if gate_hit:
+        mkey_g = now_est.strftime('%Y-%m-%d %H:%M')
+        _CONSUMED_SHM_GATE_KEYS[assn_ledger.folder_slug] = (
+            f"{mkey_g}:{gate_id}"
+        )
+        await asyncio.to_thread(
+            _assn_pub_shm_gate_sync,
+            now_est.strftime('%Y-%m-%d'),
+            mkey_g,
+            gate_id,
+            gate_desc,
+            f"SCOUT_#{new_seq}_{entry_type}",
+            new_seq,
+            feat,
+        )
     if not silent_scout_alert:
         await _send_1_scout_dispatched_alert(
             context=context,
@@ -3846,10 +4133,7 @@ async def _evaluate_t03a_1m_dip_truth_gates_scan(
     cur_seq = safe_int(st.get("day_scout_seq"), 0)
     if cur_seq < 1:
         return None
-
-    last_b_ts = safe_float(st.get("last_scout_buy_ts"), 0.0)
-    if (now_ts - last_b_ts) < SCOUT_TIME_SHIELD_SEC:
-        return None
+    # MODIFIED: 본대 T03_A 감시 60초 타임쉴드 제거 -> 매 1.5초 상시 스캔
 
     lp = safe_float(feat.get("live_price"), 0.0)
     ref_dip_low = _resolve_t03a_reference_dip_low(st, units)
@@ -3919,6 +4203,19 @@ async def _evaluate_t03a_1m_dip_truth_gates_scan(
     trig_mode_str = (
         f"T03A_1M_DIP_SCAN(저점${ref_dip_low:.2f}대비{chg_from_dip_low:+.2f}%)"
     )
+    _CONSUMED_SHM_GATE_KEYS[assn_ledger.folder_slug] = (
+        f"{cur_min_key}:{gate_id}"
+    )
+    await asyncio.to_thread(
+        _assn_pub_shm_gate_sync,
+        now_est.strftime('%Y-%m-%d'),
+        cur_min_key,
+        gate_id,
+        gate_desc,
+        trig_mode_str,
+        cur_seq,
+        feat,
+    )
 
     # [Case 96]: T03_A 눌림 스캔에서도 다회차 [모의] 10G 정찰병 출동 카운트 반영
     st, gt_dispatched = await _try_dispatch_gt_multi_gate_scout(
@@ -3982,6 +4279,21 @@ async def _run_golden_time_scouting_and_gates_step(
       본대 주문/알림 간섭 없이 무소음으로 정찰 흐름을 유지하며 다회차 10G 정찰병 출동 카운트만 수행
     """
     today_str = dt_now.strftime("%Y-%m-%d")
+    st = await _sync_scout_from_shm_if_behind(
+        assn_ledger, st, today_str, dt_now, now_ts
+    )
+    shm_res = await _consume_shm_gate_if_fresh(
+        context,
+        assn_ledger,
+        st,
+        feat,
+        today_str,
+        dt_now,
+        now_ts,
+        allow_main_force_entry,
+    )
+    if shm_res is not None:
+        return shm_res
     lp = safe_float(feat.get("live_price"), 0.0)
     raw_units = st.get("scout_units") or []
     units = [
@@ -4046,6 +4358,7 @@ async def _run_golden_time_scouting_and_gates_step(
                     else safe_int(st.get("scout_ratchet_max_lots"), 0)
                 ),
             )
+            await asyncio.to_thread(_assn_pub_shm_scout_sync, st)
             return f"SCOUT_PROFIT_EXIT_{sold_count}"
 
     b_stat = evaluate_buy_gate_bucket_status(
@@ -4063,6 +4376,7 @@ async def _run_golden_time_scouting_and_gates_step(
     in_60s_shield = bool(
         (now_ts - max(last_b_ts, last_s_ts)) < SCOUT_TIME_SHIELD_SEC
     )
+    hold_status = "SCOUTING_ACTIVE"
 
     if not units:
         if safe_int(st.get("day_scout_seq"), 0) == 0:
@@ -4089,14 +4403,10 @@ async def _run_golden_time_scouting_and_gates_step(
                 allow_main_force_entry=allow_main_force_entry,
                 silent_scout_alert=silent_scout_alert,
             )
-        return "HOLD_SCOUT_60S_SHIELD"
-
-    if in_60s_shield:
-        return "HOLD_SCOUT_60S_SHIELD"
-
-    hold_status = "SCOUTING_ACTIVE"
-
-    if len(units) >= SCOUT_MAX_INDEPENDENT_UNITS:
+        hold_status = "HOLD_SCOUT_60S_SHIELD"
+    elif in_60s_shield:
+        hold_status = "HOLD_SCOUT_60S_SHIELD"
+    elif len(units) >= SCOUT_MAX_INDEPENDENT_UNITS:
         hold_status = "HOLD_SCOUT_MAX_7_UNITS"
     else:
         has_l1 = bool(st.get("scout_has_active_l1", True))

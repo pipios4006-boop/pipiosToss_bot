@@ -567,8 +567,22 @@ async def _fetch_fresh_current_soxl_price(
     fallback_price: float = 0.0,
 ) -> float:
     try:
-        fresh_map = await context.api.get_current_prices_batch((TARGET_SYMBOL,))
-        fresh_p = safe_float((fresh_map or {}).get(TARGET_SYMBOL), 0.0)
+        try:
+            fresh_map = (
+                await context.api.get_current_prices_batch(
+                    (TARGET_SYMBOL,),
+                    bypass_shm_cache=True,
+                )
+            )
+        except TypeError:
+            fresh_map = (
+                await context.api.get_current_prices_batch(
+                    (TARGET_SYMBOL,)
+                )
+            )
+        fresh_p = safe_float(
+            (fresh_map or {}).get(TARGET_SYMBOL), 0.0
+        )
         if fresh_p > 0.0:
             if isinstance(getattr(context, "latest_prices", None), dict):
                 context.latest_prices[TARGET_SYMBOL] = fresh_p
