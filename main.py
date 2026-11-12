@@ -74,6 +74,7 @@ from quant_indicators_plugin import (
 )
 from sniper_exit_plugin import (
     execute_1m_sniper_sell_and_reanchor_plugin,
+    is_sniper_l1_trail_active,
     is_within_post_buy_time_shield,
     is_within_post_sell_time_shield,
     sync_pending_sell_order_plugin,
@@ -346,6 +347,8 @@ def _evaluate_fast_shield_mode(
     🗡️ 암살자 +1.00% 트레일링 점화(assassin_high_freq_active) 시 루프를 0.40초로 가속한다.
     """
     if bool(getattr(context, "assassin_high_freq_active", False)):
+        return True
+    if is_sniper_l1_trail_active(context, TARGET_SYMBOL):
         return True
     if str(st.get("buy_order_id") or "").strip() or str(
         st.get("sell_order_id") or ""

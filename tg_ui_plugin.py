@@ -64,6 +64,7 @@ from plugin_updater import (
 )
 from quant_engine import (
     MAX_RESERVE_PORTIONS,
+    SNIPER_L1_TRAIL_ENABLED,
     SUB_FROZEN_DAYS_TRIGGER,
     SUB_MAX_TIERS_3,
     SUB_MAX_TOTAL_LOTS_4,
@@ -81,6 +82,7 @@ from quant_indicators_plugin import (
     refresh_metrics_with_live_tick,
 )
 from sniper_exit_plugin import (
+    get_sniper_l1_trail_ui_snapshot,
     is_within_post_buy_time_shield,
     is_within_post_sell_time_shield,
     is_within_sell_monitor_time_shield,
@@ -361,6 +363,7 @@ def _format_multi_grid_stratum_lines(
     is_late_cutoff: bool = False,
     live_rsi_14: float = 50.0,
     live_assassin_active: bool = False,
+    main_trail_ui: Optional[Dict[str, Any]] = None,
 ) -> List[str]:
     held_sh = safe_int(summary.get("held_shares"), 0)
     buckets = summary.get("buckets", [])
@@ -402,13 +405,35 @@ def _format_multi_grid_stratum_lines(
         else:
             l1_qty_label = f"{b1.qty}주"
 
-        l1_ov_lock_note = (
-            "·🔒" if (is_ext_sell_only and has_upper_tiers) else ""
-        )
-        lines.append(
-            f"⚡ <b>[1층: {l1_qty_label}·${b1.actual_cost_usd:,.0f}]</b> "
-            f"<b>${b1.book_price:.2f}</b> ➔ <b>${l1_t:.2f}</b> ({g1_sign}{l1_g:.2f}%{l1_ov_lock_note})"
-        )
+        if SNIPER_L1_TRAIL_ENABLED and not is_ext_sell_only:
+            tr_m = main_trail_ui if isinstance(main_trail_ui, dict) else {}
+            l1_ign_p = safe_float(summary.get("l1_ignite_100_price"), l1_t)
+            if bool(tr_m.get("armed")):
+                st_p = safe_float(tr_m.get("active_stop_p"), l1_ign_p)
+                lk_b = (
+                    "👑1.25%락"
+                    if bool(tr_m.get("stepped_125"))
+                    else "🔥1%추적"
+                )
+                lines.append(
+                    f"⚡ <b>[1층: {l1_qty_label}·${b1.actual_cost_usd:,.0f}]</b> "
+                    f"<b>${b1.book_price:.2f}</b> ➔ 스탑 <b>${st_p:.2f}</b> ({g1_sign}{l1_g:.2f}%·{lk_b})"
+                )
+            else:
+                fg_c = safe_int(tr_m.get("forgive_count"), 0)
+                fg_b = f"·💡용서{fg_c}" if fg_c > 0 else "·점화1%"
+                lines.append(
+                    f"⚡ <b>[1층: {l1_qty_label}·${b1.actual_cost_usd:,.0f}]</b> "
+                    f"<b>${b1.book_price:.2f}</b> ➔ <b>${l1_ign_p:.2f}</b> ({g1_sign}{l1_g:.2f}%{fg_b})"
+                )
+        else:
+            l1_ov_lock_note = (
+                "·🔒" if (is_ext_sell_only and has_upper_tiers) else ""
+            )
+            lines.append(
+                f"⚡ <b>[1층: {l1_qty_label}·${b1.actual_cost_usd:,.0f}]</b> "
+                f"<b>${b1.book_price:.2f}</b> ➔ <b>${l1_t:.2f}</b> ({g1_sign}{l1_g:.2f}%{l1_ov_lock_note})"
+            )
     else:
         l2_cap = safe_float(
             summary.get("l2_ceiling_price"),
@@ -487,6 +512,7 @@ def _format_sub_grid_stratum_lines(
     is_ext_sell_only: bool = False,
     is_late_cutoff: bool = False,
     live_rsi_14: float = 50.0,
+    sub_trail_ui: Optional[Dict[str, Any]] = None,
 ) -> List[str]:
     held_sh_main = safe_int(summary.get("held_shares"), 0)
     sub_sh = safe_int(summary.get("sub_held_shares"), 0)
@@ -552,13 +578,37 @@ def _format_sub_grid_stratum_lines(
             sl1_label = f"{sb1.qty}/{sub_target_q}주"
         else:
             sl1_label = f"{sb1.qty}주"
-        sl1_ov_note = (
-            "·🔒" if (is_ext_sell_only and has_sub_uppers) else ""
-        )
-        lines.append(
-            f"  ⚡ <b>[서브1층: {sl1_label}·${sb1.actual_cost_usd:,.0f}]</b> "
-            f"<b>${sb1.book_price:.2f}</b> ➔ <b>${sl1_t:.2f}</b> ({sg1_s}{sl1_g:.2f}%{sl1_ov_note})"
-        )
+        if SNIPER_L1_TRAIL_ENABLED and not is_ext_sell_only:
+            tr_s = sub_trail_ui if isinstance(sub_trail_ui, dict) else {}
+            sl1_ign_p = safe_float(
+                summary.get("sub_l1_ignite_100_price"), sl1_t
+            )
+            if bool(tr_s.get("armed")):
+                sst_p = safe_float(tr_s.get("active_stop_p"), sl1_ign_p)
+                slk_b = (
+                    "👑1.25%락"
+                    if bool(tr_s.get("stepped_125"))
+                    else "🔥1%추적"
+                )
+                lines.append(
+                    f"  ⚡ <b>[서브1층: {sl1_label}·${sb1.actual_cost_usd:,.0f}]</b> "
+                    f"<b>${sb1.book_price:.2f}</b> ➔ 스탑 <b>${sst_p:.2f}</b> ({sg1_s}{sl1_g:.2f}%·{slk_b})"
+                )
+            else:
+                sfg_c = safe_int(tr_s.get("forgive_count"), 0)
+                sfg_b = f"·💡용서{sfg_c}" if sfg_c > 0 else "·점화1%"
+                lines.append(
+                    f"  ⚡ <b>[서브1층: {sl1_label}·${sb1.actual_cost_usd:,.0f}]</b> "
+                    f"<b>${sb1.book_price:.2f}</b> ➔ <b>${sl1_ign_p:.2f}</b> ({sg1_s}{sl1_g:.2f}%{sfg_b})"
+                )
+        else:
+            sl1_ov_note = (
+                "·🔒" if (is_ext_sell_only and has_sub_uppers) else ""
+            )
+            lines.append(
+                f"  ⚡ <b>[서브1층: {sl1_label}·${sb1.actual_cost_usd:,.0f}]</b> "
+                f"<b>${sb1.book_price:.2f}</b> ➔ <b>${sl1_t:.2f}</b> ({sg1_s}{sl1_g:.2f}%{sl1_ov_note})"
+            )
     else:
         sub_l2_cap = safe_float(
             summary.get("sub_l2_ceiling_price"),
@@ -779,6 +829,18 @@ def build_avwap_radar_message(
             f"🎯 <b>[1층 잔량 {l1_rem_q}주 대기]</b> <b>${l1_book_p:.2f}</b> 이하 시 매수"
         )
 
+    trail_ui_snap = (
+        get_sniper_l1_trail_ui_snapshot(context, symbol=TARGET_SYMBOL)
+        if context is not None
+        else {"main": {}, "sub": {}}
+    )
+    main_tr_ui = trail_ui_snap.get("main") or {}
+    sub_tr_ui = trail_ui_snap.get("sub") or {}
+    if not shield_line and (
+        bool(main_tr_ui.get("armed")) or bool(sub_tr_ui.get("armed"))
+    ):
+        shield_line = "🔥 <b>[1층 스텝트레일링 0.4s 추적중]</b> 하드보존·완결HA·용서 가동"
+
     stratum_lines = _format_multi_grid_stratum_lines(
         summary,
         lp,
@@ -786,6 +848,7 @@ def build_avwap_radar_message(
         is_late_cutoff=is_late_cutoff,
         live_rsi_14=rsi_14,
         live_assassin_active=live_assn_active,
+        main_trail_ui=main_tr_ui,
     )
     sub_stratum_lines = _format_sub_grid_stratum_lines(
         summary,
@@ -793,6 +856,7 @@ def build_avwap_radar_message(
         is_ext_sell_only=is_ext_sell_only,
         is_late_cutoff=is_late_cutoff,
         live_rsi_14=rsi_14,
+        sub_trail_ui=sub_tr_ui,
     )
 
     _, _, _, gate_info = evaluate_buy_gate_bucket_status(

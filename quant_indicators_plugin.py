@@ -670,12 +670,11 @@ def _compute_vectorized_heikin_ashi_and_rsi(
     highs: np.ndarray,
     lows: np.ndarray,
     closes: np.ndarray,
+    min_keys: Optional[List[str]] = None,
+    cur_min_key: str = "",
 ) -> Dict[str, Any]:
     """
-    # MODIFIED [Case 93 : Wilder's RSI(14), Heikin-Ashi(HA_Open, HA_Close), 및 단기 변화율(1분/3분/5분/10분) 벡터화 연산기]:
-    100% 벡터화(np.diff + Wilder's EWM) 연산으로 n >= 2 이상이면 첫 봉 NaN 왜곡 없이
-    직전 완성봉 종가(prev_bar_close), 3분 전(close_3m_ago), 5분 전(close_5m_ago · DL10 전용), 10분 전(close_10m_ago) 종가와
-    직전 완성봉까지의 평균 상승/하락폭(prev_avg_gain, prev_avg_loss)을 산출한다.
+    # MODIFIED [Case 93 & Case 99 : Wilder's RSI(14) · 실시간 HA 및 직전 완결 1분봉 확정 HA(closed_ha_*) 분리 연산기]:
     """
     n = len(closes)
     if n == 0:
@@ -699,6 +698,11 @@ def _compute_vectorized_heikin_ashi_and_rsi(
             "ha_close": 0.0,
             "prev_ha_open": 0.0,
             "prev_ha_close": 0.0,
+            "closed_bar_minute_key": "",
+            "closed_ha_open": 0.0,
+            "closed_ha_close": 0.0,
+            "closed_ha_bull": True,
+            "closed_ha_ready": False,
             "cur_bar_open": 0.0,
             "cur_bar_high": 0.0,
             "cur_bar_low": 0.0,
@@ -805,6 +809,45 @@ def _compute_vectorized_heikin_ashi_and_rsi(
         "ha_close": round(cur_ha_close, 4),
         "prev_ha_open": round(prev_ha_open, 4),
         "prev_ha_close": round(prev_ha_close, 4),
+        **(
+            lambda _idx_c, _c_mk: {
+                "closed_bar_minute_key": _c_mk,
+                "closed_ha_open": (
+                    round(float(ha_open_series[_idx_c]), 4)
+                    if _idx_c >= 0
+                    else 0.0
+                ),
+                "closed_ha_close": (
+                    round(float(ha_close_arr[_idx_c]), 4)
+                    if _idx_c >= 0
+                    else 0.0
+                ),
+                "closed_ha_bull": (
+                    bool(ha_close_arr[_idx_c] >= ha_open_series[_idx_c])
+                    if _idx_c >= 0
+                    else True
+                ),
+                "closed_ha_ready": bool(_idx_c >= 14),
+            }
+        )(
+            *(
+                next(
+                    (
+                        (k_i, str(min_keys[k_i] or ""))
+                        for k_i in range(n - 1, -1, -1)
+                        if str(min_keys[k_i] or "")
+                        and str(min_keys[k_i] or "") < cur_min_key
+                    ),
+                    (-1, ""),
+                )
+                if (
+                    isinstance(min_keys, list)
+                    and len(min_keys) == n
+                    and bool(cur_min_key)
+                )
+                else ((n - 2, "") if n >= 2 else (-1, ""))
+            )
+        ),
         "cur_bar_open": round(float(opens[-1]), 4),
         "cur_bar_high": round(float(highs[-1]), 4),
         "cur_bar_low": round(float(lows[-1]), 4),
@@ -816,10 +859,11 @@ def _compute_vectorized_heikin_ashi_and_rsi(
 
 def _recompute_ha_rsi_from_memory_store(
     symbol: str = TARGET_SYMBOL,
+    cur_min_key: str = "",
 ) -> Optional[Dict[str, Any]]:
     """
     인메모리 1분봉 저장소(_LIVE_1M_BAR_STORE)에 축적된 분봉이 2개 이상일 때,
-    O(1) 수준의 경량 배열 연산(copy=True 적용)으로 Wilder's RSI(14) 및 Heikin-Ashi 기저값을 즉시 재산출한다.
+    O(1) 경량 연산으로 Wilder's RSI(14) · 실시간 HA · 직전 완결 1분봉 확정 HA(closed_ha_*)를 즉시 재산출한다.
     """
     sym = str(symbol or TARGET_SYMBOL).upper().strip()
     with _LIVE_1M_BAR_LOCK:
@@ -865,11 +909,21 @@ def _recompute_ha_rsi_from_memory_store(
         )
         if int(np.sum(valid_mask)) < 2:
             return None
+        eff_cur_mk = str(
+            cur_min_key or bars[-1].get("_min_key") or ""
+        ).strip()
+        valid_min_keys = [
+            str(bars[i].get("_min_key") or "")
+            for i, ok in enumerate(valid_mask.tolist())
+            if ok
+        ]
         res = _compute_vectorized_heikin_ashi_and_rsi(
             opens[valid_mask],
             highs[valid_mask],
             lows[valid_mask],
             closes[valid_mask],
+            min_keys=valid_min_keys,
+            cur_min_key=eff_cur_mk,
         )
         res["cur_bar_minute_key"] = str(bars[-1].get("_min_key") or "")
         return res
@@ -1220,6 +1274,11 @@ def compute_soxl_quant_metrics_1m(
         "ha_close": round(lp, 4),
         "prev_ha_open": round(lp, 4),
         "prev_ha_close": round(lp, 4),
+        "closed_bar_minute_key": "",
+        "closed_ha_open": 0.0,
+        "closed_ha_close": 0.0,
+        "closed_ha_bull": True,
+        "closed_ha_ready": False,
         "cur_bar_open": round(lp, 4),
         "cur_bar_high": round(lp, 4),
         "cur_bar_low": round(lp, 4),
@@ -1362,8 +1421,16 @@ def compute_soxl_quant_metrics_1m(
             highs[-1] = max(highs[-1], lp)
             lows[-1] = min(lows[-1], lp)
 
+        min_keys_list = (
+            df["dt_min"].dt.strftime("%Y-%m-%d %H:%M").tolist()
+        )
         ha_rsi_info = _compute_vectorized_heikin_ashi_and_rsi(
-            opens, highs, lows, closes
+            opens,
+            highs,
+            lows,
+            closes,
+            min_keys=min_keys_list,
+            cur_min_key=cur_min_key,
         )
         last_dt_min = df["dt_min"].iloc[-1]
         ha_rsi_info["cur_bar_minute_key"] = last_dt_min.strftime(
@@ -1663,7 +1730,9 @@ def refresh_metrics_with_live_tick(
         safe_float(met.get("prev_bar_close"), 0.0) <= 0.0
         or (prev_min_key and prev_min_key != cur_min_key)
     ):
-        mem_ha_rsi = _recompute_ha_rsi_from_memory_store(sym)
+        mem_ha_rsi = _recompute_ha_rsi_from_memory_store(
+            sym, cur_min_key=cur_min_key
+        )
         if isinstance(mem_ha_rsi, dict):
             met.update(mem_ha_rsi)
 

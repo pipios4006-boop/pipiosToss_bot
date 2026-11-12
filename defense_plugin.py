@@ -70,6 +70,7 @@ from sniper_exit_plugin import (
     is_within_post_sell_time_shield,
     mark_extended_sell_restriction_cooldown,
     mark_post_sell_time_shield,
+    reset_sniper_l1_trail_slots,
     sync_pending_sell_order_plugin,
 )
 from sniper_plugin import (
@@ -913,6 +914,9 @@ async def reconcile_stratum_with_broker_holdings_plugin(
                 else:
                     restored_kw["sub_l1_target_quota_qty"] = 0
 
+                reset_sniper_l1_trail_slots(
+                    context, grid_kind="ALL", symbol=TARGET_SYMBOL
+                )
                 await context.ledger.update_state(TARGET_SYMBOL, **restored_kw)
                 return {
                     "status": "RESTORED_FROM_BACKUP_VAULT",
@@ -1970,6 +1974,9 @@ async def execute_0400_premarket_stabilization_plugin(
     )
     mark_reserve_deposit_check_shield(
         context=context, symbol=TARGET_SYMBOL, clear_shield=True
+    )
+    reset_sniper_l1_trail_slots(
+        context, grid_kind="ALL", symbol=TARGET_SYMBOL
     )
     mark_extended_sell_restriction_cooldown(
         context=context, symbol=TARGET_SYMBOL, cooldown_sec=0.0, reason="CLEAR"

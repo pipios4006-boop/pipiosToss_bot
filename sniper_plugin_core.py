@@ -61,6 +61,7 @@ from quant_indicators_plugin import (
 from sniper_exit_plugin import (
     is_within_post_buy_time_shield,
     is_within_post_sell_time_shield,
+    reset_sniper_l1_trail_slots,
 )
 import toss_api
 from toss_api import (
@@ -139,6 +140,11 @@ def mark_auto_fill_grace_shield(
         guard_map[sym] = updated
 
     if tag != "SELL_FILL":
+        reset_sniper_l1_trail_slots(
+            context,
+            grid_kind=("SUB" if is_sub_tag else "MAIN"),
+            symbol=sym,
+        )
         snap_map = getattr(context, "exit_snapshot_cache", None)
         if isinstance(snap_map, dict):
             s_entry = (

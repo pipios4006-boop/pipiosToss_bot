@@ -47,6 +47,15 @@ from quant_engine_core import (
     REENTRY_PULLBACK_DROP_PCT,
     RESERVE_DEPOSIT_TOLERANCE_RATIO,
     ROUND_TRIP_FEE_RATE_PCT,
+    SNIPER_L1_TRAIL_BOOST_TIER2_PCT,
+    SNIPER_L1_TRAIL_CB_TIGHT_PCT,
+    SNIPER_L1_TRAIL_CB_WIDE_PCT,
+    SNIPER_L1_TRAIL_ENABLED,
+    SNIPER_L1_TRAIL_IGNITE_PCT,
+    SNIPER_L1_TRAIL_QQQ_BYPASS_PCT,
+    SNIPER_L1_TRAIL_SAFE_CAP_PCT,
+    SNIPER_L1_TRAIL_STEP_LOCK_PCT,
+    SNIPER_L1_TRAIL_STEP_TRIG_PCT,
     STEP_UP_2X_DROP_PCT,
     STEP_UP_2X_MAX_TIERS,
     STEP_UP_2X_MIN_CASH_RATIO,
@@ -743,6 +752,7 @@ def evaluate_multi_grid_sell_targets(
     rise_upper_pct: float = 1.00,
     is_overnight_session: bool = False,
     sub_buckets: Optional[Sequence[StratumBucket]] = None,
+    exclude_daytime_l1: bool = False,
 ) -> Dict[str, Any]:
     valid = [
         b
@@ -802,7 +812,9 @@ def evaluate_multi_grid_sell_targets(
             hit_wma_grad = True
 
     if not hit_wma_grad:
-        if active_l1 and valid:
+        if active_l1 and valid and not (
+            exclude_daytime_l1 and not is_overnight_session
+        ):
             b1 = valid[0]
             min_l1_target_p = (
                 math.ceil(
@@ -856,7 +868,9 @@ def evaluate_multi_grid_sell_targets(
             hit_sub_wma_grad = True
 
     if not hit_sub_wma_grad:
-        if sub_active_l1 and valid_sub:
+        if sub_active_l1 and valid_sub and not (
+            exclude_daytime_l1 and not is_overnight_session
+        ):
             sb1 = valid_sub[0]
             min_sub_l1_target_p = (
                 math.ceil(
@@ -1403,6 +1417,8 @@ def summarize_stratum_portfolio(
     )
 
     l1_target_price = 0.0
+    l1_ignite_100_price = 0.0
+    l1_lock_125_price = 0.0
     l2_target_price = upper_wma_target_price
     l1_gain_pct = 0.0
     l2_gain_pct = 0.0
@@ -1413,6 +1429,30 @@ def summarize_stratum_portfolio(
         l1_target_price = round(
             math.ceil(
                 (b1.book_price * (1.0 + rise_l1_pct / 100.0) - 1e-9) * 100.0
+            )
+            / 100.0,
+            2,
+        )
+        l1_ignite_100_price = round(
+            math.ceil(
+                (
+                    b1.book_price
+                    * (1.0 + SNIPER_L1_TRAIL_IGNITE_PCT / 100.0)
+                    - 1e-9
+                )
+                * 100.0
+            )
+            / 100.0,
+            2,
+        )
+        l1_lock_125_price = round(
+            math.ceil(
+                (
+                    b1.book_price
+                    * (1.0 + SNIPER_L1_TRAIL_STEP_LOCK_PCT / 100.0)
+                    - 1e-9
+                )
+                * 100.0
             )
             / 100.0,
             2,
@@ -1653,6 +1693,8 @@ def summarize_stratum_portfolio(
     )
 
     sub_l1_target_price = 0.0
+    sub_l1_ignite_100_price = 0.0
+    sub_l1_lock_125_price = 0.0
     sub_l1_gain_pct = 0.0
     sub_l2_gain_pct = 0.0
     if sub_active_l1 and sub_buckets:
@@ -1660,6 +1702,30 @@ def summarize_stratum_portfolio(
         sub_l1_target_price = round(
             math.ceil(
                 (sb1.book_price * (1.0 + sub_rise_l1_pct / 100.0) - 1e-9)
+                * 100.0
+            )
+            / 100.0,
+            2,
+        )
+        sub_l1_ignite_100_price = round(
+            math.ceil(
+                (
+                    sb1.book_price
+                    * (1.0 + SNIPER_L1_TRAIL_IGNITE_PCT / 100.0)
+                    - 1e-9
+                )
+                * 100.0
+            )
+            / 100.0,
+            2,
+        )
+        sub_l1_lock_125_price = round(
+            math.ceil(
+                (
+                    sb1.book_price
+                    * (1.0 + SNIPER_L1_TRAIL_STEP_LOCK_PCT / 100.0)
+                    - 1e-9
+                )
                 * 100.0
             )
             / 100.0,
@@ -2099,6 +2165,8 @@ def summarize_stratum_portfolio(
         "sub_min_indiv_upper_price": sub_min_indiv_upper_price,
         "sub_min_indiv_upper_target_price": sub_min_indiv_upper_target_price,
         "sub_l1_target_price": sub_l1_target_price,
+        "sub_l1_ignite_100_price": sub_l1_ignite_100_price,
+        "sub_l1_lock_125_price": sub_l1_lock_125_price,
         "sub_l1_gain_pct": sub_l1_gain_pct,
         "sub_l2_gain_pct": sub_l2_gain_pct,
         "sub_drop_buy_pct": sub_drop_buy_pct,
@@ -2218,6 +2286,8 @@ def summarize_stratum_portfolio(
         "rise_sell_l1_pct": rise_l1_pct,
         "rise_sell_l2_pct": rise_l2_pct,
         "l1_target_price": l1_target_price,
+        "l1_ignite_100_price": l1_ignite_100_price,
+        "l1_lock_125_price": l1_lock_125_price,
         "l2_target_price": l2_target_price,
         "l1_gain_pct": l1_gain_pct,
         "l2_gain_pct": l2_gain_pct,

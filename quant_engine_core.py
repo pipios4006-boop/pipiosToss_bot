@@ -114,6 +114,17 @@ REENTRY_BREAKOUT_MAX_RSI_50: float = float(
     getattr(toss_api, "REENTRY_BREAKOUT_MAX_RSI_50", 50.0)
 )
 
+# NEW [Case 99 : 🛡️ 스나이퍼 1층 스텝 락온 트레일링(1.00% ➔ 1.45%시 1.25% 하드보존) + 완결 1분봉 HA 음봉 + <1% 용서·망각 상수]
+SNIPER_L1_TRAIL_ENABLED: bool = True
+SNIPER_L1_TRAIL_IGNITE_PCT: float = 1.00
+SNIPER_L1_TRAIL_STEP_TRIG_PCT: float = 1.45
+SNIPER_L1_TRAIL_STEP_LOCK_PCT: float = 1.25
+SNIPER_L1_TRAIL_SAFE_CAP_PCT: float = 5.00
+SNIPER_L1_TRAIL_BOOST_TIER2_PCT: float = 2.00
+SNIPER_L1_TRAIL_CB_TIGHT_PCT: float = 0.20
+SNIPER_L1_TRAIL_CB_WIDE_PCT: float = 0.30
+SNIPER_L1_TRAIL_QQQ_BYPASS_PCT: float = 0.20
+
 # [Case 84 & Case 88]: 정규장 마감 30분 전(15:30 ~ 16:00 EST) 본·서브 0주 새 사이클 첫 1층 진입 및 1층 공석 +1.0% 돌파 추격 동시 차단 기준 시각(HHMM)
 NEW_CYCLE_BUY_CUTOFF_HM: int = int(
     getattr(toss_api, "NEW_CYCLE_BUY_CUTOFF_HM", 1530)
