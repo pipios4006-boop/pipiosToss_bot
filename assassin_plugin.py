@@ -398,12 +398,15 @@ async def _consume_shm_gate_if_fresh(
         _CONSUMED_SHM_GATE_KEYS[slug] = skey
     return res_e
 
-ASSASSIN_SAFE_CAP_PCT: float = 5.00      # 본대 진입 직후 상단 안전 캡 (+5.00%)
-ASSASSIN_ARM_IGNITION_PCT: float = 1.00  # 트레일링 점화 및 최소 수익 보존선 (+1.00%)
-ASSASSIN_BOOST_TIER2_PCT: float = 2.00   # +2.00% 이상 구간 콜백 완화 기준
-ASSASSIN_CALLBACK_TIGHT_PCT: float = 0.20  # +1.00% ~ +1.99% 구간 최고가 대비 콜백 (-0.20%p)
-ASSASSIN_CALLBACK_WIDE_PCT: float = 0.30   # +2.00% 이상 구간 최고가 대비 콜백 (-0.30%p)
-ASSASSIN_QQQ_SURGE_BYPASS_PCT: float = 0.20  # QQQ 3m/10m 변화율 >= +0.20% 급등 시 HA 음봉 매도 보류
+# MODIFIED: 스나이퍼 동기화 — 초기 과민 콜백 폐기(0.00) · +1.45% 도달 시 +1.25% 스텝락 · +2% 여유 콜백(0.35)
+ASSASSIN_SAFE_CAP_PCT: float = 5.00
+ASSASSIN_ARM_IGNITION_PCT: float = 1.00
+ASSASSIN_STEP_TRIG_PCT: float = 1.45
+ASSASSIN_STEP_LOCK_PCT: float = 1.25
+ASSASSIN_BOOST_TIER2_PCT: float = 2.00
+ASSASSIN_CALLBACK_TIGHT_PCT: float = 0.00
+ASSASSIN_CALLBACK_WIDE_PCT: float = 0.35
+ASSASSIN_QQQ_SURGE_BYPASS_PCT: float = 0.20
 
 LIVE_BUY_ORDER_MAX_WAIT_SEC: float = 60.0
 
@@ -638,6 +641,7 @@ class AssassinSimLedger:
             "arm_100_price": 0.0,
             "is_trailing_armed": False,
             "armed_time_est": "",
+            "armed_minute_key": "",
             "peak_price": 0.0,
             "post_entry_min_price": 0.0,
             "active_stop_floor_price": 0.0,
@@ -1183,6 +1187,7 @@ class AssassinSimLedger:
             arm_100_price=0.0,
             is_trailing_armed=False,
             armed_time_est="",
+            armed_minute_key="",
             peak_price=0.0,
             post_entry_min_price=0.0,
             active_stop_floor_price=0.0,
@@ -1817,7 +1822,13 @@ def evaluate_assassin_ha_trailing_and_exits(
     entry_qqq_price: float = 0.0,
     qqq_live_price: float = 0.0,
     entry_gate_id: str = "",
+    closed_bar_minute_key: str = "",
+    closed_ha_ready: bool = False,
+    closed_ha_bull: Optional[bool] = None,
+    armed_minute_key: str = "",
+    cur_minute_key: str = "",
 ) -> Dict[str, Any]:
+    # MODIFIED: 완결 1분봉 확정 HA 음봉 통일 · 등호(<=) 자기격발 제거 · +1.45%➔+1.25% 스텝락 결합
     ep = safe_float(entry_price, 0.0)
     lp = safe_float(live_price, 0.0)
     bh = max(lp, safe_float(bar_high_price, lp))
@@ -1831,9 +1842,23 @@ def evaluate_assassin_ha_trailing_and_exits(
         if safe_float(arm_100_price, 0.0) > 0.0
         else (math.ceil((ep * 1.010 - 1e-9) * 100.0) / 100.0)
     )
+    step_trig_p = (
+        round(ep * (1.0 + ASSASSIN_STEP_TRIG_PCT / 100.0), 4)
+        if ep > 0.0
+        else arm_p
+    )
+    lock_125_p = (
+        math.ceil(
+            (ep * (1.0 + ASSASSIN_STEP_LOCK_PCT / 100.0) - 1e-9) * 100.0
+        )
+        / 100.0
+        if ep > 0.0
+        else arm_p
+    )
 
     armed = bool(is_trailing_armed)
     just_armed = False
+    eff_armed_mk = str(armed_minute_key or "").strip()
     cur_peak = max(safe_float(peak_price, ep), lp, bh)
     cur_min = (
         min(safe_float(post_entry_min_price, lp), lp)
@@ -1850,6 +1875,7 @@ def evaluate_assassin_ha_trailing_and_exits(
             "exit_price": round(exec_p, 2),
             "is_trailing_armed": True,
             "just_armed": not armed,
+            "armed_minute_key": eff_armed_mk or str(cur_minute_key or ""),
             "peak_price": round(max(cur_peak, exec_p), 4),
             "post_entry_min_price": round(cur_min, 4),
             "active_stop_floor_price": round(cap_p, 2),
@@ -1858,33 +1884,39 @@ def evaluate_assassin_ha_trailing_and_exits(
     if not armed and (bh >= arm_p or lp >= arm_p):
         armed = True
         just_armed = True
+        eff_armed_mk = str(cur_minute_key or eff_armed_mk).strip()
         cur_peak = max(cur_peak, lp, bh, arm_p)
 
     if armed:
         peak_gain_pct = ((cur_peak - ep) / ep) * 100.0 if ep > 0.0 else 1.0
-        cb_allow = (
-            ASSASSIN_CALLBACK_WIDE_PCT
-            if peak_gain_pct >= ASSASSIN_BOOST_TIER2_PCT
-            else ASSASSIN_CALLBACK_TIGHT_PCT
-        )
-        cb_stop_p = round(
-            max(arm_p, cur_peak * (1.0 - cb_allow / 100.0)), 2
-        )
+        stepped_125 = bool(cur_peak >= step_trig_p - 1e-9)
+        eff_floor_p = lock_125_p if stepped_125 else arm_p
+        if stepped_125 and peak_gain_pct >= ASSASSIN_BOOST_TIER2_PCT:
+            cb_stop_p = round(
+                max(
+                    lock_125_p,
+                    cur_peak * (1.0 - ASSASSIN_CALLBACK_WIDE_PCT / 100.0),
+                ),
+                2,
+            )
+        else:
+            cb_stop_p = round(eff_floor_p, 2)
 
-        if just_armed and lp >= arm_p:
+        if just_armed and lp >= arm_p - 1e-9:
             return {
                 "should_exit": False,
                 "exit_code": "ARMED_HOLD_TRACKING",
-                "exit_desc": f"🔥 +1.00% 점화 완료 · 보존선 ${arm_p:.2f} 잠금 추적 중",
+                "exit_desc": f"🔥 +1.00% 점화 완료 · 완결1분HA & 보존선 ${cb_stop_p:.2f} 추적 중",
                 "exit_price": 0.0,
                 "is_trailing_armed": True,
                 "just_armed": True,
+                "armed_minute_key": eff_armed_mk,
                 "peak_price": round(cur_peak, 4),
                 "post_entry_min_price": round(cur_min, 4),
                 "active_stop_floor_price": cb_stop_p,
             }
 
-        if lp <= arm_p:
+        if lp < arm_p - 1e-9:
             return {
                 "should_exit": True,
                 "exit_code": "TRAIL_FLOOR_100",
@@ -1892,36 +1924,53 @@ def evaluate_assassin_ha_trailing_and_exits(
                 "exit_price": round(arm_p, 2),
                 "is_trailing_armed": True,
                 "just_armed": False,
+                "armed_minute_key": eff_armed_mk,
                 "peak_price": round(cur_peak, 4),
                 "post_entry_min_price": round(cur_min, 4),
                 "active_stop_floor_price": round(arm_p, 2),
             }
 
-        if lp <= cb_stop_p:
+        if stepped_125 and lp < cb_stop_p - 1e-9:
+            exec_cb_p = round(max(lock_125_p, lp), 2)
             return {
                 "should_exit": True,
                 "exit_code": "TRAIL_CALLBACK_BOOST",
-                "exit_desc": f"🚀 HA 트레일링 고점(${cur_peak:.2f}) 콜백(-{cb_allow:.2f}%) 익절(${cb_stop_p:.2f})",
-                "exit_price": round(max(arm_p, lp), 2),
+                "exit_desc": f"🚀 스텝보존/고점(${cur_peak:.2f}) 스탑 익절(${exec_cb_p:.2f})",
+                "exit_price": exec_cb_p,
                 "is_trailing_armed": True,
                 "just_armed": False,
+                "armed_minute_key": eff_armed_mk,
                 "peak_price": round(cur_peak, 4),
                 "post_entry_min_price": round(cur_min, 4),
                 "active_stop_floor_price": cb_stop_p,
             }
 
+        if closed_ha_bull is not None:
+            is_closed_ha_red_hit = bool(
+                closed_ha_ready
+                and (not closed_ha_bull)
+                and bool(closed_bar_minute_key)
+                and (
+                    not eff_armed_mk
+                    or closed_bar_minute_key >= eff_armed_mk
+                )
+            )
+        else:
+            is_closed_ha_red_hit = bool(not soxl_is_ha_bull)
+
         if (
-            not soxl_is_ha_bull
+            is_closed_ha_red_hit
             and qqq_vel_max_3m_10m_pct < ASSASSIN_QQQ_SURGE_BYPASS_PCT
         ):
-            exec_ha_p = round(max(arm_p, lp), 2)
+            exec_ha_p = round(max(eff_floor_p, lp), 2)
             return {
                 "should_exit": True,
                 "exit_code": "TRAIL_HA_RED_BOOST",
-                "exit_desc": f"🕯️ HA 음봉 전환 트레일링 부스트 익절(${exec_ha_p:.2f})",
+                "exit_desc": f"🕯️ 완결 1분봉 HA 음봉 확정 트레일링 익절(${exec_ha_p:.2f})",
                 "exit_price": exec_ha_p,
                 "is_trailing_armed": True,
                 "just_armed": False,
+                "armed_minute_key": eff_armed_mk,
                 "peak_price": round(cur_peak, 4),
                 "post_entry_min_price": round(cur_min, 4),
                 "active_stop_floor_price": exec_ha_p,
@@ -2399,6 +2448,11 @@ async def _extract_live_assassin_features_and_qqq_snapshot(
 
     is_bull_bar = bool(lp >= cur_bar_open)
     is_ha_bull = bool(soxl_met.get("ha_bull", True))
+    closed_bar_min_key = str(
+        soxl_met.get("closed_bar_minute_key") or ""
+    ).strip()
+    closed_ha_ready = bool(soxl_met.get("closed_ha_ready", False))
+    closed_ha_bull = bool(soxl_met.get("closed_ha_bull", True))
     rsi_14 = round(safe_float(soxl_met.get("rsi_14"), 50.0), 2)
 
     qqq_vel_1m = round(safe_float(qqq_met.get("vel_1m_pct"), 0.0), 3)
@@ -2447,6 +2501,9 @@ async def _extract_live_assassin_features_and_qqq_snapshot(
         "cur_bar_low": round(cur_bar_low, 4),
         "is_bull_bar": is_bull_bar,
         "is_ha_bull": is_ha_bull,
+        "closed_bar_minute_key": closed_bar_min_key,
+        "closed_ha_ready": closed_ha_ready,
+        "closed_ha_bull": closed_ha_bull,
         "qqq_vel_1m_pct": qqq_vel_1m,
         "qqq_vel_3m_pct": qqq_vel_3m,
         "qqq_vel_10m_pct": qqq_vel_10m,
@@ -2845,8 +2902,8 @@ async def _send_4_arm_100_trailing_alert(
         "──────────────",
         f"▫️ 진입단가: <b>${ep:.2f}</b> ➔ 현재가: <b>${live_price:.2f}</b> (<b>{cur_g:+.2f}%</b>)",
         f"🔒 익절보존선: <b>${arm_p:.2f} (+1.00%)</b> 하드 잠금 완료 (손실 가능성 0%!)",
-        f"🚀 상단목표캡: <b>${cap_p:.2f} (+5.00%)</b> 까지 HA 양봉 추세 끝까지 추적",
-        "▫️ 출구조건: 고점 대비 콜백(-0.20%/-0.30%) 또는 HA 음봉 전환 시 즉시 익절 스윕",
+        f"🚀 상단목표캡: <b>${cap_p:.2f} (+5.00%)</b> 까지 완결 1분봉 HA 양봉 끝까지 추적",
+        "▫️ 출구조건: 완결 1분봉 HA 음봉 확정 또는 스텝보존(+1.25%)/콜백(-0.35%) 이탈 시 익절",
         f"🕒 {now_est.strftime('%m-%d %H:%M:%S EST')}",
     ]
     await context.send_slim_alert("\n".join(lines))
@@ -3337,6 +3394,7 @@ async def _finalize_assassin_position_entry(
         "arm_100_price": round(arm_p, 2),
         "is_trailing_armed": False,
         "armed_time_est": "",
+        "armed_minute_key": "",
         "peak_price": round(fill_p, 4),
         "post_entry_min_price": round(fill_p, 4),
         "active_stop_floor_price": 0.0,
@@ -3772,6 +3830,7 @@ async def _settle_assassin_exit_to_ledger(
         "entry_qqq_price": entry_qqq_p,
         "qqq_chg_from_entry_pct": cur_qqq_chg_pct,
         "is_trailing_armed": new_armed,
+        "armed_minute_key": "",
         "peak_price": peak_p,
         "post_entry_min_price": min_p,
         "today_exit_reason": exit_desc,
@@ -4947,9 +5006,21 @@ async def execute_simulated_assassin_tick_plugin(
             entry_qqq_price=entry_qqq_p,
             qqq_live_price=qqq_lp,
             entry_gate_id=str(st.get("entry_gate_id") or ""),
+            closed_bar_minute_key=str(
+                feat.get("closed_bar_minute_key") or ""
+            ),
+            closed_ha_ready=bool(feat.get("closed_ha_ready", False)),
+            closed_ha_bull=bool(feat.get("closed_ha_bull", True)),
+            armed_minute_key=str(st.get("armed_minute_key") or ""),
+            cur_minute_key=dt_now.strftime("%Y-%m-%d %H:%M"),
         )
 
         new_armed = bool(exit_eval.get("is_trailing_armed", False))
+        new_armed_mk = str(
+            exit_eval.get("armed_minute_key")
+            or st.get("armed_minute_key")
+            or ""
+        ).strip()
         if context is not None:
             context.assassin_high_freq_active = new_armed
 
@@ -4963,6 +5034,7 @@ async def execute_simulated_assassin_tick_plugin(
                 qqq_chg_from_entry_pct=cur_qqq_chg_pct,
                 is_trailing_armed=True,
                 armed_time_est=dt_now.strftime("%H:%M:%S"),
+                armed_minute_key=new_armed_mk,
                 peak_price=safe_float(exit_eval.get("peak_price"), lp),
                 post_entry_min_price=safe_float(
                     exit_eval.get("post_entry_min_price"), lp
@@ -4998,6 +5070,7 @@ async def execute_simulated_assassin_tick_plugin(
                 entry_qqq_price=entry_qqq_p,
                 qqq_chg_from_entry_pct=cur_qqq_chg_pct,
                 is_trailing_armed=new_armed,
+                armed_minute_key=new_armed_mk,
                 peak_price=safe_float(exit_eval.get("peak_price"), lp),
                 post_entry_min_price=safe_float(
                     exit_eval.get("post_entry_min_price"), lp
@@ -5294,7 +5367,9 @@ async def build_assassin_detail_dashboard_html(
     )
     comp_eq = max(100.0, safe_float(st.get("comp_free_cash_usd"), init_s))
     bar_str = "📈양봉" if feat.get("is_bull_bar") else "📉음봉"
-    ha_str = "🟢양봉" if feat.get("is_ha_bull") else "🔴음봉"
+    ha_str = (
+        "🟢완결양봉" if feat.get("closed_ha_bull", True) else "🔴완결음봉"
+    )
 
     exec_m = str(st.get("execution_mode") or ASSASSIN_MODE_SIMULATED).upper()
     if exec_m == ASSASSIN_MODE_LIVE:
@@ -5721,5 +5796,34 @@ def run_assassin_plugin_tdd() -> bool:
             and st_gt2["max_daily_gt_gate_wins"] == 2
             and st_gt2["today_gt_gate_history"][0]["status"] == "WIN_100"
         ), f"Case 96 다회차 10G 정찰 카운터 검증 실패: {st_gt2}"
+
+    # 7) 완결 1분봉 HA 음봉 확정 및 등호 자기격발 차단 검증
+    ex_hold = evaluate_assassin_ha_trailing_and_exits(
+        hm=800,
+        entry_price=50.00,
+        live_price=50.50,
+        bar_high_price=50.50,
+        is_trailing_armed=True,
+        peak_price=50.50,
+        arm_100_price=50.50,
+        cap_500_price=52.50,
+        soxl_is_bull_bar=False,
+        soxl_is_ha_bull=False,
+        soxl_prev_reg_close=51.00,
+        soxl_pre_open_price=50.80,
+        soxl_reg_vwap=50.60,
+        post_entry_min_price=50.00,
+        qqq_vel_1m_pct=0.0,
+        qqq_vel_3m_pct=0.0,
+        qqq_vel_max_3m_10m_pct=0.0,
+        qqq_bear_drop_amp_pct=0.0,
+        nq_entry_bear_amp_pct=2.00,
+        closed_bar_minute_key="2026-11-13 07:59",
+        closed_ha_ready=True,
+        closed_ha_bull=True,
+        armed_minute_key="2026-11-13 08:00",
+        cur_minute_key="2026-11-13 08:00",
+    )
+    assert ex_hold["should_exit"] is False
 
     return True

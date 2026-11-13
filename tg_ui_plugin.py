@@ -409,16 +409,21 @@ def _format_multi_grid_stratum_lines(
             tr_m = main_trail_ui if isinstance(main_trail_ui, dict) else {}
             l1_ign_p = safe_float(summary.get("l1_ignite_100_price"), l1_t)
             if bool(tr_m.get("armed")):
-                st_p = safe_float(tr_m.get("active_stop_p"), l1_ign_p)
-                lk_b = (
-                    "👑1.40%락"
-                    if bool(tr_m.get("stepped_125"))
-                    else "🔥1.25%추적"
-                )
-                lines.append(
-                    f"⚡ <b>[1층: {l1_qty_label}·${b1.actual_cost_usd:,.0f}]</b> "
-                    f"<b>${b1.book_price:.2f}</b> ➔ 스탑 <b>${st_p:.2f}</b> ({g1_sign}{l1_g:.2f}%·{lk_b})"
-                )
+                st_p = safe_float(tr_m.get("active_stop_p"), 0.0)
+                if bool(tr_m.get("stepped_125")) and st_p > 0.0:
+                    lines.append(
+                        f"⚡ <b>[1층: {l1_qty_label}·${b1.actual_cost_usd:,.0f}]</b> "
+                        f"<b>${b1.book_price:.2f}</b> ➔ 스탑 <b>${st_p:.2f}</b> ({g1_sign}{l1_g:.2f}%·👑1.40%락)"
+                    )
+                else:
+                    lk_m_p = safe_float(
+                        tr_m.get("lock_125_p"),
+                        safe_float(summary.get("l1_lock_125_price"), l1_ign_p),
+                    )
+                    lines.append(
+                        f"⚡ <b>[1층: {l1_qty_label}·${b1.actual_cost_usd:,.0f}]</b> "
+                        f"<b>${b1.book_price:.2f}</b> ➔ <b>1분HA추적</b>(락${lk_m_p:.2f}) ({g1_sign}{l1_g:.2f}%·🔥무스탑)"
+                    )
             else:
                 fg_c = safe_int(tr_m.get("forgive_count"), 0)
                 fg_b = f"·💡용서{fg_c}" if fg_c > 0 else "·점화1.25%"
@@ -606,16 +611,23 @@ def _format_sub_grid_stratum_lines(
                 summary.get("sub_l1_ignite_100_price"), sl1_t
             )
             if bool(tr_s.get("armed")):
-                sst_p = safe_float(tr_s.get("active_stop_p"), sl1_ign_p)
-                slk_b = (
-                    "👑1.25%락"
-                    if bool(tr_s.get("stepped_125"))
-                    else "🔥1%추적"
-                )
-                lines.append(
-                    f"  ⚡ <b>[서브1층: {sl1_label}·${sb1.actual_cost_usd:,.0f}]</b> "
-                    f"<b>${sb1.book_price:.2f}</b> ➔ 스탑 <b>${sst_p:.2f}</b> ({sg1_s}{sl1_g:.2f}%·{slk_b})"
-                )
+                sst_p = safe_float(tr_s.get("active_stop_p"), 0.0)
+                if bool(tr_s.get("stepped_125")) and sst_p > 0.0:
+                    lines.append(
+                        f"  ⚡ <b>[서브1층: {sl1_label}·${sb1.actual_cost_usd:,.0f}]</b> "
+                        f"<b>${sb1.book_price:.2f}</b> ➔ 스탑 <b>${sst_p:.2f}</b> ({sg1_s}{sl1_g:.2f}%·👑1.25%락)"
+                    )
+                else:
+                    slk_p = safe_float(
+                        tr_s.get("lock_125_p"),
+                        safe_float(
+                            summary.get("sub_l1_lock_125_price"), sl1_ign_p
+                        ),
+                    )
+                    lines.append(
+                        f"  ⚡ <b>[서브1층: {sl1_label}·${sb1.actual_cost_usd:,.0f}]</b> "
+                        f"<b>${sb1.book_price:.2f}</b> ➔ <b>1분HA추적</b>(락${slk_p:.2f}) ({sg1_s}{sl1_g:.2f}%·🔥무스탑)"
+                    )
             else:
                 sfg_c = safe_int(tr_s.get("forgive_count"), 0)
                 sfg_b = f"·💡용서{sfg_c}" if sfg_c > 0 else "·점화1%"

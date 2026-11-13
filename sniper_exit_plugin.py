@@ -195,6 +195,7 @@ class SniperL1TrailSlot:
             )
 
     def refresh_stop_price(self) -> float:
+        # MODIFIED: 스텝 돌파 전 무스탑(0.0) 순수 1분봉 HA 추종 · 돌파 후 보존선/+2% 여유콜백 잠금
         if not self.armed or self.ref_cost <= 0.0:
             self.active_stop_p = 0.0
             return 0.0
@@ -203,14 +204,17 @@ class SniperL1TrailSlot:
         ):
             self.stepped_125 = True
             self.lock_floor_p = self.lock_125_p
+        if not self.stepped_125:
+            self.active_stop_p = 0.0
+            return 0.0
         pk_gain = ((self.peak_p - self.ref_cost) / self.ref_cost) * 100.0
-        cb_pct = (
-            SNIPER_L1_TRAIL_CB_WIDE_PCT
-            if pk_gain >= SNIPER_L1_TRAIL_BOOST_TIER2_PCT
-            else SNIPER_L1_TRAIL_CB_TIGHT_PCT
-        )
-        cb_raw = round(self.peak_p * (1.0 - cb_pct / 100.0), 2)
-        self.active_stop_p = round(max(self.lock_floor_p, cb_raw), 2)
+        if pk_gain >= SNIPER_L1_TRAIL_BOOST_TIER2_PCT:
+            cb_raw = round(
+                self.peak_p * (1.0 - SNIPER_L1_TRAIL_CB_WIDE_PCT / 100.0), 2
+            )
+            self.active_stop_p = round(max(self.lock_floor_p, cb_raw), 2)
+        else:
+            self.active_stop_p = round(self.lock_floor_p, 2)
         return self.active_stop_p
 
     def release_forgive(self, bad_ha_minute_key: str = "") -> None:
@@ -2515,13 +2519,14 @@ def _step_l1_trail_slot_candidate(
             slot.refresh_stop_price()
             return "TRAIL_CAP_500", True
 
+        # MODIFIED: 점화 시 lock_floor_p=0.0 무스탑 시작 및 엄격 미만(<) 판정으로 자기격발 원천 차단
         slot.armed = True
         slot.armed_minute_key = cur_min_key
         slot.peak_p = max(probe_h, slot.arm_100_p)
-        slot.lock_floor_p = slot.arm_100_p
+        slot.lock_floor_p = 0.0
         slot.stepped_125 = False
         stop_now = slot.refresh_stop_price()
-        if wick_high_p > live_p and live_p <= stop_now + 1e-9:
+        if stop_now > 0.0 and wick_high_p > live_p and live_p < stop_now - 1e-9:
             return "TRAIL_CB_STOP", True
         return "", True
 
@@ -2531,15 +2536,16 @@ def _step_l1_trail_slot_candidate(
     if probe_h >= slot.cap_500_p - 1e-9:
         return "TRAIL_CAP_500", False
 
-    if stop_now > 0.0 and live_p <= stop_now + 1e-9:
+    if stop_now > 0.0 and live_p < stop_now - 1e-9:
         return "TRAIL_CB_STOP", False
 
+    # MODIFIED: closed_min_key < cur_min_key 완결 보장 하에 점화 분봉 마감(>=) 즉시 HA 음봉 검문
     if (
         closed_ha_ready
         and (not closed_ha_bull)
         and bool(closed_min_key)
         and bool(slot.armed_minute_key)
-        and (closed_min_key > slot.armed_minute_key)
+        and (closed_min_key >= slot.armed_minute_key)
         and (closed_min_key != slot.forgiven_ha_minute_key)
         and (qqq_vel_max < SNIPER_L1_TRAIL_QQQ_BYPASS_PCT)
     ):
@@ -2813,9 +2819,9 @@ async def execute_1m_sniper_sell_and_reanchor_plugin(
             if ign_m:
                 just_ignited_any = True
                 logger.info(
-                    "🔥 [옵션 1-B SOXL 본 1층 트레일링 점화] 단가=$%.2f ➔ 보존선=$%.2f(+1.40%%락=$%.2f) · 점화분=%s · 0.40s 추적 개시",
+                    "🔥 [SOXL 본 1층 완결1분HA 트레일링 점화] 단가=$%.2f ➔ 점화가=$%.2f(스텝락=$%.2f) · 점화분=%s · 무스탑 0.40s HA추적 개시",
                     main_slot.ref_cost,
-                    main_slot.lock_floor_p,
+                    main_slot.arm_100_p,
                     main_slot.lock_125_p,
                     main_slot.armed_minute_key,
                 )
@@ -2836,15 +2842,14 @@ async def execute_1m_sniper_sell_and_reanchor_plugin(
             if ign_s:
                 just_ignited_any = True
                 logger.info(
-                    "🔥 [Case 99 SOXL 서브 1층 트레일링 점화] 단가=$%.2f ➔ 보존선=$%.2f(1.25%%락=$%.2f) · 점화분=%s · 0.40s 추적 개시",
+                    "🔥 [SOXL 서브 1층 완결1분HA 트레일링 점화] 단가=$%.2f ➔ 점화가=$%.2f(스텝락=$%.2f) · 점화분=%s · 무스탑 0.40s HA추적 개시",
                     sub_slot.ref_cost,
-                    sub_slot.lock_floor_p,
+                    sub_slot.arm_100_p,
                     sub_slot.lock_125_p,
                     sub_slot.armed_minute_key,
                 )
-
-        if just_ignited_any and hasattr(context, "wakeup_event"):
-            context.wakeup_event.set()
+        # MODIFIED: 점화 직후 0.001s 재기상(wakeup_event) 제거 -> 정상 0.40s 가속 주기 진입
+        _ = just_ignited_any
     else:
         closed_mk = ""
         closed_ready = False
@@ -2926,24 +2931,30 @@ async def execute_1m_sniper_sell_and_reanchor_plugin(
                     main_slot.arm_100_p,
                     bad_ha_mk or "-",
                 )
-            elif (
-                main_trail_trig == "TRAIL_CB_STOP"
-                and fresh_live_p > m_stop + 1e-9
+            elif main_trail_trig == "TRAIL_CB_STOP" and (
+                m_stop <= 0.0 or fresh_live_p >= m_stop - 1e-9
             ):
                 pass
             else:
-                m_eff_fl = (
-                    main_slot.cap_500_p
-                    if (
-                        main_trail_trig == "TRAIL_CAP_500"
-                        and fresh_live_p >= main_slot.cap_500_p - 1e-9
-                    )
-                    else (
-                        main_slot.lock_floor_p
-                        if fresh_live_p >= main_slot.lock_floor_p - 1e-9
-                        else main_slot.arm_100_p
-                    )
+                eff_m_lock = (
+                    main_slot.lock_floor_p
+                    if main_slot.lock_floor_p > 0.0
+                    else main_slot.arm_100_p
                 )
+                if (
+                    main_trail_trig == "TRAIL_CAP_500"
+                    and fresh_live_p >= main_slot.cap_500_p - 1e-9
+                ):
+                    m_eff_fl = main_slot.cap_500_p
+                elif fresh_live_p >= eff_m_lock - 1e-9:
+                    mkt_fl = (
+                        math.floor((fresh_live_p * 0.998 + 1e-9) * 100.0)
+                        / 100.0
+                    )
+                    m_eff_fl = max(eff_m_lock, mkt_fl)
+                else:
+                    mkt_fl = math.floor((fresh_live_p + 1e-9) * 100.0) / 100.0
+                    m_eff_fl = max(main_slot.arm_100_p, mkt_fl)
                 sold_idx_set.add(0)
                 floor_cands.append(m_eff_fl)
                 fired_main_trail = True
@@ -2991,24 +3002,32 @@ async def execute_1m_sniper_sell_and_reanchor_plugin(
                     sub_slot.arm_100_p,
                     bad_ha_mk or "-",
                 )
-            elif (
-                sub_trail_trig == "TRAIL_CB_STOP"
-                and fresh_live_p > s_stop + 1e-9
+            elif sub_trail_trig == "TRAIL_CB_STOP" and (
+                s_stop <= 0.0 or fresh_live_p >= s_stop - 1e-9
             ):
                 pass
             else:
-                s_eff_fl = (
-                    sub_slot.cap_500_p
-                    if (
-                        sub_trail_trig == "TRAIL_CAP_500"
-                        and fresh_live_p >= sub_slot.cap_500_p - 1e-9
-                    )
-                    else (
-                        sub_slot.lock_floor_p
-                        if fresh_live_p >= sub_slot.lock_floor_p - 1e-9
-                        else sub_slot.arm_100_p
-                    )
+                eff_s_lock = (
+                    sub_slot.lock_floor_p
+                    if sub_slot.lock_floor_p > 0.0
+                    else sub_slot.arm_100_p
                 )
+                if (
+                    sub_trail_trig == "TRAIL_CAP_500"
+                    and fresh_live_p >= sub_slot.cap_500_p - 1e-9
+                ):
+                    s_eff_fl = sub_slot.cap_500_p
+                elif fresh_live_p >= eff_s_lock - 1e-9:
+                    s_mkt_fl = (
+                        math.floor((fresh_live_p * 0.998 + 1e-9) * 100.0)
+                        / 100.0
+                    )
+                    s_eff_fl = max(eff_s_lock, s_mkt_fl)
+                else:
+                    s_mkt_fl = (
+                        math.floor((fresh_live_p + 1e-9) * 100.0) / 100.0
+                    )
+                    s_eff_fl = max(sub_slot.arm_100_p, s_mkt_fl)
                 sub_sold_idx_set.add(0)
                 floor_cands.append(s_eff_fl)
                 fired_sub_trail = True
