@@ -180,9 +180,10 @@ async def _sync_barbell_sgov_holdings_if_idle(
         bst.get("sgov_sell_order_id") or ""
     ).strip():
         return
-    if (
-        time.monotonic() - safe_float(bst.get("last_sgov_action_mono"), 0.0)
-    ) < 15.0:
+    # MODIFIED: VM 재부팅 시 last_sgov_action_mono 역전으로 인한 영구 스킵 방지
+    now_sg_m = time.monotonic()
+    last_sg_m = safe_float(bst.get("last_sgov_action_mono"), 0.0)
+    if 0.0 < last_sg_m <= now_sg_m and (now_sg_m - last_sg_m) < 15.0:
         return
 
     sg_h = holdings.get(BARBELL_SAFE_SYMBOL)
@@ -555,18 +556,21 @@ async def reconcile_stratum_with_broker_holdings_plugin(
             safe_float(st.get("daily_realized_net_usd"), 0.0) + net_pnl, 4
         )
 
+        # MODIFIED: 수동 부분손절 후 전량매도 시 사이클 순흑자 초과분만 금고 격리
+        prev_cyc_z = safe_float(st.get("cycle_realized_net_usd"), 0.0)
+        vault_delta_z = round(
+            max(0.0, net_pnl + min(0.0, prev_cyc_z)), 4
+        )
         prev_vault_locked = max(
             0.0, safe_float(st.get("vaulted_profit_locked_usd"), 0.0)
         )
         next_vault_locked = (
-            round(prev_vault_locked + max(0.0, net_pnl), 4)
+            round(prev_vault_locked + vault_delta_z, 4)
             if is_barbell
             else prev_vault_locked
         )
 
-        final_cyc_net = round(
-            safe_float(st.get("cycle_realized_net_usd"), 0.0) + net_pnl, 4
-        )
+        final_cyc_net = round(prev_cyc_z + net_pnl, 4)
         final_cyc_ev = max(0, safe_int(st.get("cycle_sell_events"), 0)) + 1
         next_comp_main_cycles = (
             max(0, safe_int(st.get("completed_main_cycles"), 0)) + 1
@@ -716,7 +720,7 @@ async def reconcile_stratum_with_broker_holdings_plugin(
         if is_barbell:
             b_rec = await record_barbell_realized_profit(
                 context=context,
-                net_pnl_usd=net_pnl,
+                net_pnl_usd=vault_delta_z,  # MODIFIED: 유령현금 이중계상 차단
                 is_graduated_zero=True,
                 prev_soxl_injected_usd=cur_inj_res_usd,
                 prev_soxl_used_portions_cnt=cur_used_res_cnt,
@@ -1257,8 +1261,18 @@ async def reconcile_stratum_with_broker_holdings_plugin(
             1 if new_held_lots > BASE_MAX_LOTS_8PCT else 0
         )
 
+        # MODIFIED: 1층 공석 유지 상태에서 상단층 수동 편입 시 기존 재장전 anchor_price 보존
         eff_l1_anchor_p = (
-            merged_buckets[0].book_price if merged_buckets else est_buy_p
+            merged_buckets[0].book_price
+            if (merged_buckets and has_active_l1_bucket(merged_buckets))
+            else (
+                safe_float(st.get("anchor_price"), 0.0)
+                or (
+                    merged_buckets[0].book_price
+                    if merged_buckets
+                    else est_buy_p
+                )
+            )
         )
         old_min_p = safe_float(st.get("cycle_min_buy_price"), 0.0)
         new_min_p = (
@@ -1338,7 +1352,11 @@ async def reconcile_stratum_with_broker_holdings_plugin(
         )
         if hasattr(context, "send_slim_alert"):
             if not prev_had_active_l1:
-                pos_desc = "공석 1층 독립 편입(상단 비병합)"
+                pos_desc = (
+                    "공석 1층 독립 편입(상단 비병합)"
+                    if has_active_l1_bucket(merged_buckets)
+                    else f"1층 공석 유지 · 상단 2~{len(merged_buckets) + 1}층 단가비교 편입"
+                )
             elif is_mid_tier_inserted:
                 pos_desc = f"상단 2~{len(merged_buckets)}층 단가비교 중간편입"
             else:
@@ -1583,11 +1601,16 @@ async def reconcile_stratum_with_broker_holdings_plugin(
         safe_float(st.get("daily_realized_net_usd"), 0.0) + net_pnl, 4
     )
 
+    # MODIFIED: 수동 부분손절 후 부분익절 시 사이클 결손 우선 보전
+    prev_cyc_p = safe_float(st.get("cycle_realized_net_usd"), 0.0)
+    vault_delta_p = round(
+        max(0.0, net_pnl + min(0.0, prev_cyc_p)), 4
+    )
     prev_vault_locked_p = max(
         0.0, safe_float(st.get("vaulted_profit_locked_usd"), 0.0)
     )
     next_vault_locked_p = (
-        round(prev_vault_locked_p + max(0.0, net_pnl), 4)
+        round(prev_vault_locked_p + vault_delta_p, 4)
         if is_barbell
         else prev_vault_locked_p
     )
@@ -1735,7 +1758,7 @@ async def reconcile_stratum_with_broker_holdings_plugin(
     if is_barbell:
         b_rec_p = await record_barbell_realized_profit(
             context=context,
-            net_pnl_usd=net_pnl,
+            net_pnl_usd=vault_delta_p,  # MODIFIED: 유령현금 이중계상 차단
             is_graduated_zero=False,
             prev_soxl_injected_usd=safe_float(
                 st.get("injected_reserve_usd"), 0.0

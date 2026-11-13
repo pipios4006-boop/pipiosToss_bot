@@ -1299,6 +1299,29 @@ class _AdaptiveTelegramBridge:
             except Exception:
                 pass
         await self._close_tg_http_client()
+        self._shared_ctrl: Optional[tg_ui_plugin.TelegramCommandController] = (
+            None
+        )
+
+    def _get_shared_ctrl(self) -> tg_ui_plugin.TelegramCommandController:
+        if self._shared_ctrl is None:
+            self._shared_ctrl = tg_ui_plugin.TelegramCommandController(
+                self.context,
+                bot_token=self.bot_token,
+                chat_id=self.chat_id,
+            )
+            self._shared_ctrl._awaiting_seed_input_chats = (
+                self._awaiting_seed_input_chats
+            )
+        return self._shared_ctrl
+
+    async def close(self) -> None:
+        if self._shared_ctrl is not None:
+            try:
+                await self._shared_ctrl._close_tg_http_client()
+            except Exception:
+                pass
+        await self._close_tg_http_client()
 
     def _api_url(self, method: str) -> str:
         return f"https://api.telegram.org/bot{self.bot_token}/{method}"

@@ -22,6 +22,11 @@ import os
 import threading
 import time
 from dataclasses import asdict, dataclass
+
+try:
+    import fcntl
+except ImportError:
+    fcntl = None  # type: ignore
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -182,7 +187,48 @@ def _assn_write_shm_bus_sync(payload: Dict[str, Any]) -> None:
         os.umask(old_u)
 
 
+def _assn_acquire_shm_lock_sync() -> int:
+    if fcntl is None:
+        return -1
+    lfp = f"{_assn_shm_fp_sync()}.lock"
+    old_u = os.umask(0)
+    fd = -1
+    try:
+        fd = os.open(lfp, os.O_CREAT | os.O_RDWR, 0o666)
+        try:
+            os.fchmod(fd, 0o666)
+        except Exception:
+            pass
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        return fd
+    except Exception:
+        if fd >= 0:
+            try:
+                os.close(fd)
+            except Exception:
+                pass
+        return -1
+    finally:
+        os.umask(old_u)
+
+
+def _assn_release_shm_lock_sync(fd: int) -> None:
+    if fd < 0:
+        return
+    try:
+        if fcntl is not None:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+    except Exception:
+        pass
+    try:
+        os.close(fd)
+    except Exception:
+        pass
+
+
 def _assn_pub_shm_scout_sync(st: Dict[str, Any]) -> None:
+    # MODIFIED: 프로세스 간 정찰/10G 패킷 덮어쓰기(Lost Update) 원천 차단용 배타 락
+    lfd = _assn_acquire_shm_lock_sync()
     try:
         d_str = str(st.get("current_session_date") or "").strip()
         if not d_str:
@@ -206,6 +252,8 @@ def _assn_pub_shm_scout_sync(st: Dict[str, Any]) -> None:
         _assn_write_shm_bus_sync(cur)
     except Exception:
         pass
+    finally:
+        _assn_release_shm_lock_sync(lfd)
 
 
 def _assn_pub_shm_gate_sync(
@@ -217,6 +265,7 @@ def _assn_pub_shm_gate_sync(
     entry_scout_seq: int,
     feat: Dict[str, Any],
 ) -> None:
+    lfd = _assn_acquire_shm_lock_sync()
     try:
         cur = _assn_read_shm_bus_sync(today_str)
         cur["date"] = today_str
@@ -243,6 +292,8 @@ def _assn_pub_shm_gate_sync(
         _assn_write_shm_bus_sync(cur)
     except Exception:
         pass
+    finally:
+        _assn_release_shm_lock_sync(lfd)
 
 
 async def _sync_scout_from_shm_if_behind(
@@ -726,6 +777,16 @@ class AssassinSimLedger:
         if not isinstance(base.get("pending_buy_meta"), dict):
             base["pending_buy_meta"] = {}
 
+        # NEW [P0 방어]: VM 재부팅 시 영속화된 monotonic 역전으로 인한 미체결 타임아웃 먹통 차단
+        now_m_assn = time.monotonic()
+        for mono_k in ("pending_buy_mono", "pending_exit_mono"):
+            raw_mv = max(0.0, safe_float(base.get(mono_k), 0.0))
+            base[mono_k] = (
+                round(now_m_assn, 4)
+                if raw_mv > now_m_assn
+                else round(raw_mv, 4)
+            )
+
         # [Case 96 & Case 97]: 골든타임 다회차 [모의] 게이트 정찰병 필드 정규화
         base["gt_gate_scout_done"] = bool(
             base.get("gt_gate_scout_done", False)
@@ -1164,6 +1225,9 @@ class AssassinSimLedger:
             no_trade_days=0,
             total_scouts_dispatched=0,
             total_scout_win_exits=0,
+            gt_active_gate_scout=None,
+            last_gt_gate_exit_ts=0.0,
+            last_gt_gate_exit_price=0.0,
             today_gt_gate_dispatches=0,
             today_gt_gate_win_exits=0,
             today_gt_gate_stop_exits=0,
@@ -2520,6 +2584,7 @@ async def _dispatch_assassin_exit_sweep_order(
     try:
         if active_oid:
             det_cap = await context.api.get_order_detail(active_oid)
+            st_cap = ""
             if isinstance(det_cap, dict):
                 st_cap = str(det_cap.get("status") or "").upper().strip()
                 ex_cap = (
@@ -2536,20 +2601,29 @@ async def _dispatch_assassin_exit_sweep_order(
                         True,
                     )
 
-            try:
-                mod_res = await context.api.modify_order(
-                    order_id=active_oid,
-                    new_price=sweep_p,
-                )
-                active_oid = str(
-                    (mod_res or {}).get("orderId") or active_oid
-                ).strip()
-            except Exception:
-                try:
-                    await context.api.cancel_order(active_oid)
-                except Exception:
-                    pass
+            if st_cap in (
+                "CANCELED",
+                "REJECTED",
+                "REPLACED",
+                "REPLACE_REJECTED",
+                "CANCEL_REJECTED",
+            ):
                 active_oid = ""
+            else:
+                try:
+                    mod_res = await context.api.modify_order(
+                        order_id=active_oid,
+                        new_price=sweep_p,
+                    )
+                    active_oid = str(
+                        (mod_res or {}).get("orderId") or active_oid
+                    ).strip()
+                except Exception:
+                    try:
+                        await context.api.cancel_order(active_oid)
+                    except Exception:
+                        pass
+                    active_oid = ""
 
         if not active_oid:
             await context.api.cancel_all_open_orders(symbol=TARGET_SYMBOL)
@@ -2595,6 +2669,17 @@ async def _dispatch_assassin_exit_sweep_order(
                             active_oid,
                             True,
                         )
+                    if st_ord in (
+                        "CANCELED",
+                        "REJECTED",
+                        "REPLACED",
+                        "REPLACE_REJECTED",
+                        "CANCEL_REJECTED",
+                    ):
+                        await context.api.cancel_all_open_orders(
+                            symbol=TARGET_SYMBOL
+                        )
+                        return False, sweep_p, "", False
             return True, sweep_p, active_oid, False
     except Exception as exc:
         logger.warning("Assassin 실전 출구 스윕 예외: %s", exc)
@@ -3314,6 +3399,16 @@ async def _enter_assassin_main_force_from_gate(
 
     live_budget_usd = 0.0
     if is_live:
+        # MODIFIED [제1헌법 · Case 98-B]: 실전 본대 매수 직전 2차 브로커 실호가 직결 조회
+        if context is not None and hasattr(context, "api"):
+            try:
+                fresh_b_lp = await context.api.get_current_price(
+                    TARGET_SYMBOL, bypass_shm_cache=True
+                )
+                if fresh_b_lp > 0.0:
+                    lp = fresh_b_lp
+            except Exception:
+                pass
         raw_bp = await context.api.get_buying_power_usd(safety_buffer_pct=0.2)
         if raw_bp <= 0.0:
             await asyncio.sleep(0.25)
@@ -3444,9 +3539,12 @@ async def _sync_live_pending_buy_order(
         0.01, safe_float(st.get("pending_buy_price"), feat["live_price"])
     )
     meta = dict(st.get("pending_buy_meta") or {})
-    elapsed = time.monotonic() - safe_float(
-        st.get("pending_buy_mono"), time.monotonic()
-    )
+    now_m_b = time.monotonic()
+    raw_bm = safe_float(st.get("pending_buy_mono"), 0.0)
+    if raw_bm <= 0.0 or raw_bm > now_m_b:
+        raw_bm = now_m_b
+        await assn_ledger.update_state(pending_buy_mono=raw_bm)
+    elapsed = now_m_b - raw_bm
 
     det = await context.api.get_order_detail(buy_oid)
     fq = 0
@@ -3465,7 +3563,15 @@ async def _sync_live_pending_buy_order(
             fp = avg_p
 
     if st_ord == "FILLED" or (
-        fq > 0 and st_ord in ("CANCELED", "REJECTED", "REPLACED")
+        fq > 0
+        and st_ord
+        in (
+            "CANCELED",
+            "REJECTED",
+            "REPLACED",
+            "REPLACE_REJECTED",
+            "CANCEL_REJECTED",
+        )
     ):
         return await _finalize_assassin_position_entry(
             context=context,
@@ -3792,7 +3898,18 @@ async def _sync_live_pending_exit_order(
             actual_sell_fee_usd=actual_fee,
         )
 
-    if st_ord in ("CANCELED", "REJECTED", "REPLACED"):
+    # MODIFIED [P0 방어]: REPLACE_REJECTED / CANCEL_REJECTED 감지 시 원주문 취소 해제 후 즉시 재스윕
+    if st_ord in (
+        "CANCELED",
+        "REJECTED",
+        "REPLACED",
+        "REPLACE_REJECTED",
+        "CANCEL_REJECTED",
+    ):
+        try:
+            await context.api.cancel_all_open_orders(symbol=TARGET_SYMBOL)
+        except Exception:
+            pass
         h_map_chk, h_ok_chk = await context.api.get_holdings_map_with_status(
             symbol=TARGET_SYMBOL
         )
@@ -3842,20 +3959,35 @@ async def _sync_live_pending_exit_order(
         context.assassin_high_freq_active = True
         return "ASSASSIN_LIVE_EXIT_RE_SWEEP_ARMED"
 
-    elapsed = time.monotonic() - safe_float(
-        st.get("pending_exit_mono"), time.monotonic()
-    )
+    now_m_x = time.monotonic()
+    raw_xm = safe_float(st.get("pending_exit_mono"), 0.0)
+    if raw_xm <= 0.0 or raw_xm > now_m_x:
+        raw_xm = now_m_x
+        await assn_ledger.update_state(pending_exit_mono=raw_xm)
+    elapsed = now_m_x - raw_xm
     hm_chk = dt_now.hour * 100 + dt_now.minute
     wait_thr = 3.0 if hm_chk >= ASSASSIN_MOC_EXIT_HM else 5.0
     if elapsed >= wait_thr and lp > 0.0:
+        eff_chase_lp = lp
+        if hasattr(context, "api"):
+            try:
+                fresh_c_lp = await context.api.get_current_price(
+                    TARGET_SYMBOL, bypass_shm_cache=True
+                )
+                if fresh_c_lp > 0.0:
+                    eff_chase_lp = fresh_c_lp
+            except Exception:
+                pass
         if hm_chk >= ASSASSIN_MOC_EXIT_HM:
             bid_p = await context.api.get_best_bid_price(
-                TARGET_SYMBOL, fallback_price=lp
+                TARGET_SYMBOL, fallback_price=eff_chase_lp
             )
-            ref_m_p = min(lp, bid_p) if bid_p > 0.0 else lp
+            ref_m_p = (
+                min(eff_chase_lp, bid_p) if bid_p > 0.0 else eff_chase_lp
+            )
             chase_p = round(max(0.01, ref_m_p * 0.985), 2)
         else:
-            chase_p = round(max(0.01, lp * 0.996), 2)
+            chase_p = round(max(0.01, eff_chase_lp * 0.996), 2)
         try:
             mod_r = await context.api.modify_order(
                 order_id=sell_oid, new_price=chase_p
@@ -4895,6 +5027,21 @@ async def execute_simulated_assassin_tick_plugin(
         exit_code = str(exit_eval.get("exit_code") or "EXIT")
         exit_desc = str(exit_eval.get("exit_desc") or exit_code)
         target_xp = safe_float(exit_eval.get("exit_price"), lp)
+        if is_live_pos and context is not None and hasattr(context, "api"):
+            try:
+                fresh_x_lp = await context.api.get_current_price(
+                    TARGET_SYMBOL, bypass_shm_cache=True
+                )
+                if fresh_x_lp > 0.0:
+                    arm_fl = safe_float(st.get("arm_100_price"), 0.0)
+                    target_xp = round(
+                        max(arm_fl, fresh_x_lp)
+                        if (new_armed and arm_fl > 0.0)
+                        else fresh_x_lp,
+                        2,
+                    )
+            except Exception:
+                pass
         eff_sell_q = (
             safe_int(st.get("live_held_qty"), 1)
             if is_live_pos

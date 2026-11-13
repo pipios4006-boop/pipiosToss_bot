@@ -173,7 +173,8 @@ def _record_live_tick_to_memory_bar(
 
     with _LIVE_1M_BAR_LOCK:
         bars = _LIVE_1M_BAR_STORE.setdefault(sym, [])
-        if bars and str(bars[-1].get("_min_key") or "") == min_key:
+        last_mk = str(bars[-1].get("_min_key") or "") if bars else ""
+        if bars and last_mk == min_key:
             last_b = bars[-1]
             prev_h = safe_float(last_b.get("highPrice"), lp)
             prev_l = safe_float(last_b.get("lowPrice"), lp)
@@ -182,6 +183,18 @@ def _record_live_tick_to_memory_bar(
                 min(prev_l, lp) if prev_l > 0.0 else lp, 4
             )
             last_b["closePrice"] = lp
+        elif bars and min_key < last_mk:
+            # MODIFIED: 정각 분봉 전환 직후 지연 틱의 역순 중복 추가 원천 차단
+            for prev_b in reversed(bars[-5:]):
+                if str(prev_b.get("_min_key") or "") == min_key:
+                    p_h = safe_float(prev_b.get("highPrice"), lp)
+                    p_l = safe_float(prev_b.get("lowPrice"), lp)
+                    prev_b["highPrice"] = round(max(p_h, lp), 4)
+                    prev_b["lowPrice"] = round(
+                        min(p_l, lp) if p_l > 0.0 else lp, 4
+                    )
+                    break
+            return last_mk, len(bars)
         else:
             bars.append(
                 {

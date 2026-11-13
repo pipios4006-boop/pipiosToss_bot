@@ -80,6 +80,8 @@ SGOV_REG_END_HM: int = 1555
 SGOV_ORDER_MAX_WAIT_SEC: float = 60.0
 SGOV_ACTION_COOLDOWN_SEC: float = 15.0
 SGOV_DEFAULT_REF_PRICE: float = 100.30
+# NEW: SGOV 주문 불발 시 불필요 디스크 원장 3중 쓰기 방지용 인메모리 쿨다운 맵
+_SGOV_IDLE_COOLDOWN_MONO: Dict[str, float] = {}
 
 
 def is_barbell_mode(portion_mode: Any) -> bool:
@@ -357,6 +359,22 @@ class BarbellLedger:
         )
         base["sgov_wait_alert_sent"] = bool(
             base.get("sgov_wait_alert_sent", False)
+        )
+        # NEW [P0 방어]: VM 재부팅 시 영속화된 monotonic 역전으로 인한 SGOV 영구 동결 차단
+        now_m_chk = time.monotonic()
+        raw_last_sg_m = max(
+            0.0, safe_float(base.get("last_sgov_action_mono"), 0.0)
+        )
+        base["last_sgov_action_mono"] = (
+            0.0 if raw_last_sg_m > now_m_chk else round(raw_last_sg_m, 4)
+        )
+        raw_ord_sg_m = max(
+            0.0, safe_float(base.get("sgov_order_mono"), 0.0)
+        )
+        base["sgov_order_mono"] = (
+            round(now_m_chk, 4)
+            if raw_ord_sg_m > now_m_chk
+            else round(raw_ord_sg_m, 4)
         )
         return base
 
@@ -1498,7 +1516,10 @@ async def evaluate_and_execute_barbell_guard30_or_injection(
     if sgov_qty > 0:
         next_sells = max(1, safe_int(bst.get("pending_sgov_tranche_sells"), 0))
         already_sent = bool(bst.get("sgov_wait_alert_sent", False))
+        # MODIFIED: 1순위에서 역보충한 cash_bucket / pending_sgov_buy 동시 영속화로 예약 충돌 차단
         await b_ledger.update_state(
+            cash_bucket_usd=cash_bucket,
+            pending_sgov_buy_budget_usd=pending_sgov_buy,
             pending_sgov_tranche_sells=next_sells,
             sgov_wait_alert_sent=True,
         )
@@ -2050,10 +2071,19 @@ async def execute_barbell_sgov_tick_plugin(
     ).strip():
         return {"status": "WAIT_SOXL_ORDER_FIRST"}
 
+    # MODIFIED [P0 방어]: 재부팅 mono 역전 자동 클램핑 + 인메모리 쿨다운 병행
     now_mono = time.monotonic()
-    if (
-        now_mono - safe_float(bst.get("last_sgov_action_mono"), 0.0)
-    ) < SGOV_ACTION_COOLDOWN_SEC:
+    saved_sg_m = safe_float(bst.get("last_sgov_action_mono"), 0.0)
+    if saved_sg_m > now_mono:
+        saved_sg_m = 0.0
+        bst = await b_ledger.update_state(last_sgov_action_mono=0.0)
+    mem_sg_m = safe_float(
+        _SGOV_IDLE_COOLDOWN_MONO.get(b_ledger.folder_slug), 0.0
+    )
+    if mem_sg_m > now_mono:
+        mem_sg_m = 0.0
+    eff_sg_m = max(saved_sg_m, mem_sg_m)
+    if eff_sg_m > 0.0 and (now_mono - eff_sg_m) < SGOV_ACTION_COOLDOWN_SEC:
         return {"status": "SGOV_COOLDOWN"}
 
     pending_sells = max(0, safe_int(bst.get("pending_sgov_tranche_sells"), 0))
@@ -2095,7 +2125,13 @@ async def execute_barbell_sgov_tick_plugin(
     if pending_sells <= 0 and pending_buy_bud <= 0.0:
         return {"status": "BARBELL_SGOV_IDLE"}
 
-    sgov_lp = await context.api.get_current_price(BARBELL_SAFE_SYMBOL)
+    # MODIFIED [제1헌법 · Case 98-B]: SGOV 실주문 발주 직전 브로커 2차 실호가 직결 조회
+    try:
+        sgov_lp = await context.api.get_current_price(
+            BARBELL_SAFE_SYMBOL, bypass_shm_cache=True
+        )
+    except TypeError:
+        sgov_lp = await context.api.get_current_price(BARBELL_SAFE_SYMBOL)
     if sgov_lp <= 1.0:
         return {"status": "NO_SGOV_LIVE_PRICE"}
 
@@ -2180,6 +2216,9 @@ async def execute_barbell_sgov_tick_plugin(
                 )
                 logger.warning("바벨 SGOV 매도 예외: %s", exc)
                 return {"status": "SGOV_SELL_ERROR"}
+        else:
+            _SGOV_IDLE_COOLDOWN_MONO[b_ledger.folder_slug] = time.monotonic()
+            return {"status": "HOLD_SGOV_SELLABLE_ZERO"}
 
     # 3) [2순위] SGOV 30% 목표 예산 범위 내 지정가 매수 (현금 10% 완충 우선 확인 후 초과분만 발주)
     if (
@@ -2245,7 +2284,7 @@ async def execute_barbell_sgov_tick_plugin(
             math.floor((eff_bud + 1e-9) / (exec_buy_p * fee_mult))
         )
         if buy_q <= 0:
-            await b_ledger.update_state(last_sgov_action_mono=time.monotonic())
+            _SGOV_IDLE_COOLDOWN_MONO[b_ledger.folder_slug] = time.monotonic()
             return {"status": "HOLD_SGOV_BUY_INSUFFICIENT_BP"}
 
         cid = generate_client_order_id(prefix="SGVBUY")

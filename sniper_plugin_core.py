@@ -499,7 +499,7 @@ def is_within_reserve_deposit_check_shield(
                 else 0.0
             )
             if (
-                last_sgov_m > 0.0
+                0.0 < last_sgov_m <= now_mono  # MODIFIED: VM 재부팅 mono 역전 가드
                 and rc_m > 0.0
                 and last_sgov_m > rc_m
                 and safe_float(bst.get("cash_bucket_usd"), 0.0) > 50.0

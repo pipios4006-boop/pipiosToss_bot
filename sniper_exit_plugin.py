@@ -1647,12 +1647,16 @@ async def _commit_filled_sell_and_reanchor_ledger(
         safe_float(st.get("daily_realized_net_usd"), 0.0) + net_pnl, 4
     )
 
-    # 바벨 모드 가동 중 발생한 세후 수익금은 별도 수익금고로 격리 오프셋 동기화
+    # MODIFIED: 수동 부분손절(prev_cyc_net < 0) 후 익절 시 코어 결손 우선 보전 후 순흑자만 금고 격리
+    prev_cyc_net_b = safe_float(st.get("cycle_realized_net_usd"), 0.0)
+    vault_delta_pnl = round(
+        max(0.0, net_pnl + min(0.0, prev_cyc_net_b)), 4
+    )
     prev_vault_locked = max(
         0.0, safe_float(st.get("vaulted_profit_locked_usd"), 0.0)
     )
     next_vault_locked = (
-        round(prev_vault_locked + max(0.0, net_pnl), 4)
+        round(prev_vault_locked + vault_delta_pnl, 4)
         if is_barbell
         else prev_vault_locked
     )
@@ -1845,7 +1849,7 @@ async def _commit_filled_sell_and_reanchor_ledger(
     if is_barbell:
         barbell_rec = await record_barbell_realized_profit(
             context=context,
-            net_pnl_usd=net_pnl,
+            net_pnl_usd=vault_delta_pnl,  # MODIFIED: 유령현금 이중계상 차단
             is_graduated_zero=is_graduated_zero,
             prev_soxl_injected_usd=cur_inj_res_usd,
             prev_soxl_used_portions_cnt=cur_used_res_cnt,
@@ -2404,16 +2408,24 @@ async def _get_closed_1m_ha_and_qqq_snapshot(
         try:
             from quant_indicators_plugin import compute_soxl_quant_metrics_1m
 
+            # MODIFIED: 400분봉 + 10일봉 표준 워밍업 통일 (SHM req_cnt 축소 오염 차단)
             c_1m = await context.api.get_candles_1m(
-                symbol=TARGET_SYMBOL, total_count=200
+                symbol=TARGET_SYMBOL, total_count=400
             )
-            if c_1m:
+            c_1d = (
+                await context.api.get_candles_1d(
+                    symbol=TARGET_SYMBOL, count=10
+                )
+                if hasattr(context.api, "get_candles_1d")
+                else []
+            )
+            if c_1m or c_1d:
                 soxl_met = await asyncio.to_thread(
                     compute_soxl_quant_metrics_1m,
-                    c_1m,
+                    c_1m or [],
                     live_p,
                     dt_now,
-                    [],
+                    c_1d or [],
                 )
                 if isinstance(raw_cache, dict):
                     raw_cache[TARGET_SYMBOL] = soxl_met

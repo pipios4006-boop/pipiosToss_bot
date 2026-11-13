@@ -263,6 +263,7 @@ async def candle_radar_loop(context: SniperAppContext) -> None:
             candles_1d = await context.api.get_candles_1d(
                 symbol=TARGET_SYMBOL, count=10
             )
+            now_est = datetime.now(EST_TZ)  # NEW: HTTP 수신 직후 최신 시각 동기화
             live_p = safe_float(
                 context.latest_prices.get(TARGET_SYMBOL),
                 safe_float(
@@ -304,6 +305,7 @@ async def candle_radar_loop(context: SniperAppContext) -> None:
                     candles_qqq_1m = await context.api.get_candles_1m(
                         symbol=MACRO_REF_SYMBOL, total_count=60
                     )
+                    now_est = datetime.now(EST_TZ)  # NEW: QQQ 캔들 수신 직후 최신 시각 동기화
                     qqq_live_p = safe_float(
                         context.latest_prices.get(MACRO_REF_SYMBOL), 0.0
                     )
@@ -960,6 +962,12 @@ async def async_main() -> int:
             await asyncio.wait_for(
                 asyncio.gather(*tasks, return_exceptions=True), timeout=2.0
             )
+        except Exception:
+            pass
+
+        try:
+            if hasattr(context.tg, "close"):
+                await asyncio.wait_for(context.tg.close(), timeout=1.5)
         except Exception:
             pass
 

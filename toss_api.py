@@ -303,6 +303,8 @@ def _shm_poll_follower_prices_sync(
 def _shm_commit_prices_and_unlock_sync(
     fd: int, fetched: Dict[str, float]
 ) -> None:
+    # MODIFIED: SOLO(bypass_shm_cache) 또는 FOLLOWER 타임아웃 시 배타 락 원자적 병합
+    temp_fd = -1
     try:
         valid = {
             k: v
@@ -311,6 +313,10 @@ def _shm_commit_prices_and_unlock_sync(
         }
         if valid:
             bdir = _resolve_shm_bus_dir_sync()
+            if fd < 0 and fcntl is not None:
+                lock_fp = os.path.join(bdir, "prices_v3.lock")
+                temp_fd = _open_shm_lock_fd_sync(lock_fp)
+                fcntl.flock(temp_fd, fcntl.LOCK_EX)
             data_fp = os.path.join(bdir, "prices_v3.json")
             cur = _shm_read_json_sync(data_fp)
             now_t = time.time()
@@ -323,6 +329,7 @@ def _shm_commit_prices_and_unlock_sync(
     except Exception:
         pass
     finally:
+        _unlock_shm_fd_now(temp_fd)
         _unlock_shm_fd_now(fd)
 
 
@@ -1211,16 +1218,34 @@ class TossApiClient:
         req_cnt: int,
         items: List[Dict[str, Any]],
     ) -> None:
+        # MODIFIED: 무잠금 덮어쓰기 및 상위 400봉 캐시 축소 오염 원천 차단
+        temp_fd = -1
         try:
             if items:
                 bdir = _resolve_shm_bus_dir_sync()
+                if fd < 0 and fcntl is not None:
+                    lfp = os.path.join(bdir, f"candles_{ckey}.lock")
+                    temp_fd = _open_shm_lock_fd_sync(lfp)
+                    fcntl.flock(temp_fd, fcntl.LOCK_EX)
                 dfp = os.path.join(
                     bdir, f"candles_{ckey}.json"
                 )
+                now_t = time.time()
+                cur = _shm_read_json_sync(dfp)
+                prev_cnt = safe_int(cur.get("req_cnt"), 0)
+                prev_ts = safe_float(cur.get("ts"), 0.0)
+                prev_items = cur.get("items")
+                if (
+                    prev_cnt > int(req_cnt)
+                    and (now_t - prev_ts) <= CANDLE_1M_SHM_TTL_SEC
+                    and isinstance(prev_items, list)
+                    and len(prev_items) > len(items)
+                ):
+                    return
                 _shm_write_json_sync(
                     dfp,
                     {
-                        "ts": time.time(),
+                        "ts": now_t,
                         "req_cnt": int(req_cnt),
                         "items": items,
                     },
@@ -1228,6 +1253,7 @@ class TossApiClient:
         except Exception:
             pass
         finally:
+            _unlock_shm_fd_now(temp_fd)
             _unlock_shm_fd_now(fd)
 
     async def get_candles_1m(
@@ -1406,6 +1432,22 @@ class TossApiClient:
     ) -> List[Dict[str, Any]]:
         sym_c = str(symbol or TARGET_SYMBOL).upper().strip()
         t_cnt = max(2, min(200, safe_int(count, 10)))
+        if not adjusted or kwargs.get("bypass_shm_cache"):
+            batch_raw, _ = await self.get_candles(
+                symbol=sym_c,
+                interval="1d",
+                count=t_cnt,
+                adjusted=adjusted,
+            )
+            batch_raw.sort(
+                key=lambda x: str(
+                    x.get("timestamp")
+                    or x.get("date")
+                    or x.get("dt")
+                    or ""
+                )
+            )
+            return batch_raw
         ckey = f"1d_{sym_c}"
         role, hit_d, lfd = await asyncio.to_thread(
             self._shm_begin_candles_sync,
@@ -1415,6 +1457,18 @@ class TossApiClient:
         )
         if role == "HIT":
             return hit_d
+        if role == "FOLLOWER":
+            min_t = time.time() - CANDLE_1D_SHM_TTL_SEC
+            for _ in range(16):
+                await asyncio.sleep(0.025)
+                polled = await asyncio.to_thread(
+                    self._shm_poll_candles_sync,
+                    ckey,
+                    t_cnt,
+                    min_t,
+                )
+                if polled is not None:
+                    return polled
         try:
             batch, _ = await self.get_candles(
                 symbol=sym_c,
