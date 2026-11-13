@@ -1701,6 +1701,7 @@ async def execute_seed_protected_buy_gate_plugin(
                     is_dip_promotion=False,
                     is_vacant_l1_reentry=False,
                     trigger_desc="0주 첫 1층 진입",
+                    target_qty=target_qty,
                 )
                 if not can_proceed_0sh:
                     return {
@@ -2124,6 +2125,7 @@ async def execute_seed_protected_buy_gate_plugin(
                     is_dip_promotion=False,
                     is_vacant_l1_reentry=True,
                     trigger_desc=f"1층 공석 재장전({sig_type})",
+                    target_qty=target_qty,
                 )
                 if not can_proceed_re:
                     return {
@@ -2727,6 +2729,7 @@ async def execute_seed_protected_buy_gate_plugin(
                 is_dip_promotion=True,
                 is_vacant_l1_reentry=False,
                 trigger_desc=f"{now_held_lots + 1}회차 추매({trigger_tag})",
+                target_qty=target_qty,
             )
             if not can_proceed_dip:
                 return {

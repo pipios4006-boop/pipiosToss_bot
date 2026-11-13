@@ -1038,18 +1038,34 @@ async def record_barbell_realized_profit(
 
     new_v_avail = round(max(0.0, new_v_tot - next_v_inj), 4)
     guard_cash_floor = portion_8 * MIN_DIP_BUDGET_RATIO
+    full_1p_floor = round(portion_8 * fee_mult_top, 4)
+    est_soxl_free_after = round(
+        max(
+            0.0,
+            max(0.0, reb["soxl_seed_60_usd"] + min(0.0, eff_cyc_net))
+            + next_soxl_inj
+            - rem_inv_soxl,
+        ),
+        4,
+    )
+    est_liquid_pool_after = round(
+        est_soxl_free_after + next_cash_bucket + next_pending_sgov_buy, 4
+    )
 
-    # 현금버킷이 30% 가드 이상 회복되거나 SGOV 매수예약이 잡히면 대기 중이던 SGOV 매도예약 즉시 자동 해제
+    # MODIFIED [Case 100]: 합산 가용 유동성이 1회분(100%) 이상 회복되거나 SGOV 매수예약이 잡히면 SGOV 매도예약 즉시 해제
     cur_pending_sells = max(
         0, safe_int(bst.get("pending_sgov_tranche_sells"), 0)
     )
     if (
         is_graduated_zero
-        or next_cash_bucket >= guard_cash_floor
+        or est_liquid_pool_after >= (full_1p_floor - 1e-6)
         or next_pending_sgov_buy > 0.0
     ):
         next_pending_sells = 0
         next_wait_alert = False
+    elif sgov_q > 0 and est_liquid_pool_after < (full_1p_floor - 1e-6):
+        next_pending_sells = max(1, cur_pending_sells)
+        next_wait_alert = bool(bst.get("sgov_wait_alert_sent", False))
     else:
         next_pending_sells = cur_pending_sells
         next_wait_alert = bool(bst.get("sgov_wait_alert_sent", False))
@@ -1233,21 +1249,11 @@ async def evaluate_and_execute_barbell_guard30_or_injection(
     l1_actual_cost_usd: float,
     is_dip_promotion: bool,
     trigger_desc: str,
+    target_qty: int = 0,
 ) -> Tuple[bool, float, float, Dict[str, Any]]:
     """
-    SOXL 바벨 모드(60% 코어) 매수 직전 GUARD30 검문 및 1회분(8%) 단위 자동수혈 실행기:
-    1) SOXL 가용현금(now_free_cash)이 30% 가드(min_req_cash) 이상이면 수혈 없이 즉시 정상 매수 승인.
-    2) 시드 고갈(now_free_cash < min_req_cash) 감지 시 자동수혈 우선순위:
-       - [1순위 : 현금 10% 버킷 (cash_bucket_usd)]
-         1회분(8% = portion_budget) 단위로 즉시 수혈. 수혈 직후 잔여 현금 버킷이 30% 가드 미만으로 소진되면
-         SGOV 보유 시 즉시 정규장 SGOV 10% 매도 예약(pending_sgov_tranche_sells)을 점화!
-       - [2순위 : SGOV 30% 보유 중 정규장 대기]
-         현금 10% 가 소진되었으나 SGOV 보유 수량(sgov_held_qty > 0)이 남아 있는 경우,
-         내부 예비자본 40%가 아직 소진되지 않았으므로 수익금고를 건드리지 않고 정규장 SGOV 10% 매도 충전을 대기!
-       - [3순위 : 내부 40%(현금 10% + SGOV 30%) 전액 소진 시 별도 실현수익금고 (vault_available_usd)]
-         sgov_held_qty == 0 이고 현금 버킷도 소진된 경우, 별도 장부의 실현수익금고에서 1회분(8%) 단위로 자동수혈!
-       - [4순위 : 토스 계좌 내 미할당 추가 달러 현금 (extra_acct_cash)]
-         100% SOXL 보유 상태에서 바벨 모드로 전환했거나 계좌에 추가 입금된 달러가 있으면 1회분(8%) 단위로 자동수혈!
+    # MODIFIED [Case 94 + Case 100 (BARBELL_100PCT_FULL_PORTION_TOPUP)]:
+    SOXL 바벨 모드(60% 코어) 매수 직전 100% 1회분 정량 완충 검문 및 부족 차액(Top-Up) 자동수혈 실행기.
     """
     b_ledger = ensure_barbell_ledger(context)
     bst = b_ledger.get_state()
@@ -1262,32 +1268,53 @@ async def evaluate_and_execute_barbell_guard30_or_injection(
 
     eff_rt_pct = resolve_effective_round_trip_fee_rate_pct(state_dict=st_now)
     fee_mult = 1.0 + (eff_rt_pct / 100.0)
-    one_share_cost = max(0.01, exec_order_p) * fee_mult
+    clean_exec_p = max(0.01, safe_float(exec_order_p, 0.01))
+    one_share_cost = clean_exec_p * fee_mult
 
     if is_dip_promotion:
-        min_req_cash = max(
+        dust_floor_cash = max(
             one_share_cost,
             unit_8pct * MIN_DIP_BUDGET_RATIO,
             max(0.0, l1_actual_cost_usd) * MIN_DIP_VS_L1_RATIO,
         )
     else:
-        min_req_cash = max(one_share_cost, unit_8pct * MIN_DIP_BUDGET_RATIO)
+        dust_floor_cash = max(one_share_cost, unit_8pct * MIN_DIP_BUDGET_RATIO)
+
+    min_req_cash = dust_floor_cash
+    eff_target_q = (
+        safe_int(target_qty, 0)
+        if safe_int(target_qty, 0) > 0
+        else max(1, int(math.floor((unit_8pct + 1e-9) / clean_exec_p)))
+    )
+    req_target_cash = round(float(eff_target_q) * clean_exec_p * fee_mult, 4)
+    full_req_cash = round(
+        max(unit_8pct * fee_mult, req_target_cash, dust_floor_cash), 4
+    )
 
     raw_bp = max(0.0, safe_float(raw_bp_usd, 0.0))
+    raw_bp_safe = round(raw_bp * 0.998, 4)
     vault_avail = max(0.0, safe_float(bst.get("vault_available_usd"), 0.0))
     bp_excl_vault = round(max(0.0, raw_bp - vault_avail), 4)
+    bp_excl_vault_safe = round(bp_excl_vault * 0.998, 4)
     masked_bp = get_masked_soxl_buying_power_usd(
         context=context, raw_bp_usd=raw_bp, st_soxl=st_now, bst=bst
     )
+    masked_bp_safe = round(masked_bp * 0.998, 4)
 
-    # [정상 통과] SOXL 60% 코어 가용현금 및 별도수익금고 제외 예수금이 충분한 경우
-    if now_free_cash >= min_req_cash and bp_excl_vault >= min_req_cash:
-        eff_cap_bp = (
-            min(now_free_cash, masked_bp)
-            if masked_bp >= min_req_cash
-            else min(now_free_cash, bp_excl_vault)
+    # [정상 통과] SOXL 60% 코어 가용현금이 이미 100% 1회분 정량(full_req_cash) 이상 충분한 경우 (장부 0.998 이중차감 제거)
+    if (
+        now_free_cash >= full_req_cash - 1e-6
+        and bp_excl_vault_safe >= req_target_cash - 1e-6
+    ):
+        eff_bp_order = round(
+            min(
+                now_free_cash,
+                masked_bp_safe
+                if masked_bp_safe >= req_target_cash - 1e-6
+                else bp_excl_vault_safe,
+            ),
+            4,
         )
-        eff_bp_order = round(eff_cap_bp * 0.998, 4)
         return (
             True,
             now_free_cash,
@@ -1295,12 +1322,16 @@ async def evaluate_and_execute_barbell_guard30_or_injection(
             {
                 "action": "PROCEED_NORMAL",
                 "should_proceed": True,
-                "min_req_cash": round(min_req_cash, 4),
+                "min_req_cash": full_req_cash,
+                "dust_floor_cash": round(dust_floor_cash, 4),
             },
         )
 
+    topup_shortfall = round(max(0.0, full_req_cash - now_free_cash), 4)
     shortfall = max(0.0, min_req_cash - now_free_cash)
-    needed_portions = max(1, int(math.ceil((shortfall - 1e-9) / unit_8pct)))
+    needed_portions = max(
+        1, int(math.ceil((max(shortfall, topup_shortfall) - 1e-9) / unit_8pct))
+    )
     req_unit_usd = round(float(needed_portions) * unit_8pct, 4)
 
     cash_bucket = max(0.0, safe_float(bst.get("cash_bucket_usd"), 0.0))
@@ -1308,10 +1339,6 @@ async def evaluate_and_execute_barbell_guard30_or_injection(
     pending_sgov_buy = max(
         0.0, safe_float(bst.get("pending_sgov_buy_budget_usd"), 0.0)
     )
-
-    # -----------------------------------------------------------------------
-    # [1순위] 현금 10% 대기 버킷에서 1회분(8% = unit_8pct) 단위 즉시 자동수혈 (미집행 SGOV 대기현금 선행 역보충)
-    # -----------------------------------------------------------------------
     splits_inj = compute_barbell_seed_splits(
         safe_float(st_now.get("initial_seed_usd"), DEFAULT_INITIAL_SEED_USD)
     )
@@ -1319,22 +1346,36 @@ async def evaluate_and_execute_barbell_guard30_or_injection(
     sgov_lp_ref = max(
         1.0, safe_float(bst.get("sgov_last_price"), SGOV_DEFAULT_REF_PRICE)
     )
-    if pending_sgov_buy > 0.0 and cash_bucket < cash_10_target:
+    now_est = datetime.now(EST_TZ)
+    in_reg = is_sgov_regular_trading_window(now_est=now_est)
+
+    # [1순위] 미집행 SGOV 대기현금 선행 역보충 + 10% 대기현금 버킷에서 부족 차액(Top-Up) 정밀 수혈
+    need_in_cash_b = max(cash_10_target, topup_shortfall)
+    if pending_sgov_buy > 0.0 and cash_bucket < need_in_cash_b:
         pre_shift = round(
-            min(pending_sgov_buy, max(0.0, cash_10_target - cash_bucket)), 4
+            min(pending_sgov_buy, max(0.0, need_in_cash_b - cash_bucket)), 4
         )
         cash_bucket = round(cash_bucket + pre_shift, 4)
         pending_sgov_buy = round(max(0.0, pending_sgov_buy - pre_shift), 4)
 
-    usable_from_cash_bucket = min(
-        cash_bucket, max(0.0, bp_excl_vault - now_free_cash)
+    usable_from_shield = round(
+        min(cash_bucket, max(0.0, bp_excl_vault_safe - now_free_cash)), 4
     )
-    if (
-        usable_from_cash_bucket > 0.0
-        and (now_free_cash + usable_from_cash_bucket) >= min_req_cash
-        and raw_bp >= min_req_cash
-    ):
-        inj_usd = round(min(req_unit_usd, usable_from_cash_bucket), 4)
+    can_full_topup_shield = bool(
+        topup_shortfall > 0.0
+        and usable_from_shield >= topup_shortfall - 1e-6
+        and raw_bp_safe >= req_target_cash - 1e-6
+    )
+    can_premarket_fallback_shield = bool(
+        usable_from_shield > 0.0
+        and (not can_full_topup_shield)
+        and (sgov_qty <= 0 or (not in_reg))
+        and (now_free_cash + usable_from_shield) >= dust_floor_cash - 1e-6
+        and raw_bp_safe >= dust_floor_cash - 1e-6
+    )
+
+    if can_full_topup_shield or can_premarket_fallback_shield:
+        inj_usd = round(min(topup_shortfall, usable_from_shield), 4)
         rem_cash_raw = round(max(0.0, cash_bucket - inj_usd), 4)
         shift_from_pending = round(
             min(pending_sgov_buy, max(0.0, cash_10_target - rem_cash_raw)), 4
@@ -1349,32 +1390,44 @@ async def evaluate_and_execute_barbell_guard30_or_injection(
             )
             rem_pending_sgov_buy = 0.0
 
-        new_cash_inj = round(
-            safe_float(bst.get("cash_injected_to_soxl_usd"), 0.0) + inj_usd, 4
+        new_inj_usd = round(cur_inj_usd + inj_usd, 4)
+        new_used_res = max(
+            1, int(math.ceil((new_inj_usd - 1e-9) / unit_8pct))
         )
-        new_c_cnt = safe_int(bst.get("cash_injection_count_cycle"), 0) + needed_portions
-        new_cum_c_cnt = safe_int(bst.get("cum_cash_injection_count"), 0) + needed_portions
+        inc_cnt = max(1, new_used_res - cur_used_res)
 
-        # 현금 10% 버킷과 미집행 SGOV 매수예약 현금이 모두 소진되었을 때만 정규장 SGOV 10% 매도 큐 점화!
-        guard_floor_inj = max(one_share_cost, unit_8pct * MIN_DIP_BUDGET_RATIO)
+        est_rem_core = max(0.0, (now_free_cash + inj_usd) - req_target_cash)
+        rem_liquid_pool = (
+            est_rem_core + rem_cash_bucket + rem_pending_sgov_buy
+        )
         cur_pending_sells = max(
             0, safe_int(bst.get("pending_sgov_tranche_sells"), 0)
         )
         trigger_sgov_sell = bool(
-            rem_cash_bucket < guard_floor_inj
-            and rem_pending_sgov_buy < guard_floor_inj
-            and sgov_qty > 0
+            sgov_qty > 0 and rem_liquid_pool < (unit_8pct * fee_mult - 1e-6)
         )
         next_pending_sells = (
-            max(1, cur_pending_sells) if trigger_sgov_sell else cur_pending_sells
+            max(1, cur_pending_sells)
+            if trigger_sgov_sell
+            else cur_pending_sells
         )
 
         await b_ledger.update_state(
             cash_bucket_usd=rem_cash_bucket,
             pending_sgov_buy_budget_usd=rem_pending_sgov_buy,
-            cash_injected_to_soxl_usd=new_cash_inj,
-            cash_injection_count_cycle=new_c_cnt,
-            cum_cash_injection_count=new_cum_c_cnt,
+            cash_injected_to_soxl_usd=round(
+                safe_float(bst.get("cash_injected_to_soxl_usd"), 0.0)
+                + inj_usd,
+                4,
+            ),
+            cash_injection_count_cycle=safe_int(
+                bst.get("cash_injection_count_cycle"), 0
+            )
+            + 1,
+            cum_cash_injection_count=safe_int(
+                bst.get("cum_cash_injection_count"), 0
+            )
+            + 1,
             pending_sgov_tranche_sells=next_pending_sells,
             barbell_seed_exhausted=bool(
                 rem_cash_bucket < one_share_cost
@@ -1383,8 +1436,6 @@ async def evaluate_and_execute_barbell_guard30_or_injection(
             ),
         )
 
-        new_used_res = cur_used_res + needed_portions
-        new_inj_usd = round(cur_inj_usd + inj_usd, 4)
         updated_st = await context.ledger.update_state(
             TARGET_SYMBOL,
             used_reserve_portions_cnt=new_used_res,
@@ -1392,11 +1443,11 @@ async def evaluate_and_execute_barbell_guard30_or_injection(
             total_reserve_injected_cnt=safe_int(
                 st_now.get("total_reserve_injected_cnt"), 0
             )
-            + needed_portions,
+            + inc_cnt,
             daily_reserve_injected_cnt=safe_int(
                 st_now.get("daily_reserve_injected_cnt"), 0
             )
-            + needed_portions,
+            + inc_cnt,
             waiting_reserve_deposit=False,
             waiting_reserve_deposit_alert_sent=False,
             required_reserve_deposit_usd=0.0,
@@ -1404,18 +1455,26 @@ async def evaluate_and_execute_barbell_guard30_or_injection(
         )
         updated_free_cash = max(
             0.0,
-            safe_float(updated_st.get("free_cash_usd"), now_free_cash + inj_usd),
+            safe_float(
+                updated_st.get("free_cash_usd"), now_free_cash + inj_usd
+            ),
         )
         sgov_note = (
-            f" · 🔔현금10% 소진 감지 ➔ 정규장 SGOV 10% 보충매도 예약({next_pending_sells}건)"
+            f" · 🔔차기 1회분 완충용 SGOV 10% 매도예약({next_pending_sells}건)"
             if trigger_sgov_sell
             else f" · 잔여 현금버킷 ${rem_cash_bucket:,.2f}"
         )
+        mode_tag = (
+            "100% 정량 완충 Top-Up"
+            if can_full_topup_shield
+            else "프리장 가용전액 구제 Top-Up"
+        )
         if hasattr(context, "send_slim_alert"):
             await context.send_slim_alert(
-                title=f"💉 [바벨 1순위 현금버킷 자동수혈 (+{needed_portions}회분 · +${inj_usd:,.2f})]",
+                title=f"💉 [바벨 1순위 현금버킷 {mode_tag} (+${inj_usd:,.2f})]",
                 body=(
-                    f"타점({trigger_desc}) 시드고갈 감지 ➔ 대기 현금(10%)에서 1회분(8% · ${inj_usd:,.2f}) 즉시 수혈 완료!{sgov_note} · "
+                    f"타점({trigger_desc}) 코어현금(${now_free_cash:,.2f}) 1회분 미달 감지 ➔ "
+                    f"대기현금에서 부족 차액 +${inj_usd:,.2f} 즉시 완충!{sgov_note} · "
                     f"수혈 후 SOXL 가용현금 ${updated_free_cash:,.2f}"
                 ),
             )
@@ -1423,101 +1482,19 @@ async def evaluate_and_execute_barbell_guard30_or_injection(
         return (
             True,
             updated_free_cash,
-            round(min(raw_bp, updated_free_cash) * 0.998, 4),
+            round(min(raw_bp_safe, updated_free_cash), 4),
             {
-                "action": "BARBELL_CASH10_INJECTED",
-                "should_proceed": True,
-                "inject_usd": inj_usd,
-            },
-        )
-
-    # -----------------------------------------------------------------------
-    # [1순위 보조] 정규장 SGOV 매수 전 미체결 예약금(pending_sgov_buy_budget_usd)이 현금으로 남아 있을 때
-    # 프리장/장중 급락 시 아직 사지 않은 SGOV 예약 현금에서 10% 트랜치를 우선 현금버킷으로 전환해 즉시 수혈!
-    # -----------------------------------------------------------------------
-    if (
-        pending_sgov_buy > 0.0
-        and bp_excl_vault >= min_req_cash
-        and (
-            now_free_cash
-            + min(
-                cash_bucket + pending_sgov_buy,
-                max(0.0, bp_excl_vault - now_free_cash),
-            )
-        )
-        >= min_req_cash
-    ):
-        splits = compute_barbell_seed_splits(
-            safe_float(st_now.get("initial_seed_usd"), DEFAULT_INITIAL_SEED_USD)
-        )
-        pull_from_pending = round(
-            min(pending_sgov_buy, max(req_unit_usd, splits["cash_seed_10_usd"])),
-            4,
-        )
-        rem_pending_sgov = round(max(0.0, pending_sgov_buy - pull_from_pending), 4)
-        pooled_cash = round(cash_bucket + pull_from_pending, 4)
-        inj_usd = round(min(req_unit_usd, pooled_cash), 4)
-        rem_cash_b = round(max(0.0, pooled_cash - inj_usd), 4)
-
-        await b_ledger.update_state(
-            cash_bucket_usd=rem_cash_b,
-            pending_sgov_buy_budget_usd=rem_pending_sgov,
-            cash_injected_to_soxl_usd=round(
-                safe_float(bst.get("cash_injected_to_soxl_usd"), 0.0) + inj_usd,
-                4,
-            ),
-            cash_injection_count_cycle=safe_int(
-                bst.get("cash_injection_count_cycle"), 0
-            )
-            + needed_portions,
-            cum_cash_injection_count=safe_int(
-                bst.get("cum_cash_injection_count"), 0
-            )
-            + needed_portions,
-        )
-        updated_st = await context.ledger.update_state(
-            TARGET_SYMBOL,
-            used_reserve_portions_cnt=cur_used_res + needed_portions,
-            injected_reserve_usd=round(cur_inj_usd + inj_usd, 4),
-            total_reserve_injected_cnt=safe_int(
-                st_now.get("total_reserve_injected_cnt"), 0
-            )
-            + needed_portions,
-            daily_reserve_injected_cnt=safe_int(
-                st_now.get("daily_reserve_injected_cnt"), 0
-            )
-            + needed_portions,
-            waiting_reserve_deposit=False,
-            waiting_reserve_deposit_alert_sent=False,
-            required_reserve_deposit_usd=0.0,
-            last_reserve_check_ts=0.0,
-        )
-        updated_free_cash = max(
-            0.0,
-            safe_float(updated_st.get("free_cash_usd"), now_free_cash + inj_usd),
-        )
-        if hasattr(context, "send_slim_alert"):
-            await context.send_slim_alert(
-                title=f"💉 [바벨 SGOV 매수대기 현금 선행 자동수혈 (+${inj_usd:,.2f})]",
-                body=(
-                    f"정규장 SGOV 매수 전 급락 타점({trigger_desc}) 도달 ➔ SGOV 대기현금에서 1회분(${inj_usd:,.2f}) 선행 수혈 완료! · "
-                    f"잔여 SGOV 예약금 ${rem_pending_sgov:,.2f} / 현금버킷 ${rem_cash_b:,.2f}"
+                "action": (
+                    "BARBELL_CASH10_TOPUP_INJECTED"
+                    if can_full_topup_shield
+                    else "BARBELL_PREMARKET_DUST30_FALLBACK"
                 ),
-            )
-        return (
-            True,
-            updated_free_cash,
-            round(min(raw_bp, updated_free_cash) * 0.998, 4),
-            {
-                "action": "BARBELL_PENDING_SGOV_CASH_INJECTED",
                 "should_proceed": True,
                 "inject_usd": inj_usd,
             },
         )
 
-    # -----------------------------------------------------------------------
-    # [2순위] 현금 10% 소진 & SGOV 보유 중(sgov_held_qty > 0) ➔ 정규장 SGOV 10% 매도 충전 대기
-    # -----------------------------------------------------------------------
+    # [2순위] SGOV 보유 중(sgov_held_qty > 0): 정규장 매도 충전 대기 vs 프리장 30% 폴백 구제
     if sgov_qty > 0:
         next_sells = max(1, safe_int(bst.get("pending_sgov_tranche_sells"), 0))
         already_sent = bool(bst.get("sgov_wait_alert_sent", False))
@@ -1525,18 +1502,32 @@ async def evaluate_and_execute_barbell_guard30_or_injection(
             pending_sgov_tranche_sells=next_sells,
             sgov_wait_alert_sent=True,
         )
-        now_est = datetime.now(EST_TZ)
-        in_reg = is_sgov_regular_trading_window(now_est=now_est)
         if in_reg:
             await execute_barbell_sgov_tick_plugin(context, now_est=now_est)
-        elif not already_sent and hasattr(context, "send_slim_alert"):
-            await context.send_slim_alert(
-                title="⏳ [바벨 현금 10% 소진 · 정규장 SGOV 10% 현금화 예약]",
-                body=(
-                    f"타점({trigger_desc}) 도달 · 현금버킷(${cash_bucket:,.2f}) 소진으로 보유 SGOV({sgov_qty}주) 중 "
-                    f"현금 10% 상당 정수 수량을 09:31 EST 정규장 개시 즉시 매도하여 현금화합니다. (별도 수익금고 100% 보호 유지)"
-                ),
-            )
+        else:
+            if (
+                now_free_cash >= dust_floor_cash - 1e-6
+                and bp_excl_vault_safe >= dust_floor_cash - 1e-6
+            ):
+                return (
+                    True,
+                    now_free_cash,
+                    round(min(bp_excl_vault_safe, now_free_cash), 4),
+                    {
+                        "action": "BARBELL_PREMARKET_CORE_DUST30_FALLBACK",
+                        "should_proceed": True,
+                        "sgov_held_qty": sgov_qty,
+                        "pending_sgov_tranche_sells": next_sells,
+                    },
+                )
+            if not already_sent and hasattr(context, "send_slim_alert"):
+                await context.send_slim_alert(
+                    title="⏳ [바벨 현금 10% 소진 · 정규장 SGOV 10% 현금화 예약]",
+                    body=(
+                        f"타점({trigger_desc}) 도달 · 현금버킷(${cash_bucket:,.2f}) 소진으로 보유 SGOV({sgov_qty}주) 중 "
+                        f"현금 10% 상당 정수 수량을 09:31 EST 정규장 개시 즉시 매도하여 현금화합니다. (별도 수익금고 100% 보호 유지)"
+                    ),
+                )
         return (
             False,
             now_free_cash,
@@ -1549,118 +1540,131 @@ async def evaluate_and_execute_barbell_guard30_or_injection(
             },
         )
 
-    # -----------------------------------------------------------------------
-    # [3순위] 내부 예비자본 40%(현금 10% + SGOV 30%) 전액 소진 시 ➔ 별도 실현수익금고에서 1회분(8%) 자동수혈!
-    # -----------------------------------------------------------------------
-    pooled_with_vault = cash_bucket + vault_avail
+    # [3순위] 내부 예비자본 40% 소진 시 ➔ 별도 실현수익금고에서 부족 차액(Top-Up) 수혈!
+    pooled_with_vault = usable_from_shield + vault_avail
     if (
         vault_avail > 0.0
-        and raw_bp >= min_req_cash
-        and (now_free_cash + pooled_with_vault) >= min_req_cash
+        and raw_bp_safe >= dust_floor_cash - 1e-6
+        and (now_free_cash + pooled_with_vault) >= dust_floor_cash - 1e-6
     ):
-        take_from_cash = round(min(cash_bucket, req_unit_usd), 4)
-        rem_need = round(max(0.0, req_unit_usd - take_from_cash), 4)
+        take_from_cash = round(min(usable_from_shield, topup_shortfall), 4)
+        rem_need = round(max(0.0, topup_shortfall - take_from_cash), 4)
         take_from_vault = round(min(vault_avail, rem_need), 4)
         inj_usd = round(take_from_cash + take_from_vault, 4)
 
-        v_tot = safe_float(bst.get("vault_realized_profit_usd"), 0.0)
-        new_v_inj = round(
-            safe_float(bst.get("vault_injected_to_soxl_usd"), 0.0)
-            + take_from_vault,
-            4,
-        )
-        new_v_avail = round(max(0.0, v_tot - new_v_inj), 4)
+        if inj_usd > 0.0:
+            v_tot = safe_float(bst.get("vault_realized_profit_usd"), 0.0)
+            new_v_inj = round(
+                safe_float(bst.get("vault_injected_to_soxl_usd"), 0.0)
+                + take_from_vault,
+                4,
+            )
+            new_v_avail = round(max(0.0, v_tot - new_v_inj), 4)
+            new_inj_usd = round(cur_inj_usd + inj_usd, 4)
+            new_used_res = max(
+                1, int(math.ceil((new_inj_usd - 1e-9) / unit_8pct))
+            )
+            inc_cnt = max(1, new_used_res - cur_used_res)
 
-        await b_ledger.update_state(
-            cash_bucket_usd=round(max(0.0, cash_bucket - take_from_cash), 4),
-            vault_injected_to_soxl_usd=new_v_inj,
-            vault_available_usd=new_v_avail,
-            vault_injection_count_cycle=safe_int(
-                bst.get("vault_injection_count_cycle"), 0
+            await b_ledger.update_state(
+                cash_bucket_usd=round(
+                    max(0.0, cash_bucket - take_from_cash), 4
+                ),
+                pending_sgov_buy_budget_usd=pending_sgov_buy,
+                vault_injected_to_soxl_usd=new_v_inj,
+                vault_available_usd=new_v_avail,
+                vault_injection_count_cycle=safe_int(
+                    bst.get("vault_injection_count_cycle"), 0
+                )
+                + 1,
+                cum_vault_injection_count=safe_int(
+                    bst.get("cum_vault_injection_count"), 0
+                )
+                + 1,
+                barbell_seed_exhausted=True,
             )
-            + needed_portions,
-            cum_vault_injection_count=safe_int(
-                bst.get("cum_vault_injection_count"), 0
+            updated_st = await context.ledger.update_state(
+                TARGET_SYMBOL,
+                used_reserve_portions_cnt=new_used_res,
+                injected_reserve_usd=new_inj_usd,
+                total_reserve_injected_cnt=safe_int(
+                    st_now.get("total_reserve_injected_cnt"), 0
+                )
+                + inc_cnt,
+                daily_reserve_injected_cnt=safe_int(
+                    st_now.get("daily_reserve_injected_cnt"), 0
+                )
+                + inc_cnt,
+                waiting_reserve_deposit=False,
+                waiting_reserve_deposit_alert_sent=False,
+                required_reserve_deposit_usd=0.0,
+                last_reserve_check_ts=0.0,
             )
-            + needed_portions,
-            barbell_seed_exhausted=True,
-        )
-        updated_st = await context.ledger.update_state(
-            TARGET_SYMBOL,
-            used_reserve_portions_cnt=cur_used_res + needed_portions,
-            injected_reserve_usd=round(cur_inj_usd + inj_usd, 4),
-            total_reserve_injected_cnt=safe_int(
-                st_now.get("total_reserve_injected_cnt"), 0
-            )
-            + needed_portions,
-            daily_reserve_injected_cnt=safe_int(
-                st_now.get("daily_reserve_injected_cnt"), 0
-            )
-            + needed_portions,
-            waiting_reserve_deposit=False,
-            waiting_reserve_deposit_alert_sent=False,
-            required_reserve_deposit_usd=0.0,
-            last_reserve_check_ts=0.0,
-        )
-        updated_free_cash = max(
-            0.0,
-            safe_float(updated_st.get("free_cash_usd"), now_free_cash + inj_usd),
-        )
-        if hasattr(context, "send_slim_alert"):
-            await context.send_slim_alert(
-                title=f"🏦 [바벨 40% 예비자본 소진 ➔ 별도 수익금고 1회분(8%) 자동수혈 (+${inj_usd:,.2f})]",
-                body=(
-                    f"현금(10%) 및 SGOV(30%) 전액 소진 후 타점({trigger_desc}) 도달 ➔ "
-                    f"별도 실현수익금고에서 +${take_from_vault:,.2f} 긴급 수혈 완료! "
-                    f"(잔여 금고 가용액 ${new_v_avail:,.2f} · 지층 익절 시 0순위로 금고에 즉시 원복됩니다)"
+            updated_free_cash = max(
+                0.0,
+                safe_float(
+                    updated_st.get("free_cash_usd"), now_free_cash + inj_usd
                 ),
             )
-        return (
-            True,
-            updated_free_cash,
-            round(min(raw_bp, updated_free_cash) * 0.998, 4),
-            {
-                "action": "BARBELL_PROFIT_VAULT_INJECTED",
-                "should_proceed": True,
-                "inject_usd": inj_usd,
-            },
-        )
+            if hasattr(context, "send_slim_alert"):
+                await context.send_slim_alert(
+                    title=f"🏦 [바벨 40% 예비자본 소진 ➔ 별도 수익금고 차액 Top-Up (+${inj_usd:,.2f})]",
+                    body=(
+                        f"현금(10%) 및 SGOV(30%) 소진 후 타점({trigger_desc}) 도달 ➔ "
+                        f"별도 실현수익금고에서 부족 차액 +${take_from_vault:,.2f} 긴급 수혈 완료! "
+                        f"(잔여 금고 가용액 ${new_v_avail:,.2f} · 지층 익절 시 0순위로 금고에 즉시 원복됩니다)"
+                    ),
+                )
+            return (
+                True,
+                updated_free_cash,
+                round(min(raw_bp_safe, updated_free_cash), 4),
+                {
+                    "action": "BARBELL_PROFIT_VAULT_INJECTED",
+                    "should_proceed": True,
+                    "inject_usd": inj_usd,
+                },
+            )
 
-    # -----------------------------------------------------------------------
-    # [4순위] 토스 실계좌 내 미할당 추가 달러 현금(extra_acct_cash) 존재 시 1회분(8%) 자동수혈
-    # (SOXL 100% 보유 전환으로 바벨 시드고갈 상태일 때 계좌 추가현금 즉시 활용)
-    # -----------------------------------------------------------------------
+    # [4순위] 토스 실계좌 내 미할당 추가 달러 현금(extra_acct_cash) 존재 시 부족 차액(Top-Up) 자동수혈
     extra_acct_cash = max(
         0.0,
-        raw_bp - (now_free_cash + cash_bucket + pending_sgov_buy + vault_avail),
+        raw_bp_safe
+        - (now_free_cash + cash_bucket + pending_sgov_buy + vault_avail),
     )
     if (
         extra_acct_cash > 0.0
-        and raw_bp >= min_req_cash
-        and (now_free_cash + extra_acct_cash) >= min_req_cash
+        and raw_bp_safe >= dust_floor_cash - 1e-6
+        and (now_free_cash + extra_acct_cash) >= dust_floor_cash - 1e-6
     ):
-        inj_ext = round(min(req_unit_usd, extra_acct_cash), 4)
+        inj_ext = round(min(topup_shortfall, extra_acct_cash), 4)
         new_ext_inj = round(
             safe_float(bst.get("external_injected_to_soxl_usd"), 0.0)
             + inj_ext,
             4,
         )
+        new_inj_usd = round(cur_inj_usd + inj_ext, 4)
+        new_used_res = max(
+            1, int(math.ceil((new_inj_usd - 1e-9) / unit_8pct))
+        )
+        inc_cnt = max(1, new_used_res - cur_used_res)
+
         await b_ledger.update_state(
             external_injected_to_soxl_usd=new_ext_inj,
             barbell_seed_exhausted=True,
         )
         updated_st = await context.ledger.update_state(
             TARGET_SYMBOL,
-            used_reserve_portions_cnt=cur_used_res + needed_portions,
-            injected_reserve_usd=round(cur_inj_usd + inj_ext, 4),
+            used_reserve_portions_cnt=new_used_res,
+            injected_reserve_usd=new_inj_usd,
             total_reserve_injected_cnt=safe_int(
                 st_now.get("total_reserve_injected_cnt"), 0
             )
-            + needed_portions,
+            + inc_cnt,
             daily_reserve_injected_cnt=safe_int(
                 st_now.get("daily_reserve_injected_cnt"), 0
             )
-            + needed_portions,
+            + inc_cnt,
             waiting_reserve_deposit=False,
             waiting_reserve_deposit_alert_sent=False,
             required_reserve_deposit_usd=0.0,
@@ -1674,20 +1678,36 @@ async def evaluate_and_execute_barbell_guard30_or_injection(
         )
         if hasattr(context, "send_slim_alert"):
             await context.send_slim_alert(
-                title=f"💉 [바벨 계좌 추가현금 자동수혈 (+{needed_portions}회분 · +${inj_ext:,.2f})]",
+                title=f"💉 [바벨 계좌 추가현금 차액 Top-Up (+${inj_ext:,.2f})]",
                 body=(
-                    f"바벨 내부예비금 소진 상태에서 토스 계좌 추가현금 감지 ➔ 1회분(8% · ${inj_ext:,.2f}) 자동수혈 완료! · "
+                    f"바벨 내부예비금 소진 상태에서 토스 계좌 추가현금 감지 ➔ 부족 차액 +${inj_ext:,.2f} 자동수혈 완료! · "
                     f"수혈 후 SOXL 가용현금 ${updated_free_cash:,.2f}"
                 ),
             )
         return (
             True,
             updated_free_cash,
-            round(min(raw_bp, updated_free_cash) * 0.998, 4),
+            round(min(raw_bp_safe, updated_free_cash), 4),
             {
                 "action": "BARBELL_EXTRA_CASH_INJECTED",
                 "should_proceed": True,
                 "inject_usd": inj_ext,
+            },
+        )
+
+    # [함정 4 최후 방어] 4대 수혈 버킷이 모두 $0 이더라도 SOXL 코어 자체 잔액이 30% 가드 이상이면 마지막 진입 허용
+    if (
+        now_free_cash >= dust_floor_cash - 1e-6
+        and bp_excl_vault_safe >= dust_floor_cash - 1e-6
+    ):
+        return (
+            True,
+            now_free_cash,
+            round(min(bp_excl_vault_safe, now_free_cash), 4),
+            {
+                "action": "BARBELL_EXHAUSTED_CORE_DUST30_FALLBACK",
+                "should_proceed": True,
+                "min_req_cash": round(dust_floor_cash, 4),
             },
         )
 
@@ -2041,6 +2061,36 @@ async def execute_barbell_sgov_tick_plugin(
     pending_buy_bud = max(
         0.0, safe_float(bst.get("pending_sgov_buy_budget_usd"), 0.0)
     )
+
+    # NEW [Case 100 함정 3 방어]: 정규장 중 (SOXL 코어현금 + 대기현금 + 미집행 SGOV 예산) 합계가
+    # 1회분(100%) 미달이고 SGOV를 보유 중이면 장 마감 전에 선제적으로 SGOV 10% 내림 매도를 점화!
+    if pending_sells <= 0 and sgov_qty > 0:
+        init_s_pre = safe_float(
+            st_soxl.get("initial_seed_usd"),
+            safe_float(bst.get("initial_seed_usd"), DEFAULT_INITIAL_SEED_USD),
+        )
+        sp_pre = compute_barbell_seed_splits(init_s_pre)
+        rt_pre = resolve_effective_round_trip_fee_rate_pct(state_dict=st_soxl)
+        full_1p_req = round(
+            sp_pre["soxl_portion_8pct_usd"] * (1.0 + rt_pre / 100.0), 4
+        )
+        soxl_free_pre = max(0.0, safe_float(st_soxl.get("free_cash_usd"), 0.0))
+        cash_b_pre = max(0.0, safe_float(bst.get("cash_bucket_usd"), 0.0))
+        if (soxl_free_pre + cash_b_pre + pending_buy_bud) < (
+            full_1p_req - 1e-6
+        ):
+            if pending_buy_bud > 0.0:
+                cash_b_pre = round(cash_b_pre + pending_buy_bud, 4)
+                pending_buy_bud = 0.0
+                bst = await b_ledger.update_state(
+                    cash_bucket_usd=cash_b_pre,
+                    pending_sgov_buy_budget_usd=0.0,
+                )
+            if (soxl_free_pre + cash_b_pre) < (full_1p_req - 1e-6):
+                pending_sells = 1
+                bst = await b_ledger.update_state(
+                    pending_sgov_tranche_sells=1
+                )
 
     if pending_sells <= 0 and pending_buy_bud <= 0.0:
         return {"status": "BARBELL_SGOV_IDLE"}
@@ -2523,5 +2573,76 @@ def run_barbell_plugin_tdd() -> bool:
         abs(r_loss["cash_bucket_usd"] - 800.0) < 1e-6
         and r_loss["pending_sgov_buy_budget_usd"] == 0.0
     ), f"실시간 리밸런싱(수동 손절 0주 유령현금 차단) 검증 실패: {r_loss}"
+
+    # NEW [Case 100 부팅 TDD]: wonToss($18k) $505.82 반토막 데드존 -> 100% 차액 Top-Up 13주 복원 검증
+    import tempfile
+    from quant_engine import resolve_affordable_buy_qty
+    from toss_api_core import SoxlStratumLedger
+
+    async def _tdd_case100_async() -> None:
+        with tempfile.TemporaryDirectory() as tmp_d:
+            class _DummyCtx:
+                def __init__(self, d: str) -> None:
+                    self.base_dir = d
+                    self.ledger = SoxlStratumLedger(base_dir=d)
+                    self.barbell_ledger = BarbellLedger(
+                        base_dir=d, initial_seed_usd=18000.0
+                    )
+                    self.wakeup_event = asyncio.Event()
+
+            ctx18 = _DummyCtx(tmp_d)
+            st18 = await ctx18.ledger.update_state(
+                TARGET_SYMBOL,
+                initial_seed_usd=18000.0,
+                portion_mode=PORTION_MODE_BARBELL,
+                buckets=[
+                    {
+                        "qty": 136,
+                        "book_price": 75.6925,
+                        "book_invested_usd": 10294.18,
+                        "actual_cost_usd": 10294.18,
+                        "lot_count": 3,
+                        "lot_type": "GRID_L2",
+                    }
+                ],
+            )
+            await ctx18.barbell_ledger.update_state(
+                initial_seed_usd=18000.0,
+                is_initialized=True,
+                cash_bucket_usd=1871.91,
+                pending_sgov_buy_budget_usd=0.0,
+                sgov_held_qty=53,
+                sgov_invested_usd=5328.09,
+                sgov_last_price=100.53,
+                vault_realized_profit_usd=45.46,
+                vault_available_usd=45.46,
+            )
+            assert abs(st18["free_cash_usd"] - 505.82) < 1e-3
+            ok18, fc18, bp18, ev18 = (
+                await evaluate_and_execute_barbell_guard30_or_injection(
+                    context=ctx18,
+                    st_now=st18,
+                    raw_bp_usd=2423.19,
+                    exec_order_p=62.60,
+                    portion_budget=864.00,
+                    l1_actual_cost_usd=0.0,
+                    is_dip_promotion=False,
+                    trigger_desc="TDD_CASE100_WONTOSS",
+                    target_qty=13,
+                )
+            )
+            q18, _ = resolve_affordable_buy_qty(
+                13, 62.60, fc18, bp18, 864.00, 0.14
+            )
+            assert (
+                ok18
+                and q18 == 13
+                and abs(ev18.get("inject_usd", 0.0) - 359.3896) < 0.02
+            ), f"Case 100 TDD 실패(wonToss 13주 복원): ok={ok18}, q={q18}, fc={fc18}, bp={bp18}, ev={ev18}"
+
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        asyncio.run(_tdd_case100_async())
 
     return True

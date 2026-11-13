@@ -674,12 +674,14 @@ async def _check_and_execute_guard30_or_reserve_injection(
     is_dip_promotion: bool,
     is_vacant_l1_reentry: bool,
     trigger_desc: str,
+    target_qty: int = 0,
 ) -> Tuple[bool, float, float, Dict[str, Any]]:
     """
-    # MODIFIED [Case 77, Case 86, Case 89, Case 91 + 바벨 모드 4단계 자동수혈 워터폴 결속]:
-    1) 토스 실계좌 주문가능 달러(`raw_bp_usd`)를 조회하고 일시 0.0 반환 시 0.25초 후 재시도한다.
-    2) 현재 운용 모드가 ⚖️ 바벨 모드(`BARBELL_60_30_10`)이면 `barbell_plugin.evaluate_and_execute_barbell_guard30_or_injection()` 으로
-       즉시 위임하여 [현금 10% ➔ 정규장 SGOV 10% 내림 매도 ➔ 별도 수익금고 ➔ 계좌 추가현금] 순서로 1회분(8%) 단위 자동수혈을 집행한다!
+    # MODIFIED [Case 77, Case 86, Case 89, Case 91 + Case 94/100 바벨 100% 정량 차액 Top-Up 워터폴 결속]:
+    1) 토스 실계좌 주문가능 달러(`raw_bp_usd`)를 조회하고 일시 0.0 반환 시(바벨 내부 대기버킷 포함) 0.25초 후 재시도한다.
+    2) 현재 운용 모드가 ⚖️ 바벨 모드(`BARBELL_60_30_10`)이면 `target_qty` 를 포함해
+       `barbell_plugin.evaluate_and_execute_barbell_guard30_or_injection()` 으로 즉시 위임하여
+       100% 1회분 정량 완충(부족 차액 Top-Up) 자동수혈을 집행한다!
     3) 복리/단리 모드일 때는 기존에 격리된 수익금(`vaulted_profit_locked_usd`)을 제외한 `eff_raw_bp` 로
        무제한 온디맨드 수혈(`evaluate_guard30_and_reserve_injection`)을 수행한다.
     """
@@ -695,16 +697,35 @@ async def _check_and_execute_guard30_or_reserve_injection(
         (l1_actual_cost_usd * MIN_DIP_VS_L1_RATIO if is_dip_promotion else 0.0),
     )
 
+    ledger_liquid_est = now_free_cash
+    if is_barbell_mode(st_now.get("portion_mode")) and hasattr(
+        context, "barbell_ledger"
+    ):
+        try:
+            bst_chk = context.barbell_ledger.get_state()
+            ledger_liquid_est += (
+                max(0.0, safe_float(bst_chk.get("cash_bucket_usd"), 0.0))
+                + max(
+                    0.0,
+                    safe_float(
+                        bst_chk.get("pending_sgov_buy_budget_usd"), 0.0
+                    ),
+                )
+                + max(0.0, safe_float(bst_chk.get("vault_available_usd"), 0.0))
+            )
+        except Exception:
+            pass
+
     raw_bp_usd = await context.api.get_buying_power_usd(safety_buffer_pct=0.0)
-    if raw_bp_usd <= 0.0 and now_free_cash >= est_min_req:
+    if raw_bp_usd <= 0.0 and ledger_liquid_est >= est_min_req:
         await asyncio.sleep(0.25)
         raw_bp_usd = await context.api.get_buying_power_usd(
             safety_buffer_pct=0.0
         )
         if raw_bp_usd <= 0.0:
             logger.debug(
-                "🛡️ [Case 77 예수금 API 일시 조회 지연 방어] 원장 가용현금($%.2f >= 최소 $%.2f) 정상이나 예수금 API가 0.0을 반환하여 보류",
-                now_free_cash,
+                "🛡️ [Case 77/100 예수금 API 일시 조회 지연 방어] 원장 유동성($%.2f >= 최소 $%.2f) 정상이나 예수금 API가 0.0을 반환하여 보류",
+                ledger_liquid_est,
                 est_min_req,
             )
             return (
@@ -719,7 +740,7 @@ async def _check_and_execute_guard30_or_reserve_injection(
                 },
             )
 
-    # [바벨 모드 전용 4단계 자동수혈 워터폴 위임]
+    # [바벨 모드 전용 100% 정량 차액 Top-Up 4단계 워터폴 위임]
     if is_barbell_mode(st_now.get("portion_mode")):
         (
             can_proc_b,
@@ -735,6 +756,7 @@ async def _check_and_execute_guard30_or_reserve_injection(
             l1_actual_cost_usd=l1_actual_cost_usd,
             is_dip_promotion=is_dip_promotion,
             trigger_desc=trigger_desc,
+            target_qty=target_qty,
         )
         if can_proc_b:
             mark_reserve_deposit_check_shield(

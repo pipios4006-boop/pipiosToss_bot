@@ -218,7 +218,16 @@ async def _sync_barbell_sgov_holdings_if_idle(
         )
         sgov_30_sg = round(init_seed_sg * 0.30, 4)
         cash_10_sg = round(init_seed_sg * 0.10, 4)
-        guard_floor_sg = round(init_seed_sg * 0.60 * 0.08 * 0.30, 4)
+        rt_sg = resolve_effective_round_trip_fee_rate_pct(
+            state_dict=st_soxl_sg
+        )
+        # MODIFIED [Case 100]: 수동 SGOV 매도 동기화 시 합산 유동성 100% 1회분 회복 기준으로 매도예약 해제
+        guard_floor_sg = round(
+            init_seed_sg * 0.60 * 0.08 * (1.0 + rt_sg / 100.0), 4
+        )
+        soxl_free_sg = max(
+            0.0, safe_float(st_soxl_sg.get("free_cash_usd"), 0.0)
+        )
 
         if h_sg_qty <= 0:
             new_sg_inv = 0.0
@@ -245,7 +254,9 @@ async def _sync_barbell_sgov_holdings_if_idle(
             )
             next_cash_sg = round(min(max_liq_sg, cur_cash_b + freed_sg_usd), 4)
             upd_sg["cash_bucket_usd"] = next_cash_sg
-            if next_cash_sg >= guard_floor_sg:
+            if (soxl_free_sg + next_cash_sg + cur_pend_b) >= (
+                guard_floor_sg - 1e-6
+            ):
                 upd_sg["pending_sgov_tranche_sells"] = 0
                 upd_sg["sgov_wait_alert_sent"] = False
         else:

@@ -1903,7 +1903,20 @@ def summarize_stratum_portfolio(
         max_reserve_portions=MAX_RESERVE_PORTIONS,
         round_trip_fee_rate_pct=eff_rt_fee_pct,
     )
-    min_req_cash_guard30 = safe_float(guard30_eval.get("min_req_cash"), 0.0)
+    dust_floor_cash_guard30 = safe_float(guard30_eval.get("min_req_cash"), 0.0)
+    if is_barbell:
+        # MODIFIED [Case 100]: 바벨 모드는 100% 1회분 정량(수수료 버퍼 포함)을 자동수혈 발동 기준선으로 표출
+        fee_mult_sum = 1.0 + (eff_rt_fee_pct / 100.0)
+        min_req_cash_guard30 = round(
+            max(
+                next_portion_budget * fee_mult_sum,
+                float(next_target_qty) * eff_exec_for_cap * fee_mult_sum,
+                dust_floor_cash_guard30,
+            ),
+            4,
+        )
+    else:
+        min_req_cash_guard30 = dust_floor_cash_guard30
 
     market_eval_usd = (
         round(float(total_held_shares) * lp, 4)
