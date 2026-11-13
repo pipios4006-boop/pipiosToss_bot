@@ -1226,6 +1226,7 @@ def summarize_stratum_portfolio(
     live_price: float = 0.0,
     now_est: Optional[datetime] = None,
     rsi_14: Optional[float] = None,
+    closed_ha_shaved_bear: Optional[bool] = None,
     closed_ha_bull: Optional[bool] = None,
     closed_ha_ready: bool = True,
 ) -> Dict[str, Any]:
@@ -1592,6 +1593,7 @@ def summarize_stratum_portfolio(
         is_late_cutoff=is_late_cutoff,
         rsi_14=eff_rsi_14,
         breakout_max_rsi=REENTRY_BREAKOUT_MAX_RSI_50,
+        closed_ha_shaved_bear=closed_ha_shaved_bear,
         closed_ha_bull=closed_ha_bull,
         closed_ha_ready=closed_ha_ready,
     )
@@ -1834,6 +1836,7 @@ def summarize_stratum_portfolio(
         is_late_cutoff=is_late_cutoff,
         rsi_14=eff_rsi_14,
         breakout_max_rsi=REENTRY_BREAKOUT_MAX_RSI_50,
+        closed_ha_shaved_bear=closed_ha_shaved_bear,
         closed_ha_bull=closed_ha_bull,
         closed_ha_ready=closed_ha_ready,
     )
@@ -2583,24 +2586,42 @@ def run_quant_engine_tdd() -> bool:
             and sig_brk_rsi_blocked["signal_type"]
             == "HOLD_BREAKOUT_RSI_OVER_50"
         )
-        sig_pull_ha_bear = evaluate_l2_only_hybrid_reentry_signal(
+        # 옵션 A: 무머리 HA음봉(HOLD_PULLBACK_SHAVED_HA_BEAR / 구 HOLD_PULLBACK_HA_BEAR 대체)만 패스
+        sig_shaved_bear = evaluate_l2_only_hybrid_reentry_signal(
             live_price=82.50,
             anchor_price=83.41,
             l2_book_price=85.00,
             min_upper_tier_price=85.00,
+            closed_ha_shaved_bear=True,
             closed_ha_bull=False,
             closed_ha_ready=True,
         )
         assert (
-            sig_pull_ha_bear["should_buy"] is False
-            and sig_pull_ha_bear["signal_type"] == "HOLD_PULLBACK_HA_BEAR"
-            and sig_pull_ha_bear["pullback_ha_blocked"] is True
+            sig_shaved_bear["should_buy"] is False
+            and sig_shaved_bear["signal_type"]
+            == "HOLD_PULLBACK_SHAVED_HA_BEAR"
+            and sig_shaved_bear["pullback_ha_blocked"] is True
+        )
+        sig_wick_bear = evaluate_l2_only_hybrid_reentry_signal(
+            live_price=82.50,
+            anchor_price=83.41,
+            l2_book_price=85.00,
+            min_upper_tier_price=85.00,
+            closed_ha_shaved_bear=False,
+            closed_ha_bull=False,
+            closed_ha_ready=True,
+        )
+        assert (
+            sig_wick_bear["should_buy"] is True
+            and sig_wick_bear["signal_type"] == "PULLBACK_RELOAD"
+            and sig_wick_bear["pullback_ha_blocked"] is False
         )
         sig_pull_ha_bull = evaluate_l2_only_hybrid_reentry_signal(
             live_price=82.50,
             anchor_price=83.41,
             l2_book_price=85.00,
             min_upper_tier_price=85.00,
+            closed_ha_shaved_bear=False,
             closed_ha_bull=True,
             closed_ha_ready=True,
         )

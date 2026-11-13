@@ -756,10 +756,17 @@ async def _get_live_soxl_reentry_snapshot(
     if isinstance(raw_cache, dict):
         raw_cache[TARGET_SYMBOL] = met
     rsi_val = round(safe_float(met.get("rsi_14"), 50.0), 2)
+    closed_shaved_bear = bool(met.get("closed_ha_shaved_bear", False))
     closed_bull = bool(met.get("closed_ha_bull", True))
     closed_ready = bool(met.get("closed_ha_ready", False))
     closed_mk = str(met.get("closed_bar_minute_key") or "").strip()
-    return rsi_val, closed_bull, closed_ready, closed_mk
+    return (
+        rsi_val,
+        closed_shaved_bear,
+        closed_bull,
+        closed_ready,
+        closed_mk,
+    )
 
 
 async def _get_live_soxl_rsi_14(
@@ -767,7 +774,7 @@ async def _get_live_soxl_rsi_14(
     live_price: float = 0.0,
     now_est: Optional[datetime] = None,
 ) -> float:
-    rsi_val, _, _, _ = await _get_live_soxl_reentry_snapshot(
+    rsi_val, *_ = await _get_live_soxl_reentry_snapshot(
         context=context, live_price=live_price, now_est=now_est
     )
     return rsi_val

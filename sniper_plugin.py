@@ -565,6 +565,7 @@ async def _execute_sub_grid_buy_engine_plugin(
 
         (
             live_rsi_14,
+            sub_shaved_bear,
             sub_ha_bull,
             sub_ha_ready,
             sub_closed_mk,
@@ -588,13 +589,14 @@ async def _execute_sub_grid_buy_engine_plugin(
             is_late_cutoff=is_late_cutoff,
             rsi_14=live_rsi_14,
             breakout_max_rsi=REENTRY_BREAKOUT_MAX_RSI_50,
+            closed_ha_shaved_bear=sub_shaved_bear,
             closed_ha_bull=sub_ha_bull,
             closed_ha_ready=sub_ha_ready,
         )
         sub_sig_type = str(sub_re_sig.get("signal_type") or "HOLD_WAIT_GATE")
 
         if not bool(sub_re_sig.get("should_buy")):
-            if sub_sig_type == "HOLD_PULLBACK_HA_BEAR":
+            if sub_sig_type == "HOLD_PULLBACK_SHAVED_HA_BEAR":
                 mark_sub_pullback_ha_bear_minute_wait(
                     context=context,
                     symbol=TARGET_SYMBOL,
@@ -605,16 +607,17 @@ async def _execute_sub_grid_buy_engine_plugin(
                         TARGET_SYMBOL, last_sub_reentry_eval_ts=0.0
                     )
                 logger.info(
-                    "🛡️ [서브 1층 공석 -1.0%% 눌림목 완결 1분봉 HA 음봉 대기] 현재가 $%.2f (직전익절 $%.2f 대비 %+.2f%%) · 완결봉(%s) HA음봉 -> 다음 1분 완료 대기",
+                    "🛡️ [서브 1층 공석 -1.0%% 눌림목 무머리 HA음봉 패스] 현재가 $%.2f (직전익절 $%.2f 대비 %+.2f%%) · 완결봉(%s) 윗꼬리없는 HA음봉 -> 다음 1분 완료 대기",
                     fresh_live_p,
                     safe_float(sub_re_sig.get("ref_anchor"), sub_anchor_p),
                     safe_float(sub_re_sig.get("chg_from_exit_pct"), 0.0),
                     sub_closed_mk or "-",
                 )
                 return {
-                    "status": "SUB_L2_ONLY_PULLBACK_HA_BEAR_BLOCKED",
+                    "status": "SUB_L2_ONLY_PULLBACK_SHAVED_HA_BEAR_BLOCKED",
                     "signal_type": sub_sig_type,
                     "live_price": fresh_live_p,
+                    "closed_ha_shaved_bear": sub_shaved_bear,
                     "closed_ha_bull": sub_ha_bull,
                     "sub_l2_ceiling_price": sub_min_upper_p,
                 }
@@ -717,13 +720,14 @@ async def _execute_sub_grid_buy_engine_plugin(
                 elif sub_sig_type == "PULLBACK_RELOAD":
                     (
                         _,
+                        m_sub_shaved_bear,
                         m_sub_ha_bull,
                         m_sub_ha_ready,
                         _,
                     ) = await _get_live_soxl_reentry_snapshot(
                         context, live_price=fresh_live_p, now_est=dt_re_m
                     )
-                    if (not m_sub_ha_ready) or (not m_sub_ha_bull):
+                    if (not m_sub_ha_ready) or m_sub_shaved_bear:
                         mark_sub_pullback_ha_bear_minute_wait(
                             context=context,
                             symbol=TARGET_SYMBOL,
@@ -734,8 +738,9 @@ async def _execute_sub_grid_buy_engine_plugin(
                             last_sub_reentry_eval_ts=0.0,
                         )
                         return {
-                            "status": "SUB_L2_ONLY_PULLBACK_HA_BEAR_BLOCKED",
-                            "signal_type": "HOLD_PULLBACK_HA_BEAR",
+                            "status": "SUB_L2_ONLY_PULLBACK_SHAVED_HA_BEAR_BLOCKED",
+                            "signal_type": "HOLD_PULLBACK_SHAVED_HA_BEAR",
+                            "closed_ha_shaved_bear": m_sub_shaved_bear,
                             "closed_ha_bull": m_sub_ha_bull,
                         }
 
@@ -1903,6 +1908,7 @@ async def execute_seed_protected_buy_gate_plugin(
 
         (
             live_rsi_14,
+            closed_shaved_bear,
             closed_ha_bull,
             closed_ha_ready,
             closed_mk,
@@ -1928,6 +1934,7 @@ async def execute_seed_protected_buy_gate_plugin(
             is_late_cutoff=is_late_cutoff,
             rsi_14=live_rsi_14,
             breakout_max_rsi=REENTRY_BREAKOUT_MAX_RSI_50,
+            closed_ha_shaved_bear=closed_shaved_bear,
             closed_ha_bull=closed_ha_bull,
             closed_ha_ready=closed_ha_ready,
         )
@@ -1938,7 +1945,7 @@ async def execute_seed_protected_buy_gate_plugin(
             new_day_pass = (
                 safe_int(st.get("daily_seed_protect_pass_cnt"), 0) + 1
             )
-            if sig_type == "HOLD_PULLBACK_HA_BEAR":
+            if sig_type == "HOLD_PULLBACK_SHAVED_HA_BEAR":
                 mark_pullback_ha_bear_minute_wait(
                     context=context,
                     symbol=TARGET_SYMBOL,
@@ -1969,19 +1976,20 @@ async def execute_seed_protected_buy_gate_plugin(
             ).endswith("_ORDERED"):
                 return sub_res_after_pass
 
-            if sig_type == "HOLD_PULLBACK_HA_BEAR":
+            if sig_type == "HOLD_PULLBACK_SHAVED_HA_BEAR":
                 logger.info(
-                    "🛡️ [1층 공석 -1.0%% 눌림목 완결 1분봉 HA 음봉 대기] 현재가 $%.2f (직전익절 $%.2f 대비 %+.2f%%) · 완결봉(%s) HA음봉 -> 매수 보류 & 다음 1분 완료 대기",
+                    "🛡️ [1층 공석 -1.0%% 눌림목 무머리 HA음봉 패스] 현재가 $%.2f (직전익절 $%.2f 대비 %+.2f%%) · 완결봉(%s) 윗꼬리없는 HA음봉 -> 매수 패스 & 다음 1분 완료 대기",
                     fresh_live_p,
                     safe_float(reentry_sig.get("ref_anchor"), anchor_p),
                     safe_float(reentry_sig.get("chg_from_exit_pct"), 0.0),
                     closed_mk or "-",
                 )
                 return {
-                    "status": "L2_ONLY_REENTRY_PULLBACK_HA_BEAR_BLOCKED",
+                    "status": "L2_ONLY_REENTRY_PULLBACK_SHAVED_HA_BEAR_BLOCKED",
                     "signal_type": sig_type,
                     "live_price": fresh_live_p,
                     "rsi_14": live_rsi_14,
+                    "closed_ha_shaved_bear": closed_shaved_bear,
                     "closed_ha_bull": closed_ha_bull,
                     "l2_ceiling_price": min_upper_tier_p,
                     "ref_anchor": reentry_sig.get("ref_anchor"),
@@ -2151,13 +2159,14 @@ async def execute_seed_protected_buy_gate_plugin(
                 elif sig_type == "PULLBACK_RELOAD":
                     (
                         _,
+                        m_shaved_bear,
                         m_ha_bull,
                         m_ha_ready,
                         _,
                     ) = await _get_live_soxl_reentry_snapshot(
                         context, live_price=fresh_live_p, now_est=dt_re_mutex
                     )
-                    if (not m_ha_ready) or (not m_ha_bull):
+                    if (not m_ha_ready) or m_shaved_bear:
                         new_pass_cnt = (
                             safe_int(st_now.get("seed_protect_pass_cnt"), 0)
                             + 1
@@ -2180,9 +2189,10 @@ async def execute_seed_protected_buy_gate_plugin(
                             daily_seed_protect_pass_cnt=new_day_pass,
                         )
                         return {
-                            "status": "L2_ONLY_REENTRY_PULLBACK_HA_BEAR_BLOCKED",
-                            "signal_type": "HOLD_PULLBACK_HA_BEAR",
+                            "status": "L2_ONLY_REENTRY_PULLBACK_SHAVED_HA_BEAR_BLOCKED",
+                            "signal_type": "HOLD_PULLBACK_SHAVED_HA_BEAR",
                             "live_price": fresh_live_p,
+                            "closed_ha_shaved_bear": m_shaved_bear,
                             "closed_ha_bull": m_ha_bull,
                             "seed_protect_pass_cnt": new_day_pass,
                         }

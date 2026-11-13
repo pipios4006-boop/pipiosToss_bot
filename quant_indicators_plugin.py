@@ -712,9 +712,11 @@ def _compute_vectorized_heikin_ashi_and_rsi(
             "prev_ha_open": 0.0,
             "prev_ha_close": 0.0,
             "closed_bar_minute_key": "",
+            "closed_bar_high": 0.0,
             "closed_ha_open": 0.0,
             "closed_ha_close": 0.0,
             "closed_ha_bull": True,
+            "closed_ha_shaved_bear": False,
             "closed_ha_ready": False,
             "cur_bar_open": 0.0,
             "cur_bar_high": 0.0,
@@ -825,6 +827,11 @@ def _compute_vectorized_heikin_ashi_and_rsi(
         **(
             lambda _idx_c, _c_mk: {
                 "closed_bar_minute_key": _c_mk,
+                "closed_bar_high": (
+                    round(float(highs[_idx_c]), 4)
+                    if _idx_c >= 0
+                    else 0.0
+                ),
                 "closed_ha_open": (
                     round(float(ha_open_series[_idx_c]), 4)
                     if _idx_c >= 0
@@ -839,6 +846,20 @@ def _compute_vectorized_heikin_ashi_and_rsi(
                     bool(ha_close_arr[_idx_c] >= ha_open_series[_idx_c])
                     if _idx_c >= 0
                     else True
+                ),
+                "closed_ha_shaved_bear": (
+                    bool(
+                        (
+                            float(ha_close_arr[_idx_c])
+                            < float(ha_open_series[_idx_c]) - 1e-9
+                        )
+                        and (
+                            float(highs[_idx_c])
+                            <= float(ha_open_series[_idx_c]) + 1e-6
+                        )
+                    )
+                    if _idx_c >= 0
+                    else False
                 ),
                 "closed_ha_ready": bool(_idx_c >= 14),
             }
@@ -1288,9 +1309,11 @@ def compute_soxl_quant_metrics_1m(
         "prev_ha_open": round(lp, 4),
         "prev_ha_close": round(lp, 4),
         "closed_bar_minute_key": "",
+        "closed_bar_high": 0.0,
         "closed_ha_open": 0.0,
         "closed_ha_close": 0.0,
         "closed_ha_bull": True,
+        "closed_ha_shaved_bear": False,
         "closed_ha_ready": False,
         "cur_bar_open": round(lp, 4),
         "cur_bar_high": round(lp, 4),
