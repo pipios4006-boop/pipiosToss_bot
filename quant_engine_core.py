@@ -1114,7 +1114,10 @@ def evaluate_l2_only_hybrid_reentry_signal(
     is_late_cutoff: Optional[bool] = None,
     rsi_14: Optional[float] = None,
     breakout_max_rsi: float = REENTRY_BREAKOUT_MAX_RSI_50,
+    closed_ha_bull: Optional[bool] = None,
+    closed_ha_ready: bool = True,
 ) -> Dict[str, Any]:
+    # MODIFIED: 1층 공석 -1.00% 눌림목 전용 완결 1분봉 HA 양봉 필터(closed_ha_bull) 탑재
     lp = safe_float(live_price, 0.0)
     anc = safe_float(anchor_price, 0.0)
     b2_p = safe_float(l2_book_price, 0.0)
@@ -1139,6 +1142,14 @@ def evaluate_l2_only_hybrid_reentry_signal(
     )
     is_breakout_rsi_blocked = bool(
         has_rsi_filter and eff_rsi_val > (max_rsi_cap + 1e-6)
+    )
+    has_pullback_ha_filter = closed_ha_bull is not None
+    eff_closed_ha_bull = (
+        bool(closed_ha_bull) if has_pullback_ha_filter else True
+    )
+    is_pullback_ha_blocked = bool(
+        has_pullback_ha_filter
+        and ((not bool(closed_ha_ready)) or (not eff_closed_ha_bull))
     )
 
     ref_anchor = (
@@ -1171,6 +1182,9 @@ def evaluate_l2_only_hybrid_reentry_signal(
             "rsi_14": eff_rsi_val,
             "breakout_max_rsi": round(max_rsi_cap, 2),
             "breakout_rsi_blocked": is_breakout_rsi_blocked,
+            "pullback_ha_blocked": is_pullback_ha_blocked,
+            "closed_ha_bull": eff_closed_ha_bull,
+            "closed_ha_ready": bool(closed_ha_ready),
         }
 
     chg_from_exit_pct = ((lp - ref_anchor) / ref_anchor) * 100.0
@@ -1188,9 +1202,29 @@ def evaluate_l2_only_hybrid_reentry_signal(
             "rsi_14": eff_rsi_val,
             "breakout_max_rsi": round(max_rsi_cap, 2),
             "breakout_rsi_blocked": is_breakout_rsi_blocked,
+            "pullback_ha_blocked": is_pullback_ha_blocked,
+            "closed_ha_bull": eff_closed_ha_bull,
+            "closed_ha_ready": bool(closed_ha_ready),
         }
 
     if chg_from_exit_pct <= REENTRY_PULLBACK_DROP_PCT:
+        if is_pullback_ha_blocked:
+            return {
+                "should_buy": False,
+                "signal_type": "HOLD_PULLBACK_HA_BEAR",
+                "ref_anchor": round(ref_anchor, 4),
+                "quota_ref_price": round(ref_anchor, 4),
+                "chg_from_exit_pct": round(chg_from_exit_pct, 2),
+                "pullback_target_price": pullback_target_p,
+                "breakout_target_price": breakout_target_p,
+                "l2_ceiling_price": round(ceil_p, 4),
+                "rsi_14": eff_rsi_val,
+                "breakout_max_rsi": round(max_rsi_cap, 2),
+                "breakout_rsi_blocked": False,
+                "pullback_ha_blocked": True,
+                "closed_ha_bull": eff_closed_ha_bull,
+                "closed_ha_ready": bool(closed_ha_ready),
+            }
         return {
             "should_buy": True,
             "signal_type": "PULLBACK_RELOAD",
@@ -1203,6 +1237,9 @@ def evaluate_l2_only_hybrid_reentry_signal(
             "rsi_14": eff_rsi_val,
             "breakout_max_rsi": round(max_rsi_cap, 2),
             "breakout_rsi_blocked": False,
+            "pullback_ha_blocked": False,
+            "closed_ha_bull": eff_closed_ha_bull,
+            "closed_ha_ready": bool(closed_ha_ready),
         }
 
     if chg_from_exit_pct >= REENTRY_BREAKOUT_RISE_PCT:

@@ -1226,6 +1226,8 @@ def summarize_stratum_portfolio(
     live_price: float = 0.0,
     now_est: Optional[datetime] = None,
     rsi_14: Optional[float] = None,
+    closed_ha_bull: Optional[bool] = None,
+    closed_ha_ready: bool = True,
 ) -> Dict[str, Any]:
     """
     # MODIFIED [🎯 1 ~ 🎯 5 & Case 59 ~ 92 + 바벨 모드(BARBELL_60_30_10) 확장 통합 요약기]:
@@ -1590,6 +1592,8 @@ def summarize_stratum_portfolio(
         is_late_cutoff=is_late_cutoff,
         rsi_14=eff_rsi_14,
         breakout_max_rsi=REENTRY_BREAKOUT_MAX_RSI_50,
+        closed_ha_bull=closed_ha_bull,
+        closed_ha_ready=closed_ha_ready,
     )
     reentry_ref_anchor = safe_float(reentry_sig.get("ref_anchor"), anchor_p)
     reentry_pullback_price = safe_float(
@@ -1616,6 +1620,9 @@ def summarize_stratum_portfolio(
     )
     reentry_breakout_rsi_blocked = bool(
         reentry_sig.get("breakout_rsi_blocked", False)
+    )
+    reentry_pullback_ha_blocked = bool(
+        reentry_sig.get("pullback_ha_blocked", False)
     )
 
     if buckets:
@@ -1827,6 +1834,8 @@ def summarize_stratum_portfolio(
         is_late_cutoff=is_late_cutoff,
         rsi_14=eff_rsi_14,
         breakout_max_rsi=REENTRY_BREAKOUT_MAX_RSI_50,
+        closed_ha_bull=closed_ha_bull,
+        closed_ha_ready=closed_ha_ready,
     )
     sub_reentry_ref_anchor = safe_float(
         sub_reentry_sig.get("ref_anchor"), sub_anchor_p
@@ -1848,6 +1857,9 @@ def summarize_stratum_portfolio(
     )
     sub_reentry_breakout_rsi_blocked = bool(
         sub_reentry_sig.get("breakout_rsi_blocked", False)
+    )
+    sub_reentry_pullback_ha_blocked = bool(
+        sub_reentry_sig.get("pullback_ha_blocked", False)
     )
 
     if sub_buckets:
@@ -2265,6 +2277,7 @@ def summarize_stratum_portfolio(
         "sub_l2_ceiling_price": round(sub_l2_ceiling_price, 4),
         "sub_reentry_signal_type": sub_reentry_signal_type,
         "sub_reentry_breakout_rsi_blocked": sub_reentry_breakout_rsi_blocked,
+        "sub_reentry_pullback_ha_blocked": sub_reentry_pullback_ha_blocked,
         "sub_next_target_qty": sub_next_target_qty,
         "sub_anchor_quota_qty": sub_anchor_quota_qty,
         "sub_budget_cap_qty": sub_budget_cap_qty,
@@ -2406,6 +2419,7 @@ def summarize_stratum_portfolio(
         "reentry_rsi_14": reentry_rsi_14,
         "reentry_breakout_max_rsi": reentry_breakout_max_rsi,
         "reentry_breakout_rsi_blocked": reentry_breakout_rsi_blocked,
+        "reentry_pullback_ha_blocked": reentry_pullback_ha_blocked,
         "next_target_qty": next_target_qty,
         "anchor_quota_qty": anchor_quota_qty,
         "budget_cap_qty": budget_cap_qty,
@@ -2555,7 +2569,7 @@ def run_quant_engine_tdd() -> bool:
         r_sub = evaluate_multi_grid_sell_targets([], 81.50, is_overnight_session=True, sub_buckets=t_sub)
         assert not r_sub["should_sell"] and r_sub["overnight_indiv_locked"]
 
-        # 5) Case 73, Case 84 & Case 92 돌파 RSI<=50 검증
+        # 5) Case 73, Case 84, Case 92(돌파 RSI<=50) & 눌림목 완결1분HA 양봉 검증
         sig_brk_rsi_blocked = evaluate_l2_only_hybrid_reentry_signal(
             live_price=84.30,
             anchor_price=83.41,
@@ -2568,6 +2582,32 @@ def run_quant_engine_tdd() -> bool:
             sig_brk_rsi_blocked["should_buy"] is False
             and sig_brk_rsi_blocked["signal_type"]
             == "HOLD_BREAKOUT_RSI_OVER_50"
+        )
+        sig_pull_ha_bear = evaluate_l2_only_hybrid_reentry_signal(
+            live_price=82.50,
+            anchor_price=83.41,
+            l2_book_price=85.00,
+            min_upper_tier_price=85.00,
+            closed_ha_bull=False,
+            closed_ha_ready=True,
+        )
+        assert (
+            sig_pull_ha_bear["should_buy"] is False
+            and sig_pull_ha_bear["signal_type"] == "HOLD_PULLBACK_HA_BEAR"
+            and sig_pull_ha_bear["pullback_ha_blocked"] is True
+        )
+        sig_pull_ha_bull = evaluate_l2_only_hybrid_reentry_signal(
+            live_price=82.50,
+            anchor_price=83.41,
+            l2_book_price=85.00,
+            min_upper_tier_price=85.00,
+            closed_ha_bull=True,
+            closed_ha_ready=True,
+        )
+        assert (
+            sig_pull_ha_bull["should_buy"] is True
+            and sig_pull_ha_bull["signal_type"] == "PULLBACK_RELOAD"
+            and sig_pull_ha_bull["pullback_ha_blocked"] is False
         )
 
         # 6) Case 88 & Case 91 인출형(단리) 및 바벨 모드(60/30/10) 검증
