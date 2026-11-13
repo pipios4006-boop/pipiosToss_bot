@@ -791,7 +791,19 @@ class SoxlStratumLedger:
             l1_list = []
             uppers = list(clean_buckets[:])
 
-        max_upper_cnt = MAX_GRID_TIERS_7 - 1
+        # MODIFIED: 2층 개별 익절 후 [2층 공석] (GRID_L3~L7 시작) 슬롯 보존
+        first_up_tag = (
+            str(uppers[0].get("lot_type") or "").upper().strip()
+            if uppers
+            else ""
+        )
+        start_tier_no = (
+            3
+            if first_up_tag
+            in ("GRID_L3", "GRID_L4", "GRID_L5", "GRID_L6", "GRID_L7")
+            else 2
+        )
+        max_upper_cnt = max(1, MAX_GRID_TIERS_7 - (start_tier_no - 1))
         m_mode = str(merge_mode or DEFAULT_GRID_MERGE_MODE).upper().strip()
 
         while len(uppers) > max_upper_cnt:
@@ -862,7 +874,7 @@ class SoxlStratumLedger:
 
         relabeled_uppers: List[Dict[str, Any]] = []
         for idx, b in enumerate(uppers):
-            tier_no = min(MAX_GRID_TIERS_7, idx + 2)
+            tier_no = min(MAX_GRID_TIERS_7, idx + start_tier_no)
             b_copy = dict(b)
             b_copy["lot_type"] = f"GRID_L{tier_no}"
             relabeled_uppers.append(b_copy)

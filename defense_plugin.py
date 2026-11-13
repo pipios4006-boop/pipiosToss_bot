@@ -2380,7 +2380,7 @@ async def execute_1600_daily_closing_settlement_plugin(
                 f"{sub_day_note}{res_note} "
                 f"· 🛡️시드패스 {day_pass:,}회 / 자투리절약 +${day_saved:,.2f} "
                 f"· 오버나이트 이월: 본 {held_sh}주({held_tiers}개층·{lot_carry_str}){sub_carry_note} · 가용현금 ${free_cash:,.2f} "
-                f"(🌇애프터·🌃데이장 ⚡1.5s 방안 C 통합졸업감시 연속가동 · 개별층/매수잠금)"
+                f"(🌇애프터·🌃데이장 ⚡1.5s 본1·2층 개별채굴 & 3~7층 통합졸업 연속가동 · 매수잠금)"
             ),
         )
 

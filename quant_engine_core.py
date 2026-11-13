@@ -114,11 +114,14 @@ REENTRY_BREAKOUT_MAX_RSI_50: float = float(
     getattr(toss_api, "REENTRY_BREAKOUT_MAX_RSI_50", 50.0)
 )
 
-# NEW [Case 99 : 🛡️ 스나이퍼 1층 스텝 락온 트레일링(1.00% ➔ 1.45%시 1.25% 하드보존) + 완결 1분봉 HA 음봉 + <1% 용서·망각 상수]
+# MODIFIED [옵션 1-B : 본 1층 스텝 락온(1.25% 점화 ➔ 1.60%시 1.40% 잠금) & 서브 1층 현행(1.00% ➔ 1.45%시 1.25%) 분리]
 SNIPER_L1_TRAIL_ENABLED: bool = True
-SNIPER_L1_TRAIL_IGNITE_PCT: float = 1.00
-SNIPER_L1_TRAIL_STEP_TRIG_PCT: float = 1.45
-SNIPER_L1_TRAIL_STEP_LOCK_PCT: float = 1.25
+SNIPER_L1_TRAIL_IGNITE_PCT: float = 1.25
+SNIPER_L1_TRAIL_STEP_TRIG_PCT: float = 1.60
+SNIPER_L1_TRAIL_STEP_LOCK_PCT: float = 1.40
+SUB_SNIPER_L1_TRAIL_IGNITE_PCT: float = 1.00
+SUB_SNIPER_L1_TRAIL_STEP_TRIG_PCT: float = 1.45
+SUB_SNIPER_L1_TRAIL_STEP_LOCK_PCT: float = 1.25
 SNIPER_L1_TRAIL_SAFE_CAP_PCT: float = 5.00
 SNIPER_L1_TRAIL_BOOST_TIER2_PCT: float = 2.00
 SNIPER_L1_TRAIL_CB_TIGHT_PCT: float = 0.20
@@ -403,10 +406,37 @@ def has_active_l1_bucket(buckets: Sequence[StratumBucket]) -> bool:
     return not is_upper_grid_tier(valid[0])
 
 
+def is_vacant_l2_upper_slice(upper_buckets: Sequence[StratumBucket]) -> bool:
+    # NEW: 상단 버킷 슬라이스의 최전방이 GRID_L3~L7 이면 [2층 공석] 상태로 판별
+    valid = [
+        b
+        for b in (upper_buckets or [])
+        if isinstance(b, StratumBucket) and b.qty > 0
+    ]
+    if not valid:
+        return False
+    tag = str(valid[0].lot_type or "").upper().strip()
+    return tag in ("GRID_L3", "GRID_L4", "GRID_L5", "GRID_L6", "GRID_L7")
+
+
+def has_active_l2_bucket(buckets: Sequence[StratumBucket]) -> bool:
+    # NEW: 본 그리드에 활성 2층(GRID_L2) 보조공격수가 존재하는지 판별
+    valid = [
+        b
+        for b in (buckets or [])
+        if isinstance(b, StratumBucket) and b.qty > 0
+    ]
+    uppers = valid[1:] if has_active_l1_bucket(valid) else valid[:]
+    if not uppers:
+        return False
+    return not is_vacant_l2_upper_slice(uppers)
+
+
 def relabel_upper_grid_tiers(
     upper_buckets: Sequence[StratumBucket],
     max_tiers: int = MAX_GRID_TIERS_7,
     merge_mode: str = DEFAULT_GRID_MERGE_MODE,
+    preserve_vacant_l2: Optional[bool] = None,
 ) -> List[StratumBucket]:
     valid = [
         b
@@ -416,7 +446,14 @@ def relabel_upper_grid_tiers(
     if not valid:
         return []
 
-    max_upper_cnt = max(1, safe_int(max_tiers, MAX_GRID_TIERS_7) - 1)
+    eff_max_t = max(2, safe_int(max_tiers, MAX_GRID_TIERS_7))
+    if preserve_vacant_l2 is None:
+        vacant_l2 = is_vacant_l2_upper_slice(valid) and eff_max_t >= 3
+    else:
+        vacant_l2 = bool(preserve_vacant_l2) and eff_max_t >= 3
+
+    start_tier_no = 3 if vacant_l2 else 2
+    max_upper_cnt = max(1, eff_max_t - (start_tier_no - 1))
     m_mode = str(merge_mode or DEFAULT_GRID_MERGE_MODE).upper().strip()
 
     while len(valid) > max_upper_cnt:
@@ -441,7 +478,7 @@ def relabel_upper_grid_tiers(
                 book_invested_usd=m_cost,
                 actual_cost_usd=m_cost,
                 lot_count=m_lots,
-                lot_type=f"GRID_L{max_upper_cnt + 1}",
+                lot_type=f"GRID_L{eff_max_t}",
             )
             valid = kept_lowest_upper + middle_rest + [merged_bucket]
             valid.sort(key=lambda b: round(b.book_price, 4))
@@ -463,13 +500,13 @@ def relabel_upper_grid_tiers(
                 book_invested_usd=tot_cost,
                 actual_cost_usd=tot_cost,
                 lot_count=tot_lots,
-                lot_type=f"GRID_L{max_upper_cnt + 1}",
+                lot_type=f"GRID_L{eff_max_t}",
             )
             valid = kept + [merged_top]
 
     out: List[StratumBucket] = []
     for idx, b in enumerate(valid):
-        tier_no = min(max_upper_cnt + 1, idx + 2)
+        tier_no = min(eff_max_t, idx + start_tier_no)
         pure_cost = round(max(0.01 * float(b.qty), b.actual_cost_usd), 4)
         pure_p = round(max(0.01, pure_cost / float(b.qty)), 4)
         out.append(

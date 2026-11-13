@@ -56,6 +56,9 @@ from quant_engine_core import (
     SNIPER_L1_TRAIL_SAFE_CAP_PCT,
     SNIPER_L1_TRAIL_STEP_LOCK_PCT,
     SNIPER_L1_TRAIL_STEP_TRIG_PCT,
+    SUB_SNIPER_L1_TRAIL_IGNITE_PCT,
+    SUB_SNIPER_L1_TRAIL_STEP_LOCK_PCT,
+    SUB_SNIPER_L1_TRAIL_STEP_TRIG_PCT,
     STEP_UP_2X_DROP_PCT,
     STEP_UP_2X_MAX_TIERS,
     STEP_UP_2X_MIN_CASH_RATIO,
@@ -88,9 +91,11 @@ from quant_engine_core import (
     get_runtime_round_trip_fee_rate_pct,
     get_runtime_us_commission_rate,
     has_active_l1_bucket,
+    has_active_l2_bucket,
     is_barbell_mode,
     is_simple_income_mode,
     is_upper_grid_tier,
+    is_vacant_l2_upper_slice,
     next_cycled_portion_mode,
     relabel_sub_upper_grid_tiers,
     relabel_sub_upper_grid_tiers_with_flag,
@@ -504,11 +509,13 @@ def match_and_remove_sold_buckets_7tier(
         if not main_queue or cut_q <= 0:
             return 0
         idx, b = main_queue[0]
-        tier_label = (
-            "1층"
-            if (idx == 0 and was_active_l1)
-            else f"{idx + 1 if was_active_l1 else idx + 2}층"
-        )
+        bt_u = str(b.lot_type or "").upper().strip()
+        if idx == 0 and was_active_l1:
+            tier_label = "1층"
+        elif bt_u.startswith("GRID_L") and bt_u[6:].isdigit():
+            tier_label = f"{int(bt_u[6:])}층"
+        else:
+            tier_label = f"{idx + 1 if was_active_l1 else idx + 2}층"
         if cut_q >= b.qty:
             taken = b.qty
             sold_buckets.append(b)
@@ -676,7 +683,7 @@ def match_and_remove_sold_buckets_7tier(
     }
 
 
-def compute_upper_2_to_12_moving_avg(
+def compute_sub_upper_2_to_3_moving_avg(
     buckets: Sequence[StratumBucket],
     rise_upper_pct: float = 1.00,
 ) -> Dict[str, Any]:
@@ -741,8 +748,69 @@ def compute_upper_2_to_12_moving_avg(
     }
 
 
+def compute_upper_2_to_12_moving_avg(
+    buckets: Sequence[StratumBucket],
+    rise_upper_pct: float = 1.00,
+) -> Dict[str, Any]:
+    # MODIFIED [옵션 2-B]: 2층 보조공격수와 3~7층 재고 통합이평 분리
+    valid = [
+        b for b in (buckets or [])
+        if isinstance(b, StratumBucket) and b.qty > 0
+    ]
+    active_l1 = has_active_l1_bucket(valid)
+    uppers = valid[1:] if active_l1 else valid[:]
+    if not uppers:
+        return {
+            "has_active_l1": active_l1, "has_active_l2": False,
+            "is_l2_vacant": False, "l2_bucket": None,
+            "l2_raw_target_price": 0.0, "inv_3_7_tier_count": 0,
+            "inv_3_7_qty": 0, "inv_3_7_lots": 0,
+            "inv_3_7_actual_cost_usd": 0.0, "inv_3_7_wma_price": 0.0,
+            "inv_3_7_wma_target_price": 0.0, "inv_3_7_buckets": [],
+            "upper_tier_count": 0, "upper_qty": 0, "upper_lots": 0,
+            "upper_actual_cost_usd": 0.0, "upper_wma_price": 0.0,
+            "upper_wma_target_price": 0.0, "min_indiv_upper_price": 0.0,
+            "min_indiv_upper_target_price": 0.0, "upper_buckets": [],
+        }
+    active_l2 = not is_vacant_l2_upper_slice(uppers)
+    b_l2 = uppers[0] if active_l2 else None
+    inv_3_7 = uppers[1:] if active_l2 else uppers[:]
+    mul = 1.0 + rise_upper_pct / 100.0
+    l2_raw_t = (
+        round(math.ceil((b_l2.book_price * mul - 1e-9) * 100.0) / 100.0, 2)
+        if b_l2 is not None else 0.0
+    )
+    iq = sum(b.qty for b in inv_3_7)
+    il = sum(max(1, b.lot_count) for b in inv_3_7)
+    ic = round(sum(b.actual_cost_usd for b in inv_3_7), 4)
+    iw_p = round(ic / float(iq), 4) if iq > 0 else 0.0
+    iw_t = (
+        round(math.ceil((iw_p * mul - 1e-9) * 100.0) / 100.0, 2)
+        if iw_p > 0.0 else 0.0
+    )
+    cq = iq if iq > 0 else (b_l2.qty if b_l2 else 0)
+    cl = il if iq > 0 else (max(1, b_l2.lot_count) if b_l2 else 0)
+    cc = ic if iq > 0 else (round(b_l2.actual_cost_usd, 4) if b_l2 else 0.0)
+    cw_p = iw_p if iq > 0 else (b_l2.book_price if b_l2 else 0.0)
+    cw_t = iw_t if iq > 0 else l2_raw_t
+    min_p = min(b.book_price for b in uppers)
+    min_t = round(math.ceil((min_p * mul - 1e-9) * 100.0) / 100.0, 2)
+    return {
+        "has_active_l1": active_l1, "has_active_l2": active_l2,
+        "is_l2_vacant": bool((not active_l2) and len(inv_3_7) > 0),
+        "l2_bucket": b_l2, "l2_raw_target_price": l2_raw_t,
+        "inv_3_7_tier_count": len(inv_3_7), "inv_3_7_qty": iq,
+        "inv_3_7_lots": il, "inv_3_7_actual_cost_usd": ic,
+        "inv_3_7_wma_price": iw_p, "inv_3_7_wma_target_price": iw_t,
+        "inv_3_7_buckets": inv_3_7, "upper_tier_count": len(uppers),
+        "upper_qty": cq, "upper_lots": cl, "upper_actual_cost_usd": cc,
+        "upper_wma_price": cw_p, "upper_wma_target_price": cw_t,
+        "min_indiv_upper_price": round(min_p, 4),
+        "min_indiv_upper_target_price": min_t, "upper_buckets": uppers,
+    }
+
+
 compute_upper_2_to_7_moving_avg = compute_upper_2_to_12_moving_avg
-compute_sub_upper_2_to_3_moving_avg = compute_upper_2_to_12_moving_avg
 
 
 def evaluate_multi_grid_sell_targets(
@@ -796,58 +864,58 @@ def evaluate_multi_grid_sell_targets(
     overnight_indiv_locked = False
 
     active_l1 = has_active_l1_bucket(valid)
-    upper_start_idx = 1 if (active_l1 and valid) else 0
-    has_upper_tiers = bool(len(valid) > upper_start_idx)
+    wma_info = compute_upper_2_to_12_moving_avg(
+        valid, rise_upper_pct=rise_upper_pct
+    )
+    active_l2 = bool(wma_info.get("has_active_l2", False))
+    l2_idx = (1 if active_l1 else 0) if active_l2 else -1
+    inv_3_7_cnt = safe_int(wma_info.get("inv_3_7_tier_count"), 0)
+    inv_wma_t = safe_float(wma_info.get("inv_3_7_wma_target_price"), 0.0)
 
-    if has_upper_tiers:
-        wma_info = compute_upper_2_to_12_moving_avg(
-            valid, rise_upper_pct=rise_upper_pct
-        )
-        wma_target_p = safe_float(wma_info.get("upper_wma_target_price"), 0.0)
-
-        if wma_target_p > 0.0 and lp >= wma_target_p:
-            for k in range(len(valid)):
-                sold_idx_set.add(k)
-            floor_candidates.append(wma_target_p)
-            hit_wma_grad = True
+    if inv_3_7_cnt > 0 and inv_wma_t > 0.0 and lp >= inv_wma_t:
+        for k in range(len(valid)):
+            sold_idx_set.add(k)
+        floor_candidates.append(inv_wma_t)
+        hit_wma_grad = True
 
     if not hit_wma_grad:
-        if active_l1 and valid and not (
-            exclude_daytime_l1 and not is_overnight_session
-        ):
+        min_l1_t = 0.0
+        if active_l1 and valid:
             b1 = valid[0]
-            min_l1_target_p = (
+            min_l1_t = (
                 math.ceil(
-                    (b1.book_price * (1.0 + rise_l1_pct / 100.0) - 1e-9)
+                    (b1.book_price * (1.0 + rise_l1_pct / 100.0) - 1e-9) * 100.0
+                )
+                / 100.0
+            )
+            if not (exclude_daytime_l1 and not is_overnight_session):
+                if lp >= min_l1_t:
+                    sold_idx_set.add(0)
+                    floor_candidates.append(min_l1_t)
+                    hit_l1 = True
+
+        if active_l2 and 0 <= l2_idx < len(valid):
+            b2 = valid[l2_idx]
+            raw_l2_t = (
+                math.ceil(
+                    (b2.book_price * (1.0 + rise_upper_pct / 100.0) - 1e-9)
                     * 100.0
                 )
                 / 100.0
             )
-            if lp >= min_l1_target_p:
-                if is_overnight_session and has_upper_tiers:
-                    overnight_indiv_locked = True
-                else:
-                    sold_idx_set.add(0)
-                    floor_candidates.append(min_l1_target_p)
-                    hit_l1 = True
-
-        if has_upper_tiers:
-            for k in range(upper_start_idx, len(valid)):
-                bk = valid[k]
-                bk_target_p = (
-                    math.ceil(
-                        (bk.book_price * (1.0 + rise_upper_pct / 100.0) - 1e-9)
-                        * 100.0
-                    )
-                    / 100.0
+            if not (active_l1 and exclude_daytime_l1 and not is_overnight_session):
+                eff_l2_t = (
+                    max(raw_l2_t, min_l1_t)
+                    if (active_l1 and min_l1_t > 0.0)
+                    else raw_l2_t
                 )
-                if lp >= bk_target_p:
-                    if is_overnight_session:
-                        overnight_indiv_locked = True
-                    else:
-                        sold_idx_set.add(k)
-                        floor_candidates.append(bk_target_p)
-                        hit_indiv_grid = True
+                if lp >= eff_l2_t:
+                    sold_idx_set.add(l2_idx)
+                    floor_candidates.append(eff_l2_t)
+                    hit_indiv_grid = True
+                    if active_l1 and 0 not in sold_idx_set:
+                        sold_idx_set.add(0)
+                        hit_l1 = True
 
     sub_active_l1 = has_active_l1_bucket(valid_sub)
     sub_upper_start_idx = 1 if (sub_active_l1 and valid_sub) else 0
@@ -1466,6 +1534,27 @@ def summarize_stratum_portfolio(
         l2_gain_pct = round(
             ((lp - upper_wma_price) / upper_wma_price) * 100.0, 2
         )
+    act_l2 = bool(wma_info.get("has_active_l2", False))
+    vac_l2 = bool(wma_info.get("is_l2_vacant", False))
+    b_l2 = wma_info.get("l2_bucket")
+    l2_raw_t = safe_float(wma_info.get("l2_raw_target_price"), 0.0)
+    i37_b = list(wma_info.get("inv_3_7_buckets") or [])
+    i37_cnt = safe_int(wma_info.get("inv_3_7_tier_count"), 0)
+    i37_q = safe_int(wma_info.get("inv_3_7_qty"), 0)
+    i37_c = round(safe_float(wma_info.get("inv_3_7_actual_cost_usd"), 0.0), 4)
+    i37_wp = safe_float(wma_info.get("inv_3_7_wma_price"), 0.0)
+    i37_wt = safe_float(wma_info.get("inv_3_7_wma_target_price"), 0.0)
+    day_w = bool(dt_now.weekday() < 5 and (407 <= hm_now <= 1600))
+    l1_ref = l1_ignite_100_price if (SNIPER_L1_TRAIL_ENABLED and day_w) else l1_target_price
+    if act_l2 and isinstance(b_l2, StratumBucket):
+        l2_q, l2_bp = b_l2.qty, b_l2.book_price
+        l2_cost = round(b_l2.actual_cost_usd, 4)
+        l2_inv = bool(active_l1 and l1_ref > 0.0 and l2_raw_t <= l1_ref)
+        l2_eff_t = max(l2_raw_t, l1_ref) if (active_l1 and l1_ref > 0.0) else l2_raw_t
+        l2_ig = round(((lp - l2_bp) / l2_bp) * 100.0, 2) if (lp > 0.0 and l2_bp > 0.0) else 0.0
+    else:
+        l2_q, l2_bp, l2_cost, l2_inv, l2_eff_t, l2_ig = 0, 0.0, 0.0, False, 0.0, 0.0
+    i37_g = round(((lp - i37_wp) / i37_wp) * 100.0, 2) if (i37_wp > 0.0 and lp > 0.0) else 0.0
     if min_indiv_upper_price > 0.0 and lp > 0.0:
         min_indiv_upper_gain_pct = round(
             ((lp - min_indiv_upper_price) / min_indiv_upper_price) * 100.0, 2
@@ -1708,28 +1797,10 @@ def summarize_stratum_portfolio(
             2,
         )
         sub_l1_ignite_100_price = round(
-            math.ceil(
-                (
-                    sb1.book_price
-                    * (1.0 + SNIPER_L1_TRAIL_IGNITE_PCT / 100.0)
-                    - 1e-9
-                )
-                * 100.0
-            )
-            / 100.0,
-            2,
+            math.ceil((sb1.book_price * (1.0 + SUB_SNIPER_L1_TRAIL_IGNITE_PCT / 100.0) - 1e-9) * 100.0) / 100.0, 2
         )
         sub_l1_lock_125_price = round(
-            math.ceil(
-                (
-                    sb1.book_price
-                    * (1.0 + SNIPER_L1_TRAIL_STEP_LOCK_PCT / 100.0)
-                    - 1e-9
-                )
-                * 100.0
-            )
-            / 100.0,
-            2,
+            math.ceil((sb1.book_price * (1.0 + SUB_SNIPER_L1_TRAIL_STEP_LOCK_PCT / 100.0) - 1e-9) * 100.0) / 100.0, 2
         )
         if lp > 0.0 and sb1.book_price > 0.0:
             sub_l1_gain_pct = round(
@@ -1985,26 +2056,16 @@ def summarize_stratum_portfolio(
 
     proj_main_l1_net = 0.0
     if active_l1 and buckets and l1_target_price > 0.0:
-        eff_main_l1_grad_p = (
-            min(l1_target_price, upper_wma_target_price)
-            if (upper_qty > 0 and upper_wma_target_price > 0.0)
-            else l1_target_price
-        )
-        proj_main_l1_net = calc_sell_realized_pnl(
-            sold_qty=buckets[0].qty,
-            sell_exec_price=eff_main_l1_grad_p,
-            sold_actual_cost_usd=buckets[0].actual_cost_usd,
-            round_trip_fee_rate_pct=eff_rt_fee_pct,
-        )["net_pnl_usd"]
-
-    proj_main_upper_net = 0.0
-    if upper_qty > 0 and upper_wma_target_price > 0.0:
-        proj_main_upper_net = calc_sell_realized_pnl(
-            sold_qty=upper_qty,
-            sell_exec_price=upper_wma_target_price,
-            sold_actual_cost_usd=upper_actual_cost_usd,
-            round_trip_fee_rate_pct=eff_rt_fee_pct,
-        )["net_pnl_usd"]
+        p_l1 = min(l1_target_price, i37_wt) if (i37_q > 0 and i37_wt > 0.0) else l1_target_price
+        proj_main_l1_net = calc_sell_realized_pnl(buckets[0].qty, p_l1, buckets[0].actual_cost_usd, eff_rt_fee_pct)["net_pnl_usd"]
+    p_l2_net = 0.0
+    if act_l2 and l2_q > 0 and l2_eff_t > 0.0:
+        p_l2 = min(l2_eff_t, i37_wt) if (i37_q > 0 and i37_wt > 0.0) else l2_eff_t
+        p_l2_net = calc_sell_realized_pnl(l2_q, p_l2, l2_cost, eff_rt_fee_pct)["net_pnl_usd"]
+    p_37_net = 0.0
+    if i37_q > 0 and i37_wt > 0.0:
+        p_37_net = calc_sell_realized_pnl(i37_q, i37_wt, i37_c, eff_rt_fee_pct)["net_pnl_usd"]
+    proj_main_upper_net = round(p_l2_net + p_37_net, 4)
 
     proj_sub_l1_net = 0.0
     if sub_active_l1 and sub_buckets and sub_l1_target_price > 0.0:
@@ -2232,6 +2293,22 @@ def summarize_stratum_portfolio(
         "us_commission_rate": us_comm_rate,
         "round_trip_fee_rate_pct": eff_rt_fee_pct,
         "has_active_l1": active_l1,
+        "has_active_l2": act_l2,
+        "is_l2_vacant": vac_l2,
+        "l2_cur_qty": l2_q,
+        "l2_book_price": l2_bp,
+        "l2_actual_cost_usd": l2_cost,
+        "l2_raw_target_price": l2_raw_t,
+        "l2_eff_target_price": l2_eff_t,
+        "l2_is_inverted_with_l1": l2_inv,
+        "l2_indiv_gain_pct": l2_ig,
+        "inv_3_7_buckets": i37_b,
+        "inv_3_7_tier_count": i37_cnt,
+        "inv_3_7_qty": i37_q,
+        "inv_3_7_cost_usd": i37_c,
+        "inv_3_7_wma_price": i37_wp,
+        "inv_3_7_wma_target_price": i37_wt,
+        "inv_3_7_gain_pct": i37_g,
         "l1_cur_qty": l1_cur_qty,
         "l1_target_quota_qty": l1_target_quota_qty,
         "l1_rem_quota_qty": l1_rem_quota_qty,
@@ -2448,29 +2525,35 @@ def run_quant_engine_tdd() -> bool:
             and abs(grid_q[4].book_price - 97.50) < 1e-4
         )
 
-        # 4) Case 71, 72 & Case 83(방안 C) 검증
+        # 4) 옵션 1-B & 2-B (1·2층 24h 채굴 · 역전 동반졸업 · 3~7층 이평졸업) 검증
         test_grid = [
             StratumBucket(10, 80.0, 800.0, 800.0, 1, "DIP_1FL"),
             StratumBucket(10, 81.0, 810.0, 810.0, 1, "GRID_L2"),
             StratumBucket(10, 85.0, 850.0, 850.0, 1, "GRID_L3"),
             StratumBucket(10, 90.0, 900.0, 900.0, 1, "GRID_L4"),
         ]
-        res_ov_lock = evaluate_multi_grid_sell_targets(
-            test_grid, live_price=81.90, is_overnight_session=True
-        )
-        assert (
-            res_ov_lock["should_sell"] is False
-            and res_ov_lock["overnight_indiv_locked"] is True
-        )
-
-        res_ov_grad = evaluate_multi_grid_sell_targets(
-            test_grid, live_price=86.25, is_overnight_session=True
-        )
-        assert (
-            res_ov_grad["should_sell"] is True
-            and res_ov_grad["sold_indices"] == [0, 1, 2, 3]
-            and res_ov_grad["reason_tag"] == "SELL_ALL_GRAD"
-        )
+        r_l12 = evaluate_multi_grid_sell_targets(test_grid, 81.90, is_overnight_session=True)
+        assert r_l12["should_sell"] and r_l12["sold_indices"] == [0, 1]
+        vac_g = [
+            StratumBucket(10, 85.0, 850.0, 850.0, 1, "GRID_L3"),
+            StratumBucket(10, 90.0, 900.0, 900.0, 1, "GRID_L4"),
+        ]
+        assert not evaluate_multi_grid_sell_targets(vac_g, 86.25)["should_sell"]
+        r_grad = evaluate_multi_grid_sell_targets(test_grid, 88.38, is_overnight_session=True)
+        assert r_grad["should_sell"] and r_grad["sold_indices"] == [0, 1, 2, 3]
+        inv_g = [
+            StratumBucket(10, 80.0, 800.0, 800.0, 1, "DIP_1FL"),
+            StratumBucket(10, 80.30, 803.0, 803.0, 1, "GRID_L2"),
+        ]
+        assert not evaluate_multi_grid_sell_targets(inv_g, 81.15, is_overnight_session=True)["should_sell"]
+        r_co = evaluate_multi_grid_sell_targets(inv_g, 81.20, is_overnight_session=True)
+        assert r_co["sold_indices"] == [0, 1] and abs(r_co["min_floor_price"] - 81.20) < 1e-6
+        t_sub = [
+            StratumBucket(5, 80.0, 400.0, 400.0, 1, "SUB_DIP_1FL"),
+            StratumBucket(5, 88.0, 440.0, 440.0, 1, "GRID_L2"),
+        ]
+        r_sub = evaluate_multi_grid_sell_targets([], 81.50, is_overnight_session=True, sub_buckets=t_sub)
+        assert not r_sub["should_sell"] and r_sub["overnight_indiv_locked"]
 
         # 5) Case 73, Case 84 & Case 92 돌파 RSI<=50 검증
         sig_brk_rsi_blocked = evaluate_l2_only_hybrid_reentry_signal(

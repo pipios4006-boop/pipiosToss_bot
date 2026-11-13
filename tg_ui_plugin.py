@@ -411,9 +411,9 @@ def _format_multi_grid_stratum_lines(
             if bool(tr_m.get("armed")):
                 st_p = safe_float(tr_m.get("active_stop_p"), l1_ign_p)
                 lk_b = (
-                    "👑1.25%락"
+                    "👑1.40%락"
                     if bool(tr_m.get("stepped_125"))
-                    else "🔥1%추적"
+                    else "🔥1.25%추적"
                 )
                 lines.append(
                     f"⚡ <b>[1층: {l1_qty_label}·${b1.actual_cost_usd:,.0f}]</b> "
@@ -421,15 +421,13 @@ def _format_multi_grid_stratum_lines(
                 )
             else:
                 fg_c = safe_int(tr_m.get("forgive_count"), 0)
-                fg_b = f"·💡용서{fg_c}" if fg_c > 0 else "·점화1%"
+                fg_b = f"·💡용서{fg_c}" if fg_c > 0 else "·점화1.25%"
                 lines.append(
                     f"⚡ <b>[1층: {l1_qty_label}·${b1.actual_cost_usd:,.0f}]</b> "
                     f"<b>${b1.book_price:.2f}</b> ➔ <b>${l1_ign_p:.2f}</b> ({g1_sign}{l1_g:.2f}%{fg_b})"
                 )
         else:
-            l1_ov_lock_note = (
-                "·🔒" if (is_ext_sell_only and has_upper_tiers) else ""
-            )
+            l1_ov_lock_note = "·장외+1.5%" if is_ext_sell_only else ""
             lines.append(
                 f"⚡ <b>[1층: {l1_qty_label}·${b1.actual_cost_usd:,.0f}]</b> "
                 f"<b>${b1.book_price:.2f}</b> ➔ <b>${l1_t:.2f}</b> ({g1_sign}{l1_g:.2f}%{l1_ov_lock_note})"
@@ -457,50 +455,74 @@ def _format_multi_grid_stratum_lines(
                 f"⚡ <b>[1층: 공석]</b> 1분주기 눌림(-1%)/돌파(RSI&lt;=50){cap_note}"
             )
 
-    if upper_buckets:
-        u_cnt = len(upper_buckets)
-        u_qty = safe_int(
-            summary.get("upper_qty"), sum(b.qty for b in upper_buckets)
-        )
-        u_cost = safe_float(
-            summary.get("upper_actual_cost_usd"),
-            sum(b.actual_cost_usd for b in upper_buckets),
-        )
-        u_wma_p = safe_float(summary.get("upper_wma_price"), 0.0)
-        u_wma_t = safe_float(summary.get("upper_wma_target_price"), 0.0)
-        u_gain = safe_float(summary.get("l2_gain_pct"), 0.0)
-        ug_sign = "+" if u_gain >= 0.0 else ""
-        tier_range_label = "2층" if u_cnt == 1 else f"2~{u_cnt + 1}층"
-        lines.append(
-            f"📦 <b>[{tier_range_label}: {u_qty}주·${u_cost:,.0f}]</b> "
-            f"<b>${u_wma_p:.2f}</b> ➔ 졸업 <b>${u_wma_t:.2f}</b> ({ug_sign}{u_gain:.2f}%)"
-        )
+    act_l2 = bool(summary.get("has_active_l2", False))
+    vac_l2 = bool(summary.get("is_l2_vacant", False))
+    i37_b = list(summary.get("inv_3_7_buckets") or [])
 
-        indiv_ov_lock_note = "·🔒" if is_ext_sell_only else ""
-        for idx_u, bu in enumerate(upper_buckets):
-            t_no = idx_u + 2
-            bu_t = (
-                math.ceil(
-                    (bu.book_price * (1.0 + rise_u_pct / 100.0) - 1e-9)
-                    * 100.0
-                )
-                / 100.0
+    if act_l2 and upper_buckets:
+        b2 = upper_buckets[0]
+        mul_u = 1.0 + rise_u_pct / 100.0
+        fb_t2 = math.ceil((b2.book_price * mul_u - 1e-9) * 100.0) / 100.0
+        raw_t2 = safe_float(summary.get("l2_raw_target_price"), fb_t2)
+        eff_t2 = safe_float(summary.get("l2_eff_target_price"), raw_t2)
+        tm = main_trail_ui if isinstance(main_trail_ui, dict) else {}
+        if (
+            active_l1
+            and SNIPER_L1_TRAIL_ENABLED
+            and (not is_ext_sell_only)
+            and bool(tm.get("armed"))
+        ):
+            stp = safe_float(tm.get("active_stop_p"), 0.0)
+            if stp > eff_t2:
+                eff_t2 = stp
+        inv2 = bool(
+            active_l1
+            and (
+                bool(summary.get("l2_is_inverted_with_l1", False))
+                or eff_t2 > raw_t2 + 1e-6
             )
+        )
+        g2 = safe_float(summary.get("l2_indiv_gain_pct"), 0.0)
+        s2 = "+" if g2 >= 0.0 else ""
+        q2 = f"👑{b2.lot_count}회" if b2.lot_count > 1 else f"{b2.qty}주"
+        ib = "·🤝1층동반" if inv2 else ""
+        lines.append(
+            f"🗡️ <b>[2층: {q2}·${b2.actual_cost_usd:,.0f}]</b> "
+            f"<b>${b2.book_price:.2f}</b> ➔ <b>${eff_t2:.2f}</b> "
+            f"({s2}{g2:.2f}%{ib})"
+        )
+    elif vac_l2:
+        lines.append("🗡️ <b>[2층: 공석]</b> 채굴완료 · 공석활주로 개방")
+
+    if i37_b:
+        ic = len(i37_b)
+        iq = safe_int(summary.get("inv_3_7_qty"), 0)
+        ia = safe_float(summary.get("inv_3_7_cost_usd"), 0.0)
+        iwp = safe_float(summary.get("inv_3_7_wma_price"), 0.0)
+        iwt = safe_float(summary.get("inv_3_7_wma_target_price"), 0.0)
+        ig = safe_float(summary.get("inv_3_7_gain_pct"), 0.0)
+        igs = "+" if ig >= 0.0 else ""
+        rl = "3층" if ic == 1 else f"3~{ic + 2}층"
+        lines.append(
+            f"📦 <b>[{rl}: {iq}주·${ia:,.0f}]</b> "
+            f"<b>${iwp:.2f}</b> ➔ 졸업 <b>${iwt:.2f}</b> ({igs}{ig:.2f}%)"
+        )
+        for idx_i, bu in enumerate(i37_b):
+            t_no = idx_i + 3
             bu_g = (
                 ((live_price - bu.book_price) / bu.book_price) * 100.0
                 if (live_price > 0.0 and bu.book_price > 0.0)
                 else 0.0
             )
             bg_s = "+" if bu_g >= 0.0 else ""
-            if bu.lot_count > 1:
-                tier_tag = (
-                    f"{t_no}층(👑{bu.lot_count}회·${bu.actual_cost_usd:,.0f})"
-                )
-            else:
-                tier_tag = f"{t_no}층({bu.qty}주·${bu.actual_cost_usd:,.0f})"
+            tt = (
+                f"{t_no}층(👑{bu.lot_count}회·${bu.actual_cost_usd:,.0f})"
+                if bu.lot_count > 1
+                else f"{t_no}층({bu.qty}주·${bu.actual_cost_usd:,.0f})"
+            )
             lines.append(
-                f"  ▫️ <b>{tier_tag}</b>: ${bu.book_price:.2f} "
-                f"➔ <b>${bu_t:.2f}</b> ({bg_s}{bu_g:.2f}%{indiv_ov_lock_note})"
+                f"  ▫️ <b>{tt}</b>: ${bu.book_price:.2f} "
+                f"({bg_s}{bu_g:.2f}%·이평졸업)"
             )
 
     return lines
@@ -807,10 +829,22 @@ def build_avwap_radar_message(
             f"🚨 <b>[시드고갈 대기]</b> 권장입금 <b>${req_dep_usd:,.0f}</b> (잔여 {avail_res_cnt}/{max_res_cnt}회)"
         )
     elif is_ext_sell_only:
-        if upper_tier_cnt > 0 or sub_upper_tier_cnt > 0:
-            wma_note = f"${upper_wma_t:.2f}" if upper_wma_t > 0.0 else "+1.0%"
+        c37 = safe_int(summary.get("inv_3_7_tier_count"), 0)
+        t37 = safe_float(summary.get("inv_3_7_wma_target_price"), 0.0)
+        if c37 > 0 and t37 > 0.0:
             shield_line = (
-                f"🌃 <b>[장외 통합졸업 감시]</b> 목표 <b>{wma_note}</b> (개별·매수 잠금)"
+                f"🌃 <b>[장외 1·2층채굴 · 3~7층졸업]</b> "
+                f"이평 <b>${t37:.2f}</b> (매수잠금)"
+            )
+        elif held_sh > 0:
+            shield_line = (
+                "🌃 <b>[장외 1·2층 개별채굴]</b> 목표가 즉시 익절 (04:07 매수해금)"
+            )
+        elif sub_upper_tier_cnt > 0:
+            swt = safe_float(summary.get("sub_upper_wma_target_price"), 0.0)
+            swn = f"${swt:.2f}" if swt > 0.0 else "+1.0%"
+            shield_line = (
+                f"🌃 <b>[장외 서브통합졸업 감시]</b> 목표 <b>{swn}</b> (매수잠금)"
             )
         else:
             shield_line = (
