@@ -16,7 +16,7 @@ import math
 import signal
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Dict, Optional
 
 from assassin_plugin import (
@@ -241,6 +241,9 @@ class SniperAppContext:
 # [핵심 2] 백그라운드 태스크 1 : SOXL 1분봉/일봉 · Wilder's RSI(14) · 암살자 4대 지표 및 QQQ 안전망 레이더
 # ---------------------------------------------------------------------------
 async def candle_radar_loop(context: SniperAppContext) -> None:
+    cached_1d: list = []
+    cached_1d_mono: float = 0.0
+    cached_1d_date: str = ""
     while not context.shutdown_event.is_set():
         now_est = datetime.now(EST_TZ)
         if _check_weekend_nyse_closed_dynamic(now_est):
@@ -253,16 +256,29 @@ async def candle_radar_loop(context: SniperAppContext) -> None:
             continue
 
         hm = now_est.hour * 100 + now_est.minute
+        today_d = now_est.strftime("%Y-%m-%d")
         in_market = bool(400 <= hm <= 1605)
-        sleep_sec = 5.0 if in_market else 45.0
+        sleep_sec = 10.0 if in_market else 45.0
 
         try:
             candles_1m = await context.api.get_candles_1m(
                 symbol=TARGET_SYMBOL, total_count=(400 if in_market else 200)
             )
-            candles_1d = await context.api.get_candles_1d(
-                symbol=TARGET_SYMBOL, count=10
-            )
+            now_m_1d = time.monotonic()
+            if (
+                not cached_1d
+                or cached_1d_date != today_d
+                or (now_m_1d - cached_1d_mono) >= 180.0
+                or hm in (400, 407, 930, 1600)
+            ):
+                fetched_1d = await context.api.get_candles_1d(
+                    symbol=TARGET_SYMBOL, count=10
+                )
+                if fetched_1d:
+                    cached_1d = fetched_1d
+                    cached_1d_mono = now_m_1d
+                    cached_1d_date = today_d
+            candles_1d = cached_1d
             now_est = datetime.now(EST_TZ)  # NEW: HTTP 수신 직후 최신 시각 동기화
             live_p = safe_float(
                 context.latest_prices.get(TARGET_SYMBOL),
@@ -333,9 +349,27 @@ async def candle_radar_loop(context: SniperAppContext) -> None:
         except Exception as exc:
             logger.debug("SOXL 캔들 레이더 루프 폴백(묵음): %s", exc)
 
+        if in_market:
+            dt_chk = datetime.now(EST_TZ)
+            exp_prev_mk = (
+                dt_chk.replace(second=0, microsecond=0) - timedelta(minutes=1)
+            ).strftime("%Y-%m-%d %H:%M")
+            cur_closed_mk = str(
+                (context.candle_metrics_cache.get(TARGET_SYMBOL) or {}).get(
+                    "closed_bar_minute_key"
+                )
+                or ""
+            )
+            if dt_chk.second < 10 and cur_closed_mk < exp_prev_mk:
+                radar_wait_s = _wall_wait(5.0, 0.25)
+            else:
+                radar_wait_s = _wall_wait(10.0, 0.25)
+        else:
+            radar_wait_s = sleep_sec
+
         try:
             await asyncio.wait_for(
-                context.shutdown_event.wait(), timeout=(_wall_wait(5.0, 0.15) if in_market else sleep_sec)
+                context.shutdown_event.wait(), timeout=radar_wait_s
             )
         except asyncio.TimeoutError:
             pass
@@ -365,11 +399,12 @@ def _evaluate_fast_shield_mode(
                 return True
         except Exception:
             pass
-    in_b, _ = is_within_post_buy_time_shield(context, st, TARGET_SYMBOL)
-    if in_b:
+    # MODIFIED: 60초 타임쉴드 만료 직전 2.5초 구간에서만 0.40s 가속 점화 (유휴 회전 소거)
+    in_b, rem_b = is_within_post_buy_time_shield(context, st, TARGET_SYMBOL)
+    if in_b and 0.0 < rem_b <= 2.5:
         return True
-    in_s, _ = is_within_post_sell_time_shield(context, st, TARGET_SYMBOL)
-    if in_s:
+    in_s, rem_s = is_within_post_sell_time_shield(context, st, TARGET_SYMBOL)
+    if in_s and 0.0 < rem_s <= 2.5:
         return True
     return False
 

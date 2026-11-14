@@ -12,11 +12,20 @@
 
 from __future__ import annotations
 
+import copy
+import json
 import logging
 import math
+import os
 import threading
+import time
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
+
+try:
+    import fcntl
+except ImportError:
+    fcntl = None  # type: ignore
 
 import numpy as np
 import pandas as pd
@@ -51,6 +60,244 @@ _MAX_MEMORY_1M_BARS: int = 400
 # [Case 93]: 정규장 진입 및 장 마감 후에도 당일 한번 진성으로 확보된 전일 정규장 종가 · 04:07 프리장 시가 · 프리장 누적 VWAP을 보존하는 당일 인메모리 래치
 _DAILY_ANCHOR_LOCK = threading.RLock()
 _DAILY_SESSION_ANCHOR_STORE: Dict[Tuple[str, str], Dict[str, Any]] = {}
+
+# NEW: 프로세스 내 캔들 지문 메모 및 /dev/shm 다중 봇 벡터 지표 공유 버스 (중복 Pandas 연산 소거)
+_METRICS_MEMO_LOCK = threading.RLock()
+_BASE_METRICS_MEMO: Dict[str, Tuple[str, Dict[str, Any]]] = {}
+_METRICS_SHM_TTL_SEC: float = 4.50
+
+
+def _ewm_1d_adjust_false(arr: np.ndarray, alpha: float) -> np.ndarray:
+    m = len(arr)
+    if m == 0:
+        return np.empty(0, dtype=float)
+    out = np.empty(m, dtype=float)
+    cur = float(arr[0])
+    out[0] = cur
+    if m > 1:
+        one_m_a = 1.0 - alpha
+        for idx in range(1, m):
+            cur = alpha * float(arr[idx]) + one_m_a * cur
+            out[idx] = cur
+    return out
+
+
+def _metrics_shm_dir_sync() -> str:
+    cand = str(
+        os.environ.get("TOSS_SHM_BUS_DIR", "/dev/shm/toss_sniper_bus_v3")
+    ).strip()
+    if cand.startswith("/dev/shm/") and not os.path.isdir("/dev/shm"):
+        cand = "/tmp/toss_sniper_bus_v3"
+    if not os.path.isdir(cand):
+        old_u = os.umask(0)
+        try:
+            os.makedirs(cand, mode=0o777, exist_ok=True)
+            os.chmod(cand, 0o777)
+        except Exception:
+            pass
+        finally:
+            os.umask(old_u)
+    return cand
+
+
+def _build_candle_memo_fp(
+    sym: str,
+    cur_min_key: str,
+    candles: Any,
+    daily_candles: Any,
+    init_prev_c: float,
+    lp: float,
+    now_est: Optional[datetime],
+    dt_now: datetime,
+) -> str:
+    if not isinstance(candles, list) or len(candles) < 30:
+        return ""
+    if now_est is not None and abs(dt_now.timestamp() - time.time()) > 5.0:
+        return ""
+    c0 = candles[0] if isinstance(candles[0], dict) else {}
+    c_prev = (
+        candles[-2]
+        if len(candles) >= 2 and isinstance(candles[-2], dict)
+        else {}
+    )
+    c_last = candles[-1] if isinstance(candles[-1], dict) else {}
+    t0 = str(c0.get("timestamp") or c0.get("dt") or "")
+    tp = str(c_prev.get("timestamp") or c_prev.get("dt") or "")
+    cp = safe_float(c_prev.get("closePrice") or c_prev.get("close"), 0.0)
+    tl = str(c_last.get("timestamp") or c_last.get("dt") or "")
+    ol = safe_float(c_last.get("openPrice") or c_last.get("open"), 0.0)
+    hl = safe_float(c_last.get("highPrice") or c_last.get("high"), 0.0)
+    ll = safe_float(c_last.get("lowPrice") or c_last.get("low"), 0.0)
+    cl = safe_float(c_last.get("closePrice") or c_last.get("close"), 0.0)
+    vl = safe_float(c_last.get("volume"), 0.0)
+    d_cnt = len(daily_candles) if isinstance(daily_candles, list) else 0
+    d_last_c = 0.0
+    if d_cnt > 0 and isinstance(daily_candles[-1], dict):
+        d_last_c = safe_float(
+            daily_candles[-1].get("closePrice")
+            or daily_candles[-1].get("close"),
+            0.0,
+        )
+    has_lp = 1 if lp > 0.0 else 0
+    return (
+        f"{sym}|{cur_min_key}|{len(candles)}|{t0}|{tp}:{cp:.4f}|"
+        f"{tl}:{ol:.4f}:{hl:.4f}:{ll:.4f}:{cl:.4f}:{vl:.1f}|"
+        f"{d_cnt}:{d_last_c:.4f}|{init_prev_c:.4f}|{has_lp}"
+    )
+
+
+def _hydrate_mem_bars_from_shm_sync(
+    sym: str, shm_bars: List[Dict[str, Any]]
+) -> None:
+    if not shm_bars:
+        return
+    synced = [dict(b) for b in shm_bars if isinstance(b, dict)]
+    if not synced:
+        return
+    with _LIVE_1M_BAR_LOCK:
+        existing = _LIVE_1M_BAR_STORE.get(sym, [])
+        if existing:
+            last_sk = str(synced[-1].get("_min_key") or "")
+            for eb in existing[-3:]:
+                eb_k = str(eb.get("_min_key") or "")
+                if not eb_k:
+                    continue
+                if eb_k == last_sk:
+                    cur_s = synced[-1]
+                    eb_h = safe_float(eb.get("highPrice"), 0.0)
+                    eb_l = safe_float(eb.get("lowPrice"), 0.0)
+                    eb_c = safe_float(eb.get("closePrice"), 0.0)
+                    if eb_h > 0.0:
+                        cur_s["highPrice"] = round(
+                            max(safe_float(cur_s.get("highPrice"), eb_h), eb_h),
+                            4,
+                        )
+                    if eb_l > 0.0:
+                        cs_l = safe_float(cur_s.get("lowPrice"), eb_l)
+                        cur_s["lowPrice"] = round(
+                            min(cs_l, eb_l) if cs_l > 0.0 else eb_l, 4
+                        )
+                    if eb_c > 0.0:
+                        cur_s["closePrice"] = round(eb_c, 4)
+                elif eb_k > last_sk:
+                    synced.append(dict(eb))
+                    last_sk = eb_k
+        _LIVE_1M_BAR_STORE[sym] = synced[-_MAX_MEMORY_1M_BARS:]
+
+
+def _try_get_cached_base_metrics(
+    sym: str, fp_str: str
+) -> Optional[Dict[str, Any]]:
+    if not fp_str:
+        return None
+    with _METRICS_MEMO_LOCK:
+        memo = _BASE_METRICS_MEMO.get(sym)
+        if memo is not None and memo[0] == fp_str:
+            return dict(memo[1])
+    try:
+        bdir = _metrics_shm_dir_sync()
+        dfp = os.path.join(bdir, f"metrics_base_v3_{sym}.json")
+        if not os.path.isfile(dfp):
+            return None
+        with open(dfp, "r", encoding="utf-8") as rf:
+            payload = json.load(rf)
+        if not isinstance(payload, dict):
+            return None
+        if str(payload.get("fp") or "") != fp_str:
+            return None
+        if (time.time() - safe_float(payload.get("ts"), 0.0)) > _METRICS_SHM_TTL_SEC:
+            return None
+        base_out = payload.get("out")
+        if not isinstance(base_out, dict):
+            return None
+        shm_bars = payload.get("mem_bars")
+        if isinstance(shm_bars, list) and shm_bars:
+            _hydrate_mem_bars_from_shm_sync(sym, shm_bars)
+        t_date = str(payload.get("target_date") or "").strip()
+        latch_d = payload.get("latch")
+        if t_date and isinstance(latch_d, dict) and latch_d:
+            _update_daily_anchor_latch(
+                symbol=sym,
+                target_date=t_date,
+                prev_reg_close=safe_float(latch_d.get("prev_reg_close"), 0.0),
+                pre_open_price=safe_float(latch_d.get("pre_open_price"), 0.0),
+                pre_stats=(
+                    latch_d.get("pre_stats")
+                    if isinstance(latch_d.get("pre_stats"), dict)
+                    else None
+                ),
+                verified_distinct=bool(latch_d.get("verified_distinct", False)),
+            )
+        with _METRICS_MEMO_LOCK:
+            _BASE_METRICS_MEMO[sym] = (fp_str, dict(base_out))
+        return dict(base_out)
+    except Exception:
+        return None
+
+
+def _store_cached_base_metrics(
+    sym: str,
+    fp_str: str,
+    target_date: str,
+    out_dict: Dict[str, Any],
+) -> None:
+    if not fp_str:
+        return
+    snap_out = dict(out_dict)
+    with _METRICS_MEMO_LOCK:
+        _BASE_METRICS_MEMO[sym] = (fp_str, snap_out)
+    lfd = -1
+    old_u = os.umask(0)
+    try:
+        bdir = _metrics_shm_dir_sync()
+        if fcntl is not None:
+            lfp = os.path.join(bdir, f"metrics_base_v3_{sym}.lock")
+            lfd = os.open(lfp, os.O_CREAT | os.O_RDWR, 0o666)
+            try:
+                os.fchmod(lfd, 0o666)
+            except Exception:
+                pass
+            fcntl.flock(lfd, fcntl.LOCK_EX)
+        with _LIVE_1M_BAR_LOCK:
+            mem_snap = [
+                dict(b) for b in _LIVE_1M_BAR_STORE.get(sym, [])[-_MAX_MEMORY_1M_BARS:]
+            ]
+        latch_snap = copy.deepcopy(_get_daily_anchor_latch(sym, target_date))
+        dfp = os.path.join(bdir, f"metrics_base_v3_{sym}.json")
+        tmp_fp = f"{dfp}.tmp.{os.getpid()}.{threading.get_ident()}"
+        with open(tmp_fp, "w", encoding="utf-8") as wf:
+            json.dump(
+                {
+                    "ts": time.time(),
+                    "fp": fp_str,
+                    "target_date": target_date,
+                    "out": snap_out,
+                    "mem_bars": mem_snap,
+                    "latch": latch_snap,
+                },
+                wf,
+                ensure_ascii=False,
+            )
+            wf.flush()
+        try:
+            os.chmod(tmp_fp, 0o666)
+        except Exception:
+            pass
+        os.replace(tmp_fp, dfp)
+    except Exception:
+        pass
+    finally:
+        os.umask(old_u)
+        if lfd >= 0:
+            try:
+                if fcntl is not None:
+                    fcntl.flock(lfd, fcntl.LOCK_UN)
+            except Exception:
+                pass
+            try:
+                os.close(lfd)
+            except Exception:
+                pass
 
 
 class _BuyGateBucketResultTuple(tuple):
@@ -734,12 +981,7 @@ def _compute_vectorized_heikin_ashi_and_rsi(
     shifted_hc[0] = ha_seed
     if n > 1:
         shifted_hc[1:] = ha_close_arr[:-1]
-    ha_open_series = (
-        pd.Series(shifted_hc)
-        .ewm(alpha=0.5, adjust=False)
-        .mean()
-        .to_numpy(dtype=float)
-    )
+    ha_open_series = _ewm_1d_adjust_false(shifted_hc, 0.5)
 
     cur_ha_open = float(ha_open_series[-1])
     cur_ha_close = float(ha_close_arr[-1])
@@ -776,18 +1018,8 @@ def _compute_vectorized_heikin_ashi_and_rsi(
         deltas = np.diff(closes)
         gains = np.maximum(0.0, deltas)
         losses = np.maximum(0.0, -deltas)
-        avg_gain_arr = (
-            pd.Series(gains)
-            .ewm(alpha=1.0 / 14.0, min_periods=1, adjust=False)
-            .mean()
-            .to_numpy(dtype=float)
-        )
-        avg_loss_arr = (
-            pd.Series(losses)
-            .ewm(alpha=1.0 / 14.0, min_periods=1, adjust=False)
-            .mean()
-            .to_numpy(dtype=float)
-        )
+        avg_gain_arr = _ewm_1d_adjust_false(gains, 1.0 / 14.0)
+        avg_loss_arr = _ewm_1d_adjust_false(losses, 1.0 / 14.0)
         last_g = float(avg_gain_arr[-1])
         last_l = float(avg_loss_arr[-1])
         if len(avg_gain_arr) >= 2:
@@ -926,34 +1158,21 @@ def _recompute_ha_rsi_from_memory_store(
     if len(bars) < 2:
         return None
     try:
-        df_m = pd.DataFrame(bars)
         opens = np.array(
-            pd.to_numeric(df_m["openPrice"], errors="coerce").to_numpy(
-                dtype=float
-            ),
+            [safe_float(b.get("openPrice"), np.nan) for b in bars],
             dtype=float,
-            copy=True,
         )
         highs = np.array(
-            pd.to_numeric(df_m["highPrice"], errors="coerce").to_numpy(
-                dtype=float
-            ),
+            [safe_float(b.get("highPrice"), np.nan) for b in bars],
             dtype=float,
-            copy=True,
         )
         lows = np.array(
-            pd.to_numeric(df_m["lowPrice"], errors="coerce").to_numpy(
-                dtype=float
-            ),
+            [safe_float(b.get("lowPrice"), np.nan) for b in bars],
             dtype=float,
-            copy=True,
         )
         closes = np.array(
-            pd.to_numeric(df_m["closePrice"], errors="coerce").to_numpy(
-                dtype=float
-            ),
+            [safe_float(b.get("closePrice"), np.nan) for b in bars],
             dtype=float,
-            copy=True,
         )
         valid_mask = (
             np.isfinite(opens)
@@ -1375,6 +1594,23 @@ def compute_soxl_quant_metrics_1m(
         "updated_est": dt_now.strftime("%m-%d %H:%M:%S EST"),
     }
 
+    _rt_memo_fp = _build_candle_memo_fp(
+        sym=sym,
+        cur_min_key=cur_min_key,
+        candles=candles,
+        daily_candles=daily_candles,
+        init_prev_c=init_prev_c,
+        lp=lp,
+        now_est=now_est,
+        dt_now=dt_now,
+    )
+    if _rt_memo_fp:
+        _cached_base = _try_get_cached_base_metrics(sym, _rt_memo_fp)
+        if isinstance(_cached_base, dict):
+            return refresh_metrics_with_live_tick(
+                _cached_base, lp, now_est=dt_now, symbol=sym
+            )
+
     merged_candles = _merge_api_and_memory_candles(candles, sym)
     if not merged_candles:
         default_out["ma5_amp_pct"] = _compute_5ma_intraday_amp_pct_vectorized(
@@ -1673,6 +1909,8 @@ def compute_soxl_quant_metrics_1m(
                 "day_amp_pct": all_stats["amp_pct"],
             }
         )
+        if _rt_memo_fp:
+            _store_cached_base_metrics(sym, _rt_memo_fp, target_date, out)
         return refresh_metrics_with_live_tick(
             out, lp, now_est=dt_now, symbol=sym
         )
