@@ -331,7 +331,16 @@ def _shm_commit_prices_and_unlock_sync(
             if fd < 0 and fcntl is not None:
                 lock_fp = os.path.join(bdir, "prices_v3.lock")
                 temp_fd = _open_shm_lock_fd_sync(lock_fp)
-                fcntl.flock(temp_fd, fcntl.LOCK_EX)
+                try:
+                    # MODIFIED: 실주문 2차 호가(SOLO) 커밋 시 락 경합 지연 0ms 차단
+                    fcntl.flock(temp_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except (BlockingIOError, OSError):
+                    try:
+                        os.close(temp_fd)
+                    except Exception:
+                        pass
+                    temp_fd = -1
+                    return
             data_fp = os.path.join(bdir, "prices_v3.json")
             cur = _shm_read_json_sync(data_fp)
             now_t = time.time()
@@ -692,10 +701,10 @@ class TossApiClient:
             if not force_refresh and self._commission_locked:
                 return self.us_commission_rate, self.round_trip_fee_rate_pct
 
+            # MODIFIED [Case 86]: KST 종료일 만료 수수료율 오락온 차단(원장 폴백 보존)
             items = await self.get_commissions()
             today_kst = datetime.now(KST_TZ).strftime("%Y-%m-%d")
             found_us_rate = 0.0
-            fallback_us_rate = 0.0
             for it in items:
                 mkt = str(it.get("marketCountry") or "").upper().strip()
                 if mkt == "US":
@@ -707,13 +716,9 @@ class TossApiClient:
                     if s_dt and len(s_dt) == 10 and today_kst < s_dt:
                         continue
                     if e_dt and len(e_dt) == 10 and today_kst > e_dt:
-                        if fallback_us_rate <= 0.0:
-                            fallback_us_rate = round(r_val, 6)
                         continue
                     found_us_rate = round(r_val, 6)
                     break
-            if found_us_rate <= 0.0 and fallback_us_rate > 0.0:
-                found_us_rate = fallback_us_rate
 
             if found_us_rate > 0.0:
                 rt_pct = round(found_us_rate * 200.0, 4)

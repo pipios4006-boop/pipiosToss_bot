@@ -4425,19 +4425,20 @@ async def _evaluate_t03a_1m_dip_truth_gates_scan(
     trig_mode_str = (
         f"T03A_1M_DIP_SCAN(저점${ref_dip_low:.2f}대비{chg_from_dip_low:+.2f}%)"
     )
-    _CONSUMED_SHM_GATE_KEYS[assn_ledger.folder_slug] = (
-        f"{cur_min_key}:{gate_id}"
-    )
-    await asyncio.to_thread(
-        _assn_pub_shm_gate_sync,
-        now_est.strftime('%Y-%m-%d'),
-        cur_min_key,
-        gate_id,
-        gate_desc,
-        trig_mode_str,
-        cur_seq,
-        feat,
-    )
+    # MODIFIED [Case 96/98-C]: 동일 분봉·게이트 /dev/shm 중복 덮어쓰기 스레싱 차단
+    gate_sig_key = f"{cur_min_key}:{gate_id}"
+    if _CONSUMED_SHM_GATE_KEYS.get(assn_ledger.folder_slug) != gate_sig_key:
+        _CONSUMED_SHM_GATE_KEYS[assn_ledger.folder_slug] = gate_sig_key
+        await asyncio.to_thread(
+            _assn_pub_shm_gate_sync,
+            now_est.strftime('%Y-%m-%d'),
+            cur_min_key,
+            gate_id,
+            gate_desc,
+            trig_mode_str,
+            cur_seq,
+            feat,
+        )
 
     # [Case 96]: T03_A 눌림 스캔에서도 다회차 [모의] 10G 정찰병 출동 카운트 반영
     st, gt_dispatched = await _try_dispatch_gt_multi_gate_scout(
@@ -4451,7 +4452,18 @@ async def _evaluate_t03a_1m_dip_truth_gates_scan(
         now_ts=now_ts,
     )
 
-    if allow_main_force_entry or gt_dispatched:
+    rem_min_sec = 60.0 - float(now_est.second)
+    rem_gt_cd = GT_GATE_SCOUT_COOLDOWN_SEC - (
+        now_ts - safe_float(st.get("last_gt_gate_exit_ts"), 0.0)
+    )
+    bg_busy_this_min = bool(
+        (not allow_main_force_entry)
+        and (
+            bool(st.get("gt_gate_scout_done", False))
+            or rem_gt_cd >= rem_min_sec
+        )
+    )
+    if allow_main_force_entry or gt_dispatched or bg_busy_this_min:
         _LAST_T03A_DIP_SCAN_KEY = cur_min_key
         _LAST_T03A_DIP_SCAN_TS = now_ts
 
@@ -4894,36 +4906,46 @@ async def execute_simulated_assassin_tick_plugin(
         if is_live_pos and cap_oid_now and hasattr(context, "api"):
             try:
                 det_c = await context.api.get_order_detail(cap_oid_now)
-                if (
-                    isinstance(det_c, dict)
-                    and str(det_c.get("status") or "").upper().strip()
-                    == "FILLED"
-                ):
+                if isinstance(det_c, dict):
+                    st_cap_c = str(det_c.get("status") or "").upper().strip()
                     ex_c = (
                         det_c.get("execution")
                         if isinstance(det_c.get("execution"), dict)
                         else {}
                     )
-                    fp_c = safe_float(
-                        ex_c.get("averageFilledPrice"),
-                        safe_float(st.get("cap_500_price"), lp),
-                    )
-                    return await _settle_assassin_exit_to_ledger(
-                        context=context,
-                        assn_ledger=assn_ledger,
-                        st=st,
-                        exec_xp=fp_c,
-                        exit_code="CAP_500_HOMERUN",
-                        exit_desc=f"👑 +5.00% 상단 안전 캡 실전 체결(${fp_c:.2f})",
-                        entry_qqq_p=entry_qqq_p,
-                        cur_qqq_chg_pct=cur_qqq_chg_pct,
-                        new_armed=True,
-                        peak_p=max(
-                            safe_float(st.get("peak_price"), fp_c), fp_c
-                        ),
-                        min_p=safe_float(st.get("post_entry_min_price"), lp),
-                        dt_now=dt_now,
-                    )
+                    fq_c = safe_int(ex_c.get("filledQuantity"), 0)
+                    if st_cap_c == "FILLED":
+                        fp_c = safe_float(
+                            ex_c.get("averageFilledPrice"),
+                            safe_float(st.get("cap_500_price"), lp),
+                        )
+                        return await _settle_assassin_exit_to_ledger(
+                            context=context,
+                            assn_ledger=assn_ledger,
+                            st=st,
+                            exec_xp=fp_c,
+                            exit_code="CAP_500_HOMERUN",
+                            exit_desc=f"👑 +5.00% 상단 안전 캡 실전 체결(${fp_c:.2f})",
+                            entry_qqq_p=entry_qqq_p,
+                            cur_qqq_chg_pct=cur_qqq_chg_pct,
+                            new_armed=True,
+                            peak_p=max(
+                                safe_float(st.get("peak_price"), fp_c), fp_c
+                            ),
+                            min_p=safe_float(
+                                st.get("post_entry_min_price"), lp
+                            ),
+                            dt_now=dt_now,
+                        )
+                    if (
+                        st_cap_c in ("CANCELED", "REJECTED", "REPLACED")
+                        and fq_c <= 0
+                    ):
+                        # NEW: 외부 취소/종결된 안전캡 ID 즉시 소거(불필요 반복 API 폴링 차단)
+                        st = await assn_ledger.update_state(
+                            safe_cap_sell_order_id=""
+                        )
+                        cap_oid_now = ""
             except Exception:
                 pass
 

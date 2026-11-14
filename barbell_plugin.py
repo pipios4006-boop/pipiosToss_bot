@@ -1067,7 +1067,13 @@ async def record_barbell_realized_profit(
     eff_cyc_net = (
         safe_float(cycle_realized_net_override, 0.0)
         if cycle_realized_net_override is not None
-        else safe_float(st_soxl.get("cycle_realized_net_usd"), 0.0)
+        else round(
+            safe_float(st_soxl.get("cycle_realized_net_usd"), 0.0)
+            - max(
+                0.0, safe_float(st_soxl.get("cycle_vaulted_locked_usd"), 0.0)
+            ),
+            4,
+        )
     )
 
     sgov_q = max(0, safe_int(bst.get("sgov_held_qty"), 0))

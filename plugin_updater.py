@@ -1107,17 +1107,55 @@ def _is_weekday_market_busy_est(now_est: Optional[datetime] = None) -> bool:
     return 400 <= hm <= 1605
 
 
+def _has_active_orders_or_live_assn_for_update(context: Any) -> bool:
+    # NEW [Case 81]: 스나이퍼 SOXL · 바벨 SGOV · 실전 암살자 미결주문/포지션 통합 검문기
+    try:
+        st = context.ledger.get_state("SOXL")
+        if str(st.get("buy_order_id") or "").strip() or str(
+            st.get("sell_order_id") or ""
+        ).strip():
+            return True
+    except Exception:
+        pass
+    try:
+        if hasattr(context, "barbell_ledger"):
+            bst = context.barbell_ledger.get_state()
+            if str(bst.get("sgov_buy_order_id") or "").strip() or str(
+                bst.get("sgov_sell_order_id") or ""
+            ).strip():
+                return True
+    except Exception:
+        pass
+    try:
+        if hasattr(context, "assassin_ledger"):
+            ast_st = context.assassin_ledger.get_state()
+            if (
+                bool(ast_st.get("is_live_position", False))
+                or str(ast_st.get("pending_buy_order_id") or "").strip()
+                or str(
+                    ast_st.get("pending_exit_sell_order_id") or ""
+                ).strip()
+            ):
+                return True
+    except Exception:
+        pass
+    return False
+
+
 async def run_auto_update_loop(
     context: Any,
     interval_sec: float = 3600.0,
 ) -> None:
     wait_s = max(300.0, float(interval_sec or 3600.0))
     base_dir = get_bot_base_dir(getattr(context, "base_dir", None))
+    # NEW [Case 81]: 미결주문 유예 시 차기 주기 재기동 신호 증발 차단용 래치
+    pending_restart_msg: str = ""
 
     while not context.shutdown_event.is_set():
+        eff_wait_s = 60.0 if pending_restart_msg else wait_s
         try:
             await asyncio.wait_for(
-                context.shutdown_event.wait(), timeout=wait_s
+                context.shutdown_event.wait(), timeout=eff_wait_s
             )
             break
         except asyncio.TimeoutError:
@@ -1130,50 +1168,38 @@ async def run_auto_update_loop(
         if _is_weekday_market_busy_est(now_est):
             continue
 
-        try:
-            st = context.ledger.get_state("SOXL")
-            if str(st.get("buy_order_id") or "").strip() or str(
-                st.get("sell_order_id") or ""
-            ).strip():
-                continue
-        except Exception:
-            pass
+        if _has_active_orders_or_live_assn_for_update(context):
+            continue
 
         try:
-            if hasattr(context, "barbell_ledger"):
-                bst = context.barbell_ledger.get_state()
-                if str(bst.get("sgov_buy_order_id") or "").strip() or str(
-                    bst.get("sgov_sell_order_id") or ""
-                ).strip():
+            if pending_restart_msg:
+                ok_v, msg_v = await asyncio.to_thread(
+                    verify_all_modules_compile, base_dir
+                )
+                if not ok_v:
+                    logger.error(
+                        "🚨 [Case 81 유예 재기동 취소] 로컬 코어 검증 실패: %s",
+                        msg_v,
+                    )
+                    pending_restart_msg = ""
                     continue
-        except Exception:
-            pass
+                ok, msg, changed = True, pending_restart_msg, True
+            else:
+                ok, msg, changed = await execute_git_pull_and_preflight(
+                    base_dir
+                )
+                if ok and changed:
+                    pending_restart_msg = msg
 
-        try:
-            if hasattr(context, "assassin_ledger"):
-                ast_st = context.assassin_ledger.get_state()
-                if (
-                    bool(ast_st.get("is_live_position", False))
-                    or str(ast_st.get("pending_buy_order_id") or "").strip()
-                    or str(
-                        ast_st.get("pending_exit_sell_order_id") or ""
-                    ).strip()
-                ):
-                    continue
-        except Exception:
-            pass
-
-        try:
-            ok, msg, changed = await execute_git_pull_and_preflight(base_dir)
-            if ok and changed:
-                st_chk = context.ledger.get_state("SOXL")
-                if str(st_chk.get("buy_order_id") or "").strip() or str(
-                    st_chk.get("sell_order_id") or ""
-                ).strip():
+            if ok and (changed or bool(pending_restart_msg)):
+                if _is_weekday_market_busy_est(
+                    datetime.now(EST_TZ)
+                ) or _has_active_orders_or_live_assn_for_update(context):
                     logger.info(
-                        "⏳ [Case 81 재기동 유예] 업데이트 도중 신규 SOXL 미결주문 감지 -> 정산 완료 후 차기 주기 재기동"
+                        "⏳ [Case 81 재기동 유예 래치 보존] 미결주문/장중 감지 -> 종결 후 60초 내 재기동"
                     )
                     continue
+                pending_restart_msg = ""
                 logger.warning(
                     "🚀 [Case 81 장외 무인 자동 업데이트 검증 통과] %s -> 3.5초 워치독 및 os.execv 인플레이스 자가 재기동 개시",
                     msg,

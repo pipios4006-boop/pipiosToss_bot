@@ -578,10 +578,13 @@ async def reconcile_stratum_with_broker_holdings_plugin(
             safe_float(st.get("daily_realized_net_usd"), 0.0) + net_pnl, 4
         )
 
-        # MODIFIED: 수동 부분손절 후 전량매도 시 사이클 순흑자 초과분만 금고 격리
+        # MODIFIED [Case 94]: 선행 익절 격리분(prev_cyc_vz) 차감 결손 보전 후 순흑자만 금고 격리
         prev_cyc_z = safe_float(st.get("cycle_realized_net_usd"), 0.0)
+        prev_cyc_vz = max(
+            0.0, safe_float(st.get("cycle_vaulted_locked_usd"), 0.0)
+        )
         vault_delta_z = round(
-            max(0.0, net_pnl + min(0.0, prev_cyc_z)), 4
+            max(0.0, net_pnl + min(0.0, prev_cyc_z - prev_cyc_vz)), 4
         )
         prev_vault_locked = max(
             0.0, safe_float(st.get("vaulted_profit_locked_usd"), 0.0)
@@ -590,6 +593,9 @@ async def reconcile_stratum_with_broker_holdings_plugin(
             round(prev_vault_locked + vault_delta_z, 4)
             if is_barbell
             else prev_vault_locked
+        )
+        final_cyc_v_locked = (
+            round(prev_cyc_vz + vault_delta_z, 4) if is_barbell else 0.0
         )
 
         final_cyc_net = round(prev_cyc_z + net_pnl, 4)
@@ -733,6 +739,7 @@ async def reconcile_stratum_with_broker_holdings_plugin(
             cycle_sub_realized_net_usd=0.0,
             cycle_sell_events=0,
             cycle_leftover_saved_usd=0.0,
+            cycle_vaulted_locked_usd=0.0,
             last_cycle_realized_net_usd=final_cyc_net,
             last_cycle_sell_events=final_cyc_ev,
             completed_main_cycles=next_comp_main_cycles,
@@ -746,7 +753,9 @@ async def reconcile_stratum_with_broker_holdings_plugin(
                 is_graduated_zero=True,
                 prev_soxl_injected_usd=cur_inj_res_usd,
                 prev_soxl_used_portions_cnt=cur_used_res_cnt,
-                cycle_realized_net_override=final_cyc_net,
+                cycle_realized_net_override=round(
+                    final_cyc_net - final_cyc_v_locked, 4
+                ),
             )
             barbell_vault_total = safe_float(
                 b_rec.get("vault_realized_profit_usd"), next_vault_locked
@@ -1623,10 +1632,13 @@ async def reconcile_stratum_with_broker_holdings_plugin(
         safe_float(st.get("daily_realized_net_usd"), 0.0) + net_pnl, 4
     )
 
-    # MODIFIED: 수동 부분손절 후 부분익절 시 사이클 결손 우선 보전
+    # MODIFIED [Case 94]: 선행 익절 격리분(prev_cyc_vp) 차감 결손 보전 후 순흑자만 금고 격리
     prev_cyc_p = safe_float(st.get("cycle_realized_net_usd"), 0.0)
+    prev_cyc_vp = max(
+        0.0, safe_float(st.get("cycle_vaulted_locked_usd"), 0.0)
+    )
     vault_delta_p = round(
-        max(0.0, net_pnl + min(0.0, prev_cyc_p)), 4
+        max(0.0, net_pnl + min(0.0, prev_cyc_p - prev_cyc_vp)), 4
     )
     prev_vault_locked_p = max(
         0.0, safe_float(st.get("vaulted_profit_locked_usd"), 0.0)
@@ -1635,6 +1647,9 @@ async def reconcile_stratum_with_broker_holdings_plugin(
         round(prev_vault_locked_p + vault_delta_p, 4)
         if is_barbell
         else prev_vault_locked_p
+    )
+    cur_cyc_vp = (
+        round(prev_cyc_vp + vault_delta_p, 4) if is_barbell else 0.0
     )
 
     cur_cyc_gross = round(
@@ -1763,6 +1778,7 @@ async def reconcile_stratum_with_broker_holdings_plugin(
         "cycle_realized_net_usd": cur_cyc_net,
         "cycle_sub_realized_net_usd": cur_cyc_sub_net,
         "cycle_sell_events": cur_cyc_ev,
+        "cycle_vaulted_locked_usd": cur_cyc_vp,
     }
     if sold_sub_q > 0:
         part_update_kw["last_sub_sell_fill_ts"] = now_part_sell_ts
@@ -1788,7 +1804,9 @@ async def reconcile_stratum_with_broker_holdings_plugin(
             prev_soxl_used_portions_cnt=safe_int(
                 st.get("used_reserve_portions_cnt"), 0
             ),
-            cycle_realized_net_override=cur_cyc_net,
+            cycle_realized_net_override=round(
+                cur_cyc_net - cur_cyc_vp, 4
+            ),
         )
         barbell_vault_part = safe_float(
             b_rec_p.get("vault_realized_profit_usd"), next_vault_locked_p

@@ -47,6 +47,7 @@ from barbell_plugin import (
     build_barbell_detail_dashboard_html,
     ensure_barbell_ledger,
     format_barbell_slim_radar_block,
+    get_masked_soxl_buying_power_usd,
     initialize_or_sync_barbell_on_mode_enter,
     is_barbell_mode,
     summarize_barbell_status,
@@ -1232,7 +1233,21 @@ def build_sync_instruction_message(
     used_res_cnt = safe_int(summary.get("used_reserve_portions_cnt"), 0)
     tot_res_cnt = safe_int(summary.get("total_reserve_injected_cnt"), 0)
     inj_res_usd = safe_float(summary.get("injected_reserve_usd"), 0.0)
-    unalloc_dep_usd = max(0.0, safe_float(broker_bp_usd, 0.0) - free_cash)
+    # MODIFIED [Case 77/94]: 바벨 보호버킷·SGOV예약금·격리수익금고 차감 후 순수 미할당 예수금만 산출
+    raw_bp_sync = max(0.0, safe_float(broker_bp_usd, 0.0))
+    if is_barbell and context is not None:
+        eff_soxl_bp_sync = get_masked_soxl_buying_power_usd(
+            context=context, raw_bp_usd=raw_bp_sync, st_soxl=st
+        )
+    elif is_barbell:
+        v_lk_s = max(0.0, safe_float(st.get("vaulted_profit_locked_usd"), 0.0))
+        eff_soxl_bp_sync = max(
+            0.0, raw_bp_sync - v_lk_s - round(init_seed * 0.40, 4)
+        )
+    else:
+        v_lk_s = max(0.0, safe_float(st.get("vaulted_profit_locked_usd"), 0.0))
+        eff_soxl_bp_sync = max(0.0, raw_bp_sync - v_lk_s)
+    unalloc_dep_usd = round(max(0.0, eff_soxl_bp_sync - free_cash), 4)
 
     base_portion_unit = max(
         1.0, safe_float(summary.get("next_portion_budget"), init_seed * 0.08)

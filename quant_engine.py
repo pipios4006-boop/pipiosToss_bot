@@ -1333,7 +1333,9 @@ def summarize_stratum_portfolio(
 
     if is_barbell:
         cyc_loss_adj = min(
-            0.0, safe_float(st.get("cycle_realized_net_usd"), 0.0)
+            0.0,
+            safe_float(st.get("cycle_realized_net_usd"), 0.0)
+            - max(0.0, safe_float(st.get("cycle_vaulted_locked_usd"), 0.0)),
         )
         expected_free_cash = round(
             max(
@@ -2024,7 +2026,9 @@ def summarize_stratum_portfolio(
     if is_barbell:
         soxl_mark_net = (free_cash + market_eval_usd) - injected_reserve_usd
         cyc_loss_ref = min(
-            0.0, safe_float(st.get("cycle_realized_net_usd"), 0.0)
+            0.0,
+            safe_float(st.get("cycle_realized_net_usd"), 0.0)
+            - max(0.0, safe_float(st.get("cycle_vaulted_locked_usd"), 0.0)),
         )
         prior_unvaulted_adj = (
             cum_realized - vaulted_profit_locked_usd

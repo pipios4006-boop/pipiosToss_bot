@@ -1161,6 +1161,7 @@ async def _commit_filled_sell_and_reanchor_ledger(
             cycle_sub_realized_net_usd=0.0,
             cycle_sell_events=0,
             cycle_leftover_saved_usd=0.0,
+            cycle_vaulted_locked_usd=0.0,
             last_sell_fill_ts=now_empty_epoch,
             last_cycle_end_ts=now_empty_epoch,
             last_sub_sell_fill_ts=now_empty_epoch,
@@ -1670,10 +1671,14 @@ async def _commit_filled_sell_and_reanchor_ledger(
         safe_float(st.get("daily_realized_net_usd"), 0.0) + net_pnl, 4
     )
 
-    # MODIFIED: 수동 부분손절(prev_cyc_net < 0) 후 익절 시 코어 결손 우선 보전 후 순흑자만 금고 격리
+    # MODIFIED [Case 94]: 선행 익절 격리분(prev_cyc_v_locked) 차감 결손 보전으로 유령현금 0% 달성
     prev_cyc_net_b = safe_float(st.get("cycle_realized_net_usd"), 0.0)
+    prev_cyc_v_locked = max(
+        0.0, safe_float(st.get("cycle_vaulted_locked_usd"), 0.0)
+    )
+    prev_unvaulted_loss = min(0.0, prev_cyc_net_b - prev_cyc_v_locked)
     vault_delta_pnl = round(
-        max(0.0, net_pnl + min(0.0, prev_cyc_net_b)), 4
+        max(0.0, net_pnl + prev_unvaulted_loss), 4
     )
     prev_vault_locked = max(
         0.0, safe_float(st.get("vaulted_profit_locked_usd"), 0.0)
@@ -1682,6 +1687,11 @@ async def _commit_filled_sell_and_reanchor_ledger(
         round(prev_vault_locked + vault_delta_pnl, 4)
         if is_barbell
         else prev_vault_locked
+    )
+    cur_cyc_v_locked = (
+        round(prev_cyc_v_locked + vault_delta_pnl, 4)
+        if is_barbell
+        else 0.0
     )
 
     cur_cyc_gross = round(
@@ -1718,6 +1728,7 @@ async def _commit_filled_sell_and_reanchor_ledger(
         next_cyc_sub_net = 0.0
         next_cyc_ev = 0
         next_cyc_saved = 0.0
+        next_cyc_v_locked = 0.0
     else:
         next_last_cyc_net = prev_last_cyc_net
         next_last_cyc_ev = prev_last_cyc_ev
@@ -1728,6 +1739,7 @@ async def _commit_filled_sell_and_reanchor_ledger(
         next_cyc_sub_net = cur_cyc_sub_net
         next_cyc_ev = cur_cyc_ev
         next_cyc_saved = prev_cyc_saved
+        next_cyc_v_locked = cur_cyc_v_locked
 
     init_seed = max(
         100.0, safe_float(st.get("initial_seed_usd"), DEFAULT_INITIAL_SEED_USD)
@@ -1848,6 +1860,7 @@ async def _commit_filled_sell_and_reanchor_ledger(
         "cycle_sub_realized_net_usd": next_cyc_sub_net,
         "cycle_sell_events": next_cyc_ev,
         "cycle_leftover_saved_usd": next_cyc_saved,
+        "cycle_vaulted_locked_usd": next_cyc_v_locked,
         "last_cycle_realized_net_usd": next_last_cyc_net,
         "last_cycle_sell_events": next_last_cyc_ev,
         "completed_main_cycles": next_comp_main_cycles,
@@ -1876,7 +1889,9 @@ async def _commit_filled_sell_and_reanchor_ledger(
             is_graduated_zero=is_graduated_zero,
             prev_soxl_injected_usd=cur_inj_res_usd,
             prev_soxl_used_portions_cnt=cur_used_res_cnt,
-            cycle_realized_net_override=cur_cyc_net,
+            cycle_realized_net_override=round(
+                cur_cyc_net - cur_cyc_v_locked, 4
+            ),
         )
         barbell_vault_total = safe_float(
             barbell_rec.get("vault_realized_profit_usd"), next_vault_locked
@@ -2981,7 +2996,7 @@ async def execute_1m_sniper_sell_and_reanchor_plugin(
                 floor_cands.append(m_eff_fl)
                 fired_main_trail = True
 
-                # NEW: 주간 활성 2층(GRID_L2) 목표가가 1층 점화가/스탑가 이하로 역전(또는 동시 돌파) 시 1층 청산가로 2층 동반 졸업
+                # MODIFIED [P0 방어 · Case 24/99]: 과거 고점 m_stop 참조 손절 차단 -> 실청산 하한(m_eff_fl) 또는 실호가(fresh_live_p)가 2층 목표가 이상일 때만 하한가 보장 동반 졸업
                 if len(buckets) >= 2 and has_active_l2_bucket(buckets):
                     b2_day = buckets[1]
                     raw_l2_day_t = (
@@ -2995,14 +3010,10 @@ async def execute_1m_sniper_sell_and_reanchor_plugin(
                         )
                         / 100.0
                     )
-                    l1_inv_ref = max(
-                        main_slot.arm_100_p,
-                        m_stop,
-                        m_eff_fl,
-                    )
-                    if raw_l2_day_t <= l1_inv_ref + 1e-9:
-                        sold_idx_set.add(1)
-                    elif fresh_live_p >= raw_l2_day_t - 1e-9:
+                    if (
+                        raw_l2_day_t <= m_eff_fl + 1e-9
+                        or fresh_live_p >= raw_l2_day_t - 1e-9
+                    ):
                         sold_idx_set.add(1)
                         floor_cands.append(raw_l2_day_t)
 

@@ -157,13 +157,20 @@ def _hydrate_mem_bars_from_shm_sync(
     with _LIVE_1M_BAR_LOCK:
         existing = _LIVE_1M_BAR_STORE.get(sym, [])
         if existing:
+            # MODIFIED [Case 101/103]: 직전 완결봉 포함 최근 3개 분봉 로컬 고/저가 꼬리 병합
+            tail_start = max(0, len(synced) - 3)
+            key_to_idx = {
+                str(synced[idx].get("_min_key") or ""): idx
+                for idx in range(tail_start, len(synced))
+                if str(synced[idx].get("_min_key") or "")
+            }
             last_sk = str(synced[-1].get("_min_key") or "")
             for eb in existing[-3:]:
                 eb_k = str(eb.get("_min_key") or "")
                 if not eb_k:
                     continue
-                if eb_k == last_sk:
-                    cur_s = synced[-1]
+                if eb_k in key_to_idx:
+                    cur_s = synced[key_to_idx[eb_k]]
                     eb_h = safe_float(eb.get("highPrice"), 0.0)
                     eb_l = safe_float(eb.get("lowPrice"), 0.0)
                     eb_c = safe_float(eb.get("closePrice"), 0.0)
@@ -177,11 +184,14 @@ def _hydrate_mem_bars_from_shm_sync(
                         cur_s["lowPrice"] = round(
                             min(cs_l, eb_l) if cs_l > 0.0 else eb_l, 4
                         )
-                    if eb_c > 0.0:
+                    if eb_c > 0.0 and (
+                        eb_k == last_sk or bool(cur_s.get("_synthetic", False))
+                    ):
                         cur_s["closePrice"] = round(eb_c, 4)
                 elif eb_k > last_sk:
                     synced.append(dict(eb))
                     last_sk = eb_k
+                    key_to_idx[eb_k] = len(synced) - 1
         _LIVE_1M_BAR_STORE[sym] = synced[-_MAX_MEMORY_1M_BARS:]
 
 
@@ -213,6 +223,43 @@ def _try_get_cached_base_metrics(
         shm_bars = payload.get("mem_bars")
         if isinstance(shm_bars, list) and shm_bars:
             _hydrate_mem_bars_from_shm_sync(sym, shm_bars)
+            # NEW [Case 101/103]: 로컬 직전 완결봉 꼬리 병합 시 확정 HA 즉시 재연산
+            c_mk = str(base_out.get("closed_bar_minute_key") or "").strip()
+            if c_mk:
+                need_ha_recalc = False
+                with _LIVE_1M_BAR_LOCK:
+                    for mb in reversed(_LIVE_1M_BAR_STORE.get(sym, [])[-4:]):
+                        if str(mb.get("_min_key") or "") == c_mk:
+                            mb_h = safe_float(mb.get("highPrice"), 0.0)
+                            mb_l = safe_float(mb.get("lowPrice"), 0.0)
+                            if (
+                                abs(
+                                    mb_h
+                                    - safe_float(
+                                        base_out.get("closed_bar_high"), 0.0
+                                    )
+                                )
+                                > 1e-6
+                                or abs(
+                                    mb_l
+                                    - safe_float(
+                                        base_out.get("closed_bar_low"), 0.0
+                                    )
+                                )
+                                > 1e-6
+                            ):
+                                need_ha_recalc = True
+                            break
+                if need_ha_recalc:
+                    re_ha = _recompute_ha_rsi_from_memory_store(
+                        sym,
+                        cur_min_key=str(
+                            base_out.get("cur_bar_minute_key") or ""
+                        ),
+                    )
+                    if isinstance(re_ha, dict):
+                        base_out = dict(base_out)
+                        base_out.update(re_ha)
         t_date = str(payload.get("target_date") or "").strip()
         latch_d = payload.get("latch")
         if t_date and isinstance(latch_d, dict) and latch_d:

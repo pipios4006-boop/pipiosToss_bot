@@ -636,6 +636,7 @@ class SoxlStratumLedger:
             # [Case 91 + 바벨 확장]: COMP_08PCT / SIMPLE_08PCT / BARBELL_60_30_10 및 격리 수익금 오프셋
             "portion_mode": PORTION_MODE_COMPOUND,
             "vaulted_profit_locked_usd": 0.0,
+            "cycle_vaulted_locked_usd": 0.0,
             "threshold_mode": "WIDE_RUNWAY",
             "reentry_mode": "HYBRID_PULL_OR_BRK",
             "grid_merge_mode": DEFAULT_GRID_MERGE_MODE,
@@ -1475,6 +1476,7 @@ class SoxlStratumLedger:
             st["cycle_sub_realized_net_usd"] = 0.0
             st["cycle_sell_events"] = 0
             st["cycle_leftover_saved_usd"] = 0.0
+            st["cycle_vaulted_locked_usd"] = 0.0
         else:
             st["cycle_realized_gross_usd"] = round(
                 safe_float(st.get("cycle_realized_gross_usd"), 0.0), 4
@@ -1494,6 +1496,16 @@ class SoxlStratumLedger:
             st["cycle_leftover_saved_usd"] = round(
                 safe_float(st.get("cycle_leftover_saved_usd"), 0.0), 4
             )
+            st["cycle_vaulted_locked_usd"] = round(
+                min(
+                    st["vaulted_profit_locked_usd"],
+                    max(
+                        0.0,
+                        safe_float(st.get("cycle_vaulted_locked_usd"), 0.0),
+                    ),
+                ),
+                4,
+            )
 
         # 🚨 [Case 77, Case 88, Case 91 & 바벨 모드(60% SOXL 분리 · 별도 수익금고 격리) 통합 회계 항등식 강제]
         actual_inv_buckets = round(
@@ -1512,8 +1524,11 @@ class SoxlStratumLedger:
 
         if is_barbell_mode(st["portion_mode"]):
             soxl_core_60 = round(init_seed * BARBELL_SOXL_WEIGHT, 4)
+            # MODIFIED [Case 94]: 선행 익절 격리분 차감 결손 보전으로 유령현금 0% 항등식 유지
             cyc_loss_adj = min(
-                0.0, safe_float(st.get("cycle_realized_net_usd"), 0.0)
+                0.0,
+                safe_float(st.get("cycle_realized_net_usd"), 0.0)
+                - safe_float(st.get("cycle_vaulted_locked_usd"), 0.0),
             )
             total_pool_equity = (
                 max(0.0, soxl_core_60 + cyc_loss_adj) + inj_res_usd
@@ -1996,6 +2011,7 @@ class SoxlStratumLedger:
             initial_seed_usd=round(init_seed, 4),
             cumulative_realized_net_usd=round(cum_net, 4),
             vaulted_profit_locked_usd=round(v_locked, 4),
+            cycle_vaulted_locked_usd=0.0,
             cycle_realized_gross_usd=0.0,
             cycle_realized_fee_usd=0.0,
             cycle_realized_net_usd=0.0,
@@ -2059,6 +2075,7 @@ class SoxlStratumLedger:
             kw["cumulative_realized_gross_usd"] = 0.0
             kw["cumulative_realized_fee_usd"] = 0.0
             kw["vaulted_profit_locked_usd"] = 0.0
+            kw["cycle_vaulted_locked_usd"] = 0.0
             kw["cycle_realized_gross_usd"] = 0.0
             kw["cycle_realized_fee_usd"] = 0.0
             kw["cycle_realized_net_usd"] = 0.0
