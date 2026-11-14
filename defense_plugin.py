@@ -1797,13 +1797,9 @@ async def reconcile_stratum_with_broker_holdings_plugin(
             else ""
         )
         if is_barbell:
+            # MODIFIED [Case 102]: 수동 부분매도 환수금 보호 현금버킷 보존 및 0주 졸업 시 SGOV 원복 표기
             rt_part_note = (
-                f" · ⚡실시간환수 ${repaid_part_soxl:,.0f}(현금 ${cash_b_part:,.0f}"
-                + (
-                    f"·SGOV예약 +${added_part_sgov:,.0f})"
-                    if added_part_sgov > 0.0
-                    else ")"
-                )
+                f" · ⚡실시간환수 ${repaid_part_soxl:,.0f}(보호현금버킷 ${cash_b_part:,.0f} 보존➔0주 SGOV원복)"
                 if repaid_part_soxl > 0.0
                 else ""
             )

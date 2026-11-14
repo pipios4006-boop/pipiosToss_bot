@@ -1949,13 +1949,9 @@ async def _commit_filled_sell_and_reanchor_ledger(
         sess_tag = " · 🌃장외익절" if is_ext_sell else ""
 
         if is_barbell:
+            # MODIFIED [Case 102]: 미졸업 부분익절 환수금은 보호 현금버킷에 보존 후 0주 졸업 시 일괄 SGOV 원복
             rt_reb_note = ""
             if not is_graduated_zero and repaid_this_time > 0.0:
-                sgov_add_note = (
-                    f"➔SGOV예약 +${added_sgov_reb_usd:,.0f}(총 ${pending_sgov_reb_usd:,.0f})"
-                    if added_sgov_reb_usd > 0.0
-                    else ""
-                )
                 vault_rep_note = (
                     f"·금고원복 ${repaid_to_vault_usd:,.0f}"
                     if repaid_to_vault_usd > 0.0
@@ -1963,7 +1959,7 @@ async def _commit_filled_sell_and_reanchor_ledger(
                 )
                 rt_reb_note = (
                     f" · ⚡실시간환수 ${repaid_this_time:,.0f}"
-                    f"(현금버킷 ${barbell_cash_b_usd:,.0f}{sgov_add_note}{vault_rep_note})"
+                    f"(보호현금버킷 ${barbell_cash_b_usd:,.0f} 보존{vault_rep_note}➔0주 SGOV원복)"
                 )
             credit_mode_desc = (
                 f"별도 수익금고 영구격리!(⚖️바벨 · 누적금고 +${barbell_vault_total:,.2f}){rt_reb_note}"

@@ -605,18 +605,14 @@ def classify_barbell_transition_allocation(
             cash_bucket = round(cash_10 + raw_sgov_shortfall, 4)
         exhausted = False
     elif inv_soxl < tot_seed - 1e-6:
+        # MODIFIED [Case 102]: SOXL > 60% 시드고갈 구간에서는 중도 SGOV 매수예약 없이 전액 보호 현금버킷에 보존
         soxl_inj = round(inv_soxl - soxl_60, 4)
         used_p_cnt = max(
             1, int(math.ceil((soxl_inj - 1e-9) / max(1.0, portion_8)))
         )
         rem_seed = round(max(0.0, tot_seed - inv_soxl - sgov_inv), 4)
-        cash_bucket = round(min(cash_10, rem_seed), 4)
-        rem_for_sgov = round(max(0.0, rem_seed - cash_bucket), 4)
-        if rem_for_sgov >= (ref_sgov_p * 1.002):
-            pending_sgov_buy = rem_for_sgov
-        else:
-            pending_sgov_buy = 0.0
-            cash_bucket = round(cash_bucket + rem_for_sgov, 4)
+        cash_bucket = rem_seed
+        pending_sgov_buy = 0.0
         exhausted = bool(cash_bucket < portion_8 and sgov_q <= 0)
     else:
         soxl_inj = round(inv_soxl - soxl_60, 4)
@@ -778,6 +774,8 @@ def compute_realtime_barbell_stratum_rebalance(
     cycle_realized_net_usd: float = 0.0,
     topup_reserve_usd: float = 0.0,
     is_graduated_zero: bool = False,
+    sgov_tranche_sells_done_cycle: int = 0,
+    cash_injection_count_cycle: int = 0,
 ) -> Dict[str, Any]:
     """
     # NEW: 전 구간 실시간 지층 리밸런싱 순수 연산기
@@ -874,20 +872,45 @@ def compute_realtime_barbell_stratum_rebalance(
     )
     liquid_pool = round(min(raw_liquid, max_barbell_liquid_40), 4)
 
-    # [1순위] 현금 10% 우선 완충 ➔ [2순위] SOXL > 60% 여부 무관 10% 초과분 즉시 SGOV(30% 한도) 배정
-    base_cash = round(min(cash_10, liquid_pool), 4)
-    excess_over_cash10 = round(max(0.0, liquid_pool - base_cash), 4)
-    sgov_room = round(max(0.0, sgov_30 - sgov_inv), 4)
-    cand_sgov_buy = round(min(excess_over_cash10, sgov_room), 4)
-
-    if cand_sgov_buy >= min_one_sgov_cost:
-        next_pending_sgov_buy = cand_sgov_buy
-        next_cash_bucket = round(
-            base_cash + max(0.0, excess_over_cash10 - cand_sgov_buy), 4
-        )
+    # MODIFIED [Case 102]: 미졸업(SOXL > 0주) 중 실시간 SGOV 재매수 폐기 -> 보호 현금버킷 보존 후 0주 졸업 시 일괄 매수
+    if is_graduated_zero:
+        base_cash = round(min(cash_10, liquid_pool), 4)
+        excess_over_cash10 = round(max(0.0, liquid_pool - base_cash), 4)
+        sgov_room = round(max(0.0, sgov_30 - sgov_inv), 4)
+        cand_sgov_buy = round(min(excess_over_cash10, sgov_room), 4)
+        if cand_sgov_buy >= min_one_sgov_cost:
+            next_pending_sgov_buy = cand_sgov_buy
+            next_cash_bucket = round(
+                base_cash + max(0.0, excess_over_cash10 - cand_sgov_buy), 4
+            )
+        else:
+            next_pending_sgov_buy = 0.0
+            next_cash_bucket = liquid_pool
     else:
-        next_pending_sgov_buy = 0.0
-        next_cash_bucket = liquid_pool
+        had_cycle_depletion = bool(
+            prev_inj > 0.0
+            or repaid_from_soxl_usd > 0.0
+            or safe_int(sgov_tranche_sells_done_cycle, 0) > 0
+            or safe_int(cash_injection_count_cycle, 0) > 0
+        )
+        if had_cycle_depletion or prev_pend_b <= 0.0:
+            next_pending_sgov_buy = 0.0
+            next_cash_bucket = liquid_pool
+        else:
+            base_cash = round(min(cash_10, liquid_pool), 4)
+            excess_over_cash10 = round(max(0.0, liquid_pool - base_cash), 4)
+            sgov_room = round(max(0.0, sgov_30 - sgov_inv), 4)
+            kept_pend_buy = round(
+                min(prev_pend_b, excess_over_cash10, sgov_room), 4
+            )
+            if kept_pend_buy >= min_one_sgov_cost:
+                next_pending_sgov_buy = kept_pend_buy
+                next_cash_bucket = round(
+                    max(0.0, liquid_pool - kept_pend_buy), 4
+                )
+            else:
+                next_pending_sgov_buy = 0.0
+                next_cash_bucket = liquid_pool
 
     added_sgov_buy_usd = round(
         max(0.0, next_pending_sgov_buy - prev_pend_b), 4
@@ -1041,6 +1064,12 @@ async def record_barbell_realized_profit(
         cycle_realized_net_usd=eff_cyc_net,
         topup_reserve_usd=topup_resv_usd,
         is_graduated_zero=is_graduated_zero,
+        sgov_tranche_sells_done_cycle=safe_int(
+            bst.get("sgov_tranche_sells_done_cycle"), 0
+        ),
+        cash_injection_count_cycle=safe_int(
+            bst.get("cash_injection_count_cycle"), 0
+        ),
     )
 
     next_cash_bucket = reb["cash_bucket_usd"]
@@ -1120,7 +1149,8 @@ async def record_barbell_realized_profit(
         "sgov_wait_alert_sent": next_wait_alert,
         "completed_barbell_cycles": comp_cycles,
     }
-    if is_fully_unwound:
+    # MODIFIED [Case 102]: 사이클 내 수혈·SGOV매도 이력은 오직 0주 전량 졸업 시에만 초기화
+    if is_graduated_zero:
         b_upd_kw["cash_injection_count_cycle"] = 0
         b_upd_kw["vault_injection_count_cycle"] = 0
         b_upd_kw["sgov_tranche_sells_done_cycle"] = 0
@@ -2220,12 +2250,37 @@ async def execute_barbell_sgov_tick_plugin(
             _SGOV_IDLE_COOLDOWN_MONO[b_ledger.folder_slug] = time.monotonic()
             return {"status": "HOLD_SGOV_SELLABLE_ZERO"}
 
-    # 3) [2순위] SGOV 30% 목표 예산 범위 내 지정가 매수 (현금 10% 완충 우선 확인 후 초과분만 발주)
+    # 3) [2순위] SGOV 30% 목표 예산 범위 내 지정가 매수 (미졸업 수혈·매도 사이클 중에는 보호 현금버킷으로 이관)
     if (
         pending_buy_bud > 0.0
         and pending_sells == 0
         and not bool(st_soxl.get("waiting_reserve_deposit", False))
     ):
+        has_soxl_pos = bool(
+            st_soxl.get("buckets") or st_soxl.get("sub_buckets")
+        )
+        had_depletion_cycle = bool(
+            safe_float(st_soxl.get("injected_reserve_usd"), 0.0) > 0.0
+            or safe_int(bst.get("sgov_tranche_sells_done_cycle"), 0) > 0
+            or safe_int(bst.get("cash_injection_count_cycle"), 0) > 0
+        )
+        if has_soxl_pos and had_depletion_cycle:
+            merged_cash_b = round(
+                max(0.0, safe_float(bst.get("cash_bucket_usd"), 0.0))
+                + pending_buy_bud,
+                4,
+            )
+            await b_ledger.update_state(
+                cash_bucket_usd=merged_cash_b,
+                pending_sgov_buy_budget_usd=0.0,
+            )
+            logger.info(
+                "🛡️ [Case 102 바벨 미졸업 사이클 SGOV 재매수 잠금] 잔여 매수예약금 $%.2f ➔ 보호 현금버킷($%.2f) 보존(0주 졸업 시 일괄 매수)",
+                pending_buy_bud,
+                merged_cash_b,
+            )
+            return {"status": "BARBELL_HOLD_SGOV_REBUY_UNTIL_ZERO_GRAD"}
+
         splits_tick = compute_barbell_seed_splits(init_seed)
         cash_10_tick = splits_tick["cash_seed_10_usd"]
         cur_cash_b = max(0.0, safe_float(bst.get("cash_bucket_usd"), 0.0))
@@ -2472,10 +2527,10 @@ async def build_barbell_detail_dashboard_html(context: Any) -> str:
         f"① 🐂 SOXL 코어(60%): 목표 <b>${info['soxl_seed_60_usd']:,.2f}</b> (1회분 8% = <b>${info['soxl_portion_8pct_usd']:,.2f}</b>)",
         f"② 🛡️ SGOV 버킷(30%): 보유 <b>{info['sgov_held_qty']}주</b> (원금 <b>${info['sgov_invested_usd']:,.2f}</b> · 현재가 ${info['sgov_last_price']:.2f})",
         f"   ▫️ SGOV 세션: {reg_badge} | 매수예약 <b>${info['pending_sgov_buy_budget_usd']:,.0f}</b> · 매도예약 <b>{info['pending_sgov_tranche_sells']}건</b>(금번 {info['sgov_tranche_sells_done_cycle']}/3회)",
-        f"③ 💵 현금 대기(10%): 현재 <b>${info['cash_bucket_usd']:,.2f}</b> (1순위 완충/수혈 · 기수혈 ${info['cash_injected_to_soxl_usd']:,.0f} · 초과분 즉시 SGOV 전환)",
+        f"③ 💵 보호 현금버킷(기본10%·최대40%): 현재 <b>${info['cash_bucket_usd']:,.2f}</b> (기수혈 ${info['cash_injected_to_soxl_usd']:,.0f} · 미졸업 환수현금 보존 ➔ 0주졸업시 SGOV전환)",
         "━━━━━━━━━━━━━━━━━━",
         "🏦 <b>[별도 실현수익금고 (일반 매매/리밸런싱 100% 사용 금지)]</b>",
-        f"• 누적 격리수익: <b>+${info['vault_realized_profit_usd']:,.2f}</b> (0주졸업 {info['completed_barbell_cycles']}회 · 지층익절 실시간복원)",
+        f"• 누적 격리수익: <b>+${info['vault_realized_profit_usd']:,.2f}</b> (0주졸업 {info['completed_barbell_cycles']}회 · 환수금 현금보존·0주 SGOV원복)",
         f"• 금고 가용잔액: <b>${info['vault_available_usd']:,.2f}</b> | 40%소진 긴급대여: <b>${info['vault_injected_to_soxl_usd']:,.2f}</b>",
         f"• 금일 격리수익: <b>+${info['daily_vaulted_profit_usd']:,.2f}</b> | 이번구간 격리: <b>+${info['cycle_vaulted_profit_usd']:,.2f}</b>",
         f"🕒 {now_est.strftime('%m-%d %H:%M:%S EST')}",
@@ -2506,12 +2561,12 @@ def run_barbell_plugin_tdd() -> bool:
         and c_a["barbell_seed_exhausted"] is False
     ), f"바벨 전환 케이스 A 검증 실패: {c_a}"
 
-    # 케이스 B: SOXL $8,200(60%~100%) 보유 중 전환 -> 수혈 $2,200 인식 + 현금 $1,000 + SGOV $800
+    # 케이스 B (Case 102): SOXL $8,200(60%~100%) 시드고갈 구간 전환 -> 수혈 $2,200 인식 + 보호 현금버킷 $1,800 보존(SGOV $0)
     c_b = classify_barbell_transition_allocation(10000.0, 8200.0)
     assert (
         abs(c_b["soxl_injected_reserve_usd"] - 2200.0) < 1e-6
-        and abs(c_b["cash_bucket_usd"] - 1000.0) < 1e-6
-        and abs(c_b["pending_sgov_buy_budget_usd"] - 800.0) < 1e-6
+        and abs(c_b["cash_bucket_usd"] - 1800.0) < 1e-6
+        and c_b["pending_sgov_buy_budget_usd"] == 0.0
     ), f"바벨 전환 케이스 B 검증 실패: {c_b}"
 
     # 케이스 C: SOXL $10,000(100%) 보유 중 전환 -> 바벨 시드고갈 인식(현금 $0 · SGOV $0)
@@ -2529,8 +2584,7 @@ def run_barbell_plugin_tdd() -> bool:
     )
     assert q_sell == 9, f"SGOV 10% 내림 매도 수량 검증 실패: {q_sell}"
 
-    # 실시간 리밸런싱 검증 1: SOXL $9,200 -> $7,000 (70% > 60% 구간) 부분 익절 시
-    # 환수 $2,200 중 현금 10%($1,000) 우선 완충 후 초과분 $1,200 즉시 SGOV 매수예약 배정 검증!
+    # Case 102 검증 1: 미졸업(SOXL $9,200 -> $7,000) 부분 익절 시 SGOV 재매수 없이 환수 $2,200 전액 현금버킷 보존!
     r_70 = compute_realtime_barbell_stratum_rebalance(
         initial_seed_usd=10000.0,
         rem_soxl_invested_usd=7000.0,
@@ -2546,32 +2600,49 @@ def run_barbell_plugin_tdd() -> bool:
     assert (
         abs(r_70["rem_soxl_injected_usd"] - 1000.0) < 1e-6
         and abs(r_70["repaid_from_soxl_usd"] - 2200.0) < 1e-6
-        and abs(r_70["cash_bucket_usd"] - 1000.0) < 1e-6
-        and abs(r_70["pending_sgov_buy_budget_usd"] - 1200.0) < 1e-6
-    ), f"실시간 리밸런싱(>60% 구간 현금10% + 초과SGOV 배정) 검증 실패: {r_70}"
+        and abs(r_70["cash_bucket_usd"] - 2200.0) < 1e-6
+        and r_70["pending_sgov_buy_budget_usd"] == 0.0
+    ), f"Case 102 미졸업(>60% 구간 전액 현금버킷 보존) 검증 실패: {r_70}"
 
-    # 실시간 리밸런싱 검증 2: SOXL $7,000 -> $5,500 (55% <= 60% 구간) 추가 익절 시
-    # 잔여 수혈 $0 완납 및 기존 단주현금($96.70) 포함 전액 SGOV 30%($3,000) 한도 복원 검증!
+    # Case 102 검증 2: 미졸업(SOXL $7,000 -> $5,500 <= 60%) 추가 부분 익절 시에도 0주 전까지 전액 현금버킷($3,200) 유지!
     r_55 = compute_realtime_barbell_stratum_rebalance(
         initial_seed_usd=10000.0,
         rem_soxl_invested_usd=5500.0,
         prev_soxl_injected_usd=1000.0,
         prev_soxl_used_portions_cnt=3,
-        prev_cash_bucket_usd=1096.70,
+        prev_cash_bucket_usd=2200.0,
         prev_pending_sgov_buy_usd=0.0,
-        sgov_held_qty=19,
-        sgov_invested_usd=1903.30,
+        sgov_held_qty=8,
+        sgov_invested_usd=800.0,
         sgov_ref_price=100.30,
         is_graduated_zero=False,
     )
     assert (
         r_55["rem_soxl_injected_usd"] == 0.0
         and r_55["rem_soxl_used_portions_cnt"] == 0
-        and abs(r_55["cash_bucket_usd"] - 1000.0) < 1e-6
-        and abs(r_55["pending_sgov_buy_budget_usd"] - 1096.70) < 1e-6
-    ), f"실시간 리밸런싱(<=60% 구간 60/30/10 완전 복원) 검증 실패: {r_55}"
+        and abs(r_55["cash_bucket_usd"] - 3200.0) < 1e-6
+        and r_55["pending_sgov_buy_budget_usd"] == 0.0
+    ), f"Case 102 미졸업(<=60% 구간 SGOV 재매수 잠금) 검증 실패: {r_55}"
 
-    # 실시간 리밸런싱 검증 3: 수익금고 대여($960) + 추가현금($540) 존재 시 0-A/0-B순위 원복 검증!
+    # Case 102 검증 2-B: 0주 전량 졸업(is_graduated_zero=True) 확정 순간 단 1회 SGOV 30% 부족분($2,200) 일괄 예약!
+    r_zero = compute_realtime_barbell_stratum_rebalance(
+        initial_seed_usd=10000.0,
+        rem_soxl_invested_usd=0.0,
+        prev_soxl_injected_usd=0.0,
+        prev_soxl_used_portions_cnt=0,
+        prev_cash_bucket_usd=3200.0,
+        prev_pending_sgov_buy_usd=0.0,
+        sgov_held_qty=8,
+        sgov_invested_usd=800.0,
+        sgov_ref_price=100.30,
+        is_graduated_zero=True,
+    )
+    assert (
+        abs(r_zero["cash_bucket_usd"] - 1000.0) < 1e-6
+        and abs(r_zero["pending_sgov_buy_budget_usd"] - 2200.0) < 1e-6
+    ), f"Case 102 0주 졸업 시 SGOV 30% 일괄 예약 검증 실패: {r_zero}"
+
+    # Case 102 검증 3: 미졸업 중 수익금고 대여($960) + 추가현금($540) 0순위 원복 후 잔여 $1,200 현금버킷 보존!
     r_v = compute_realtime_barbell_stratum_rebalance(
         initial_seed_usd=10000.0,
         rem_soxl_invested_usd=8800.0,
@@ -2591,9 +2662,9 @@ def run_barbell_plugin_tdd() -> bool:
         and r_v["next_vault_injected_usd"] == 0.0
         and abs(r_v["repaid_to_ext_usd"] - 540.0) < 1e-6
         and r_v["next_external_injected_usd"] == 0.0
-        and abs(r_v["cash_bucket_usd"] - 1000.0) < 1e-6
-        and abs(r_v["pending_sgov_buy_budget_usd"] - 200.0) < 1e-6
-    ), f"실시간 리밸런싱(수익금고/외부현금 0순위 원복) 검증 실패: {r_v}"
+        and abs(r_v["cash_bucket_usd"] - 1200.0) < 1e-6
+        and r_v["pending_sgov_buy_budget_usd"] == 0.0
+    ), f"Case 102(수익금고/외부현금 0순위 원복 및 현금보존) 검증 실패: {r_v}"
 
     # 실시간 리밸런싱 검증 4: 수동 손절 0주 졸업(-$200) 시 유령현금 0% 항등식 검증!
     r_loss = compute_realtime_barbell_stratum_rebalance(

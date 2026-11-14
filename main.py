@@ -978,6 +978,12 @@ async def async_main() -> int:
             pass
 
         try:
+            if hasattr(context.tg, "close"):
+                await asyncio.wait_for(context.tg.close(), timeout=1.5)
+        except Exception:
+            pass
+
+        try:
             await asyncio.wait_for(context.api.close(), timeout=1.5)
         except Exception:
             pass

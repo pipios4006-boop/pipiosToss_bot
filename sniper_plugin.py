@@ -119,6 +119,10 @@ from barbell_plugin import (
     get_masked_soxl_buying_power_usd,
     is_barbell_mode,
 )
+from barbell_plugin import (
+    get_masked_soxl_buying_power_usd,
+    is_barbell_mode,
+)
 from toss_api import (
     DEFAULT_INITIAL_SEED_USD,
     EST_TZ,
@@ -130,6 +134,24 @@ from toss_api import (
 )
 
 logger = logging.getLogger("toss_sniper.sniper_plugin")
+
+
+def _resolve_masked_bp_for_soxl_sub_or_topup(
+    context: Any,
+    st_soxl: Dict[str, Any],
+    raw_bp_usd: float,
+) -> float:
+    raw_bp = max(0.0, safe_float(raw_bp_usd, 0.0))
+    if raw_bp <= 0.0:
+        return 0.0
+    if is_barbell_mode(st_soxl.get("portion_mode")):
+        return get_masked_soxl_buying_power_usd(
+            context=context, raw_bp_usd=raw_bp, st_soxl=st_soxl
+        )
+    vault_locked = max(
+        0.0, safe_float(st_soxl.get("vaulted_profit_locked_usd"), 0.0)
+    )
+    return round(max(0.0, raw_bp - vault_locked), 4)
 
 
 def _resolve_masked_bp_for_soxl_sub_or_topup(
