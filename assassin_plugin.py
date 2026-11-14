@@ -1825,6 +1825,7 @@ def evaluate_assassin_ha_trailing_and_exits(
     closed_bar_minute_key: str = "",
     closed_ha_ready: bool = False,
     closed_ha_bull: Optional[bool] = None,
+    closed_ha_shaved_bull: Optional[bool] = None,
     armed_minute_key: str = "",
     cur_minute_key: str = "",
 ) -> Dict[str, Any]:
@@ -1945,7 +1946,21 @@ def evaluate_assassin_ha_trailing_and_exits(
                 "active_stop_floor_price": cb_stop_p,
             }
 
-        if closed_ha_bull is not None:
+        if closed_ha_shaved_bull is not None:
+            eff_shaved_bull = bool(
+                (True if closed_ha_bull is None else closed_ha_bull)
+                and closed_ha_shaved_bull
+            )
+            is_closed_ha_red_hit = bool(
+                closed_ha_ready
+                and (not eff_shaved_bull)
+                and bool(closed_bar_minute_key)
+                and (
+                    not eff_armed_mk
+                    or closed_bar_minute_key >= eff_armed_mk
+                )
+            )
+        elif closed_ha_bull is not None:
             is_closed_ha_red_hit = bool(
                 closed_ha_ready
                 and (not closed_ha_bull)
@@ -1963,10 +1978,15 @@ def evaluate_assassin_ha_trailing_and_exits(
             and qqq_vel_max_3m_10m_pct < ASSASSIN_QQQ_SURGE_BYPASS_PCT
         ):
             exec_ha_p = round(max(eff_floor_p, lp), 2)
+            ha_exit_lbl = (
+                "완결 1분봉 아랫꼬리 HA양봉(추세둔화)"
+                if bool(closed_ha_bull)
+                else "완결 1분봉 HA 음봉 확정"
+            )
             return {
                 "should_exit": True,
                 "exit_code": "TRAIL_HA_RED_BOOST",
-                "exit_desc": f"🕯️ 완결 1분봉 HA 음봉 확정 트레일링 익절(${exec_ha_p:.2f})",
+                "exit_desc": f"🕯️ {ha_exit_lbl} 트레일링 익절(${exec_ha_p:.2f})",
                 "exit_price": exec_ha_p,
                 "is_trailing_armed": True,
                 "just_armed": False,
@@ -1985,6 +2005,7 @@ def evaluate_assassin_ha_trailing_and_exits(
                 "exit_price": exec_moc_p,
                 "is_trailing_armed": True,
                 "just_armed": False,
+                "armed_minute_key": eff_armed_mk,
                 "peak_price": round(cur_peak, 4),
                 "post_entry_min_price": round(cur_min, 4),
                 "active_stop_floor_price": exec_moc_p,
@@ -1993,10 +2014,11 @@ def evaluate_assassin_ha_trailing_and_exits(
         return {
             "should_exit": False,
             "exit_code": "ARMED_HOLD_TRACKING",
-            "exit_desc": f"🔥 HA 트레일링 추적 중(최고 ${cur_peak:.2f} / 스탑 ${cb_stop_p:.2f})",
+            "exit_desc": f"🔥 강세HA 트레일링 추적 중(최고 ${cur_peak:.2f} / 스탑 ${cb_stop_p:.2f})",
             "exit_price": 0.0,
             "is_trailing_armed": True,
             "just_armed": False,
+            "armed_minute_key": eff_armed_mk,
             "peak_price": round(cur_peak, 4),
             "post_entry_min_price": round(cur_min, 4),
             "active_stop_floor_price": cb_stop_p,
@@ -2453,6 +2475,14 @@ async def _extract_live_assassin_features_and_qqq_snapshot(
     ).strip()
     closed_ha_ready = bool(soxl_met.get("closed_ha_ready", False))
     closed_ha_bull = bool(soxl_met.get("closed_ha_bull", True))
+    closed_ha_shaved_bull = (
+        bool(
+            closed_ha_bull
+            and bool(soxl_met.get("closed_ha_shaved_bull", False))
+        )
+        if "closed_ha_shaved_bull" in soxl_met
+        else closed_ha_bull
+    )
     rsi_14 = round(safe_float(soxl_met.get("rsi_14"), 50.0), 2)
 
     qqq_vel_1m = round(safe_float(qqq_met.get("vel_1m_pct"), 0.0), 3)
@@ -2504,6 +2534,7 @@ async def _extract_live_assassin_features_and_qqq_snapshot(
         "closed_bar_minute_key": closed_bar_min_key,
         "closed_ha_ready": closed_ha_ready,
         "closed_ha_bull": closed_ha_bull,
+        "closed_ha_shaved_bull": closed_ha_shaved_bull,
         "qqq_vel_1m_pct": qqq_vel_1m,
         "qqq_vel_3m_pct": qqq_vel_3m,
         "qqq_vel_10m_pct": qqq_vel_10m,
@@ -2902,8 +2933,8 @@ async def _send_4_arm_100_trailing_alert(
         "──────────────",
         f"▫️ 진입단가: <b>${ep:.2f}</b> ➔ 현재가: <b>${live_price:.2f}</b> (<b>{cur_g:+.2f}%</b>)",
         f"🔒 익절보존선: <b>${arm_p:.2f} (+1.00%)</b> 하드 잠금 완료 (손실 가능성 0%!)",
-        f"🚀 상단목표캡: <b>${cap_p:.2f} (+5.00%)</b> 까지 완결 1분봉 HA 양봉 끝까지 추적",
-        "▫️ 출구조건: 완결 1분봉 HA 음봉 확정 또는 스텝보존(+1.25%)/콜백(-0.35%) 이탈 시 익절",
+        f"🚀 상단목표캡: <b>${cap_p:.2f} (+5.00%)</b> 까지 완결 1분봉 무밑꼬리 강세 HA양봉 홀딩",
+        "▫️ 출구조건: 완결 1분봉 비강세HA(아랫꼬리양봉·음봉) 확정 또는 스텝보존(+1.25%)/콜백(-0.35%) 이탈 시 익절",
         f"🕒 {now_est.strftime('%m-%d %H:%M:%S EST')}",
     ]
     await context.send_slim_alert("\n".join(lines))
@@ -5011,6 +5042,9 @@ async def execute_simulated_assassin_tick_plugin(
             ),
             closed_ha_ready=bool(feat.get("closed_ha_ready", False)),
             closed_ha_bull=bool(feat.get("closed_ha_bull", True)),
+            closed_ha_shaved_bull=bool(
+                feat.get("closed_ha_shaved_bull", False)
+            ),
             armed_minute_key=str(st.get("armed_minute_key") or ""),
             cur_minute_key=dt_now.strftime("%Y-%m-%d %H:%M"),
         )
@@ -5368,7 +5402,13 @@ async def build_assassin_detail_dashboard_html(
     comp_eq = max(100.0, safe_float(st.get("comp_free_cash_usd"), init_s))
     bar_str = "📈양봉" if feat.get("is_bull_bar") else "📉음봉"
     ha_str = (
-        "🟢완결양봉" if feat.get("closed_ha_bull", True) else "🔴완결음봉"
+        "🟢완결강세양봉(패스)"
+        if feat.get("closed_ha_shaved_bull", False)
+        else (
+            "🟡완결밑꼬리양봉(익절)"
+            if feat.get("closed_ha_bull", True)
+            else "🔴완결음봉(익절)"
+        )
     )
 
     exec_m = str(st.get("execution_mode") or ASSASSIN_MODE_SIMULATED).upper()
@@ -5825,5 +5865,66 @@ def run_assassin_plugin_tdd() -> bool:
         cur_minute_key="2026-11-13 08:00",
     )
     assert ex_hold["should_exit"] is False
+
+    # 8) Case 103: 완결 1분봉 무밑꼬리 강세 HA양봉 홀딩 vs 아랫꼬리 HA양봉 즉시 익절 검증
+    ex_shaved_hold = evaluate_assassin_ha_trailing_and_exits(
+        hm=801,
+        entry_price=50.00,
+        live_price=50.70,
+        bar_high_price=50.80,
+        is_trailing_armed=True,
+        peak_price=50.80,
+        arm_100_price=50.50,
+        cap_500_price=52.50,
+        soxl_is_bull_bar=True,
+        soxl_is_ha_bull=True,
+        soxl_prev_reg_close=51.00,
+        soxl_pre_open_price=50.80,
+        soxl_reg_vwap=50.60,
+        post_entry_min_price=50.00,
+        qqq_vel_1m_pct=0.0,
+        qqq_vel_3m_pct=0.0,
+        qqq_vel_max_3m_10m_pct=0.0,
+        qqq_bear_drop_amp_pct=0.0,
+        nq_entry_bear_amp_pct=2.00,
+        closed_bar_minute_key="2026-11-13 08:00",
+        closed_ha_ready=True,
+        closed_ha_bull=True,
+        closed_ha_shaved_bull=True,
+        armed_minute_key="2026-11-13 08:00",
+        cur_minute_key="2026-11-13 08:01",
+    )
+    assert ex_shaved_hold["should_exit"] is False
+    ex_weak_bull_exit = evaluate_assassin_ha_trailing_and_exits(
+        hm=801,
+        entry_price=50.00,
+        live_price=50.70,
+        bar_high_price=50.80,
+        is_trailing_armed=True,
+        peak_price=50.80,
+        arm_100_price=50.50,
+        cap_500_price=52.50,
+        soxl_is_bull_bar=True,
+        soxl_is_ha_bull=True,
+        soxl_prev_reg_close=51.00,
+        soxl_pre_open_price=50.80,
+        soxl_reg_vwap=50.60,
+        post_entry_min_price=50.00,
+        qqq_vel_1m_pct=0.0,
+        qqq_vel_3m_pct=0.0,
+        qqq_vel_max_3m_10m_pct=0.0,
+        qqq_bear_drop_amp_pct=0.0,
+        nq_entry_bear_amp_pct=2.00,
+        closed_bar_minute_key="2026-11-13 08:00",
+        closed_ha_ready=True,
+        closed_ha_bull=True,
+        closed_ha_shaved_bull=False,
+        armed_minute_key="2026-11-13 08:00",
+        cur_minute_key="2026-11-13 08:01",
+    )
+    assert (
+        ex_weak_bull_exit["should_exit"] is True
+        and ex_weak_bull_exit["exit_code"] == "TRAIL_HA_RED_BOOST"
+    )
 
     return True

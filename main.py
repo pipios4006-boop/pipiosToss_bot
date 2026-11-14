@@ -965,18 +965,7 @@ async def async_main() -> int:
         except Exception:
             pass
 
-        try:
-            if hasattr(context.tg, "close"):
-                await asyncio.wait_for(context.tg.close(), timeout=1.5)
-        except Exception:
-            pass
-
-        try:
-            if hasattr(context.tg, "close"):
-                await asyncio.wait_for(context.tg.close(), timeout=1.5)
-        except Exception:
-            pass
-
+        # MODIFIED: 종료 시 텔레그램 비동기 HTTP 세션 1회 정상 회수
         try:
             if hasattr(context.tg, "close"):
                 await asyncio.wait_for(context.tg.close(), timeout=1.5)

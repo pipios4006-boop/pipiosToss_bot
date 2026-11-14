@@ -250,12 +250,34 @@ async def _sync_barbell_sgov_holdings_if_idle(
 
         if h_sg_qty < l_sg_qty:
             freed_sg_usd = max(0.0, old_sg_inv - new_sg_inv)
-            max_liq_sg = max(
-                0.0, (cash_10_sg + sgov_30_sg) - new_sg_inv - cur_pend_b
+            has_soxl_pos_sg = bool(
+                st_soxl_sg.get("buckets")
+                or st_soxl_sg.get("sub_buckets")
+                or str(st_soxl_sg.get("buy_order_id") or "").strip()
             )
-            next_cash_sg = round(min(max_liq_sg, cur_cash_b + freed_sg_usd), 4)
+            if has_soxl_pos_sg:
+                # MODIFIED [Case 102]: 미졸업(SOXL > 0주) 중 수동 SGOV 매도 시 매도이력 각인 및 재매수 예약 $0 잠금
+                upd_sg["sgov_tranche_sells_done_cycle"] = (
+                    safe_int(bst.get("sgov_tranche_sells_done_cycle"), 0) + 1
+                )
+                upd_sg["pending_sgov_buy_budget_usd"] = 0.0
+                max_liq_sg = max(
+                    0.0, (cash_10_sg + sgov_30_sg) - new_sg_inv
+                )
+                next_cash_sg = round(
+                    min(max_liq_sg, cur_cash_b + cur_pend_b + freed_sg_usd), 4
+                )
+                eff_pend_sg = 0.0
+            else:
+                max_liq_sg = max(
+                    0.0, (cash_10_sg + sgov_30_sg) - new_sg_inv - cur_pend_b
+                )
+                next_cash_sg = round(
+                    min(max_liq_sg, cur_cash_b + freed_sg_usd), 4
+                )
+                eff_pend_sg = cur_pend_b
             upd_sg["cash_bucket_usd"] = next_cash_sg
-            if (soxl_free_sg + next_cash_sg + cur_pend_b) >= (
+            if (soxl_free_sg + next_cash_sg + eff_pend_sg) >= (
                 guard_floor_sg - 1e-6
             ):
                 upd_sg["pending_sgov_tranche_sells"] = 0

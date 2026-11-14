@@ -2473,6 +2473,14 @@ async def _get_closed_1m_ha_and_qqq_snapshot(
         if isinstance(soxl_met, dict)
         else True
     )
+    closed_shaved_bull = (
+        bool(
+            closed_bull
+            and bool(soxl_met.get("closed_ha_shaved_bull", False))
+        )
+        if isinstance(soxl_met, dict) and "closed_ha_shaved_bull" in soxl_met
+        else closed_bull
+    )
     qqq_met = (
         raw_cache.get("QQQ") if isinstance(raw_cache, dict) else None
     )
@@ -2481,7 +2489,13 @@ async def _get_closed_1m_ha_and_qqq_snapshot(
         if isinstance(qqq_met, dict)
         else 0.0
     )
-    return closed_mk, closed_ready, closed_bull, qqq_vel_max
+    return (
+        closed_mk,
+        closed_ready,
+        closed_bull,
+        closed_shaved_bull,
+        qqq_vel_max,
+    )
 
 
 def _step_l1_trail_slot_candidate(
@@ -2493,6 +2507,7 @@ def _step_l1_trail_slot_candidate(
     closed_ha_ready: bool,
     closed_ha_bull: bool,
     qqq_vel_max: float,
+    closed_ha_shaved_bull: Optional[bool] = None,
 ) -> Tuple[str, bool]:
     """
     # NEW [Case 99 : 🛡️ ⑥ 하드보존(1%➔1.25%) + 완결 1분봉 HA 음봉 + 콜백 1차 후보 판정기]
@@ -2535,10 +2550,15 @@ def _step_l1_trail_slot_candidate(
     if stop_now > 0.0 and live_p < stop_now - 1e-9:
         return "TRAIL_CB_STOP", False
 
-    # MODIFIED: closed_min_key < cur_min_key 완결 보장 하에 점화 분봉 마감(>=) 즉시 HA 음봉 검문
+    # MODIFIED [Case 103]: 완결 1분봉이 무밑꼬리 강세 HA양봉(eff_shaved_bull)일 때만 패스(홀딩)
+    eff_shaved_bull = (
+        bool(closed_ha_bull and closed_ha_shaved_bull)
+        if closed_ha_shaved_bull is not None
+        else bool(closed_ha_bull)
+    )
     if (
         closed_ha_ready
-        and (not closed_ha_bull)
+        and (not eff_shaved_bull)
         and bool(closed_min_key)
         and bool(slot.armed_minute_key)
         and (closed_min_key >= slot.armed_minute_key)
@@ -2796,9 +2816,13 @@ async def execute_1m_sniper_sell_and_reanchor_plugin(
     forgiven_any = False
 
     if use_daytime_l1_trail:
-        closed_mk, closed_ready, closed_bull, qqq_vel_max = (
-            await _get_closed_1m_ha_and_qqq_snapshot(context, live_p, dt_now)
-        )
+        (
+            closed_mk,
+            closed_ready,
+            closed_bull,
+            closed_shaved_bull,
+            qqq_vel_max,
+        ) = await _get_closed_1m_ha_and_qqq_snapshot(context, live_p, dt_now)
         if bool(sell_eval.get("hit_wma_grad")):
             main_slot.full_reset()
         elif main_slot.qty > 0:
@@ -2811,11 +2835,12 @@ async def execute_1m_sniper_sell_and_reanchor_plugin(
                 closed_ha_ready=closed_ready,
                 closed_ha_bull=closed_bull,
                 qqq_vel_max=qqq_vel_max,
+                closed_ha_shaved_bull=closed_shaved_bull,
             )
             if ign_m:
                 just_ignited_any = True
                 logger.info(
-                    "🔥 [SOXL 본 1층 완결1분HA 트레일링 점화] 단가=$%.2f ➔ 점화가=$%.2f(스텝락=$%.2f) · 점화분=%s · 무스탑 0.40s HA추적 개시",
+                    "🔥 [SOXL 본 1층 완결1분HA 트레일링 점화] 단가=$%.2f ➔ 점화가=$%.2f(스텝락=$%.2f) · 점화분=%s · 강세HA양봉 홀딩 추적 개시",
                     main_slot.ref_cost,
                     main_slot.arm_100_p,
                     main_slot.lock_125_p,
@@ -2834,22 +2859,23 @@ async def execute_1m_sniper_sell_and_reanchor_plugin(
                 closed_ha_ready=closed_ready,
                 closed_ha_bull=closed_bull,
                 qqq_vel_max=qqq_vel_max,
+                closed_ha_shaved_bull=closed_shaved_bull,
             )
             if ign_s:
                 just_ignited_any = True
                 logger.info(
-                    "🔥 [SOXL 서브 1층 완결1분HA 트레일링 점화] 단가=$%.2f ➔ 점화가=$%.2f(스텝락=$%.2f) · 점화분=%s · 무스탑 0.40s HA추적 개시",
+                    "🔥 [SOXL 서브 1층 완결1분HA 트레일링 점화] 단가=$%.2f ➔ 점화가=$%.2f(스텝락=$%.2f) · 점화분=%s · 강세HA양봉 홀딩 추적 개시",
                     sub_slot.ref_cost,
                     sub_slot.arm_100_p,
                     sub_slot.lock_125_p,
                     sub_slot.armed_minute_key,
                 )
-        # MODIFIED: 점화 직후 0.001s 재기상(wakeup_event) 제거 -> 정상 0.40s 가속 주기 진입
         _ = just_ignited_any
     else:
         closed_mk = ""
         closed_ready = False
         closed_bull = True
+        closed_shaved_bull = True
 
     if (
         bool(sell_eval.get("should_sell"))
@@ -2903,7 +2929,7 @@ async def execute_1m_sniper_sell_and_reanchor_plugin(
 
         bad_ha_mk = (
             closed_mk
-            if (closed_ready and (not closed_bull) and bool(closed_mk))
+            if (closed_ready and (not closed_shaved_bull) and bool(closed_mk))
             else ""
         )
         fired_main_trail = False
