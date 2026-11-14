@@ -415,7 +415,7 @@ def _format_multi_grid_stratum_lines(
                 if bool(tr_m.get("stepped_125")) and st_p > 0.0:
                     lines.append(
                         f"⚡ <b>[1층: {l1_qty_label}·${b1.actual_cost_usd:,.0f}]</b> "
-                        f"<b>${b1.book_price:.2f}</b> ➔ 스탑 <b>${st_p:.2f}</b> ({g1_sign}{l1_g:.2f}%·👑1.40%락)"
+                        f"<b>${b1.book_price:.2f}</b> ➔ 스탑 <b>${st_p:.2f}</b> ({g1_sign}{l1_g:.2f}%·👑1.60%락)"
                     )
                 else:
                     lk_m_p = safe_float(
@@ -424,11 +424,11 @@ def _format_multi_grid_stratum_lines(
                     )
                     lines.append(
                         f"⚡ <b>[1층: {l1_qty_label}·${b1.actual_cost_usd:,.0f}]</b> "
-                        f"<b>${b1.book_price:.2f}</b> ➔ <b>1분HA추적</b>(락${lk_m_p:.2f}) ({g1_sign}{l1_g:.2f}%·🔥무스탑)"
+                        f"<b>${b1.book_price:.2f}</b> ➔ <b>강세HA추적</b>(락${lk_m_p:.2f}) ({g1_sign}{l1_g:.2f}%·🔥무스탑)"
                     )
             else:
                 fg_c = safe_int(tr_m.get("forgive_count"), 0)
-                fg_b = f"·💡용서{fg_c}" if fg_c > 0 else "·점화1.25%"
+                fg_b = f"·💡용서{fg_c}" if fg_c > 0 else "·점화1.50%"
                 lines.append(
                     f"⚡ <b>[1층: {l1_qty_label}·${b1.actual_cost_usd:,.0f}]</b> "
                     f"<b>${b1.book_price:.2f}</b> ➔ <b>${l1_ign_p:.2f}</b> ({g1_sign}{l1_g:.2f}%{fg_b})"
@@ -630,7 +630,7 @@ def _format_sub_grid_stratum_lines(
                 if bool(tr_s.get("stepped_125")) and sst_p > 0.0:
                     lines.append(
                         f"  ⚡ <b>[서브1층: {sl1_label}·${sb1.actual_cost_usd:,.0f}]</b> "
-                        f"<b>${sb1.book_price:.2f}</b> ➔ 스탑 <b>${sst_p:.2f}</b> ({sg1_s}{sl1_g:.2f}%·👑1.25%락)"
+                        f"<b>${sb1.book_price:.2f}</b> ➔ 스탑 <b>${sst_p:.2f}</b> ({sg1_s}{sl1_g:.2f}%·👑1.60%락)"
                     )
                 else:
                     slk_p = safe_float(
@@ -641,11 +641,11 @@ def _format_sub_grid_stratum_lines(
                     )
                     lines.append(
                         f"  ⚡ <b>[서브1층: {sl1_label}·${sb1.actual_cost_usd:,.0f}]</b> "
-                        f"<b>${sb1.book_price:.2f}</b> ➔ <b>1분HA추적</b>(락${slk_p:.2f}) ({sg1_s}{sl1_g:.2f}%·🔥무스탑)"
+                        f"<b>${sb1.book_price:.2f}</b> ➔ <b>강세HA추적</b>(락${slk_p:.2f}) ({sg1_s}{sl1_g:.2f}%·🔥무스탑)"
                     )
             else:
                 sfg_c = safe_int(tr_s.get("forgive_count"), 0)
-                sfg_b = f"·💡용서{sfg_c}" if sfg_c > 0 else "·점화1%"
+                sfg_b = f"·💡용서{sfg_c}" if sfg_c > 0 else "·점화1.50%"
                 lines.append(
                     f"  ⚡ <b>[서브1층: {sl1_label}·${sb1.actual_cost_usd:,.0f}]</b> "
                     f"<b>${sb1.book_price:.2f}</b> ➔ <b>${sl1_ign_p:.2f}</b> ({sg1_s}{sl1_g:.2f}%{sfg_b})"

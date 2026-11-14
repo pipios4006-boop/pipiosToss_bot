@@ -2948,7 +2948,7 @@ async def execute_1m_sniper_sell_and_reanchor_plugin(
                 main_slot.release_forgive(bad_ha_minute_key=bad_ha_mk)
                 forgiven_any = True
                 logger.info(
-                    "💡 [옵션 1-B 본 1층 '허락보다 용서를' 릴리스 & 기존 HA 망각] 실호가=$%.2f < +1.25%%($%.2f) -> 허공주문 차단 · 망각봉=%s",
+                    "💡 [제안 B 본 1층 '허락보다 용서를' 릴리스 & 기존 HA 망각] 실호가=$%.2f < +1.50%%($%.2f) -> 허공주문 차단 · 망각봉=%s",
                     fresh_live_p,
                     main_slot.arm_100_p,
                     bad_ha_mk or "-",
@@ -3019,7 +3019,7 @@ async def execute_1m_sniper_sell_and_reanchor_plugin(
                 sub_slot.release_forgive(bad_ha_minute_key=bad_ha_mk)
                 forgiven_any = True
                 logger.info(
-                    "💡 [Case 99 서브 1층 '허락보다 용서를' 릴리스 & 기존 HA 망각] 실호가=$%.2f < +1.00%%($%.2f) -> 허공주문 차단 · 망각봉=%s",
+                    "💡 [제안 B 서브 1층 '허락보다 용서를' 릴리스 & 기존 HA 망각] 실호가=$%.2f < +1.50%%($%.2f) -> 허공주문 차단 · 망각봉=%s",
                     fresh_live_p,
                     sub_slot.arm_100_p,
                     bad_ha_mk or "-",
