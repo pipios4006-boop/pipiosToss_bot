@@ -2074,12 +2074,59 @@ async def _sync_pending_sgov_orders(
             last_sgov_action_mono=time.monotonic(),
             last_settled_sgov_order_ids=settled_oids[-50:],
         )
+        # MODIFIED [Audit-03]: SGOV 매도 차익(sgov_gain > 0) 발생 시 스나이퍼 원장 vaulted_profit_locked_usd 동기화
+        st_soxl_post_sg = context.ledger.get_state(TARGET_SYMBOL)
+        sgov_gain_sync_kw: Dict[str, Any] = {}
+        if sgov_gain > 0.0:
+            sgov_gain_sync_kw = {
+                "vaulted_profit_locked_usd": round(
+                    max(
+                        0.0,
+                        safe_float(
+                            st_soxl_post_sg.get("vaulted_profit_locked_usd"),
+                            0.0,
+                        ),
+                    )
+                    + sgov_gain,
+                    4,
+                ),
+                "cumulative_realized_gross_usd": round(
+                    safe_float(
+                        st_soxl_post_sg.get("cumulative_realized_gross_usd"),
+                        0.0,
+                    )
+                    + safe_float(pnl_info.get("gross_pnl_usd"), sgov_gain),
+                    4,
+                ),
+                "cumulative_realized_fee_usd": round(
+                    safe_float(
+                        st_soxl_post_sg.get("cumulative_realized_fee_usd"), 0.0
+                    )
+                    + safe_float(pnl_info.get("fee_usd"), 0.0),
+                    4,
+                ),
+                "cumulative_realized_net_usd": round(
+                    safe_float(
+                        st_soxl_post_sg.get("cumulative_realized_net_usd"), 0.0
+                    )
+                    + sgov_gain,
+                    4,
+                ),
+                "daily_realized_net_usd": round(
+                    safe_float(
+                        st_soxl_post_sg.get("daily_realized_net_usd"), 0.0
+                    )
+                    + sgov_gain,
+                    4,
+                ),
+            }
         await context.ledger.update_state(
             TARGET_SYMBOL,
             waiting_reserve_deposit=False,
             waiting_reserve_deposit_alert_sent=False,
             required_reserve_deposit_usd=0.0,
             last_reserve_check_ts=0.0,
+            **sgov_gain_sync_kw,
         )
         context.wakeup_event.set()
         if hasattr(context, "send_slim_alert"):
@@ -2097,7 +2144,11 @@ async def _sync_pending_sgov_orders(
             )
         return {"status": "SGOV_SELL_FILLED", "qty": eff_q, "price": eff_p}
 
-    if need_timeout_cancel or ord_status in ("CANCELED", "REJECTED"):
+    if need_timeout_cancel or ord_status in (
+        "CANCELED",
+        "REJECTED",
+        "REPLACED",
+    ):
         await b_ledger.update_state(
             sgov_buy_order_id="",
             sgov_sell_order_id="",

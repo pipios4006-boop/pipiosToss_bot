@@ -230,8 +230,16 @@ def _try_get_cached_base_metrics(
                 with _LIVE_1M_BAR_LOCK:
                     for mb in reversed(_LIVE_1M_BAR_STORE.get(sym, [])[-4:]):
                         if str(mb.get("_min_key") or "") == c_mk:
+                            # MODIFIED [Audit-02]: 직전 완결봉 O/H/L/C(closed_ha_close) 병합 차이 전수 감지
+                            mb_o = safe_float(mb.get("openPrice"), 0.0)
                             mb_h = safe_float(mb.get("highPrice"), 0.0)
                             mb_l = safe_float(mb.get("lowPrice"), 0.0)
+                            mb_c = safe_float(mb.get("closePrice"), 0.0)
+                            mb_ha_c = (
+                                round((mb_o + mb_h + mb_l + mb_c) * 0.25, 4)
+                                if (mb_o > 0.0 and mb_c > 0.0)
+                                else 0.0
+                            )
                             if (
                                 abs(
                                     mb_h
@@ -247,6 +255,16 @@ def _try_get_cached_base_metrics(
                                     )
                                 )
                                 > 1e-6
+                                or (
+                                    mb_ha_c > 0.0
+                                    and abs(
+                                        mb_ha_c
+                                        - safe_float(
+                                            base_out.get("closed_ha_close"), 0.0
+                                        )
+                                    )
+                                    > 1e-4
+                                )
                             ):
                                 need_ha_recalc = True
                             break
@@ -282,6 +300,36 @@ def _try_get_cached_base_metrics(
         return None
 
 
+def _open_metrics_shm_lock_fd_sync(lock_fp: str) -> int:
+    # NEW [Audit-01A]: Ubuntu 24.04 fs.protected_regular=2 다중 UID EACCES 원천 차단
+    try:
+        return os.open(lock_fp, os.O_RDWR)
+    except FileNotFoundError:
+        tmp_lk = f"{lock_fp}.{os.getpid()}.{threading.get_ident()}"
+        old_u = os.umask(0)
+        try:
+            fd_t = os.open(
+                tmp_lk,
+                os.O_CREAT | os.O_EXCL | os.O_RDWR,
+                0o666,
+            )
+            try:
+                os.fchmod(fd_t, 0o666)
+            except Exception:
+                pass
+            os.close(fd_t)
+            os.replace(tmp_lk, lock_fp)
+        except Exception:
+            try:
+                if os.path.exists(tmp_lk):
+                    os.remove(tmp_lk)
+            except Exception:
+                pass
+        finally:
+            os.umask(old_u)
+        return os.open(lock_fp, os.O_RDWR)
+
+
 def _store_cached_base_metrics(
     sym: str,
     fp_str: str,
@@ -299,11 +347,7 @@ def _store_cached_base_metrics(
         bdir = _metrics_shm_dir_sync()
         if fcntl is not None:
             lfp = os.path.join(bdir, f"metrics_base_v3_{sym}.lock")
-            lfd = os.open(lfp, os.O_CREAT | os.O_RDWR, 0o666)
-            try:
-                os.fchmod(lfd, 0o666)
-            except Exception:
-                pass
+            lfd = _open_metrics_shm_lock_fd_sync(lfp)
             fcntl.flock(lfd, fcntl.LOCK_EX)
         with _LIVE_1M_BAR_LOCK:
             mem_snap = [

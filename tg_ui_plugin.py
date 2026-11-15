@@ -2193,6 +2193,7 @@ class TelegramCommandController:
             "cumulative_realized_fee_usd": 0.0,
             "cumulative_realized_net_usd": 0.0,
             "vaulted_profit_locked_usd": 0.0,
+            "cycle_vaulted_locked_usd": 0.0,  # MODIFIED [Audit-04B]: Case 104 사이클 선행 격리분 명시적 초기화
             "daily_realized_net_usd": 0.0,
             "cycle_realized_gross_usd": 0.0,
             "cycle_realized_fee_usd": 0.0,

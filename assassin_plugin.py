@@ -187,18 +187,43 @@ def _assn_write_shm_bus_sync(payload: Dict[str, Any]) -> None:
         os.umask(old_u)
 
 
+def _open_assn_shm_lock_fd_sync(lock_fp: str) -> int:
+    # NEW [Audit-01B]: Ubuntu 24.04 fs.protected_regular=2 다중 UID EACCES 원천 차단
+    try:
+        return os.open(lock_fp, os.O_RDWR)
+    except FileNotFoundError:
+        tmp_lk = f"{lock_fp}.{os.getpid()}.{threading.get_ident()}"
+        old_u = os.umask(0)
+        try:
+            fd_t = os.open(
+                tmp_lk,
+                os.O_CREAT | os.O_EXCL | os.O_RDWR,
+                0o666,
+            )
+            try:
+                os.fchmod(fd_t, 0o666)
+            except Exception:
+                pass
+            os.close(fd_t)
+            os.replace(tmp_lk, lock_fp)
+        except Exception:
+            try:
+                if os.path.exists(tmp_lk):
+                    os.remove(tmp_lk)
+            except Exception:
+                pass
+        finally:
+            os.umask(old_u)
+        return os.open(lock_fp, os.O_RDWR)
+
+
 def _assn_acquire_shm_lock_sync() -> int:
     if fcntl is None:
         return -1
     lfp = f"{_assn_shm_fp_sync()}.lock"
-    old_u = os.umask(0)
     fd = -1
     try:
-        fd = os.open(lfp, os.O_CREAT | os.O_RDWR, 0o666)
-        try:
-            os.fchmod(fd, 0o666)
-        except Exception:
-            pass
+        fd = _open_assn_shm_lock_fd_sync(lfp)
         fcntl.flock(fd, fcntl.LOCK_EX)
         return fd
     except Exception:
@@ -208,8 +233,6 @@ def _assn_acquire_shm_lock_sync() -> int:
             except Exception:
                 pass
         return -1
-    finally:
-        os.umask(old_u)
 
 
 def _assn_release_shm_lock_sync(fd: int) -> None:
@@ -363,8 +386,11 @@ async def _consume_shm_gate_if_fresh(
         now_ts=now_ts,
     )
     if not allow_main_force_entry:
-        _CONSUMED_SHM_GATE_KEYS[slug] = skey
-        return f"GT_SHM_SCOUT_DISPATCHED_{gid}" if gt_d else None
+        # MODIFIED [Audit-04A]: 60초 쿨다운/활성슬롯 대기 중(gt_d == False) SHM 10G 신호 조기 소모 방지
+        if gt_d:
+            _CONSUMED_SHM_GATE_KEYS[slug] = skey
+            return f"GT_SHM_SCOUT_DISPATCHED_{gid}"
+        return None
     res_e = await _enter_assassin_main_force_from_gate(
         context=context,
         assn_ledger=assn_ledger,
