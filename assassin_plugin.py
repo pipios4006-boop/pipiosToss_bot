@@ -424,14 +424,14 @@ async def _consume_shm_gate_if_fresh(
         _CONSUMED_SHM_GATE_KEYS[slug] = skey
     return res_e
 
-# MODIFIED: 스나이퍼 동기화 — 초기 과민 콜백 폐기(0.00) · +1.45% 도달 시 +1.25% 스텝락 · +2% 여유 콜백(0.35)
+# MODIFIED [Case 106]: 실시간 -0.35% 틱 콜백 영구 폐기(0.00) ➔ 하드보존(+1.00%➔+1.25%) + 순수 완결 1분봉 강세HA 홀딩 단일화
 ASSASSIN_SAFE_CAP_PCT: float = 5.00
 ASSASSIN_ARM_IGNITION_PCT: float = 1.00
 ASSASSIN_STEP_TRIG_PCT: float = 1.45
 ASSASSIN_STEP_LOCK_PCT: float = 1.25
 ASSASSIN_BOOST_TIER2_PCT: float = 2.00
 ASSASSIN_CALLBACK_TIGHT_PCT: float = 0.00
-ASSASSIN_CALLBACK_WIDE_PCT: float = 0.35
+ASSASSIN_CALLBACK_WIDE_PCT: float = 0.00
 ASSASSIN_QQQ_SURGE_BYPASS_PCT: float = 0.20
 
 LIVE_BUY_ORDER_MAX_WAIT_SEC: float = 60.0
@@ -1952,7 +1952,11 @@ def evaluate_assassin_ha_trailing_and_exits(
         peak_gain_pct = ((cur_peak - ep) / ep) * 100.0 if ep > 0.0 else 1.0
         stepped_125 = bool(cur_peak >= step_trig_p - 1e-9)
         eff_floor_p = lock_125_p if stepped_125 else arm_p
-        if stepped_125 and peak_gain_pct >= ASSASSIN_BOOST_TIER2_PCT:
+        if (
+            ASSASSIN_CALLBACK_WIDE_PCT > 0.0
+            and stepped_125
+            and peak_gain_pct >= ASSASSIN_BOOST_TIER2_PCT
+        ):
             cb_stop_p = round(
                 max(
                     lock_125_p,
@@ -3018,8 +3022,8 @@ async def _send_4_arm_100_trailing_alert(
         "──────────────",
         f"▫️ 진입단가: <b>${ep:.2f}</b> ➔ 현재가: <b>${live_price:.2f}</b> (<b>{cur_g:+.2f}%</b>)",
         f"🔒 익절보존선: <b>${arm_p:.2f} (+1.00%)</b> 하드 잠금 완료 (손실 가능성 0%!)",
-        f"🚀 상단목표캡: <b>${cap_p:.2f} (+5.00%)</b> 까지 완결 1분봉 무밑꼬리 강세 HA양봉 홀딩",
-        "▫️ 출구조건: 완결 1분봉 비강세HA(아랫꼬리양봉·음봉) 확정 또는 스텝보존(+1.25%)/콜백(-0.35%) 이탈 시 익절",
+        f"🚀 상단목표캡: <b>${cap_p:.2f} (+5.00%)</b> 까지 완결 1분봉 무밑꼬리 강세 HA양봉 홀딩(콜백 0%)",
+        "▫️ 출구조건: 완결 1분봉 비강세HA(아랫꼬리양봉·음봉) 확정 또는 하드보존선(+1.00%➔+1.25%) 이탈 시 익절",
         f"🕒 {now_est.strftime('%m-%d %H:%M:%S EST')}",
     ]
     await context.send_slim_alert("\n".join(lines))

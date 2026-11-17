@@ -416,7 +416,7 @@ def _format_multi_grid_stratum_lines(
                 if bool(tr_m.get("stepped_125")) and st_p > 0.0:
                     lines.append(
                         f"⚡ <b>[1층: {l1_qty_label}·${b1.actual_cost_usd:,.0f}]</b> "
-                        f"<b>${b1.book_price:.2f}</b> ➔ 스탑 <b>${st_p:.2f}</b> ({g1_sign}{l1_g:.2f}%·👑1.60%락)"
+                        f"<b>${b1.book_price:.2f}</b> ➔ <b>강세HA추적</b>(보존${st_p:.2f}) ({g1_sign}{l1_g:.2f}%·👑1.60%락)"
                     )
                 else:
                     lk_m_p = safe_float(
@@ -661,7 +661,7 @@ def _format_sub_grid_stratum_lines(
                 if bool(tr_s.get("stepped_125")) and sst_p > 0.0:
                     lines.append(
                         f"  ⚡ <b>[서브1층: {sl1_label}·${sb1.actual_cost_usd:,.0f}]</b> "
-                        f"<b>${sb1.book_price:.2f}</b> ➔ 스탑 <b>${sst_p:.2f}</b> ({sg1_s}{sl1_g:.2f}%·👑1.60%락)"
+                        f"<b>${sb1.book_price:.2f}</b> ➔ <b>강세HA추적</b>(보존${sst_p:.2f}) ({sg1_s}{sl1_g:.2f}%·👑1.60%락)"
                     )
                 else:
                     slk_p = safe_float(

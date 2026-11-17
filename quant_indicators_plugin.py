@@ -171,6 +171,12 @@ def _hydrate_mem_bars_from_shm_sync(
                     continue
                 if eb_k in key_to_idx:
                     cur_s = synced[key_to_idx[eb_k]]
+                    if (
+                        eb_k < last_sk
+                        and (not bool(cur_s.get("_synthetic", False)))
+                        and bool(eb.get("_synthetic", True))
+                    ):
+                        continue
                     eb_h = safe_float(eb.get("highPrice"), 0.0)
                     eb_l = safe_float(eb.get("lowPrice"), 0.0)
                     eb_c = safe_float(eb.get("closePrice"), 0.0)
@@ -522,15 +528,26 @@ def _record_live_tick_to_memory_bar(
             )
             last_b["closePrice"] = lp
         elif bars and min_key < last_mk:
-            # MODIFIED: 정각 분봉 전환 직후 지연 틱의 역순 중복 추가 원천 차단
+            # MODIFIED [Case 106]: API +1분 마감라벨 진행봉 반영 및 기완결 공식봉 오염 원천 차단
+            if not bool(bars[-1].get("_synthetic", False)):
+                last_b = bars[-1]
+                prev_h = safe_float(last_b.get("highPrice"), lp)
+                prev_l = safe_float(last_b.get("lowPrice"), lp)
+                last_b["highPrice"] = round(max(prev_h, lp), 4)
+                last_b["lowPrice"] = round(
+                    min(prev_l, lp) if prev_l > 0.0 else lp, 4
+                )
+                last_b["closePrice"] = lp
+                return last_mk, len(bars)
             for prev_b in reversed(bars[-5:]):
                 if str(prev_b.get("_min_key") or "") == min_key:
-                    p_h = safe_float(prev_b.get("highPrice"), lp)
-                    p_l = safe_float(prev_b.get("lowPrice"), lp)
-                    prev_b["highPrice"] = round(max(p_h, lp), 4)
-                    prev_b["lowPrice"] = round(
-                        min(p_l, lp) if p_l > 0.0 else lp, 4
-                    )
+                    if bool(prev_b.get("_synthetic", False)):
+                        p_h = safe_float(prev_b.get("highPrice"), lp)
+                        p_l = safe_float(prev_b.get("lowPrice"), lp)
+                        prev_b["highPrice"] = round(max(p_h, lp), 4)
+                        prev_b["lowPrice"] = round(
+                            min(p_l, lp) if p_l > 0.0 else lp, 4
+                        )
                     break
             return last_mk, len(bars)
         else:
@@ -1177,6 +1194,7 @@ def _compute_vectorized_heikin_ashi_and_rsi(
                     if _idx_c >= 0
                     else True
                 ),
+                # MODIFIED [Case 106]: 센트($0.01) 호가 격자 정렬 및 +1분 마감라벨 직전 완결봉 참조
                 "closed_ha_shaved_bear": (
                     bool(
                         (
@@ -1185,7 +1203,15 @@ def _compute_vectorized_heikin_ashi_and_rsi(
                         )
                         and (
                             float(highs[_idx_c])
-                            <= float(ha_open_series[_idx_c]) + 1e-6
+                            <= max(
+                                float(ha_open_series[_idx_c]),
+                                (
+                                    round(float(ha_open_series[_idx_c]), 2)
+                                    if float(ha_open_series[_idx_c]) >= 1.0
+                                    else float(ha_open_series[_idx_c])
+                                ),
+                            )
+                            + 1e-6
                         )
                     )
                     if _idx_c >= 0
@@ -1199,7 +1225,15 @@ def _compute_vectorized_heikin_ashi_and_rsi(
                         )
                         and (
                             float(lows[_idx_c])
-                            >= float(ha_open_series[_idx_c]) - 1e-6
+                            >= min(
+                                float(ha_open_series[_idx_c]),
+                                (
+                                    round(float(ha_open_series[_idx_c]), 2)
+                                    if float(ha_open_series[_idx_c]) >= 1.0
+                                    else float(ha_open_series[_idx_c])
+                                ),
+                            )
+                            - 1e-6
                         )
                     )
                     if _idx_c >= 0
@@ -1209,14 +1243,20 @@ def _compute_vectorized_heikin_ashi_and_rsi(
             }
         )(
             *(
-                next(
-                    (
-                        (k_i, str(min_keys[k_i] or ""))
-                        for k_i in range(n - 1, -1, -1)
-                        if str(min_keys[k_i] or "")
-                        and str(min_keys[k_i] or "") < cur_min_key
-                    ),
-                    (-1, ""),
+                (
+                    lambda _bound_mk: next(
+                        (
+                            (k_i, str(min_keys[k_i] or ""))
+                            for k_i in range(n - 1, -1, -1)
+                            if str(min_keys[k_i] or "")
+                            and str(min_keys[k_i] or "") < _bound_mk
+                        ),
+                        (-1, ""),
+                    )
+                )(
+                    str(min_keys[-1] or "")
+                    if (n >= 2 and str(min_keys[-1] or "") > cur_min_key)
+                    else cur_min_key
                 )
                 if (
                     isinstance(min_keys, list)
@@ -1771,10 +1811,22 @@ def compute_soxl_quant_metrics_1m(
             return default_out
 
         if df.duplicated(subset=["dt_min"]).any():
-            grp_min = df.groupby("dt_min", sort=False)
-            df["H"] = grp_min["H"].transform("max")
-            df["L"] = grp_min["L"].transform("min")
-            df["V"] = grp_min["V"].transform("max")
+            grp_syn = df.groupby(["dt_min", "is_synthetic"], sort=False)
+            df["H"] = grp_syn["H"].transform("max")
+            df["L"] = grp_syn["L"].transform("min")
+            df["V"] = grp_syn["V"].transform("max")
+            dt_now_min = dt_now.replace(second=0, microsecond=0)
+            form_cut_dt = (
+                max(dt_now_min, df["dt_min"].max())
+                if df["dt_min"].nunique() >= 2
+                else dt_now_min
+            )
+            cur_mask = df["dt_min"] >= form_cut_dt
+            if cur_mask.any() and df.loc[cur_mask, "dt_min"].duplicated().any():
+                grp_cur = df.loc[cur_mask].groupby("dt_min", sort=False)
+                df.loc[cur_mask, "H"] = grp_cur["H"].transform("max")
+                df.loc[cur_mask, "L"] = grp_cur["L"].transform("min")
+                df.loc[cur_mask, "V"] = grp_cur["V"].transform("max")
             df.drop_duplicates(subset=["dt_min"], keep="last", inplace=True)
 
         df.sort_values("dt_min", ascending=True, inplace=True)

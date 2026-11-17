@@ -360,7 +360,13 @@ async def candle_radar_loop(context: SniperAppContext) -> None:
                 )
                 or ""
             )
-            if dt_chk.second < 10 and cur_closed_mk < exp_prev_mk:
+            trail_fast = bool(
+                is_sniper_l1_trail_active(context, TARGET_SYMBOL)
+                or bool(getattr(context, "assassin_high_freq_active", False))
+            )
+            if dt_chk.second < 10 and (
+                cur_closed_mk < exp_prev_mk or trail_fast
+            ):
                 radar_wait_s = _wall_wait(5.0, 0.25)
             else:
                 radar_wait_s = _wall_wait(10.0, 0.25)

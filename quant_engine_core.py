@@ -124,11 +124,11 @@ SNIPER_L1_TRAIL_STEP_LOCK_PCT: float = 1.60
 SUB_SNIPER_L1_TRAIL_IGNITE_PCT: float = 1.50
 SUB_SNIPER_L1_TRAIL_STEP_TRIG_PCT: float = 1.75
 SUB_SNIPER_L1_TRAIL_STEP_LOCK_PCT: float = 1.60
-# MODIFIED: 점화 초기 0.20% 과민 콜백 폐기(0.00) 및 +2.00% 이상 여유 콜백(0.35%) 설정
+# MODIFIED [Case 106]: 실시간 -0.35% 틱 콜백 영구 폐기(0.00) ➔ 하드보존(+1.60%) + 순수 완결 1분봉 강세HA 홀딩 단일화
 SNIPER_L1_TRAIL_SAFE_CAP_PCT: float = 5.00
 SNIPER_L1_TRAIL_BOOST_TIER2_PCT: float = 2.00
 SNIPER_L1_TRAIL_CB_TIGHT_PCT: float = 0.00
-SNIPER_L1_TRAIL_CB_WIDE_PCT: float = 0.35
+SNIPER_L1_TRAIL_CB_WIDE_PCT: float = 0.00
 SNIPER_L1_TRAIL_QQQ_BYPASS_PCT: float = 0.20
 
 # [Case 84 & Case 88]: 정규장 마감 30분 전(15:30 ~ 16:00 EST) 본·서브 0주 새 사이클 첫 1층 진입 및 1층 공석 +1.0% 돌파 추격 동시 차단 기준 시각(HHMM)

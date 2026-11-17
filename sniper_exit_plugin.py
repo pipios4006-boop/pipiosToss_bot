@@ -200,7 +200,7 @@ class SniperL1TrailSlot:
             )
 
     def refresh_stop_price(self) -> float:
-        # MODIFIED: 스텝 돌파 전 무스탑(0.0) 순수 1분봉 HA 추종 · 돌파 후 보존선/+2% 여유콜백 잠금
+        # MODIFIED [Case 106]: 스텝 돌파 전 무스탑(0.0) · 돌파 후 오직 +1.60% 하드보존선만 잠금(실시간 틱 콜백 가로채기 영구 소각)
         if not self.armed or self.ref_cost <= 0.0:
             self.active_stop_p = 0.0
             return 0.0
@@ -212,14 +212,17 @@ class SniperL1TrailSlot:
         if not self.stepped_125:
             self.active_stop_p = 0.0
             return 0.0
-        pk_gain = ((self.peak_p - self.ref_cost) / self.ref_cost) * 100.0
-        if pk_gain >= SNIPER_L1_TRAIL_BOOST_TIER2_PCT:
-            cb_raw = round(
-                self.peak_p * (1.0 - SNIPER_L1_TRAIL_CB_WIDE_PCT / 100.0), 2
-            )
-            self.active_stop_p = round(max(self.lock_floor_p, cb_raw), 2)
-        else:
-            self.active_stop_p = round(self.lock_floor_p, 2)
+        if SNIPER_L1_TRAIL_CB_WIDE_PCT > 0.0:
+            pk_gain = ((self.peak_p - self.ref_cost) / self.ref_cost) * 100.0
+            if pk_gain >= SNIPER_L1_TRAIL_BOOST_TIER2_PCT:
+                cb_raw = round(
+                    self.peak_p
+                    * (1.0 - SNIPER_L1_TRAIL_CB_WIDE_PCT / 100.0),
+                    2,
+                )
+                self.active_stop_p = round(max(self.lock_floor_p, cb_raw), 2)
+                return self.active_stop_p
+        self.active_stop_p = round(self.lock_floor_p, 2)
         return self.active_stop_p
 
     def release_forgive(self, bad_ha_minute_key: str = "") -> None:
@@ -3069,7 +3072,7 @@ async def execute_1m_sniper_sell_and_reanchor_plugin(
                     m_eff_fl = max(eff_m_lock, mkt_fl)
                 else:
                     mkt_fl = math.floor((fresh_live_p + 1e-9) * 100.0) / 100.0
-                    m_eff_fl = max(main_slot.arm_100_p, mkt_fl)
+                    m_eff_fl = max(eff_m_lock, mkt_fl)
                 sold_idx_set.add(0)
                 floor_cands.append(m_eff_fl)
                 fired_main_trail = True
@@ -3138,7 +3141,7 @@ async def execute_1m_sniper_sell_and_reanchor_plugin(
                     s_mkt_fl = (
                         math.floor((fresh_live_p + 1e-9) * 100.0) / 100.0
                     )
-                    s_eff_fl = max(sub_slot.arm_100_p, s_mkt_fl)
+                    s_eff_fl = max(eff_s_lock, s_mkt_fl)
                 sub_sold_idx_set.add(0)
                 floor_cands.append(s_eff_fl)
                 fired_sub_trail = True
