@@ -668,6 +668,8 @@ class AssassinSimLedger:
             "is_trailing_armed": False,
             "armed_time_est": "",
             "armed_minute_key": "",
+            "armed_wall_minute_key": "",
+            "armed_closed_bar_key": "",
             "peak_price": 0.0,
             "post_entry_min_price": 0.0,
             "active_stop_floor_price": 0.0,
@@ -786,6 +788,12 @@ class AssassinSimLedger:
         )
         base["entry_trigger_mode"] = str(
             base.get("entry_trigger_mode") or ""
+        ).strip()
+        base["armed_wall_minute_key"] = str(
+            base.get("armed_wall_minute_key") or ""
+        ).strip()
+        base["armed_closed_bar_key"] = str(
+            base.get("armed_closed_bar_key") or ""
         ).strip()
         raw_dyn_thr = safe_float(
             base.get("dyn_qqq_stage2_thr_pct"), SAFETY_DYN_QQQ_MIN_THR_PCT
@@ -1214,6 +1222,8 @@ class AssassinSimLedger:
             is_trailing_armed=False,
             armed_time_est="",
             armed_minute_key="",
+            armed_wall_minute_key="",
+            armed_closed_bar_key="",
             peak_price=0.0,
             post_entry_min_price=0.0,
             active_stop_floor_price=0.0,
@@ -1854,8 +1864,11 @@ def evaluate_assassin_ha_trailing_and_exits(
     closed_ha_shaved_bull: Optional[bool] = None,
     armed_minute_key: str = "",
     cur_minute_key: str = "",
+    cur_bar_minute_key: str = "",
+    armed_wall_minute_key: str = "",
+    armed_closed_bar_key: str = "",
 ) -> Dict[str, Any]:
-    # MODIFIED: 완결 1분봉 확정 HA 음봉 통일 · 등호(<=) 자기격발 제거 · +1.45%➔+1.25% 스텝락 결합
+    # MODIFIED [Case 99 & Case 103]: 기완결 1분봉(armed_closed_bar_key) 3중 분리 락온으로 +1분 오프셋 1초 조기청산 차단
     ep = safe_float(entry_price, 0.0)
     lp = safe_float(live_price, 0.0)
     bh = max(lp, safe_float(bar_high_price, lp))
@@ -1883,9 +1896,16 @@ def evaluate_assassin_ha_trailing_and_exits(
         else arm_p
     )
 
+    wall_mk = str(cur_minute_key or "").strip()
+    bar_mk = str(cur_bar_minute_key or "").strip()
+    c_mk = str(closed_bar_minute_key or "").strip()
+    eff_form_mk = bar_mk if (bar_mk and bar_mk > wall_mk) else wall_mk
+
     armed = bool(is_trailing_armed)
     just_armed = False
     eff_armed_mk = str(armed_minute_key or "").strip()
+    eff_armed_wall_mk = str(armed_wall_minute_key or "").strip()
+    eff_armed_closed_mk = str(armed_closed_bar_key or "").strip()
     cur_peak = max(safe_float(peak_price, ep), lp, bh)
     cur_min = (
         min(safe_float(post_entry_min_price, lp), lp)
@@ -1902,7 +1922,9 @@ def evaluate_assassin_ha_trailing_and_exits(
             "exit_price": round(exec_p, 2),
             "is_trailing_armed": True,
             "just_armed": not armed,
-            "armed_minute_key": eff_armed_mk or str(cur_minute_key or ""),
+            "armed_minute_key": eff_armed_mk or eff_form_mk,
+            "armed_wall_minute_key": eff_armed_wall_mk or wall_mk,
+            "armed_closed_bar_key": eff_armed_closed_mk or c_mk,
             "peak_price": round(max(cur_peak, exec_p), 4),
             "post_entry_min_price": round(cur_min, 4),
             "active_stop_floor_price": round(cap_p, 2),
@@ -1911,8 +1933,20 @@ def evaluate_assassin_ha_trailing_and_exits(
     if not armed and (bh >= arm_p or lp >= arm_p):
         armed = True
         just_armed = True
-        eff_armed_mk = str(cur_minute_key or eff_armed_mk).strip()
+        eff_armed_wall_mk = wall_mk
+        eff_armed_mk = eff_form_mk or eff_armed_mk
+        eff_armed_closed_mk = c_mk
         cur_peak = max(cur_peak, lp, bh, arm_p)
+    elif (
+        armed
+        and wall_mk
+        and eff_armed_wall_mk
+        and wall_mk == eff_armed_wall_mk
+    ):
+        if bar_mk and bar_mk > eff_armed_mk:
+            eff_armed_mk = bar_mk
+        if c_mk and c_mk > eff_armed_closed_mk:
+            eff_armed_closed_mk = c_mk
 
     if armed:
         peak_gain_pct = ((cur_peak - ep) / ep) * 100.0 if ep > 0.0 else 1.0
@@ -1938,6 +1972,8 @@ def evaluate_assassin_ha_trailing_and_exits(
                 "is_trailing_armed": True,
                 "just_armed": True,
                 "armed_minute_key": eff_armed_mk,
+                "armed_wall_minute_key": eff_armed_wall_mk,
+                "armed_closed_bar_key": eff_armed_closed_mk,
                 "peak_price": round(cur_peak, 4),
                 "post_entry_min_price": round(cur_min, 4),
                 "active_stop_floor_price": cb_stop_p,
@@ -1952,6 +1988,8 @@ def evaluate_assassin_ha_trailing_and_exits(
                 "is_trailing_armed": True,
                 "just_armed": False,
                 "armed_minute_key": eff_armed_mk,
+                "armed_wall_minute_key": eff_armed_wall_mk,
+                "armed_closed_bar_key": eff_armed_closed_mk,
                 "peak_price": round(cur_peak, 4),
                 "post_entry_min_price": round(cur_min, 4),
                 "active_stop_floor_price": round(arm_p, 2),
@@ -1967,10 +2005,29 @@ def evaluate_assassin_ha_trailing_and_exits(
                 "is_trailing_armed": True,
                 "just_armed": False,
                 "armed_minute_key": eff_armed_mk,
+                "armed_wall_minute_key": eff_armed_wall_mk,
+                "armed_closed_bar_key": eff_armed_closed_mk,
                 "peak_price": round(cur_peak, 4),
                 "post_entry_min_price": round(cur_min, 4),
                 "active_stop_floor_price": cb_stop_p,
             }
+
+        is_post_ignition_closed_bar = bool(
+            bool(c_mk)
+            and (
+                not eff_armed_mk
+                or c_mk >= eff_armed_mk
+            )
+            and (
+                not eff_armed_closed_mk
+                or c_mk > eff_armed_closed_mk
+            )
+            and (
+                not eff_armed_wall_mk
+                or not wall_mk
+                or wall_mk > eff_armed_wall_mk
+            )
+        )
 
         if closed_ha_shaved_bull is not None:
             eff_shaved_bull = bool(
@@ -1980,21 +2037,13 @@ def evaluate_assassin_ha_trailing_and_exits(
             is_closed_ha_red_hit = bool(
                 closed_ha_ready
                 and (not eff_shaved_bull)
-                and bool(closed_bar_minute_key)
-                and (
-                    not eff_armed_mk
-                    or closed_bar_minute_key >= eff_armed_mk
-                )
+                and is_post_ignition_closed_bar
             )
         elif closed_ha_bull is not None:
             is_closed_ha_red_hit = bool(
                 closed_ha_ready
                 and (not closed_ha_bull)
-                and bool(closed_bar_minute_key)
-                and (
-                    not eff_armed_mk
-                    or closed_bar_minute_key >= eff_armed_mk
-                )
+                and is_post_ignition_closed_bar
             )
         else:
             is_closed_ha_red_hit = bool(not soxl_is_ha_bull)
@@ -2017,6 +2066,8 @@ def evaluate_assassin_ha_trailing_and_exits(
                 "is_trailing_armed": True,
                 "just_armed": False,
                 "armed_minute_key": eff_armed_mk,
+                "armed_wall_minute_key": eff_armed_wall_mk,
+                "armed_closed_bar_key": eff_armed_closed_mk,
                 "peak_price": round(cur_peak, 4),
                 "post_entry_min_price": round(cur_min, 4),
                 "active_stop_floor_price": exec_ha_p,
@@ -2032,6 +2083,8 @@ def evaluate_assassin_ha_trailing_and_exits(
                 "is_trailing_armed": True,
                 "just_armed": False,
                 "armed_minute_key": eff_armed_mk,
+                "armed_wall_minute_key": eff_armed_wall_mk,
+                "armed_closed_bar_key": eff_armed_closed_mk,
                 "peak_price": round(cur_peak, 4),
                 "post_entry_min_price": round(cur_min, 4),
                 "active_stop_floor_price": exec_moc_p,
@@ -2045,6 +2098,8 @@ def evaluate_assassin_ha_trailing_and_exits(
             "is_trailing_armed": True,
             "just_armed": False,
             "armed_minute_key": eff_armed_mk,
+            "armed_wall_minute_key": eff_armed_wall_mk,
+            "armed_closed_bar_key": eff_armed_closed_mk,
             "peak_price": round(cur_peak, 4),
             "post_entry_min_price": round(cur_min, 4),
             "active_stop_floor_price": cb_stop_p,
@@ -2496,6 +2551,9 @@ async def _extract_live_assassin_features_and_qqq_snapshot(
 
     is_bull_bar = bool(lp >= cur_bar_open)
     is_ha_bull = bool(soxl_met.get("ha_bull", True))
+    cur_bar_min_key = str(
+        soxl_met.get("cur_bar_minute_key") or ""
+    ).strip()
     closed_bar_min_key = str(
         soxl_met.get("closed_bar_minute_key") or ""
     ).strip()
@@ -2557,6 +2615,7 @@ async def _extract_live_assassin_features_and_qqq_snapshot(
         "cur_bar_low": round(cur_bar_low, 4),
         "is_bull_bar": is_bull_bar,
         "is_ha_bull": is_ha_bull,
+        "cur_bar_minute_key": cur_bar_min_key,
         "closed_bar_minute_key": closed_bar_min_key,
         "closed_ha_ready": closed_ha_ready,
         "closed_ha_bull": closed_ha_bull,
@@ -3452,6 +3511,8 @@ async def _finalize_assassin_position_entry(
         "is_trailing_armed": False,
         "armed_time_est": "",
         "armed_minute_key": "",
+        "armed_wall_minute_key": "",
+        "armed_closed_bar_key": "",
         "peak_price": round(fill_p, 4),
         "post_entry_min_price": round(fill_p, 4),
         "active_stop_floor_price": 0.0,
@@ -3888,6 +3949,8 @@ async def _settle_assassin_exit_to_ledger(
         "qqq_chg_from_entry_pct": cur_qqq_chg_pct,
         "is_trailing_armed": new_armed,
         "armed_minute_key": "",
+        "armed_wall_minute_key": "",
+        "armed_closed_bar_key": "",
         "peak_price": peak_p,
         "post_entry_min_price": min_p,
         "today_exit_reason": exit_desc,
@@ -5095,12 +5158,29 @@ async def execute_simulated_assassin_tick_plugin(
             ),
             armed_minute_key=str(st.get("armed_minute_key") or ""),
             cur_minute_key=dt_now.strftime("%Y-%m-%d %H:%M"),
+            cur_bar_minute_key=str(feat.get("cur_bar_minute_key") or ""),
+            armed_wall_minute_key=str(
+                st.get("armed_wall_minute_key") or ""
+            ),
+            armed_closed_bar_key=str(
+                st.get("armed_closed_bar_key") or ""
+            ),
         )
 
         new_armed = bool(exit_eval.get("is_trailing_armed", False))
         new_armed_mk = str(
             exit_eval.get("armed_minute_key")
             or st.get("armed_minute_key")
+            or ""
+        ).strip()
+        new_armed_wall_mk = str(
+            exit_eval.get("armed_wall_minute_key")
+            or st.get("armed_wall_minute_key")
+            or ""
+        ).strip()
+        new_armed_closed_mk = str(
+            exit_eval.get("armed_closed_bar_key")
+            or st.get("armed_closed_bar_key")
             or ""
         ).strip()
         if context is not None:
@@ -5117,6 +5197,8 @@ async def execute_simulated_assassin_tick_plugin(
                 is_trailing_armed=True,
                 armed_time_est=dt_now.strftime("%H:%M:%S"),
                 armed_minute_key=new_armed_mk,
+                armed_wall_minute_key=new_armed_wall_mk,
+                armed_closed_bar_key=new_armed_closed_mk,
                 peak_price=safe_float(exit_eval.get("peak_price"), lp),
                 post_entry_min_price=safe_float(
                     exit_eval.get("post_entry_min_price"), lp
@@ -5153,6 +5235,8 @@ async def execute_simulated_assassin_tick_plugin(
                 qqq_chg_from_entry_pct=cur_qqq_chg_pct,
                 is_trailing_armed=new_armed,
                 armed_minute_key=new_armed_mk,
+                armed_wall_minute_key=new_armed_wall_mk,
+                armed_closed_bar_key=new_armed_closed_mk,
                 peak_price=safe_float(exit_eval.get("peak_price"), lp),
                 post_entry_min_price=safe_float(
                     exit_eval.get("post_entry_min_price"), lp
@@ -5973,6 +6057,136 @@ def run_assassin_plugin_tdd() -> bool:
     assert (
         ex_weak_bull_exit["should_exit"] is True
         and ex_weak_bull_exit["exit_code"] == "TRAIL_HA_RED_BOOST"
+    )
+
+    # 9) 2026-11-17 06:01:31 ➔ 06:01:32 EST (+1분 마감라벨 오프셋) 1초 조기청산 차단 회귀 검증
+    r_ign = evaluate_assassin_ha_trailing_and_exits(
+        hm=601,
+        entry_price=47.77,
+        live_price=48.27,
+        bar_high_price=48.27,
+        is_trailing_armed=False,
+        peak_price=47.77,
+        arm_100_price=48.25,
+        cap_500_price=50.16,
+        soxl_is_bull_bar=True,
+        soxl_is_ha_bull=True,
+        soxl_prev_reg_close=48.76,
+        soxl_pre_open_price=47.90,
+        soxl_reg_vwap=0.0,
+        post_entry_min_price=47.21,
+        qqq_vel_1m_pct=0.05,
+        qqq_vel_3m_pct=0.10,
+        qqq_vel_max_3m_10m_pct=0.10,
+        qqq_bear_drop_amp_pct=0.50,
+        nq_entry_bear_amp_pct=2.00,
+        closed_bar_minute_key="2026-11-17 06:01",
+        closed_ha_ready=True,
+        closed_ha_bull=True,
+        closed_ha_shaved_bull=False,
+        armed_minute_key="",
+        cur_minute_key="2026-11-17 06:01",
+        cur_bar_minute_key="2026-11-17 06:02",
+    )
+    assert r_ign["should_exit"] is False and r_ign["just_armed"] is True
+
+    r_1sec = evaluate_assassin_ha_trailing_and_exits(
+        hm=601,
+        entry_price=47.77,
+        live_price=48.27,
+        bar_high_price=48.29,
+        is_trailing_armed=True,
+        peak_price=r_ign["peak_price"],
+        arm_100_price=48.25,
+        cap_500_price=50.16,
+        soxl_is_bull_bar=True,
+        soxl_is_ha_bull=True,
+        soxl_prev_reg_close=48.76,
+        soxl_pre_open_price=47.90,
+        soxl_reg_vwap=0.0,
+        post_entry_min_price=47.21,
+        qqq_vel_1m_pct=0.05,
+        qqq_vel_3m_pct=0.10,
+        qqq_vel_max_3m_10m_pct=0.10,
+        qqq_bear_drop_amp_pct=0.50,
+        nq_entry_bear_amp_pct=2.00,
+        closed_bar_minute_key="2026-11-17 06:01",
+        closed_ha_ready=True,
+        closed_ha_bull=True,
+        closed_ha_shaved_bull=False,
+        armed_minute_key=r_ign["armed_minute_key"],
+        cur_minute_key="2026-11-17 06:01",
+        cur_bar_minute_key="2026-11-17 06:02",
+        armed_wall_minute_key=r_ign["armed_wall_minute_key"],
+        armed_closed_bar_key=r_ign["armed_closed_bar_key"],
+    )
+    assert r_1sec["should_exit"] is False, f"06:01:32 1초 조기청산 재발: {r_1sec}"
+
+    r_0602_pass = evaluate_assassin_ha_trailing_and_exits(
+        hm=602,
+        entry_price=47.77,
+        live_price=48.55,
+        bar_high_price=48.60,
+        is_trailing_armed=True,
+        peak_price=48.60,
+        arm_100_price=48.25,
+        cap_500_price=50.16,
+        soxl_is_bull_bar=True,
+        soxl_is_ha_bull=True,
+        soxl_prev_reg_close=48.76,
+        soxl_pre_open_price=47.90,
+        soxl_reg_vwap=0.0,
+        post_entry_min_price=47.21,
+        qqq_vel_1m_pct=0.05,
+        qqq_vel_3m_pct=0.10,
+        qqq_vel_max_3m_10m_pct=0.10,
+        qqq_bear_drop_amp_pct=0.50,
+        nq_entry_bear_amp_pct=2.00,
+        closed_bar_minute_key="2026-11-17 06:02",
+        closed_ha_ready=True,
+        closed_ha_bull=True,
+        closed_ha_shaved_bull=True,
+        armed_minute_key=r_1sec["armed_minute_key"],
+        cur_minute_key="2026-11-17 06:02",
+        cur_bar_minute_key="2026-11-17 06:03",
+        armed_wall_minute_key=r_1sec["armed_wall_minute_key"],
+        armed_closed_bar_key=r_1sec["armed_closed_bar_key"],
+    )
+    assert r_0602_pass["should_exit"] is False
+
+    r_0609_exit = evaluate_assassin_ha_trailing_and_exits(
+        hm=609,
+        entry_price=47.77,
+        live_price=48.74,
+        bar_high_price=48.88,
+        is_trailing_armed=True,
+        peak_price=48.88,
+        arm_100_price=48.25,
+        cap_500_price=50.16,
+        soxl_is_bull_bar=True,
+        soxl_is_ha_bull=True,
+        soxl_prev_reg_close=48.76,
+        soxl_pre_open_price=47.90,
+        soxl_reg_vwap=0.0,
+        post_entry_min_price=47.21,
+        qqq_vel_1m_pct=0.02,
+        qqq_vel_3m_pct=0.05,
+        qqq_vel_max_3m_10m_pct=0.05,
+        qqq_bear_drop_amp_pct=0.50,
+        nq_entry_bear_amp_pct=2.00,
+        closed_bar_minute_key="2026-11-17 06:09",
+        closed_ha_ready=True,
+        closed_ha_bull=True,
+        closed_ha_shaved_bull=False,
+        armed_minute_key=r_0602_pass["armed_minute_key"],
+        cur_minute_key="2026-11-17 06:09",
+        cur_bar_minute_key="2026-11-17 06:10",
+        armed_wall_minute_key=r_0602_pass["armed_wall_minute_key"],
+        armed_closed_bar_key=r_0602_pass["armed_closed_bar_key"],
+    )
+    assert (
+        r_0609_exit["should_exit"] is True
+        and r_0609_exit["exit_code"] == "TRAIL_HA_RED_BOOST"
     )
 
     return True
