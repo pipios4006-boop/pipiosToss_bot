@@ -55,6 +55,7 @@ from toss_api import (
     generate_client_order_id,
     get_bot_base_dir,
     get_folder_slug,
+    resolve_trading_session_date_est,
     safe_float,
     safe_int,
 )
@@ -188,13 +189,13 @@ class BarbellLedger:
     ) -> Dict[str, Any]:
         splits = compute_barbell_seed_splits(seed_usd)
         now_est = datetime.now(EST_TZ)
-        today_str = now_est.strftime("%Y-%m-%d")
+        sess_str = resolve_trading_session_date_est(now_est)
         return {
             "symbol": BARBELL_SAFE_SYMBOL,
             "folder_slug": self.folder_slug,
             "initial_seed_usd": splits["total_seed_usd"],
             "is_initialized": False,
-            "logical_date": today_str,
+            "logical_date": sess_str,
             # 현금 10% 대기 버킷 상태
             "cash_bucket_usd": splits["cash_seed_10_usd"],
             "cash_injected_to_soxl_usd": 0.0,
@@ -505,10 +506,12 @@ class BarbellLedger:
         self, logical_date: str
     ) -> Dict[str, Any]:
         st = self.get_state()
-        if str(st.get("logical_date") or "") == str(logical_date):
+        target_d = str(logical_date or "").strip()
+        cur_d = str(st.get("logical_date") or "").strip()
+        if not target_d or (cur_d and cur_d >= target_d):
             return st
         return await self.update_state(
-            logical_date=str(logical_date),
+            logical_date=target_d,
             daily_vaulted_profit_usd=0.0,
         )
 
@@ -2179,9 +2182,20 @@ async def execute_barbell_sgov_tick_plugin(
         return {"status": "NOT_BARBELL_MODE"}
 
     dt_now = now_est.astimezone(EST_TZ) if now_est else datetime.now(EST_TZ)
-    today_str = dt_now.strftime("%Y-%m-%d")
+    sess_date_str = resolve_trading_session_date_est(
+        dt_now,
+        last_closing_report_date=str(
+            st_soxl.get("last_closing_report_date") or ""
+        ),
+    )
+    if str(st_soxl.get("logical_date") or "") < sess_date_str and hasattr(
+        context.ledger, "rollover_daily_counters_if_needed"
+    ):
+        st_soxl = await context.ledger.rollover_daily_counters_if_needed(
+            sess_date_str
+        )
     b_ledger = ensure_barbell_ledger(context)
-    bst = await b_ledger.rollover_daily_if_needed(today_str)
+    bst = await b_ledger.rollover_daily_if_needed(sess_date_str)
 
     if not bool(bst.get("is_initialized", False)):
         bst = await initialize_or_sync_barbell_on_mode_enter(context)

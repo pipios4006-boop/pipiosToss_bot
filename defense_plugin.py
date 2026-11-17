@@ -86,6 +86,7 @@ from toss_api import (
     EST_TZ,
     TARGET_SYMBOL,
     get_folder_slug,
+    resolve_trading_session_date_est,
     safe_float,
     safe_int,
 )
@@ -325,6 +326,27 @@ async def reconcile_stratum_with_broker_holdings_plugin(
         return {"status": "SKIP_HOLDINGS_NOT_READY"}
 
     st = context.ledger.get_state(TARGET_SYMBOL)
+    dt_sess_chk = (
+        now_est.astimezone(EST_TZ) if now_est else datetime.now(EST_TZ)
+    )
+    sess_date_chk = resolve_trading_session_date_est(
+        dt_sess_chk,
+        last_closing_report_date=str(
+            st.get("last_closing_report_date") or ""
+        ),
+    )
+    if str(st.get("logical_date") or "") < sess_date_chk and hasattr(
+        context.ledger, "rollover_daily_counters_if_needed"
+    ):
+        st = await context.ledger.rollover_daily_counters_if_needed(
+            sess_date_chk
+        )
+        try:
+            await ensure_barbell_ledger(context).rollover_daily_if_needed(
+                sess_date_chk
+            )
+        except Exception:
+            pass
     portion_mode = (
         str(st.get("portion_mode") or PORTION_MODE_COMPOUND).upper().strip()
     )
@@ -2083,18 +2105,6 @@ async def execute_0400_premarket_stabilization_plugin(
         us_commission_rate=us_comm_r,
         round_trip_fee_rate_pct=rt_fee_pct,
         **clear_0400_ord_kw,
-        daily_seed_protect_pass_cnt=0,
-        daily_unlock_buy_events=0,
-        daily_sub_buy_cnt=0,
-        daily_sub_buy_events=0,
-        daily_sub_sell_cnt=0,
-        daily_sub_sell_events=0,
-        daily_sub_unlock_events=0,
-        daily_sub_realized_net_usd=0.0,
-        daily_main_buy_cnt=0,
-        daily_main_sell_cnt=0,
-        daily_reserve_injected_cnt=0,
-        daily_dust_guard_blocked_cnt=0,
         last_evaluated_buy_bucket_id=-1,
         last_evaluated_date=today_str,
         sub_last_evaluated_buy_bucket_id=-1,
@@ -2113,7 +2123,7 @@ async def execute_0400_premarket_stabilization_plugin(
     )
 
     logger.info(
-        "🌅 [04:00 EST 프리장 오프닝 안정화 완료] 당일 카운터 0회 리셋 · 왕복수수료=%.2f%% · 잔류주문 취소=%d건 · 그리드동기화=%s",
+        "🌅 [04:00 EST 프리장 오프닝 안정화 완료] 오버나이트(16:01~03:59) 확정수익 보존 · 왕복수수료=%.2f%% · 잔류주문 취소=%d건 · 그리드동기화=%s",
         rt_fee_pct,
         canceled_cnt,
         sync_res.get("status"),
@@ -2146,6 +2156,10 @@ async def execute_1600_daily_closing_settlement_plugin(
             await context.ledger.rollover_daily_counters_if_needed(today_str)
         except Exception as exc:
             logger.debug("16:00 마감 선행 일일 롤오버 예외(묵음): %s", exc)
+    try:
+        await ensure_barbell_ledger(context).rollover_daily_if_needed(today_str)
+    except Exception:
+        pass
 
     st = context.ledger.get_state(TARGET_SYMBOL)
     if str(st.get("last_closing_report_date") or "") == today_str:
@@ -2420,8 +2434,25 @@ async def execute_1600_daily_closing_settlement_plugin(
             ),
         )
 
+    next_sess_date = resolve_trading_session_date_est(
+        dt_now, after_1600_close=True
+    )
+    if hasattr(context.ledger, "rollover_daily_counters_if_needed"):
+        try:
+            await context.ledger.rollover_daily_counters_if_needed(
+                next_sess_date
+            )
+        except Exception as exc:
+            logger.debug("16:00 결산 후 차기 세션 롤오버 예외(묵음): %s", exc)
+    try:
+        await ensure_barbell_ledger(context).rollover_daily_if_needed(
+            next_sess_date
+        )
+    except Exception:
+        pass
+
     logger.info(
-        "🌙 [16:00 EST 일일 결산 완료 · %s · %s] 당일실현=$%.2f · 이번사이클=$%.2f · 누적실현=$%.2f · 본동결=%d일 · 서브동결=%d일",
+        "🌙 [16:00 EST 일일 결산 완료 · %s · %s] 당일실현=$%.2f · 이번사이클=$%.2f · 누적실현=$%.2f · 본동결=%d일 · 서브동결=%d일 · 차기세션=%s",
         folder_slug,
         mode_lbl,
         day_net,
@@ -2429,10 +2460,12 @@ async def execute_1600_daily_closing_settlement_plugin(
         cum_net,
         next_main_frozen,
         next_sub_frozen,
+        next_sess_date,
     )
     return {
         "status": "DAILY_CLOSING_SETTLEMENT_DONE",
         "date": today_str,
+        "next_session_date": next_sess_date,
         "portion_mode": summary.get("portion_mode"),
         "daily_realized_net_usd": day_net,
         "daily_withdrawable_profit_usd": max(0.0, day_net),
@@ -2466,10 +2499,13 @@ async def execute_daily_1700_gc_and_backup_plugin(
         except Exception as exc:
             logger.warning("17:00 EST 원장 스냅샷 백업 예외: %s", exc)
 
-    await context.ledger.rollover_daily_counters_if_needed(logical_date)
+    next_gc_sess_date = resolve_trading_session_date_est(
+        dt_now, after_1600_close=True
+    )
+    await context.ledger.rollover_daily_counters_if_needed(next_gc_sess_date)
     try:
         await ensure_barbell_ledger(context).rollover_daily_if_needed(
-            logical_date
+            next_gc_sess_date
         )
     except Exception:
         pass

@@ -24,7 +24,7 @@ import shutil
 import threading
 import time
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo
 
@@ -188,6 +188,36 @@ def next_cycled_portion_mode(cur_mode: Any) -> str:
     if is_simple_income_mode(cur_mode):
         return PORTION_MODE_BARBELL
     return PORTION_MODE_SIMPLE
+
+
+def resolve_trading_session_date_est(
+    now_est: Optional[datetime] = None,
+    after_1600_close: bool = False,
+    last_closing_report_date: str = "",
+) -> str:
+    """
+    24시간 통합 거래일(16:01 EST 애프터·데이장 ~ 익일 16:00 EST 정규장 마감) 산출기:
+    - 평일 16:00 EST 마감 결산 완료 직후(또는 17:00 EST 이후)부터 차기 미국 평일(금요일은 월요일)로 귀속한다.
+    """
+    dt = now_est.astimezone(EST_TZ) if now_est else datetime.now(EST_TZ)
+    wd = dt.weekday()
+    if wd == 5:
+        return (dt + timedelta(days=2)).strftime("%Y-%m-%d")
+    if wd == 6:
+        return (dt + timedelta(days=1)).strftime("%Y-%m-%d")
+    today_s = dt.strftime("%Y-%m-%d")
+    hm = dt.hour * 100 + dt.minute
+    closed_today = bool(
+        after_1600_close
+        or (
+            last_closing_report_date
+            and str(last_closing_report_date).strip() == today_s
+        )
+    )
+    if hm >= 1700 or (hm >= 1600 and closed_today):
+        add_days = 3 if wd == 4 else 1
+        return (dt + timedelta(days=add_days)).strftime("%Y-%m-%d")
+    return today_s
 
 
 def _read_env_us_commission_rates() -> Tuple[float, float]:
@@ -617,7 +647,9 @@ class SoxlStratumLedger:
         folder_slug: str = "default_bot",
         initial_seed: float = DEFAULT_INITIAL_SEED_USD,
     ) -> Dict[str, Any]:
-        today_est = datetime.now(EST_TZ).strftime("%Y-%m-%d")
+        now_dt_est = datetime.now(EST_TZ)
+        today_est = now_dt_est.strftime("%Y-%m-%d")
+        sess_est = resolve_trading_session_date_est(now_dt_est)
         clean_seed = (
             round(initial_seed, 4)
             if initial_seed >= 100.0
@@ -722,7 +754,7 @@ class SoxlStratumLedger:
             "last_reserve_check_ts": 0.0,
             "last_evaluated_buy_bucket_id": -1,
             "last_evaluated_date": today_est,
-            "logical_date": today_est,
+            "logical_date": sess_est,
             "last_closing_report_date": "",
             "last_tg_update_id": 0,
             "total_buy_events": 0,
@@ -2125,38 +2157,41 @@ class SoxlStratumLedger:
         self, logical_date: str
     ) -> Dict[str, Any]:
         st = self.get_state(TARGET_SYMBOL)
-        cur_date = str(st.get("logical_date") or "")
-        if cur_date == str(logical_date):
+        target_d = str(logical_date or "").strip()
+        cur_date = str(st.get("logical_date") or "").strip()
+        if not target_d or (cur_date and cur_date >= target_d):
             return st
-        return await self.update_state(
-            TARGET_SYMBOL,
-            logical_date=str(logical_date),
-            daily_buy_events=0,
-            daily_unlock_buy_events=0,
-            daily_sub_buy_cnt=0,
-            daily_sub_buy_events=0,
-            daily_sub_sell_cnt=0,
-            daily_sub_sell_events=0,
-            daily_sub_unlock_events=0,
-            daily_sub_realized_net_usd=0.0,
-            daily_main_buy_cnt=0,
-            daily_main_sell_cnt=0,
-            daily_reserve_injected_cnt=0,
-            daily_dust_guard_blocked_cnt=0,
-            daily_sell_events=0,
-            daily_indiv_grid_sell_cnt=0,
-            daily_wma_grad_sell_cnt=0,
-            daily_seed_protect_pass_cnt=0,
-            daily_reanchor_cnt=0,
-            daily_leftover_saved_usd=0.0,
-            daily_realized_net_usd=0.0,
-            last_evaluated_buy_bucket_id=-1,
-            last_evaluated_date=str(logical_date),
-            sub_last_evaluated_buy_bucket_id=-1,
-            sub_last_evaluated_date=str(logical_date),
-            last_reentry_eval_ts=0.0,
-            last_sub_reentry_eval_ts=0.0,
-        )
+        cal_today = datetime.now(EST_TZ).strftime("%Y-%m-%d")
+        upd_kw: Dict[str, Any] = {
+            "logical_date": target_d,
+            "daily_buy_events": 0,
+            "daily_unlock_buy_events": 0,
+            "daily_sub_buy_cnt": 0,
+            "daily_sub_buy_events": 0,
+            "daily_sub_sell_cnt": 0,
+            "daily_sub_sell_events": 0,
+            "daily_sub_unlock_events": 0,
+            "daily_sub_realized_net_usd": 0.0,
+            "daily_main_buy_cnt": 0,
+            "daily_main_sell_cnt": 0,
+            "daily_reserve_injected_cnt": 0,
+            "daily_dust_guard_blocked_cnt": 0,
+            "daily_sell_events": 0,
+            "daily_indiv_grid_sell_cnt": 0,
+            "daily_wma_grad_sell_cnt": 0,
+            "daily_seed_protect_pass_cnt": 0,
+            "daily_reanchor_cnt": 0,
+            "daily_leftover_saved_usd": 0.0,
+            "daily_realized_net_usd": 0.0,
+            "last_reentry_eval_ts": 0.0,
+            "last_sub_reentry_eval_ts": 0.0,
+        }
+        if cal_today >= target_d:
+            upd_kw["last_evaluated_buy_bucket_id"] = -1
+            upd_kw["last_evaluated_date"] = cal_today
+            upd_kw["sub_last_evaluated_buy_bucket_id"] = -1
+            upd_kw["sub_last_evaluated_date"] = cal_today
+        return await self.update_state(TARGET_SYMBOL, **upd_kw)
 
 
 # 하위 호환 별칭 (타 모듈 임포트 호환 100% 보장)

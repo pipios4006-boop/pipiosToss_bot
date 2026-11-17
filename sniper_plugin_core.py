@@ -1657,13 +1657,21 @@ async def _commit_filled_buy_to_stratum_ledger(
                 f"{mode_cash_lbl} ${free_cash_now:,.2f} (총 {new_held_shares}주)"
             )
         elif was_l2_only and tag == "REENTRY_1FL" and len(new_buckets) >= 2:
-            re_mode_lbl = (
-                "1층공석 최저가 돌파"
-                if raw_tag == "REENTRY_1FL_LOW_BREAK"
-                else "현재가 지정가 1층"
-            )
+            if raw_tag == "REENTRY_1FL_LOW_BREAK":
+                re_mode_lbl = "1층공석 최저가 돌파"
+            elif raw_tag == "REENTRY_1FL_BREAKOUT":
+                re_mode_lbl = "1층공석 +1% 돌파"
+            else:
+                re_mode_lbl = "1층공석 -1% 눌림목"
             title_str = (
                 f"🔥 [SOXL {re_mode_lbl} 재장전 체결] {q_int}주 @ ${fill_p:.2f} (상단 {u_cnt}개층 비병합)"
+            )
+            body_str = (
+                f"실사용 ${actual_spent:,.2f} (자투리 +${saved_from_portion:.2f} 시드보존) · "
+                f"🛡️60초 타임쉴드 후 1층목표 ${l1_target:.2f}(+1.5%) 감시{rem_quota_note} · "
+                f"2~{new_held_tiers}층({u_qty}주) 이평 ${u_wma_p:.2f}(목표 ${u_wma_t:.2f}) 유지 · "
+                f"기억저가 ${new_cycle_min_p:.2f}{ratchet_note}(와이드 {drop_req_p:.1f}% 추매가 ${trig_buy_p:.2f}) · "
+                f"{mode_cash_lbl} ${free_cash_now:,.2f} (총 {new_held_shares}주)"
             )
         elif raw_tag == "DIP_1FL_LOW_BREAK":
             title_str = (
@@ -1674,13 +1682,6 @@ async def _commit_filled_buy_to_stratum_ledger(
                 f"실사용 ${actual_spent:,.2f} (자투리 +${saved_from_portion:.2f} 시드보존) · "
                 f"🛡️60초 타임쉴드 후 1층목표 ${l1_target:.2f} 감시{rem_quota_note} · 차기단차 {drop_req_p:.1f}%(${trig_buy_p:.2f}) · "
                 f"{mode_cash_lbl} ${free_cash_now:,.2f} (총 {new_held_shares}주)"
-            )
-            body_str = (
-                f"실사용 ${actual_spent:,.2f} (자투리 +${saved_from_portion:.2f} 시드보존) · "
-                f"🛡️60초 타임쉴드 후 1층목표 ${l1_target:.2f}(+1.5%) 감시{rem_quota_note} · "
-                f"2~{new_held_tiers}층({u_qty}주) 이평 ${u_wma_p:.2f}(목표 ${u_wma_t:.2f}) 유지 · "
-                f"기억저가 ${new_cycle_min_p:.2f}{ratchet_note}(와이드 {drop_req_p:.1f}% 추매가 ${trig_buy_p:.2f}) · "
-                f"{mode_cash_lbl} ${free_cash_now:,.2f}"
             )
         elif is_step_up_unlock_fill:
             reb_m = (
@@ -1886,7 +1887,7 @@ async def sync_pending_buy_order_plugin(
                 filled_qty=eff_q,
                 avg_fill_price=eff_p,
                 portion_budget=portion_budget,
-                lot_type=lot_type,
+                lot_type=raw_lot_type,
                 settled_order_id=buy_oid,
                 ordered_qty=ordered_qty,
             )
@@ -1953,7 +1954,7 @@ async def sync_pending_buy_order_plugin(
                         filled_qty=filled_q,
                         avg_fill_price=eff_p,
                         portion_budget=portion_budget,
-                        lot_type=lot_type,
+                        lot_type=raw_lot_type,
                         settled_order_id=buy_oid,
                         ordered_qty=ordered_qty,
                     )
@@ -2066,7 +2067,7 @@ async def sync_pending_buy_order_plugin(
                     filled_qty=(f_qty if f_qty > 0 else ordered_qty),
                     avg_fill_price=(f_avg if f_avg > 0.0 else ord_price),
                     portion_budget=portion_budget,
-                    lot_type=lot_type,
+                    lot_type=raw_lot_type,
                     settled_order_id=buy_oid,
                     ordered_qty=ordered_qty,
                 )

@@ -81,6 +81,7 @@ from toss_api import (
     TARGET_SYMBOL,
     _NonRetryableApiError,
     generate_client_order_id,
+    resolve_trading_session_date_est,
     safe_float,
     safe_int,
 )
@@ -1130,6 +1131,24 @@ async def _commit_filled_sell_and_reanchor_ledger(
     # MODIFIED [🎯 1 ~ 🎯 4 & Case 19, 59 ~ 91 + 바벨 모드(실현수익 별도 금고 영구 격리 및 0주 졸업 60/30/10 리밸런싱) + 실전 암살자 0주 인계]:
     """
     st = context.ledger.get_state(TARGET_SYMBOL)
+    sess_date_sell = resolve_trading_session_date_est(
+        datetime.now(EST_TZ),
+        last_closing_report_date=str(
+            st.get("last_closing_report_date") or ""
+        ),
+    )
+    if str(st.get("logical_date") or "") < sess_date_sell and hasattr(
+        context.ledger, "rollover_daily_counters_if_needed"
+    ):
+        st = await context.ledger.rollover_daily_counters_if_needed(
+            sess_date_sell
+        )
+        try:
+            await ensure_barbell_ledger(context).rollover_daily_if_needed(
+                sess_date_sell
+            )
+        except Exception:
+            pass
     buckets = buckets_from_dicts(st.get("buckets", []))
     sub_buckets = buckets_from_dicts(st.get("sub_buckets", []))
     fill_p = round(max(0.01, safe_float(avg_fill_price, 0.01)), 4)
