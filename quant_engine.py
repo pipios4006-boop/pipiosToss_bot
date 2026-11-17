@@ -45,6 +45,8 @@ from quant_engine_core import (
     REENTRY_BREAKOUT_MAX_RSI_50,
     REENTRY_BREAKOUT_RISE_PCT,
     REENTRY_PULLBACK_DROP_PCT,
+    REG_OPEN_VWAP_SHIELD_END_HM,
+    REG_OPEN_VWAP_SHIELD_START_HM,
     RESERVE_DEPOSIT_TOLERANCE_RATIO,
     ROUND_TRIP_FEE_RATE_PCT,
     SNIPER_L1_TRAIL_BOOST_TIER2_PCT,
@@ -85,6 +87,7 @@ from quant_engine_core import (
     enforce_true_breakeven_floor_on_buckets,
     evaluate_guard30_and_reserve_injection,
     evaluate_l2_only_hybrid_reentry_signal,
+    evaluate_l2_vacant_low_break_signal,
     evaluate_step_up_2x_dip_signal,
     evaluate_sub_grid_dip_signal,
     get_golden8_prog_thresholds,
@@ -236,7 +239,10 @@ def vrev_add_quota_lot_and_merge_2tier(
         return [lowest_b] + sorted_uppers
 
     shifted_uppers = relabel_upper_grid_tiers(
-        existing, max_tiers=eff_max_tiers, merge_mode=eff_merge_mode
+        existing,
+        max_tiers=eff_max_tiers,
+        merge_mode=eff_merge_mode,
+        preserve_vacant_l2=False,
     )
     return [new_l1] + shifted_uppers
 
@@ -1229,6 +1235,7 @@ def summarize_stratum_portfolio(
     closed_ha_shaved_bear: Optional[bool] = None,
     closed_ha_bull: Optional[bool] = None,
     closed_ha_ready: bool = True,
+    session_vwap: Optional[float] = None,
 ) -> Dict[str, Any]:
     """
     # MODIFIED [🎯 1 ~ 🎯 5 & Case 59 ~ 92 + 바벨 모드(BARBELL_60_30_10) 확장 통합 요약기]:
@@ -1582,6 +1589,25 @@ def summarize_stratum_portfolio(
         portion_mode=portion_mode,
     )
 
+    eff_sess_vwap = (
+        round(max(0.0, safe_float(session_vwap, 0.0)), 4)
+        if session_vwap is not None
+        else (
+            round(max(0.0, safe_float(st.get("session_vwap"), 0.0)), 4)
+            if st.get("session_vwap") is not None
+            else None
+        )
+    )
+    eff_hm_for_re = (
+        hm_now
+        if (
+            dt_now.weekday() < 5
+            and (407 <= hm_now <= 1600)
+            and eff_sess_vwap is not None
+        )
+        else None
+    )
+
     reentry_sig = evaluate_l2_only_hybrid_reentry_signal(
         live_price=lp,
         anchor_price=anchor_p,
@@ -1595,6 +1621,18 @@ def summarize_stratum_portfolio(
         is_late_cutoff=is_late_cutoff,
         rsi_14=eff_rsi_14,
         breakout_max_rsi=REENTRY_BREAKOUT_MAX_RSI_50,
+        closed_ha_shaved_bear=closed_ha_shaved_bear,
+        closed_ha_bull=closed_ha_bull,
+        closed_ha_ready=closed_ha_ready,
+        session_vwap=eff_sess_vwap,
+        hm=eff_hm_for_re,
+        cycle_min_buy_price=(cycle_min_p if cycle_min_p > 0.0 else None),
+    )
+    l2_vac_low_brk_sig = evaluate_l2_vacant_low_break_signal(
+        live_price=lp,
+        buckets=buckets,
+        cycle_min_buy_price=cycle_min_p,
+        cycle_ratchet_max_lots=cycle_ratchet_max_lots,
         closed_ha_shaved_bear=closed_ha_shaved_bear,
         closed_ha_bull=closed_ha_bull,
         closed_ha_ready=closed_ha_ready,
@@ -1693,9 +1731,12 @@ def summarize_stratum_portfolio(
             anchor_p if anchor_p > 0.0 else (lp if lp > 0.0 else 1.0)
         )
     elif is_l2_only:
+        q_ref_re = safe_float(
+            reentry_sig.get("quota_ref_price"), reentry_ref_anchor
+        )
         ref_for_quota = (
-            reentry_ref_anchor
-            if reentry_ref_anchor > 0.0
+            q_ref_re
+            if q_ref_re > 0.0
             else (lp if lp > 0.0 else active_buy_anchor)
         )
     elif bool(step_up_eval.get("is_step_up_unlock")) and stepped_min_price > 0.0:
@@ -1841,6 +1882,11 @@ def summarize_stratum_portfolio(
         closed_ha_shaved_bear=closed_ha_shaved_bear,
         closed_ha_bull=closed_ha_bull,
         closed_ha_ready=closed_ha_ready,
+        session_vwap=eff_sess_vwap,
+        hm=eff_hm_for_re,
+        cycle_min_buy_price=(
+            sub_cycle_min_p if sub_cycle_min_p > 0.0 else None
+        ),
     )
     sub_reentry_ref_anchor = safe_float(
         sub_reentry_sig.get("ref_anchor"), sub_anchor_p
@@ -1932,9 +1978,12 @@ def summarize_stratum_portfolio(
             else (lp if lp > 0.0 else active_buy_anchor)
         )
     elif is_sub_l2_only:
+        sub_q_ref_re = safe_float(
+            sub_reentry_sig.get("quota_ref_price"), sub_reentry_ref_anchor
+        )
         sub_ref_for_quota = (
-            sub_reentry_ref_anchor
-            if sub_reentry_ref_anchor > 0.0
+            sub_q_ref_re
+            if sub_q_ref_re > 0.0
             else (lp if lp > 0.0 else sub_active_buy_anchor)
         )
     elif (
@@ -2427,6 +2476,22 @@ def summarize_stratum_portfolio(
         "reentry_breakout_max_rsi": reentry_breakout_max_rsi,
         "reentry_breakout_rsi_blocked": reentry_breakout_rsi_blocked,
         "reentry_pullback_ha_blocked": reentry_pullback_ha_blocked,
+        "reentry_pullback_vwap_blocked": bool(
+            reentry_sig.get("pullback_vwap_blocked", False)
+        ),
+        "reentry_reg_open_7m_shield": bool(
+            reentry_sig.get("reg_open_7m_shield_blocked", False)
+        ),
+        "session_vwap": safe_float(reentry_sig.get("session_vwap"), 0.0),
+        "l2_vacant_low_break_eligible": bool(
+            l2_vac_low_brk_sig.get("eligible", False)
+        ),
+        "l2_vacant_low_break_signal_type": str(
+            l2_vac_low_brk_sig.get("signal_type") or "NOT_ELIGIBLE"
+        ),
+        "sub_reentry_pullback_vwap_blocked": bool(
+            sub_reentry_sig.get("pullback_vwap_blocked", False)
+        ),
         "next_target_qty": next_target_qty,
         "anchor_quota_qty": anchor_quota_qty,
         "budget_cap_qty": budget_cap_qty,
@@ -2633,6 +2698,78 @@ def run_quant_engine_tdd() -> bool:
             sig_pull_ha_bull["should_buy"] is True
             and sig_pull_ha_bull["signal_type"] == "PULLBACK_RELOAD"
             and sig_pull_ha_bull["pullback_ha_blocked"] is False
+        )
+
+        # Case 105 TDD: 1) 눌림 > 세션VWAP 패스 & 09:30~09:36 7분 타임쉴드 & 2) 본(1·2층공석)/서브(1층공석) 최저가 돌파매수
+        sig_vwap_blk = evaluate_l2_only_hybrid_reentry_signal(
+            live_price=51.67,
+            anchor_price=52.30,
+            min_upper_tier_price=54.00,
+            closed_ha_shaved_bear=False,
+            closed_ha_bull=False,
+            closed_ha_ready=True,
+            session_vwap=50.75,
+            hm=1136,
+            cycle_min_buy_price=50.39,
+        )
+        assert (
+            sig_vwap_blk["should_buy"] is False
+            and sig_vwap_blk["signal_type"] == "HOLD_PULLBACK_ABOVE_SESSION_VWAP"
+        )
+        sig_7m_blk = evaluate_l2_only_hybrid_reentry_signal(
+            live_price=50.50,
+            anchor_price=52.30,
+            min_upper_tier_price=54.00,
+            closed_ha_shaved_bear=False,
+            closed_ha_ready=True,
+            session_vwap=51.00,
+            hm=935,
+            cycle_min_buy_price=50.39,
+        )
+        assert (
+            sig_7m_blk["should_buy"] is False
+            and sig_7m_blk["signal_type"] == "HOLD_REG_OPEN_7M_VWAP_SHIELD"
+        )
+        sig_lb_l1 = evaluate_l2_only_hybrid_reentry_signal(
+            live_price=50.25,
+            anchor_price=50.60,
+            min_upper_tier_price=54.00,
+            closed_ha_shaved_bear=False,
+            closed_ha_ready=True,
+            session_vwap=50.80,
+            hm=1030,
+            cycle_min_buy_price=50.39,
+        )
+        assert (
+            sig_lb_l1["should_buy"] is True
+            and sig_lb_l1["signal_type"] == "LOW_BREAK_RELOAD"
+            and abs(sig_lb_l1["quota_ref_price"] - 50.39) < 1e-6
+        )
+        l2_vac_buckets = [
+            StratumBucket(10, 51.00, 510.0, 510.0, 1, "REENTRY_1FL"),
+            StratumBucket(10, 54.00, 540.0, 540.0, 1, "GRID_L3"),
+        ]
+        sig_l2_vac_sh = evaluate_l2_vacant_low_break_signal(
+            live_price=48.75,
+            buckets=l2_vac_buckets,
+            cycle_min_buy_price=50.39,
+            cycle_ratchet_max_lots=3,
+            closed_ha_shaved_bear=True,
+            closed_ha_ready=True,
+        )
+        sig_l2_vac_ok = evaluate_l2_vacant_low_break_signal(
+            live_price=48.75,
+            buckets=l2_vac_buckets,
+            cycle_min_buy_price=50.39,
+            cycle_ratchet_max_lots=3,
+            closed_ha_shaved_bear=False,
+            closed_ha_ready=True,
+        )
+        assert (
+            sig_l2_vac_sh["should_buy"] is False
+            and sig_l2_vac_sh["signal_type"] == "HOLD_LOW_BREAK_SHAVED_HA_BEAR"
+            and sig_l2_vac_ok["should_buy"] is True
+            and sig_l2_vac_ok["signal_type"] == "LOW_BREAK_L2_VAC_RELOAD"
         )
 
         # 6) Case 88 & Case 91 인출형(단리) 및 바벨 모드(60/30/10) 검증

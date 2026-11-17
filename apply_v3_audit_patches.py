@@ -4396,7 +4396,7 @@ _EVOLVED_SUPERSEDED_MARKERS: Dict[str, Tuple[str, ...]] = {
         "sub_trail_ui: Optional[Dict[str, Any]] = None,",
     ),
     "P12_A3_SUB_VACANT_L1_BADGES": (
-        "[서브1층: 공석]</b> 🛡️돌파차단 · 눌림(-1%",
+        "[서브1층: 공석]</b> 🛡️돌파차단 · 눌림(&lt;=VWAP",
         "돌파(RSI&lt;=50)",
     ),
     "P05_B_BARBELL_MARK_EQUITY_AND_GRAD_PROJ": (
@@ -4407,6 +4407,11 @@ _EVOLVED_SUPERSEDED_MARKERS: Dict[str, Tuple[str, ...]] = {
     "P06_A_RSI_PREWARM_400_AND_1D": (
         'async def _get_live_soxl_reentry_snapshot(',
         'def mark_pullback_ha_bear_minute_wait(',
+    ),
+    "P06_C_SYNC_BUY_TIMEOUT_SAFE_CLEAR": (
+        "BUY_PARTIAL_CANCEL_CONFIRMING",
+        "BUY_CANCEL_IN_FLIGHT",
+        "is_vacant_l2_lowbrk_now",
     ),
     "P12_B1_RADAR_PASS_RSI14": (
         'HOLD_PULLBACK_SHAVED_HA_BEAR',

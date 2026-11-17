@@ -728,8 +728,12 @@ def mark_post_sell_time_shield(
         entry["last_sell_fill_ts"] = now_epoch
         entry["last_reentry_eval_mono"] = 0.0
         entry["last_reentry_eval_ts"] = 0.0
+        entry["pullback_ha_wait_min_key"] = ""
+        entry["pullback_ha_wait_mono"] = 0.0
         entry["last_sub_reentry_eval_mono"] = 0.0
         entry["last_sub_reentry_eval_ts"] = 0.0
+        entry["sub_pullback_ha_wait_min_key"] = ""
+        entry["sub_pullback_ha_wait_mono"] = 0.0
         entry["last_reserve_check_mono"] = 0.0
         entry["last_reserve_check_ts"] = 0.0
         entry["last_sell_gate_eval_mono"] = 0.0
@@ -760,8 +764,12 @@ def mark_post_sell_time_shield(
         g_entry["last_sell_fill_ts"] = now_epoch
         g_entry["last_reentry_eval_mono"] = 0.0
         g_entry["last_reentry_eval_ts"] = 0.0
+        g_entry["pullback_ha_wait_min_key"] = ""
+        g_entry["pullback_ha_wait_mono"] = 0.0
         g_entry["last_sub_reentry_eval_mono"] = 0.0
         g_entry["last_sub_reentry_eval_ts"] = 0.0
+        g_entry["sub_pullback_ha_wait_min_key"] = ""
+        g_entry["sub_pullback_ha_wait_mono"] = 0.0
         g_entry["last_reserve_check_mono"] = 0.0
         g_entry["last_reserve_check_ts"] = 0.0
         g_entry["last_sell_gate_eval_mono"] = 0.0
@@ -2083,11 +2091,11 @@ async def _commit_filled_sell_and_reanchor_ledger(
                     elif will_hit_late_cutoff_after_shield:
                         reload_guide = (
                             f"🛡️60초 타임쉴드 후 장마감 30분전(15:30 ~ 16:00) +1.0% 돌파차단 · "
-                            f"2층상한 ${l2_cap_p:.2f} 이하 -1.0% 눌림목만 1분 주기 재장전 감시(기억저가 ${next_cycle_min_p:.2f}{ratchet_lock_note} 잠금)"
+                            f"2층상한 ${l2_cap_p:.2f} 이하 눌림(-1%·<=세션VWAP) & 최저가돌파(<${next_cycle_min_p:.2f}{ratchet_lock_note}) 감시"
                         )
                     else:
                         reload_guide = (
-                            f"🛡️60초 타임쉴드 후 1분 주기 1층재장전(2층상한 ${l2_cap_p:.2f} 이하 · 기억저가 ${next_cycle_min_p:.2f}{ratchet_lock_note} 잠금)"
+                            f"🛡️60초 타임쉴드 후 1층재장전(눌림<=세션VWAP · 최저가돌파 <${next_cycle_min_p:.2f}{ratchet_lock_note} · 상한 ${l2_cap_p:.2f})"
                         )
                     note_str = (
                         f"🔄이번사이클 누적: {cyc_sign}${abs(cur_cyc_net):,.2f}({cur_cyc_ev}회) · "

@@ -47,6 +47,7 @@ from quant_engine import (
     buckets_to_dicts,
     evaluate_guard30_and_reserve_injection,
     has_active_l1_bucket,
+    has_active_l2_bucket,
     is_simple_income_mode,
     resolve_effective_round_trip_fee_rate_pct,
     resolve_portion_budget_base_equity,
@@ -718,6 +719,7 @@ async def _get_live_soxl_reentry_snapshot(
     last_warm_m = safe_float(getattr(context, "_last_rsi_warm_mono", 0.0), 0.0)
     if (
         not isinstance(base_met, dict)
+        or not bool(base_met.get("anchors_ready", False))
         or not bool(base_met.get("rsi_ready", False))
         or not bool(base_met.get("closed_ha_ready", False))
         or safe_float(base_met.get("prev_bar_close"), 0.0) <= 0.0
@@ -767,6 +769,40 @@ async def _get_live_soxl_reentry_snapshot(
         closed_ready,
         closed_mk,
     )
+
+
+def _get_cached_soxl_session_vwap(
+    context: Any,
+    live_price: float = 0.0,
+    now_est: Optional[datetime] = None,
+) -> float:
+    """
+    # NEW [Case 105 : 세션별 누적 VWAP O(1) 무부하 추출기]:
+    - 프리장(04:07 ~ 09:29 EST): 당일 프리마켓 누적 VWAP (premarket_vwap)
+    - 정규장(09:30 ~ 16:00 EST): 당일 정규장 누적 VWAP (regular_vwap)
+    """
+    _ = live_price
+    dt_now = now_est.astimezone(EST_TZ) if now_est else datetime.now(EST_TZ)
+    hm_now = dt_now.hour * 100 + dt_now.minute
+    raw_cache = getattr(context, "candle_metrics_cache", None)
+    met = (
+        raw_cache.get(TARGET_SYMBOL)
+        if isinstance(raw_cache, dict)
+        else None
+    )
+    if not isinstance(met, dict):
+        return 0.0
+    if 407 <= hm_now <= 929:
+        v_pre = safe_float(met.get("premarket_vwap"), 0.0)
+        if v_pre <= 0.0:
+            v_pre = safe_float(met.get("vwap"), 0.0)
+        return round(max(0.0, v_pre), 4)
+    if 930 <= hm_now <= 1600:
+        v_reg = safe_float(met.get("regular_vwap"), 0.0)
+        if v_reg <= 0.0:
+            v_reg = safe_float(met.get("vwap"), 0.0)
+        return round(max(0.0, v_reg), 4)
+    return round(max(0.0, safe_float(met.get("vwap"), 0.0)), 4)
 
 
 async def _get_live_soxl_rsi_14(
@@ -1143,7 +1179,11 @@ async def _commit_filled_buy_to_stratum_ledger(
         sub_tag = (
             "SUB_REENTRY_1FL"
             if raw_tag
-            in ("SUB_REENTRY_1FL_BREAKOUT", "SUB_REENTRY_1FL_PULLBACK")
+            in (
+                "SUB_REENTRY_1FL_BREAKOUT",
+                "SUB_REENTRY_1FL_PULLBACK",
+                "SUB_REENTRY_1FL_LOW_BREAK",
+            )
             else raw_tag
         )
         raw_sub_budget = safe_float(portion_budget, 0.0)
@@ -1359,8 +1399,13 @@ async def _commit_filled_buy_to_stratum_ledger(
                     f"{q_int}주 @ ${fill_p:.2f}"
                 )
             elif was_sub_l2_only and sub_tag == "SUB_REENTRY_1FL":
+                sub_re_lbl = (
+                    "최저가 돌파 재장전"
+                    if raw_tag == "SUB_REENTRY_1FL_LOW_BREAK"
+                    else "재장전"
+                )
                 title_str = (
-                    f"🛡️ [SOXL 서브그리드 1층 재장전 체결 ({new_sub_lots}/{SUB_MAX_TOTAL_LOTS_4}회분 · {new_sub_tiers}개층)] "
+                    f"🛡️ [SOXL 서브그리드 1층 {sub_re_lbl} 체결 ({new_sub_lots}/{SUB_MAX_TOTAL_LOTS_4}회분 · {new_sub_tiers}개층)] "
                     f"{q_int}주 @ ${fill_p:.2f}"
                 )
             else:
@@ -1402,8 +1447,13 @@ async def _commit_filled_buy_to_stratum_ledger(
     # -----------------------------------------------------------------------
     tag = (
         "REENTRY_1FL"
-        if raw_tag in ("REENTRY_1FL_BREAKOUT", "REENTRY_1FL_PULLBACK")
-        else raw_tag
+        if raw_tag
+        in (
+            "REENTRY_1FL_BREAKOUT",
+            "REENTRY_1FL_PULLBACK",
+            "REENTRY_1FL_LOW_BREAK",
+        )
+        else ("DIP_1FL" if raw_tag == "DIP_1FL_LOW_BREAK" else raw_tag)
     )
     raw_portion_budget = safe_float(portion_budget, 0.0)
     if raw_portion_budget <= 0.0:
@@ -1607,8 +1657,23 @@ async def _commit_filled_buy_to_stratum_ledger(
                 f"{mode_cash_lbl} ${free_cash_now:,.2f} (총 {new_held_shares}주)"
             )
         elif was_l2_only and tag == "REENTRY_1FL" and len(new_buckets) >= 2:
+            re_mode_lbl = (
+                "1층공석 최저가 돌파"
+                if raw_tag == "REENTRY_1FL_LOW_BREAK"
+                else "현재가 지정가 1층"
+            )
             title_str = (
-                f"🔥 [SOXL 현재가 지정가 1층 재장전 체결] {q_int}주 @ ${fill_p:.2f} (상단 {u_cnt}개층 비병합)"
+                f"🔥 [SOXL {re_mode_lbl} 재장전 체결] {q_int}주 @ ${fill_p:.2f} (상단 {u_cnt}개층 비병합)"
+            )
+        elif raw_tag == "DIP_1FL_LOW_BREAK":
+            title_str = (
+                f"🔥 [SOXL 2층공석 최저가 돌파매수 체결 ({new_held_lots}회차{ratchet_note}/{new_held_tiers}개층)] {q_int}주 @ ${fill_p:.2f}"
+            )
+            body_str = (
+                f"구기억저가 ${old_min_p:.2f} 하향돌파 ➔ 신규기억저가 ${new_cycle_min_p:.2f} 갱신(공석 2층 슬롯 충전 완료) · "
+                f"실사용 ${actual_spent:,.2f} (자투리 +${saved_from_portion:.2f} 시드보존) · "
+                f"🛡️60초 타임쉴드 후 1층목표 ${l1_target:.2f} 감시{rem_quota_note} · 차기단차 {drop_req_p:.1f}%(${trig_buy_p:.2f}) · "
+                f"{mode_cash_lbl} ${free_cash_now:,.2f} (총 {new_held_shares}주)"
             )
             body_str = (
                 f"실사용 ${actual_spent:,.2f} (자투리 +${saved_from_portion:.2f} 시드보존) · "
@@ -1696,11 +1761,18 @@ async def sync_pending_buy_order_plugin(
         str(st.get("pending_lot_type") or "QUOTA_L1").upper().strip()
     )
     is_sub_lot = raw_lot_type.startswith("SUB_")
-    if raw_lot_type in ("REENTRY_1FL_BREAKOUT", "REENTRY_1FL_PULLBACK"):
+    if raw_lot_type in (
+        "REENTRY_1FL_BREAKOUT",
+        "REENTRY_1FL_PULLBACK",
+        "REENTRY_1FL_LOW_BREAK",
+    ):
         lot_type = "REENTRY_1FL"
+    elif raw_lot_type == "DIP_1FL_LOW_BREAK":
+        lot_type = "DIP_1FL"
     elif raw_lot_type in (
         "SUB_REENTRY_1FL_BREAKOUT",
         "SUB_REENTRY_1FL_PULLBACK",
+        "SUB_REENTRY_1FL_LOW_BREAK",
     ):
         lot_type = "SUB_REENTRY_1FL"
     else:
@@ -1709,6 +1781,12 @@ async def sync_pending_buy_order_plugin(
     buckets_now = buckets_from_dicts(st.get("buckets", []))
     has_active_l1_now = has_active_l1_bucket(buckets_now)
     is_vacant_l1_now = bool(len(buckets_now) > 0 and not has_active_l1_now)
+    is_vacant_l2_lowbrk_now = bool(
+        not is_sub_lot
+        and raw_lot_type == "DIP_1FL_LOW_BREAK"
+        and len(buckets_now) > 0
+        and not has_active_l2_bucket(buckets_now)
+    )
     cur_target_q = max(0, safe_int(st.get("l1_target_quota_qty"), 0))
     fallback_target_q_on_zero_cancel = (
         max(buckets_now[0].qty, cur_target_q) if has_active_l1_now else 0
@@ -1734,6 +1812,7 @@ async def sync_pending_buy_order_plugin(
         not is_sub_lot
         and is_vacant_l1_now
         and lot_type == "REENTRY_1FL"
+        and raw_lot_type != "REENTRY_1FL_LOW_BREAK"
         and (
             raw_lot_type == "REENTRY_1FL_BREAKOUT"
             or (
@@ -1755,6 +1834,7 @@ async def sync_pending_buy_order_plugin(
         is_sub_lot
         and is_sub_vacant_l1_now
         and lot_type == "SUB_REENTRY_1FL"
+        and raw_lot_type != "SUB_REENTRY_1FL_LOW_BREAK"
         and (
             raw_lot_type == "SUB_REENTRY_1FL_BREAKOUT"
             or (
@@ -1889,7 +1969,10 @@ async def sync_pending_buy_order_plugin(
                 mark_reentry_monitor_60s_cycle_shield(
                     context=context, symbol=TARGET_SYMBOL, eval_price=ord_price
                 )
-                if (is_vacant_l1_now and not is_sub_lot)
+                if (
+                    (is_vacant_l1_now and not is_sub_lot)
+                    or is_vacant_l2_lowbrk_now
+                )
                 else safe_float(st.get("last_reentry_eval_ts"), 0.0)
             )
             sub_re_epoch = (
@@ -1997,7 +2080,10 @@ async def sync_pending_buy_order_plugin(
             mark_reentry_monitor_60s_cycle_shield(
                 context=context, symbol=TARGET_SYMBOL, eval_price=ord_price
             )
-            if (is_vacant_l1_now and not is_sub_lot)
+            if (
+                (is_vacant_l1_now and not is_sub_lot)
+                or is_vacant_l2_lowbrk_now
+            )
             else safe_float(st.get("last_reentry_eval_ts"), 0.0)
         )
         sub_re_epoch = (

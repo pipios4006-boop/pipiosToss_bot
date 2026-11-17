@@ -42,6 +42,8 @@ from quant_engine import (
     PORTION_RATIO_LOCKED,
     REENTRY_BREAKOUT_MAX_RSI_50,
     REENTRY_BREAKOUT_RISE_PCT,
+    REG_OPEN_VWAP_SHIELD_END_HM,
+    REG_OPEN_VWAP_SHIELD_START_HM,
     ROUND_TRIP_FEE_RATE_PCT,
     SUB_FROZEN_DAYS_TRIGGER,
     SUB_GRID_DEFAULT_ENABLED,
@@ -59,10 +61,12 @@ from quant_engine import (
     compute_sub_upper_2_to_3_moving_avg,
     compute_upper_2_to_7_moving_avg,
     evaluate_l2_only_hybrid_reentry_signal,
+    evaluate_l2_vacant_low_break_signal,
     evaluate_step_up_2x_dip_signal,
     evaluate_sub_grid_dip_signal,
     get_golden8_prog_thresholds,
     has_active_l1_bucket,
+    has_active_l2_bucket,
     is_simple_income_mode,
     resolve_affordable_buy_qty,
     resolve_effective_round_trip_fee_rate_pct,
@@ -94,6 +98,7 @@ from sniper_plugin_core import (
     _check_and_execute_guard30_or_reserve_injection,
     _commit_filled_buy_to_stratum_ledger,
     _fetch_fresh_current_soxl_price,
+    _get_cached_soxl_session_vwap,
     _get_live_soxl_price,
     _get_live_soxl_reentry_snapshot,
     _get_live_soxl_rsi_14,
@@ -551,9 +556,15 @@ async def _execute_sub_grid_buy_engine_plugin(
         ) = await _get_live_soxl_reentry_snapshot(
             context, live_price=fresh_live_p, now_est=eff_dt_now
         )
+        sub_sess_vwap = _get_cached_soxl_session_vwap(
+            context, live_price=fresh_live_p, now_est=eff_dt_now
+        )
         sub_min_upper_p = min(sb.book_price for sb in sub_buckets)
         sub_anchor_p = safe_float(
             st.get("sub_anchor_price"), sub_min_upper_p
+        )
+        sub_cycle_min_p_re = safe_float(
+            st.get("sub_cycle_min_buy_price"), 0.0
         )
         is_late_cutoff = is_late_regular_new_cycle_cutoff_window(
             hm, now_est=eff_dt_now
@@ -571,11 +582,20 @@ async def _execute_sub_grid_buy_engine_plugin(
             closed_ha_shaved_bear=sub_shaved_bear,
             closed_ha_bull=sub_ha_bull,
             closed_ha_ready=sub_ha_ready,
+            session_vwap=sub_sess_vwap,
+            hm=hm,
+            cycle_min_buy_price=(
+                sub_cycle_min_p_re if sub_cycle_min_p_re > 0.0 else None
+            ),
         )
         sub_sig_type = str(sub_re_sig.get("signal_type") or "HOLD_WAIT_GATE")
 
         if not bool(sub_re_sig.get("should_buy")):
-            if sub_sig_type == "HOLD_PULLBACK_SHAVED_HA_BEAR":
+            if sub_sig_type in (
+                "HOLD_PULLBACK_SHAVED_HA_BEAR",
+                "HOLD_LOW_BREAK_SHAVED_HA_BEAR",
+                "HOLD_REG_OPEN_7M_VWAP_SHIELD",
+            ):
                 mark_sub_pullback_ha_bear_minute_wait(
                     context=context,
                     symbol=TARGET_SYMBOL,
@@ -586,16 +606,18 @@ async def _execute_sub_grid_buy_engine_plugin(
                         TARGET_SYMBOL, last_sub_reentry_eval_ts=0.0
                     )
                 logger.info(
-                    "🛡️ [서브 1층 공석 -1.0%% 눌림목 무머리 HA음봉 패스] 현재가 $%.2f (직전익절 $%.2f 대비 %+.2f%%) · 완결봉(%s) 윗꼬리없는 HA음봉 -> 다음 1분 완료 대기",
+                    "🛡️ [Case 101/105 서브 1층 공석 분경계 패스(%s)] 현재가 $%.2f · 서브저가 $%.2f · 세션VWAP $%.2f · 완결봉(%s) -> 다음 분 정각 재검문",
+                    sub_sig_type,
                     fresh_live_p,
-                    safe_float(sub_re_sig.get("ref_anchor"), sub_anchor_p),
-                    safe_float(sub_re_sig.get("chg_from_exit_pct"), 0.0),
+                    sub_cycle_min_p_re,
+                    sub_sess_vwap,
                     sub_closed_mk or "-",
                 )
                 return {
-                    "status": "SUB_L2_ONLY_PULLBACK_SHAVED_HA_BEAR_BLOCKED",
+                    "status": "SUB_L2_ONLY_MINUTE_BOUNDARY_HOLD",
                     "signal_type": sub_sig_type,
                     "live_price": fresh_live_p,
+                    "session_vwap": sub_sess_vwap,
                     "closed_ha_shaved_bear": sub_shaved_bear,
                     "closed_ha_bull": sub_ha_bull,
                     "sub_l2_ceiling_price": sub_min_upper_p,
@@ -613,6 +635,7 @@ async def _execute_sub_grid_buy_engine_plugin(
                 "status": "SUB_L2_ONLY_REENTRY_HOLD",
                 "signal_type": sub_sig_type,
                 "live_price": fresh_live_p,
+                "session_vwap": sub_sess_vwap,
                 "rsi_14": live_rsi_14,
                 "sub_l2_ceiling_price": sub_min_upper_p,
             }
@@ -696,7 +719,7 @@ async def _execute_sub_grid_buy_engine_plugin(
                             "signal_type": "HOLD_BREAKOUT_RSI_OVER_50",
                             "rsi_14": mutex_sub_rsi,
                         }
-                elif sub_sig_type == "PULLBACK_RELOAD":
+                elif sub_sig_type in ("PULLBACK_RELOAD", "LOW_BREAK_RELOAD"):
                     (
                         _,
                         m_sub_shaved_bear,
@@ -706,6 +729,33 @@ async def _execute_sub_grid_buy_engine_plugin(
                     ) = await _get_live_soxl_reentry_snapshot(
                         context, live_price=fresh_live_p, now_est=dt_re_m
                     )
+                    m_sub_vwap = _get_cached_soxl_session_vwap(
+                        context, live_price=fresh_live_p, now_est=dt_re_m
+                    )
+                    m_sub_c_min = safe_float(
+                        st_now.get("sub_cycle_min_buy_price"), 0.0
+                    )
+                    m_exec_p_chk = max(
+                        0.01, math.floor((fresh_live_p + 1e-9) * 100.0) / 100.0
+                    )
+                    if (
+                        sub_sig_type == "PULLBACK_RELOAD"
+                        and REG_OPEN_VWAP_SHIELD_START_HM
+                        <= hm_re_m
+                        <= REG_OPEN_VWAP_SHIELD_END_HM
+                    ):
+                        mark_sub_pullback_ha_bear_minute_wait(
+                            context=context,
+                            symbol=TARGET_SYMBOL,
+                            cur_min_key=dt_re_m.strftime("%Y-%m-%d %H:%M"),
+                        )
+                        await context.ledger.update_state(
+                            TARGET_SYMBOL, last_sub_reentry_eval_ts=0.0
+                        )
+                        return {
+                            "status": "SUB_L2_ONLY_REG_OPEN_7M_SHIELD",
+                            "signal_type": "HOLD_REG_OPEN_7M_VWAP_SHIELD",
+                        }
                     if (not m_sub_ha_ready) or m_sub_shaved_bear:
                         mark_sub_pullback_ha_bear_minute_wait(
                             context=context,
@@ -718,9 +768,52 @@ async def _execute_sub_grid_buy_engine_plugin(
                         )
                         return {
                             "status": "SUB_L2_ONLY_PULLBACK_SHAVED_HA_BEAR_BLOCKED",
-                            "signal_type": "HOLD_PULLBACK_SHAVED_HA_BEAR",
+                            "signal_type": (
+                                "HOLD_LOW_BREAK_SHAVED_HA_BEAR"
+                                if sub_sig_type == "LOW_BREAK_RELOAD"
+                                else "HOLD_PULLBACK_SHAVED_HA_BEAR"
+                            ),
                             "closed_ha_shaved_bear": m_sub_shaved_bear,
                             "closed_ha_bull": m_sub_ha_bull,
+                        }
+                    if (
+                        sub_sig_type == "LOW_BREAK_RELOAD"
+                        and (
+                            m_sub_c_min <= 0.0
+                            or m_exec_p_chk >= (m_sub_c_min - 1e-6)
+                        )
+                    ):
+                        sub_re_epoch = mark_sub_reentry_monitor_60s_cycle_shield(
+                            context=context,
+                            symbol=TARGET_SYMBOL,
+                            eval_price=fresh_live_p,
+                        )
+                        await context.ledger.update_state(
+                            TARGET_SYMBOL,
+                            last_sub_reentry_eval_ts=sub_re_epoch,
+                        )
+                        return {
+                            "status": "SUB_L2_ONLY_LOW_BREAK_REBOUNDED",
+                            "signal_type": "HOLD_ABOVE_CYCLE_MIN",
+                        }
+                    if (
+                        sub_sig_type == "PULLBACK_RELOAD"
+                        and m_sub_vwap > 0.0
+                        and fresh_live_p > (m_sub_vwap + 1e-6)
+                    ):
+                        sub_re_epoch = mark_sub_reentry_monitor_60s_cycle_shield(
+                            context=context,
+                            symbol=TARGET_SYMBOL,
+                            eval_price=fresh_live_p,
+                        )
+                        await context.ledger.update_state(
+                            TARGET_SYMBOL,
+                            last_sub_reentry_eval_ts=sub_re_epoch,
+                        )
+                        return {
+                            "status": "SUB_L2_ONLY_PULLBACK_VWAP_BLOCKED",
+                            "signal_type": "HOLD_PULLBACK_ABOVE_SESSION_VWAP",
+                            "session_vwap": m_sub_vwap,
                         }
 
                 sub_min_upper_p = min(sb.book_price for sb in now_sub_buckets)
@@ -803,8 +896,11 @@ async def _execute_sub_grid_buy_engine_plugin(
                 quota_ref_p = max(
                     0.01,
                     safe_float(
-                        sub_re_sig.get("ref_anchor"),
-                        sub_anchor_p if sub_anchor_p > 0.0 else exec_order_p,
+                        sub_re_sig.get("quota_ref_price"),
+                        safe_float(
+                            sub_re_sig.get("ref_anchor"),
+                            sub_anchor_p if sub_anchor_p > 0.0 else exec_order_p,
+                        ),
                     ),
                 )
                 sub_target_qty, sub_p_bud = compute_sub4_quota_qty(
@@ -858,7 +954,11 @@ async def _execute_sub_grid_buy_engine_plugin(
                 pending_sub_lot_tag = (
                     "SUB_REENTRY_1FL_BREAKOUT"
                     if sub_sig_type == "BREAKOUT_RELOAD"
-                    else "SUB_REENTRY_1FL"
+                    else (
+                        "SUB_REENTRY_1FL_LOW_BREAK"
+                        if sub_sig_type == "LOW_BREAK_RELOAD"
+                        else "SUB_REENTRY_1FL"
+                    )
                 )
                 cid = generate_client_order_id(prefix="SRE1FL")
                 try:
@@ -1894,12 +1994,16 @@ async def execute_seed_protected_buy_gate_plugin(
         ) = await _get_live_soxl_reentry_snapshot(
             context, live_price=fresh_live_p, now_est=dt_now
         )
+        sess_vwap = _get_cached_soxl_session_vwap(
+            context, live_price=fresh_live_p, now_est=dt_now
+        )
         min_upper_tier_p = min(b.book_price for b in buckets)
         wma_info = compute_upper_2_to_7_moving_avg(buckets)
         upper_wma_p = safe_float(
             wma_info.get("upper_wma_price"), min_upper_tier_p
         )
         anchor_p = safe_float(st.get("anchor_price"), min_upper_tier_p)
+        cycle_min_p_re = safe_float(st.get("cycle_min_buy_price"), 0.0)
         is_late_cutoff = is_late_regular_new_cycle_cutoff_window(
             hm, now_est=dt_now
         )
@@ -1916,6 +2020,9 @@ async def execute_seed_protected_buy_gate_plugin(
             closed_ha_shaved_bear=closed_shaved_bear,
             closed_ha_bull=closed_ha_bull,
             closed_ha_ready=closed_ha_ready,
+            session_vwap=sess_vwap,
+            hm=hm,
+            cycle_min_buy_price=(cycle_min_p_re if cycle_min_p_re > 0.0 else None),
         )
         sig_type = str(reentry_sig.get("signal_type") or "HOLD_WAIT_GATE")
 
@@ -1924,7 +2031,11 @@ async def execute_seed_protected_buy_gate_plugin(
             new_day_pass = (
                 safe_int(st.get("daily_seed_protect_pass_cnt"), 0) + 1
             )
-            if sig_type == "HOLD_PULLBACK_SHAVED_HA_BEAR":
+            if sig_type in (
+                "HOLD_PULLBACK_SHAVED_HA_BEAR",
+                "HOLD_LOW_BREAK_SHAVED_HA_BEAR",
+                "HOLD_REG_OPEN_7M_VWAP_SHIELD",
+            ):
                 mark_pullback_ha_bear_minute_wait(
                     context=context,
                     symbol=TARGET_SYMBOL,
@@ -1955,10 +2066,15 @@ async def execute_seed_protected_buy_gate_plugin(
             ).endswith("_ORDERED"):
                 return sub_res_after_pass
 
-            if sig_type == "HOLD_PULLBACK_SHAVED_HA_BEAR":
+            if sig_type in (
+                "HOLD_PULLBACK_SHAVED_HA_BEAR",
+                "HOLD_LOW_BREAK_SHAVED_HA_BEAR",
+            ):
                 logger.info(
-                    "🛡️ [1층 공석 -1.0%% 눌림목 무머리 HA음봉 패스] 현재가 $%.2f (직전익절 $%.2f 대비 %+.2f%%) · 완결봉(%s) 윗꼬리없는 HA음봉 -> 매수 패스 & 다음 1분 완료 대기",
+                    "🛡️ [Case 101/105 1층 공석 무머리 HA음봉 패스(%s)] 현재가 $%.2f (기억저가 $%.2f · 직전익절 $%.2f 대비 %+.2f%%) · 완결봉(%s) -> 다음 1분 정각 대기",
+                    sig_type,
                     fresh_live_p,
+                    cycle_min_p_re,
                     safe_float(reentry_sig.get("ref_anchor"), anchor_p),
                     safe_float(reentry_sig.get("chg_from_exit_pct"), 0.0),
                     closed_mk or "-",
@@ -1974,6 +2090,36 @@ async def execute_seed_protected_buy_gate_plugin(
                     "ref_anchor": reentry_sig.get("ref_anchor"),
                     "chg_from_exit_pct": reentry_sig.get("chg_from_exit_pct"),
                     "seed_protect_pass_cnt": new_day_pass,
+                }
+            if sig_type == "HOLD_REG_OPEN_7M_VWAP_SHIELD":
+                logger.info(
+                    "🛡️ [Case 105 정규장 개장 7분(09:30~09:36 EST) VWAP 안정화 쉴드] 현재가 $%.2f (직전익절 $%.2f 대비 %+.2f%%) -> 09:37 EST 해금 대기",
+                    fresh_live_p,
+                    safe_float(reentry_sig.get("ref_anchor"), anchor_p),
+                    safe_float(reentry_sig.get("chg_from_exit_pct"), 0.0),
+                )
+                return {
+                    "status": "L2_ONLY_REENTRY_REG_OPEN_7M_SHIELD",
+                    "signal_type": sig_type,
+                    "live_price": fresh_live_p,
+                    "session_vwap": sess_vwap,
+                    "seed_protect_pass_cnt": new_day_pass,
+                }
+            if sig_type == "HOLD_PULLBACK_ABOVE_SESSION_VWAP":
+                logger.info(
+                    "🛡️ [Case 105 1층 공석 -1.0%% 눌림목 > 세션VWAP 패스] 현재가 $%.2f > 세션VWAP $%.2f (직전익절 $%.2f 대비 %+.2f%%) -> 고가매수 차단 & 60초 타임쉴드",
+                    fresh_live_p,
+                    sess_vwap,
+                    safe_float(reentry_sig.get("ref_anchor"), anchor_p),
+                    safe_float(reentry_sig.get("chg_from_exit_pct"), 0.0),
+                )
+                return {
+                    "status": "L2_ONLY_REENTRY_ABOVE_SESSION_VWAP_BLOCKED",
+                    "signal_type": sig_type,
+                    "live_price": fresh_live_p,
+                    "session_vwap": sess_vwap,
+                    "seed_protect_pass_cnt": new_day_pass,
+                    "next_reentry_check_sec": REENTRY_MONITOR_TIME_SHIELD_SEC,
                 }
 
             if sig_type == "HOLD_PREVENT_INVERSION":
@@ -2135,7 +2281,7 @@ async def execute_seed_protected_buy_gate_plugin(
                             "rsi_14": mutex_rsi_14,
                             "seed_protect_pass_cnt": new_day_pass,
                         }
-                elif sig_type == "PULLBACK_RELOAD":
+                elif sig_type in ("PULLBACK_RELOAD", "LOW_BREAK_RELOAD"):
                     (
                         _,
                         m_shaved_bear,
@@ -2145,6 +2291,47 @@ async def execute_seed_protected_buy_gate_plugin(
                     ) = await _get_live_soxl_reentry_snapshot(
                         context, live_price=fresh_live_p, now_est=dt_re_mutex
                     )
+                    m_sess_vwap = _get_cached_soxl_session_vwap(
+                        context, live_price=fresh_live_p, now_est=dt_re_mutex
+                    )
+                    m_c_min_now = safe_float(
+                        st_now.get("cycle_min_buy_price"), 0.0
+                    )
+                    m_exec_chk = max(
+                        0.01, math.floor((fresh_live_p + 1e-9) * 100.0) / 100.0
+                    )
+                    if (
+                        sig_type == "PULLBACK_RELOAD"
+                        and REG_OPEN_VWAP_SHIELD_START_HM
+                        <= hm_re_mutex
+                        <= REG_OPEN_VWAP_SHIELD_END_HM
+                    ):
+                        new_pass_cnt = (
+                            safe_int(st_now.get("seed_protect_pass_cnt"), 0) + 1
+                        )
+                        new_day_pass = (
+                            safe_int(
+                                st_now.get("daily_seed_protect_pass_cnt"), 0
+                            )
+                            + 1
+                        )
+                        mark_pullback_ha_bear_minute_wait(
+                            context=context,
+                            symbol=TARGET_SYMBOL,
+                            cur_min_key=dt_re_mutex.strftime("%Y-%m-%d %H:%M"),
+                        )
+                        await context.ledger.update_state(
+                            TARGET_SYMBOL,
+                            last_reentry_eval_ts=0.0,
+                            seed_protect_pass_cnt=new_pass_cnt,
+                            daily_seed_protect_pass_cnt=new_day_pass,
+                        )
+                        return {
+                            "status": "L2_ONLY_REENTRY_REG_OPEN_7M_SHIELD",
+                            "signal_type": "HOLD_REG_OPEN_7M_VWAP_SHIELD",
+                            "live_price": fresh_live_p,
+                            "seed_protect_pass_cnt": new_day_pass,
+                        }
                     if (not m_ha_ready) or m_shaved_bear:
                         new_pass_cnt = (
                             safe_int(st_now.get("seed_protect_pass_cnt"), 0)
@@ -2169,10 +2356,66 @@ async def execute_seed_protected_buy_gate_plugin(
                         )
                         return {
                             "status": "L2_ONLY_REENTRY_PULLBACK_SHAVED_HA_BEAR_BLOCKED",
-                            "signal_type": "HOLD_PULLBACK_SHAVED_HA_BEAR",
+                            "signal_type": (
+                                "HOLD_LOW_BREAK_SHAVED_HA_BEAR"
+                                if sig_type == "LOW_BREAK_RELOAD"
+                                else "HOLD_PULLBACK_SHAVED_HA_BEAR"
+                            ),
                             "live_price": fresh_live_p,
                             "closed_ha_shaved_bear": m_shaved_bear,
                             "closed_ha_bull": m_ha_bull,
+                            "seed_protect_pass_cnt": new_day_pass,
+                        }
+                    if (
+                        sig_type == "LOW_BREAK_RELOAD"
+                        and (
+                            m_c_min_now <= 0.0
+                            or m_exec_chk >= (m_c_min_now - 1e-6)
+                        )
+                    ):
+                        re_eval_epoch = mark_reentry_monitor_60s_cycle_shield(
+                            context=context,
+                            symbol=TARGET_SYMBOL,
+                            eval_price=fresh_live_p,
+                        )
+                        await context.ledger.update_state(
+                            TARGET_SYMBOL, last_reentry_eval_ts=re_eval_epoch
+                        )
+                        return {
+                            "status": "L2_ONLY_LOW_BREAK_REBOUNDED",
+                            "signal_type": "HOLD_ABOVE_CYCLE_MIN",
+                            "live_price": fresh_live_p,
+                        }
+                    if (
+                        sig_type == "PULLBACK_RELOAD"
+                        and m_sess_vwap > 0.0
+                        and fresh_live_p > (m_sess_vwap + 1e-6)
+                    ):
+                        new_pass_cnt = (
+                            safe_int(st_now.get("seed_protect_pass_cnt"), 0) + 1
+                        )
+                        new_day_pass = (
+                            safe_int(
+                                st_now.get("daily_seed_protect_pass_cnt"), 0
+                            )
+                            + 1
+                        )
+                        re_eval_epoch = mark_reentry_monitor_60s_cycle_shield(
+                            context=context,
+                            symbol=TARGET_SYMBOL,
+                            eval_price=fresh_live_p,
+                        )
+                        await context.ledger.update_state(
+                            TARGET_SYMBOL,
+                            last_reentry_eval_ts=re_eval_epoch,
+                            seed_protect_pass_cnt=new_pass_cnt,
+                            daily_seed_protect_pass_cnt=new_day_pass,
+                        )
+                        return {
+                            "status": "L2_ONLY_REENTRY_ABOVE_SESSION_VWAP_BLOCKED",
+                            "signal_type": "HOLD_PULLBACK_ABOVE_SESSION_VWAP",
+                            "live_price": fresh_live_p,
+                            "session_vwap": m_sess_vwap,
                             "seed_protect_pass_cnt": new_day_pass,
                         }
 
@@ -2241,8 +2484,11 @@ async def execute_seed_protected_buy_gate_plugin(
                 quota_ref_p = max(
                     0.01,
                     safe_float(
-                        reentry_sig.get("ref_anchor"),
-                        anchor_p if anchor_p > 0.0 else exec_order_p,
+                        reentry_sig.get("quota_ref_price"),
+                        safe_float(
+                            reentry_sig.get("ref_anchor"),
+                            anchor_p if anchor_p > 0.0 else exec_order_p,
+                        ),
                     ),
                 )
                 target_qty, portion_budget = compute_golden8_quota_qty(
@@ -2307,7 +2553,11 @@ async def execute_seed_protected_buy_gate_plugin(
                 pending_lot_tag_re = (
                     "REENTRY_1FL_BREAKOUT"
                     if sig_type == "BREAKOUT_RELOAD"
-                    else "REENTRY_1FL"
+                    else (
+                        "REENTRY_1FL_LOW_BREAK"
+                        if sig_type == "LOW_BREAK_RELOAD"
+                        else "REENTRY_1FL"
+                    )
                 )
                 cid = generate_client_order_id(prefix="RE1FL")
                 try:
@@ -2571,6 +2821,347 @@ async def execute_seed_protected_buy_gate_plugin(
                                 symbol=TARGET_SYMBOL,
                                 clear_shield=False,
                             )
+
+    # -----------------------------------------------------------------------
+    # [분기 B-1B · Case 105 : 본 그리드 활성 1층 보유 중 진성 [2층 공석] 최저가 돌파매수 (LOW_BREAK_L2_VAC_RELOAD)]
+    # -> 활성 1층 보유 & 활성 2층 부재(not has_active_l2_bucket) & 사이클 최고 도달 회차 >= 2 상태에서
+    #    지정가 < 본 기억저가(cycle_min_buy_price) 도달 시 완결 1분봉 무머리 HA 음봉만 패스 후 공석 2층 슬롯 충전!
+    # -----------------------------------------------------------------------
+    if has_active_l1 and (not has_active_l2_bucket(buckets)):
+        held_lots_l2v = sum(b.lot_count for b in buckets)
+        ratchet_l2v = max(
+            held_lots_l2v, safe_int(st.get("cycle_ratchet_max_lots"), 0)
+        )
+        c_min_l2v = safe_float(st.get("cycle_min_buy_price"), 0.0)
+        exec_pre_l2v = max(
+            0.01, math.floor((live_p + 1e-9) * 100.0) / 100.0
+        )
+        if (
+            ratchet_l2v >= 2
+            and c_min_l2v > 0.0
+            and exec_pre_l2v < (c_min_l2v - 1e-6)
+        ):
+            in_re_l2v, _ = is_within_reentry_monitor_time_shield(
+                context, st, TARGET_SYMBOL, now_est=dt_now
+            )
+            if not in_re_l2v:
+                fresh_l2v_p = await _fetch_fresh_current_soxl_price(
+                    context, fallback_price=live_p, now_est=dt_now
+                )
+                if fresh_l2v_p > 0.0:
+                    (
+                        l2v_rsi,
+                        l2v_shaved_bear,
+                        l2v_ha_bull,
+                        l2v_ha_ready,
+                        l2v_closed_mk,
+                    ) = await _get_live_soxl_reentry_snapshot(
+                        context, live_price=fresh_l2v_p, now_est=dt_now
+                    )
+                    l2v_eval = evaluate_l2_vacant_low_break_signal(
+                        live_price=fresh_l2v_p,
+                        buckets=buckets,
+                        cycle_min_buy_price=c_min_l2v,
+                        cycle_ratchet_max_lots=ratchet_l2v,
+                        closed_ha_shaved_bear=l2v_shaved_bear,
+                        closed_ha_bull=l2v_ha_bull,
+                        closed_ha_ready=l2v_ha_ready,
+                    )
+                    l2v_sig_type = str(
+                        l2v_eval.get("signal_type") or "NOT_ELIGIBLE"
+                    )
+                    if l2v_sig_type == "HOLD_LOW_BREAK_SHAVED_HA_BEAR":
+                        mark_pullback_ha_bear_minute_wait(
+                            context=context,
+                            symbol=TARGET_SYMBOL,
+                            cur_min_key=dt_now.strftime("%Y-%m-%d %H:%M"),
+                        )
+                        logger.info(
+                            "🛡️ [Case 105 본 2층공석 최저가 돌파 무머리 HA음봉 패스] 현재가 $%.2f < 기억저가 $%.2f · 완결봉(%s) 무머리 HA음봉 -> 다음 1분 정각 대기",
+                            fresh_l2v_p,
+                            c_min_l2v,
+                            l2v_closed_mk or "-",
+                        )
+                    elif bool(l2v_eval.get("should_buy")):
+                        async with context.in_memory_ordering_lock:
+                            async with context.dual_strike_mutex:
+                                st_now = context.ledger.get_state(TARGET_SYMBOL)
+                                if str(
+                                    st_now.get("buy_order_id") or ""
+                                ).strip() or str(
+                                    st_now.get("sell_order_id") or ""
+                                ).strip():
+                                    return {"status": "ALREADY_ORDERING_IN_MUTEX"}
+
+                                now_buckets = buckets_from_dicts(
+                                    st_now.get("buckets", [])
+                                )
+                                if (
+                                    not now_buckets
+                                    or not has_active_l1_bucket(now_buckets)
+                                    or has_active_l2_bucket(now_buckets)
+                                ):
+                                    return {"status": "L2_VACANT_STATE_CHANGED_IN_MUTEX"}
+
+                                in_s_sh, _ = is_within_post_sell_time_shield(
+                                    context, st_now, TARGET_SYMBOL
+                                )
+                                in_b_sh, _ = is_within_post_buy_time_shield(
+                                    context, st_now, TARGET_SYMBOL
+                                )
+                                in_re_m2, _ = is_within_reentry_monitor_time_shield(
+                                    context, st_now, TARGET_SYMBOL, now_est=dt_now
+                                )
+                                if in_s_sh or in_b_sh or in_re_m2:
+                                    return {"status": "HOLD_60S_TIME_SHIELD_IN_MUTEX"}
+
+                                dt_l2v_m = (
+                                    now_est.astimezone(EST_TZ)
+                                    if now_est
+                                    else datetime.now(EST_TZ)
+                                )
+                                (
+                                    _,
+                                    m_l2v_shaved_bear,
+                                    m_l2v_ha_bull,
+                                    m_l2v_ha_ready,
+                                    _,
+                                ) = await _get_live_soxl_reentry_snapshot(
+                                    context,
+                                    live_price=fresh_l2v_p,
+                                    now_est=dt_l2v_m,
+                                )
+                                now_held_l2v = sum(
+                                    b.lot_count for b in now_buckets
+                                )
+                                now_ratchet_l2v = max(
+                                    now_held_l2v,
+                                    safe_int(
+                                        st_now.get("cycle_ratchet_max_lots"), 0
+                                    ),
+                                )
+                                now_c_min_l2v = safe_float(
+                                    st_now.get("cycle_min_buy_price"), 0.0
+                                )
+                                m_l2v_eval = evaluate_l2_vacant_low_break_signal(
+                                    live_price=fresh_l2v_p,
+                                    buckets=now_buckets,
+                                    cycle_min_buy_price=now_c_min_l2v,
+                                    cycle_ratchet_max_lots=now_ratchet_l2v,
+                                    closed_ha_shaved_bear=m_l2v_shaved_bear,
+                                    closed_ha_bull=m_l2v_ha_bull,
+                                    closed_ha_ready=m_l2v_ha_ready,
+                                )
+                                if not bool(m_l2v_eval.get("should_buy")):
+                                    if (
+                                        str(m_l2v_eval.get("signal_type") or "")
+                                        == "HOLD_LOW_BREAK_SHAVED_HA_BEAR"
+                                    ):
+                                        mark_pullback_ha_bear_minute_wait(
+                                            context=context,
+                                            symbol=TARGET_SYMBOL,
+                                            cur_min_key=dt_l2v_m.strftime(
+                                                "%Y-%m-%d %H:%M"
+                                            ),
+                                        )
+                                    return {
+                                        "status": "L2_VACANT_LOW_BREAK_CHANGED_IN_MUTEX",
+                                        "signal_type": m_l2v_eval.get(
+                                            "signal_type"
+                                        ),
+                                    }
+
+                                exec_order_p = max(
+                                    0.01,
+                                    math.floor((fresh_l2v_p + 1e-9) * 100.0)
+                                    / 100.0,
+                                )
+                                eff_rt_l2v = resolve_effective_round_trip_fee_rate_pct(
+                                    state_dict=st_now
+                                )
+                                now_sub_l2v = buckets_from_dicts(
+                                    st_now.get("sub_buckets", [])
+                                )
+                                now_free_l2v = max(
+                                    0.0,
+                                    safe_float(st_now.get("free_cash_usd"), 0.0),
+                                )
+                                now_seed_l2v = max(
+                                    100.0,
+                                    safe_float(
+                                        st_now.get("initial_seed_usd"),
+                                        DEFAULT_INITIAL_SEED_USD,
+                                    ),
+                                )
+                                now_inj_l2v = max(
+                                    0.0,
+                                    safe_float(
+                                        st_now.get("injected_reserve_usd"), 0.0
+                                    ),
+                                )
+                                now_inv_l2v = sum(
+                                    b.actual_cost_usd for b in now_buckets
+                                ) + sum(
+                                    sb.actual_cost_usd for sb in now_sub_l2v
+                                )
+                                now_core_eq_l2v = max(
+                                    now_seed_l2v,
+                                    (now_free_l2v + now_inv_l2v) - now_inj_l2v,
+                                )
+                                now_p_mode_l2v = (
+                                    str(
+                                        st_now.get("portion_mode")
+                                        or PORTION_MODE_COMPOUND
+                                    )
+                                    .upper()
+                                    .strip()
+                                )
+                                target_qty, portion_budget = (
+                                    compute_golden8_quota_qty(
+                                        anchor_price=now_c_min_l2v,
+                                        current_total_equity=now_core_eq_l2v,
+                                        initial_seed_usd=now_seed_l2v,
+                                        portion_mode=now_p_mode_l2v,
+                                        exec_price=exec_order_p,
+                                    )
+                                )
+                                (
+                                    can_proc_l2v,
+                                    eff_free_l2v,
+                                    bp_usd_l2v,
+                                    guard_res_l2v,
+                                ) = await _check_and_execute_guard30_or_reserve_injection(
+                                    context=context,
+                                    st_now=st_now,
+                                    exec_order_p=exec_order_p,
+                                    portion_budget=portion_budget,
+                                    l1_actual_cost_usd=now_buckets[
+                                        0
+                                    ].actual_cost_usd,
+                                    is_dip_promotion=True,
+                                    is_vacant_l1_reentry=False,
+                                    trigger_desc="2층공석 최저가 돌파매수",
+                                    target_qty=target_qty,
+                                )
+                                if not can_proc_l2v:
+                                    return {
+                                        "status": "HOLD_L2_VACANT_LOW_BREAK_GUARD30",
+                                        "guard_eval": guard_res_l2v,
+                                    }
+
+                                buy_qty_l2v, _ = resolve_affordable_buy_qty(
+                                    target_qty=target_qty,
+                                    price_t=exec_order_p,
+                                    free_cash_usd=eff_free_l2v,
+                                    broker_buying_power_usd=(
+                                        bp_usd_l2v if bp_usd_l2v > 0.0 else None
+                                    ),
+                                    max_portion_budget_usd=portion_budget,
+                                    round_trip_fee_rate_pct=eff_rt_l2v,
+                                )
+                                if buy_qty_l2v <= 0:
+                                    mark_reentry_monitor_60s_cycle_shield(
+                                        context=context,
+                                        symbol=TARGET_SYMBOL,
+                                        eval_price=exec_order_p,
+                                    )
+                                    return {
+                                        "status": "HOLD_L2_VACANT_LOW_BREAK_ZERO_QTY"
+                                    }
+
+                                _, cur_b10_l2v, today_l2v, _ = (
+                                    evaluate_buy_gate_bucket_status(
+                                        now_est=dt_now,
+                                        buy_interval_min=buy_interval_min,
+                                        last_evaluated_bucket_id=safe_int(
+                                            st_now.get(
+                                                "last_evaluated_buy_bucket_id"
+                                            ),
+                                            -1,
+                                        ),
+                                        last_evaluated_date=str(
+                                            st_now.get("last_evaluated_date")
+                                            or ""
+                                        ),
+                                    )
+                                )
+                                prev_b10_l2v = safe_int(
+                                    st_now.get("last_evaluated_buy_bucket_id"),
+                                    -1,
+                                )
+                                prev_dt_l2v = str(
+                                    st_now.get("last_evaluated_date") or ""
+                                )
+                                next_b10_l2v = (
+                                    max(prev_b10_l2v, cur_b10_l2v)
+                                    if prev_dt_l2v == today_l2v
+                                    else cur_b10_l2v
+                                )
+                                cid = generate_client_order_id(prefix="LB2VAC")
+                                try:
+                                    ord_res = await context.api.create_order(
+                                        symbol=TARGET_SYMBOL,
+                                        side="BUY",
+                                        quantity=buy_qty_l2v,
+                                        price=exec_order_p,
+                                        order_type="LIMIT",
+                                        time_in_force="DAY",
+                                        client_order_id=cid,
+                                        enforce_daymarket_block=True,
+                                    )
+                                except Exception as exc:
+                                    mark_reentry_monitor_60s_cycle_shield(
+                                        context=context,
+                                        symbol=TARGET_SYMBOL,
+                                        eval_price=exec_order_p,
+                                    )
+                                    logger.warning(
+                                        "Case 105 본 2층공석 최저가 돌파매수 주문 예외: %s",
+                                        exc,
+                                    )
+                                    return {
+                                        "status": "ORDER_ERROR",
+                                        "error": str(exc),
+                                    }
+
+                                oid = str(ord_res.get("orderId") or "").strip()
+                                mark_reentry_monitor_60s_cycle_shield(
+                                    context=context,
+                                    symbol=TARGET_SYMBOL,
+                                    eval_price=exec_order_p,
+                                )
+                                await context.ledger.update_state(
+                                    TARGET_SYMBOL,
+                                    buy_order_id=oid,
+                                    client_order_id=cid,
+                                    ordered_qty=buy_qty_l2v,
+                                    buy_price=exec_order_p,
+                                    pending_portion_budget=portion_budget,
+                                    pending_lot_type="DIP_1FL_LOW_BREAK",
+                                    pending_step_up_min_price=0.0,
+                                    pending_sub_step_up_min_price=0.0,
+                                    last_evaluated_buy_bucket_id=next_b10_l2v,
+                                    last_evaluated_date=today_l2v,
+                                    last_modify_mono=time.monotonic(),
+                                )
+                                context.wakeup_event.set()
+                                logger.info(
+                                    "🔥 [Case 105 SOXL 본 2층공석 최저가 돌파매수 발주] %d주 @ 지정가 $%.2f < 기억저가 $%.2f (1층 $%.2f ➔ 2층 이관 예정 · RSI=%.1f · orderId=%s)",
+                                    buy_qty_l2v,
+                                    exec_order_p,
+                                    now_c_min_l2v,
+                                    now_buckets[0].book_price,
+                                    l2v_rsi,
+                                    oid,
+                                )
+                                return {
+                                    "status": "L2_VACANT_LOW_BREAK_1FL_ORDERED",
+                                    "signal_type": "LOW_BREAK_L2_VAC_RELOAD",
+                                    "orderId": oid,
+                                    "qty": buy_qty_l2v,
+                                    "price": exec_order_p,
+                                    "cycle_min_buy_price": now_c_min_l2v,
+                                }
 
     # -----------------------------------------------------------------------
     # [분기 B-2 · Case 60, Case 72, Case 76, Case 77, Case 87, Case 88 & Case 91 : 본 그리드 활성 1층 보유 중 (has_active_l1_bucket(buckets) == True)]
