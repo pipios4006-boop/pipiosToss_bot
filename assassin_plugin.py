@@ -19,6 +19,7 @@ import json
 import logging
 import math
 import os
+import re
 import threading
 import time
 from dataclasses import asdict, dataclass
@@ -435,6 +436,89 @@ ASSASSIN_CALLBACK_WIDE_PCT: float = 0.00
 ASSASSIN_QQQ_SURGE_BYPASS_PCT: float = 0.20
 
 LIVE_BUY_ORDER_MAX_WAIT_SEC: float = 60.0
+# NEW [Case 107]: 실전 트레일링 익절 보존선 사수 및 에어포켓 60초 용서 릴리스 상수/산출기
+LIVE_TRAIL_EXIT_FORGIVE_WAIT_SEC: float = 60.0
+LIVE_TRAIL_FORGIVE_CUTOFF_HM: int = 1550
+_LIVE_EXIT_FIRST_START_MONO: Dict[str, float] = {}
+
+_TRAIL_LOCKED_EXIT_CODES: Tuple[str, ...] = (
+    "CAP_500_HOMERUN",
+    "TRAIL_FLOOR_100",
+    "TRAIL_CALLBACK_BOOST",
+    "TRAIL_HA_RED_BOOST",
+)
+_PROFIT_PROTECTED_EXIT_CODES: Tuple[str, ...] = (
+    "CAP_500_HOMERUN",
+    "TRAIL_FLOOR_100",
+    "TRAIL_CALLBACK_BOOST",
+    "TRAIL_HA_RED_BOOST",
+    "VWAP_1500_PROFIT_EXIT",
+)
+_EXIT_DESC_TRAILING_PRICE_RE = re.compile(r"\(\$[0-9]+(?:\.[0-9]+)?\)$")
+
+
+def _sync_exit_desc_price_tag(exit_desc: str, actual_price: float) -> str:
+    desc = str(exit_desc or "").strip()
+    xp = safe_float(actual_price, 0.0)
+    if not desc or xp <= 0.0:
+        return desc
+    return _EXIT_DESC_TRAILING_PRICE_RE.sub(f"(${xp:.2f})", desc)
+
+
+def _resolve_live_profit_exit_floor_price(
+    st: Dict[str, Any],
+    exit_code: str,
+    peak_override: float = 0.0,
+) -> float:
+    code_u = str(exit_code or "").upper().strip()
+    if code_u not in _PROFIT_PROTECTED_EXIT_CODES:
+        return 0.0
+    ep = safe_float(st.get("entry_price"), 0.0)
+    if ep <= 0.0:
+        return 0.0
+    if code_u == "VWAP_1500_PROFIT_EXIT":
+        return round(math.ceil((ep * 1.0020 - 1e-9) * 100.0) / 100.0, 2)
+    arm_p = safe_float(st.get("arm_100_price"), 0.0)
+    if arm_p <= 0.0:
+        arm_p = (
+            math.ceil(
+                (ep * (1.0 + ASSASSIN_ARM_IGNITION_PCT / 100.0) - 1e-9)
+                * 100.0
+            )
+            / 100.0
+        )
+    step_trig_p = round(ep * (1.0 + ASSASSIN_STEP_TRIG_PCT / 100.0), 4)
+    lock_125_p = (
+        math.ceil(
+            (ep * (1.0 + ASSASSIN_STEP_LOCK_PCT / 100.0) - 1e-9) * 100.0
+        )
+        / 100.0
+    )
+    pk = max(
+        safe_float(st.get("peak_price"), 0.0),
+        safe_float(peak_override, 0.0),
+    )
+    if pk >= step_trig_p - 1e-9:
+        return round(max(arm_p, lock_125_p), 2)
+    return round(arm_p, 2)
+
+
+def compute_live_exit_chase_price(
+    st: Dict[str, Any],
+    exit_code: str,
+    live_price: float,
+    hm: int,
+    best_bid_price: float = 0.0,
+) -> float:
+    lp = max(0.01, safe_float(live_price, 0.01))
+    if safe_int(hm, 0) >= ASSASSIN_MOC_EXIT_HM:
+        ref_m_p = min(lp, best_bid_price) if best_bid_price > 0.0 else lp
+        return round(max(0.01, ref_m_p * 0.985), 2)
+    floor_p = _resolve_live_profit_exit_floor_price(st, exit_code)
+    if floor_p > 0.0:
+        mkt_fl = math.floor((lp * 0.998 + 1e-9) * 100.0) / 100.0
+        return round(max(floor_p, mkt_fl), 2)
+    return round(max(0.01, lp * 0.996), 2)
 
 # [Case 93 & Case 97-A : 출동 순간 QQQ 지수(entry_qqq_price) 기반 08:15~ SN4×SN3 단일 방어망 상수 (UG 영구 소각)]
 SAFETY_NET_MODE_DEFAULT: str = "SN4_DEEP_1000_SN3_SMART_HYBRID"
@@ -3957,7 +4041,9 @@ async def _settle_assassin_exit_to_ledger(
         "armed_closed_bar_key": "",
         "peak_price": peak_p,
         "post_entry_min_price": min_p,
-        "today_exit_reason": exit_desc,
+        "today_exit_reason": _sync_exit_desc_price_tag(
+            exit_desc, round(exec_xp, 2)
+        ),
         "today_exit_time_est": dt_now.strftime("%H:%M:%S"),
         "today_exit_price": round(exec_xp, 2),
         "today_gain_pct": round(gain_pct, 2),
@@ -4008,6 +4094,7 @@ async def _settle_assassin_exit_to_ledger(
     else:
         upd_exit["exit_moc_cnt"] = safe_int(st.get("exit_moc_cnt"), 0) + 1
 
+    _LIVE_EXIT_FIRST_START_MONO.pop(assn_ledger.folder_slug, None)
     if context is not None:
         context.assassin_high_freq_active = False
 
@@ -4028,6 +4115,7 @@ async def _sync_live_pending_exit_order(
 ) -> str:
     sell_oid = str(st.get("pending_exit_sell_order_id") or "").strip()
     if not sell_oid:
+        _LIVE_EXIT_FIRST_START_MONO.pop(assn_ledger.folder_slug, None)
         return "NO_PENDING_EXIT"
 
     det = await context.api.get_order_detail(sell_oid)
@@ -4147,6 +4235,13 @@ async def _sync_live_pending_exit_order(
     if raw_xm <= 0.0 or raw_xm > now_m_x:
         raw_xm = now_m_x
         await assn_ledger.update_state(pending_exit_mono=raw_xm)
+    first_x_m = safe_float(
+        _LIVE_EXIT_FIRST_START_MONO.get(assn_ledger.folder_slug), 0.0
+    )
+    if first_x_m <= 0.0 or first_x_m > now_m_x:
+        first_x_m = raw_xm
+        _LIVE_EXIT_FIRST_START_MONO[assn_ledger.folder_slug] = first_x_m
+    total_exit_elapsed = max(0.0, now_m_x - first_x_m)
     elapsed = now_m_x - raw_xm
     hm_chk = dt_now.hour * 100 + dt_now.minute
     wait_thr = 3.0 if hm_chk >= ASSASSIN_MOC_EXIT_HM else 5.0
@@ -4161,27 +4256,151 @@ async def _sync_live_pending_exit_order(
                     eff_chase_lp = fresh_c_lp
             except Exception:
                 pass
-        if hm_chk >= ASSASSIN_MOC_EXIT_HM:
-            bid_p = await context.api.get_best_bid_price(
+        exit_code_p = str(st.get("pending_exit_code") or "EXIT").upper().strip()
+        hard_floor_p = _resolve_live_profit_exit_floor_price(
+            st, exit_code_p, peak_override=eff_chase_lp
+        )
+        # NEW [Case 107]: 에어포켓 급락으로 60.0초 미체결(체결 0주 & 15:50 이전) 시 보존선 사수 취소 및 용서 릴리스
+        if (
+            hard_floor_p > 0.0
+            and hm_chk < LIVE_TRAIL_FORGIVE_CUTOFF_HM
+            and fq <= 0
+            and total_exit_elapsed >= LIVE_TRAIL_EXIT_FORGIVE_WAIT_SEC
+            and eff_chase_lp < (hard_floor_p - 1e-9)
+        ):
+            try:
+                await context.api.cancel_order(sell_oid)
+            except Exception:
+                pass
+            await asyncio.sleep(0.35)
+            det_c = await context.api.get_order_detail(sell_oid)
+            st_c = (
+                str(det_c.get("status") or "").upper().strip()
+                if isinstance(det_c, dict)
+                else ""
+            )
+            ex_c = (
+                det_c.get("execution")
+                if (
+                    isinstance(det_c, dict)
+                    and isinstance(det_c.get("execution"), dict)
+                )
+                else {}
+            )
+            fq_c = safe_int(ex_c.get("filledQuantity"), 0)
+            fp_c = safe_float(ex_c.get("averageFilledPrice"), hard_floor_p)
+            if st_c == "FILLED":
+                return await _settle_assassin_exit_to_ledger(
+                    context=context,
+                    assn_ledger=assn_ledger,
+                    st=st,
+                    exec_xp=(fp_c if fp_c > 0.0 else hard_floor_p),
+                    exit_code=exit_code_p,
+                    exit_desc=str(
+                        st.get("pending_exit_desc") or "실전 청산 체결"
+                    ),
+                    entry_qqq_p=eq_qqq,
+                    cur_qqq_chg_pct=q_chg,
+                    new_armed=bool(st.get("is_trailing_armed", False)),
+                    peak_p=safe_float(st.get("peak_price"), fp_c),
+                    min_p=safe_float(st.get("post_entry_min_price"), fp_c),
+                    dt_now=dt_now,
+                )
+            if (
+                isinstance(det_c, dict)
+                and st_c in ("CANCELED", "REJECTED", "REPLACED")
+                and fq_c <= 0
+            ):
+                _LIVE_EXIT_FIRST_START_MONO.pop(assn_ledger.folder_slug, None)
+                live_q_rel = max(1, safe_int(st.get("live_held_qty"), 1))
+                ep_rel = max(
+                    0.01, safe_float(st.get("entry_price"), eff_chase_lp)
+                )
+                cap_p_rel = safe_float(st.get("cap_500_price"), 0.0) or round(
+                    ep_rel * (1.0 + ASSASSIN_SAFE_CAP_PCT / 100.0), 2
+                )
+                _, rel_cap_oid = await _dispatch_assassin_safe_cap_sell_order(
+                    context=context,
+                    qty=live_q_rel,
+                    cap_price=cap_p_rel,
+                    is_live=True,
+                )
+                await assn_ledger.update_state(
+                    is_trailing_armed=False,
+                    armed_time_est="",
+                    armed_minute_key="",
+                    armed_wall_minute_key="",
+                    armed_closed_bar_key="",
+                    peak_price=round(eff_chase_lp, 4),
+                    post_entry_min_price=round(
+                        min(
+                            safe_float(
+                                st.get("post_entry_min_price"), eff_chase_lp
+                            ),
+                            eff_chase_lp,
+                        ),
+                        4,
+                    ),
+                    active_stop_floor_price=0.0,
+                    alert_arm_100_sent=False,
+                    safe_cap_sell_order_id=rel_cap_oid,
+                    pending_exit_sell_order_id="",
+                    pending_exit_code="",
+                    pending_exit_desc="",
+                    pending_exit_mono=0.0,
+                )
+                context.assassin_high_freq_active = False
+                logger.info(
+                    "💡 [Case 107 실전 암살자 에어포켓 60초 미체결 보존선($%.2f) 사수 릴리스] 실호가=$%.2f -> 손절정정 차단 & +5%% 안전캡($%.2f) 복구",
+                    hard_floor_p,
+                    eff_chase_lp,
+                    cap_p_rel,
+                )
+                if hasattr(context, "send_slim_alert"):
+                    await context.send_slim_alert(
+                        title="💡 [[실전] 암살자 에어포켓 미체결 · 보존선 사수 릴리스]",
+                        body=(
+                            f"호가 공백으로 실호가(${eff_chase_lp:.2f})가 익절보존선(${hard_floor_p:.2f})을 하회하여 "
+                            f"하향 정정을 차단하고 주문을 안전 취소했습니다. (+5.00% 안전캡 ${cap_p_rel:.2f} 복구 · 반등 시 재점화)"
+                        ),
+                    )
+                return "ASSASSIN_LIVE_EXIT_FORGIVEN_RELEASE"
+
+        bid_p = (
+            await context.api.get_best_bid_price(
                 TARGET_SYMBOL, fallback_price=eff_chase_lp
             )
-            ref_m_p = (
-                min(eff_chase_lp, bid_p) if bid_p > 0.0 else eff_chase_lp
-            )
-            chase_p = round(max(0.01, ref_m_p * 0.985), 2)
+            if hm_chk >= ASSASSIN_MOC_EXIT_HM
+            else 0.0
+        )
+        chase_p = compute_live_exit_chase_price(
+            st=st,
+            exit_code=exit_code_p,
+            live_price=eff_chase_lp,
+            hm=hm_chk,
+            best_bid_price=bid_p,
+        )
+        cur_ord_p = (
+            safe_float(det.get("price"), 0.0) if isinstance(det, dict) else 0.0
+        )
+        # MODIFIED [Case 107]: 이미 보존선과 동일한 가격에 대기 중이면 중복 정정을 생략해 호가창 시간우선순위 사수
+        if cur_ord_p > 0.0 and abs(chase_p - cur_ord_p) < 0.005:
+            await assn_ledger.update_state(pending_exit_mono=time.monotonic())
         else:
-            chase_p = round(max(0.01, eff_chase_lp * 0.996), 2)
-        try:
-            mod_r = await context.api.modify_order(
-                order_id=sell_oid, new_price=chase_p
-            )
-            new_oid = str((mod_r or {}).get("orderId") or sell_oid).strip()
-            await assn_ledger.update_state(
-                pending_exit_sell_order_id=new_oid,
-                pending_exit_mono=time.monotonic(),
-            )
-        except Exception:
-            pass
+            try:
+                mod_r = await context.api.modify_order(
+                    order_id=sell_oid, new_price=chase_p
+                )
+                new_oid = str((mod_r or {}).get("orderId") or sell_oid).strip()
+                await assn_ledger.update_state(
+                    pending_exit_sell_order_id=new_oid,
+                    pending_exit_desc=_sync_exit_desc_price_tag(
+                        str(st.get("pending_exit_desc") or ""), chase_p
+                    ),
+                    pending_exit_mono=time.monotonic(),
+                )
+            except Exception:
+                pass
     context.assassin_high_freq_active = True
     return "ASSASSIN_LIVE_EXIT_WAITING"
 # -*- coding: utf-8 -*-
@@ -5271,20 +5490,89 @@ async def execute_simulated_assassin_tick_plugin(
         exit_desc = str(exit_eval.get("exit_desc") or exit_code)
         target_xp = safe_float(exit_eval.get("exit_price"), lp)
         if is_live_pos and context is not None and hasattr(context, "api"):
+            fresh_x_lp = 0.0
             try:
                 fresh_x_lp = await context.api.get_current_price(
                     TARGET_SYMBOL, bypass_shm_cache=True
                 )
-                if fresh_x_lp > 0.0:
-                    arm_fl = safe_float(st.get("arm_100_price"), 0.0)
-                    target_xp = round(
-                        max(arm_fl, fresh_x_lp)
-                        if (new_armed and arm_fl > 0.0)
-                        else fresh_x_lp,
-                        2,
-                    )
             except Exception:
-                pass
+                fresh_x_lp = 0.0
+            if fresh_x_lp > 0.0:
+                eval_pk = max(
+                    safe_float(exit_eval.get("peak_price"), lp), fresh_x_lp
+                )
+                hard_fl = _resolve_live_profit_exit_floor_price(
+                    st, exit_code, peak_override=eval_pk
+                )
+                base_arm_fl = safe_float(st.get("arm_100_price"), hard_fl)
+                # NEW [Case 107]: 발주 직전 2차 실호가가 +1.00% 점화선 미만으로 급락 시 허공 발주 없이 즉시 용서 릴리스
+                if (
+                    exit_code in _TRAIL_LOCKED_EXIT_CODES
+                    and hm < LIVE_TRAIL_FORGIVE_CUTOFF_HM
+                    and base_arm_fl > 0.0
+                    and fresh_x_lp < (base_arm_fl - 1e-9)
+                ):
+                    eff_cap_oid = cap_oid_now
+                    if not eff_cap_oid:
+                        ep_f = max(
+                            0.01,
+                            safe_float(st.get("entry_price"), fresh_x_lp),
+                        )
+                        cap_p_f = safe_float(
+                            st.get("cap_500_price"), 0.0
+                        ) or round(
+                            ep_f * (1.0 + ASSASSIN_SAFE_CAP_PCT / 100.0), 2
+                        )
+                        _, eff_cap_oid = (
+                            await _dispatch_assassin_safe_cap_sell_order(
+                                context=context,
+                                qty=max(1, safe_int(st.get("live_held_qty"), 1)),
+                                cap_price=cap_p_f,
+                                is_live=True,
+                            )
+                        )
+                    await assn_ledger.update_state(
+                        entry_qqq_price=entry_qqq_p,
+                        qqq_chg_from_entry_pct=cur_qqq_chg_pct,
+                        is_trailing_armed=False,
+                        armed_time_est="",
+                        armed_minute_key="",
+                        armed_wall_minute_key="",
+                        armed_closed_bar_key="",
+                        peak_price=round(fresh_x_lp, 4),
+                        post_entry_min_price=round(
+                            min(
+                                safe_float(
+                                    exit_eval.get("post_entry_min_price"),
+                                    fresh_x_lp,
+                                ),
+                                fresh_x_lp,
+                            ),
+                            4,
+                        ),
+                        active_stop_floor_price=0.0,
+                        alert_arm_100_sent=False,
+                        safe_cap_sell_order_id=eff_cap_oid,
+                    )
+                    context.assassin_high_freq_active = False
+                    logger.info(
+                        "💡 [Case 107 실전 암살자 2차 실호가($%.2f) < 점화가($%.2f) '허락보다 용서를' 릴리스] code=%s",
+                        fresh_x_lp,
+                        base_arm_fl,
+                        exit_code,
+                    )
+                    return "ASSASSIN_LIVE_TRAIL_FORGIVEN_PRE_ORDER"
+                if hard_fl > 0.0:
+                    floor_cent_lp = (
+                        math.floor((fresh_x_lp + 1e-9) * 100.0) / 100.0
+                    )
+                    target_xp = round(max(hard_fl, floor_cent_lp), 2)
+                    exit_desc = _sync_exit_desc_price_tag(exit_desc, target_xp)
+                else:
+                    target_xp = round(fresh_x_lp, 2)
+            _LIVE_EXIT_FIRST_START_MONO[assn_ledger.folder_slug] = (
+                time.monotonic()
+            )
         eff_sell_q = (
             safe_int(st.get("live_held_qty"), 1)
             if is_live_pos
@@ -6192,5 +6480,51 @@ def run_assassin_plugin_tdd() -> bool:
         r_0609_exit["should_exit"] is True
         and r_0609_exit["exit_code"] == "TRAIL_HA_RED_BOOST"
     )
+
+    # 10) Case 107: 2026-11-17 실전($47.77 진입 ➔ $48.27 점화) 5.0초 0.996($48.15) 보존선 파괴 원천 차단 검증
+    mock_live_st_100 = {
+        "entry_price": 47.77,
+        "arm_100_price": 48.25,
+        "peak_price": 48.27,
+    }
+    fl_100 = _resolve_live_profit_exit_floor_price(
+        mock_live_st_100, "TRAIL_HA_RED_BOOST"
+    )
+    chase_at_4827 = compute_live_exit_chase_price(
+        mock_live_st_100, "TRAIL_HA_RED_BOOST", live_price=48.27, hm=601
+    )
+    chase_at_4815 = compute_live_exit_chase_price(
+        mock_live_st_100, "TRAIL_HA_RED_BOOST", live_price=48.15, hm=601
+    )
+    assert (
+        abs(fl_100 - 48.25) < 1e-6
+        and abs(chase_at_4827 - 48.25) < 1e-6
+        and abs(chase_at_4815 - 48.25) < 1e-6
+    ), f"Case 107 +1.00% 보존선($48.25) 하향 이탈 재발: {fl_100}, {chase_at_4827}, {chase_at_4815}"
+
+    mock_live_st_125 = {
+        "entry_price": 47.77,
+        "arm_100_price": 48.25,
+        "peak_price": 48.60,
+    }
+    fl_125 = _resolve_live_profit_exit_floor_price(
+        mock_live_st_125, "TRAIL_HA_RED_BOOST"
+    )
+    chase_step_125 = compute_live_exit_chase_price(
+        mock_live_st_125, "TRAIL_HA_RED_BOOST", live_price=48.30, hm=605
+    )
+    chase_stop_cut = compute_live_exit_chase_price(
+        mock_live_st_125, "STAGE23_DIR_BEAR_BREAK", live_price=46.50, hm=945
+    )
+    synced_desc = _sync_exit_desc_price_tag(
+        "🕯️ 완결 1분봉 아랫꼬리 HA양봉(추세둔화) 트레일링 익절($48.27)",
+        48.25,
+    )
+    assert (
+        abs(fl_125 - 48.37) < 1e-6
+        and abs(chase_step_125 - 48.37) < 1e-6
+        and abs(chase_stop_cut - 46.31) < 1e-6
+        and synced_desc.endswith("($48.25)")
+    ), f"Case 107 +1.25% 스텝보존/긴급손절/사유동기화 검증 실패: {fl_125}, {chase_step_125}, {chase_stop_cut}"
 
     return True
