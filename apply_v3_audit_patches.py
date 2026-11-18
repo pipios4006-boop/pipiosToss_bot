@@ -4443,6 +4443,18 @@ _EVOLVED_SUPERSEDED_MARKERS: Dict[str, Tuple[str, ...]] = {
         'if hasattr(context.tg, "close"):',
         "await asyncio.wait_for(context.tg.close(), timeout=1.5)",
     ),
+    "P11_A1_ACTIVATE_ZERO_SOXL_GUARDS": (
+        '"is_stop_latched": False,',
+        '"alert_stop_latch_sent": False,',
+    ),
+    "P11_A2_TOGGLE_PROMOTE_VERIFY_HOLDINGS": (
+        "is_stop_latched=False,",
+        "alert_stop_latch_sent=False,",
+    ),
+    "P11_C3_LIVE_EXIT_FAIL_NO_FAKE_SETTLE": (
+        "is_stop_latched=new_stop_latched,",
+        "rebound_armed_closed_bar_key=new_rb_cmk,",
+    ),
 }
 
 
