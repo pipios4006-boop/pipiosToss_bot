@@ -14,10 +14,12 @@ import ast
 import asyncio
 import errno
 import glob
+import hashlib
 import json
 import logging
 import os
 import re
+import signal
 import subprocess
 import sys
 import threading
@@ -26,6 +28,11 @@ import urllib.error
 import urllib.request
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Set, Tuple
+
+try:
+    import fcntl
+except ImportError:
+    fcntl = None  # type: ignore
 
 from toss_api import (
     EST_TZ,
@@ -96,9 +103,505 @@ _TERNARY_WALRUS_GLITCH_RE = re.compile(
     r"\bif\s+\(?[A-Za-z_][A-Za-z0-9_]*\s*:=\s*res_obj\.get\(\s*(['\"]items['\"])\s*\)\s*\)?"
 )
 
-# [Case 81]: 중복 execv 방지를 위한 프로세스 전역 락 및 워치독 상태
+# [Case 81 & Case 108]: 중복 execv 방지 · SHA-256 코드 드리프트 · /proc 좀비 헌터 · 커널 심장박동 워치독 상태
 _RESTART_EXEC_LOCK = threading.Lock()
 _RESTART_WATCHDOG_TIMER: Optional[threading.Timer] = None
+
+AUTO_UPDATE_CHECK_INTERVAL_SEC: float = 600.0
+FLEET_BEACON_POLL_STEP_SEC: float = 15.0
+ZOMBIE_HEARTBEAT_STALL_SEC: float = 300.0
+
+_SINGLETON_LOCK_FD: int = -1
+_LAST_MAIN_HEARTBEAT_MONO: float = time.monotonic()
+_KERNEL_WATCHDOG_STARTED: bool = False
+_KERNEL_WATCHDOG_LOCK = threading.Lock()
+
+
+def compute_core_modules_sha256_sync(base_dir: Optional[str] = None) -> str:
+    target_dir = get_bot_base_dir(base_dir)
+    hasher = hashlib.sha256()
+    for fname in REQUIRED_CORE_MODULES:
+        fpath = os.path.join(target_dir, fname)
+        if not os.path.isfile(fpath):
+            return ""
+        try:
+            with open(fpath, "rb") as rf:
+                raw = rf.read().replace(b"\r\n", b"\n")
+            hasher.update(fname.encode("utf-8"))
+            hasher.update(b"\x00")
+            hasher.update(raw)
+            hasher.update(b"\x00")
+        except Exception:
+            return ""
+    return hasher.hexdigest()
+
+
+BOOT_CODE_SHA256: str = compute_core_modules_sha256_sync()
+
+
+def refresh_boot_code_sha256(base_dir: Optional[str] = None) -> str:
+    global BOOT_CODE_SHA256
+    cur = compute_core_modules_sha256_sync(base_dir)
+    if cur:
+        BOOT_CODE_SHA256 = cur
+    return BOOT_CODE_SHA256
+
+
+def touch_bot_heartbeat() -> float:
+    global _LAST_MAIN_HEARTBEAT_MONO
+    now_m = time.monotonic()
+    _LAST_MAIN_HEARTBEAT_MONO = now_m
+    return now_m
+
+
+def get_bot_heartbeat_age_sec() -> float:
+    return max(0.0, time.monotonic() - _LAST_MAIN_HEARTBEAT_MONO)
+
+
+def _resolve_updater_shm_dir_sync() -> str:
+    bdir = str(
+        os.environ.get("TOSS_SHM_BUS_DIR", "/dev/shm/toss_sniper_bus_v3")
+    ).strip()
+    if bdir.startswith("/dev/shm/") and not os.path.isdir("/dev/shm"):
+        bdir = "/tmp/toss_sniper_bus_v3"
+    if not os.path.isdir(bdir):
+        old_u = os.umask(0)
+        try:
+            os.makedirs(bdir, mode=0o777, exist_ok=True)
+            os.chmod(bdir, 0o777)
+        except Exception:
+            pass
+        finally:
+            os.umask(old_u)
+    return bdir
+
+
+def _read_shm_update_beacon_sync() -> Dict[str, Any]:
+    fp = os.path.join(
+        _resolve_updater_shm_dir_sync(), "fleet_update_beacon_v3.json"
+    )
+    if not os.path.isfile(fp):
+        return {}
+    try:
+        with open(fp, "r", encoding="utf-8") as rf:
+            data = json.load(rf)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _write_shm_update_beacon_sync(
+    commit_or_sha: str, source_dir: Optional[str] = None
+) -> None:
+    bdir = _resolve_updater_shm_dir_sync()
+    fp = os.path.join(bdir, "fleet_update_beacon_v3.json")
+    tmp_fp = f"{fp}.tmp.{os.getpid()}.{threading.get_ident()}"
+    payload = {
+        "ts": round(time.time(), 3),
+        "commit": str(commit_or_sha or "").strip(),
+        "source_dir": str(source_dir or get_bot_base_dir()),
+        "pid": os.getpid(),
+    }
+    old_u = os.umask(0)
+    try:
+        with open(tmp_fp, "w", encoding="utf-8") as wf:
+            json.dump(payload, wf, ensure_ascii=False)
+            wf.flush()
+        try:
+            os.chmod(tmp_fp, 0o666)
+        except Exception:
+            pass
+        os.replace(tmp_fp, fp)
+    except Exception:
+        try:
+            if os.path.exists(tmp_fp):
+                os.remove(tmp_fp)
+        except Exception:
+            pass
+    finally:
+        os.umask(old_u)
+
+
+def _read_env_identity_pair_sync(target_dir: str) -> Tuple[str, str]:
+    tg_tok = ""
+    client_id = ""
+    env_fp = os.path.join(target_dir, ".env")
+    if not os.path.isfile(env_fp):
+        return "", ""
+    try:
+        with open(env_fp, "r", encoding="utf-8", errors="ignore") as rf:
+            for raw_line in rf:
+                line = raw_line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                if line.startswith("export "):
+                    line = line[len("export ") :].strip()
+                k, v = line.split("=", 1)
+                k_u = k.strip().upper()
+                v_c = v.strip().strip("'").strip('"').strip()
+                if k_u in (
+                    "TELEGRAM_BOT_TOKEN",
+                    "TG_BOT_TOKEN",
+                    "BOT_TOKEN",
+                    "TELEGRAM_TOKEN",
+                ) and not tg_tok:
+                    m = _TG_TOKEN_STRICT_RE.search(v_c)
+                    if m:
+                        tg_tok = m.group(1)
+                elif k_u in (
+                    "TOSS_CLIENT_ID",
+                    "TOSS_API_KEY",
+                    "TOSS_APP_KEY",
+                    "CLIENT_ID",
+                ) and v_c and not client_id:
+                    client_id = v_c
+    except Exception:
+        return "", ""
+    return tg_tok, client_id
+
+
+def _is_systemd_service_pid(pid: int) -> Tuple[bool, str]:
+    cg_fp = f"/proc/{pid}/cgroup"
+    if not os.path.isfile(cg_fp):
+        return False, ""
+    try:
+        with open(cg_fp, "r", encoding="utf-8", errors="ignore") as rf:
+            for line in rf:
+                leaf = line.strip().rsplit("/", 1)[-1]
+                if leaf.endswith(".service") and not leaf.startswith("user@"):
+                    return True, leaf
+    except Exception:
+        pass
+    return False, ""
+
+
+def _collect_protected_family_pids(my_pid: int) -> Set[int]:
+    protected: Set[int] = {1, my_pid}
+    ppid_map: Dict[int, int] = {}
+    if not os.path.isdir("/proc"):
+        return protected
+    try:
+        for entry in os.listdir("/proc"):
+            if not entry.isdigit():
+                continue
+            p_i = int(entry)
+            try:
+                with open(
+                    f"/proc/{p_i}/stat", "r", encoding="utf-8", errors="ignore"
+                ) as sf:
+                    raw_stat = sf.read()
+                rpar = raw_stat.rfind(")")
+                if rpar > 0:
+                    fields = raw_stat[rpar + 1 :].split()
+                    if len(fields) >= 2 and fields[1].isdigit():
+                        ppid_map[p_i] = int(fields[1])
+            except Exception:
+                continue
+        cur = my_pid
+        for _ in range(32):
+            parent = ppid_map.get(cur, 0)
+            if parent <= 1 or parent in protected:
+                break
+            protected.add(parent)
+            cur = parent
+        changed = True
+        while changed:
+            changed = False
+            for child_p, par_p in ppid_map.items():
+                if par_p in protected and child_p not in protected:
+                    protected.add(child_p)
+                    changed = True
+    except Exception:
+        pass
+    return protected
+
+
+def _extract_python_main_script_from_cmdline(args: List[str]) -> str:
+    if len(args) < 2:
+        return ""
+    exe_base = os.path.basename(args[0]).lower()
+    if not exe_base.startswith("python"):
+        return ""
+    idx = 1
+    while idx < len(args):
+        tok = args[idx]
+        if tok in ("-c", "-m"):
+            return ""
+        if tok in ("-W", "-X", "--check-hash-based-pycs"):
+            idx += 2
+            continue
+        if tok.startswith("-"):
+            idx += 1
+            continue
+        return tok
+    return ""
+
+
+def _discover_duplicate_bot_candidates_sync(
+    base_dir: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    if not os.path.isdir("/proc"):
+        return []
+    target_dir = os.path.realpath(get_bot_base_dir(base_dir))
+    my_main_py = os.path.realpath(os.path.join(target_dir, "main.py"))
+    my_pid = os.getpid()
+    my_uid = os.getuid() if hasattr(os, "getuid") else -1
+    protected_pids = _collect_protected_family_pids(my_pid)
+    my_tg_tok, my_cid = _read_env_identity_pair_sync(target_dir)
+
+    victims: List[Dict[str, Any]] = []
+    try:
+        entries = os.listdir("/proc")
+    except Exception:
+        return []
+
+    for entry in entries:
+        if not entry.isdigit():
+            continue
+        pid = int(entry)
+        if pid <= 1 or pid in protected_pids:
+            continue
+        try:
+            if my_uid > 0:
+                st_p = os.stat(f"/proc/{pid}")
+                if st_p.st_uid != my_uid:
+                    continue
+            with open(f"/proc/{pid}/cmdline", "rb") as cf:
+                raw_cmd = cf.read()
+            if not raw_cmd:
+                continue
+            args = [
+                x
+                for x in raw_cmd.decode("utf-8", errors="ignore").split("\x00")
+                if x
+            ]
+            if "--verify-only" in args:
+                continue
+            script_arg = _extract_python_main_script_from_cmdline(args)
+            if not script_arg or os.path.basename(script_arg) != "main.py":
+                continue
+
+            try:
+                cand_cwd = os.path.realpath(f"/proc/{pid}/cwd")
+            except Exception:
+                cand_cwd = ""
+
+            if os.path.isabs(script_arg):
+                cand_main = os.path.realpath(script_arg)
+            elif cand_cwd:
+                cand_main = os.path.realpath(
+                    os.path.join(cand_cwd, script_arg)
+                )
+            else:
+                continue
+
+            cand_dir = os.path.dirname(cand_main)
+            cand_is_svc, cand_unit = _is_systemd_service_pid(pid)
+            same_dir = bool(
+                cand_dir == target_dir or cand_main == my_main_py
+            )
+            same_clone = False
+            if not same_dir and my_tg_tok and my_cid and (not cand_is_svc):
+                if os.path.isfile(
+                    os.path.join(cand_dir, "sniper_plugin_core.py")
+                ) and os.path.isfile(
+                    os.path.join(cand_dir, "barbell_plugin.py")
+                ):
+                    c_tok, c_cid = _read_env_identity_pair_sync(cand_dir)
+                    if c_tok == my_tg_tok and c_cid == my_cid:
+                        same_clone = True
+
+            if same_dir or same_clone:
+                victims.append(
+                    {
+                        "pid": pid,
+                        "dir": cand_dir,
+                        "same_dir": same_dir,
+                        "is_service": cand_is_svc,
+                        "service_unit": cand_unit,
+                    }
+                )
+        except Exception:
+            continue
+    return victims
+
+
+def _kill_victim_pids_sync(
+    victims: List[Dict[str, Any]]
+) -> List[Dict[str, Any]]:
+    if not victims:
+        return []
+    reaped: List[Dict[str, Any]] = []
+    for v in victims:
+        v_pid = safe_int(v.get("pid"), 0)
+        if v_pid <= 1:
+            continue
+        try:
+            os.kill(v_pid, signal.SIGTERM)
+            reaped.append(v)
+        except ProcessLookupError:
+            continue
+        except Exception as exc:
+            logger.debug("좀비 프로세스 SIGTERM 예외(PID=%d): %s", v_pid, exc)
+
+    if not reaped:
+        return []
+
+    deadline = time.monotonic() + 1.5
+    while time.monotonic() < deadline:
+        alive_cnt = sum(
+            1 for v in reaped if os.path.exists(f"/proc/{v['pid']}")
+        )
+        if alive_cnt == 0:
+            break
+        time.sleep(0.1)
+
+    for v in reaped:
+        v_pid = safe_int(v.get("pid"), 0)
+        if v_pid > 1 and os.path.exists(f"/proc/{v_pid}"):
+            try:
+                os.kill(v_pid, signal.SIGKILL)
+            except Exception:
+                pass
+    return reaped
+
+
+def _scan_and_reap_zombies_for_preflight_sync(
+    base_dir: Optional[str] = None,
+) -> Tuple[List[Dict[str, Any]], bool]:
+    # 프리플라이트 중 비서비스 중복 좀비는 즉시 소각하고, 정규 systemd 서비스 존재 시 재기동 인계 플래그 반환
+    my_is_svc, _ = _is_systemd_service_pid(os.getpid())
+    cands = _discover_duplicate_bot_candidates_sync(base_dir)
+    if not cands:
+        return [], False
+
+    need_systemd_yield = False
+    immediate_targets: List[Dict[str, Any]] = []
+    for c in cands:
+        if (not my_is_svc) and bool(c.get("same_dir")) and bool(
+            c.get("is_service")
+        ):
+            need_systemd_yield = True
+        else:
+            immediate_targets.append(c)
+
+    reaped = _kill_victim_pids_sync(immediate_targets)
+    if reaped:
+        logger.warning(
+            "🧹 [Case 108 프리플라이트 유령 중복 좀비 %d개 즉시 소각 완료] PIDs=%s",
+            len(reaped),
+            [r["pid"] for r in reaped],
+        )
+    return reaped, need_systemd_yield
+
+
+def reap_duplicate_zombie_bots_sync(
+    base_dir: Optional[str] = None,
+    yield_to_systemd: bool = False,
+) -> List[Dict[str, Any]]:
+    target_dir = os.path.realpath(get_bot_base_dir(base_dir))
+    my_pid = os.getpid()
+    my_is_svc, _ = _is_systemd_service_pid(my_pid)
+    cands = _discover_duplicate_bot_candidates_sync(target_dir)
+    if not cands:
+        return []
+
+    had_same_dir_svc = any(
+        bool(c.get("same_dir")) and bool(c.get("is_service")) for c in cands
+    )
+    reaped = _kill_victim_pids_sync(cands)
+    if reaped:
+        logger.warning(
+            "🧹 [Case 108 중복 좀비 봇 사살 완료] 내 PID=%d · 소각된 좀비=%s",
+            my_pid,
+            [(r["pid"], r.get("service_unit") or "nohup/cli") for r in reaped],
+        )
+
+    if yield_to_systemd and (not my_is_svc) and had_same_dir_svc:
+        wait_until = time.monotonic() + 6.5
+        while time.monotonic() < wait_until:
+            time.sleep(0.25)
+            post_cands = _discover_duplicate_bot_candidates_sync(target_dir)
+            svc_respawned = [
+                c
+                for c in post_cands
+                if bool(c.get("same_dir")) and bool(c.get("is_service"))
+            ]
+            if svc_respawned:
+                new_svc = svc_respawned[0]
+                logger.warning(
+                    "🛡️ [Case 108 정규 systemd 서비스(%s · PID=%d) 최신 코드 부활 확인 -> 수동 중복 프로세스(PID=%d) 자진 종료]",
+                    new_svc.get("service_unit") or "systemd",
+                    safe_int(new_svc.get("pid"), 0),
+                    my_pid,
+                )
+                try:
+                    sys.stdout.flush()
+                    sys.stderr.flush()
+                except Exception:
+                    pass
+                os._exit(0)
+    return reaped
+
+
+def release_bot_singleton_lock_sync() -> None:
+    global _SINGLETON_LOCK_FD
+    fd = _SINGLETON_LOCK_FD
+    _SINGLETON_LOCK_FD = -1
+    if fd < 0:
+        return
+    try:
+        if fcntl is not None:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+    except Exception:
+        pass
+    try:
+        os.close(fd)
+    except Exception:
+        pass
+
+
+def acquire_bot_singleton_lock_sync(base_dir: Optional[str] = None) -> bool:
+    global _SINGLETON_LOCK_FD
+    target_dir = get_bot_base_dir(base_dir)
+    reap_duplicate_zombie_bots_sync(target_dir, yield_to_systemd=True)
+    if fcntl is None:
+        return True
+    if _SINGLETON_LOCK_FD >= 0:
+        return True
+    slug = get_folder_slug(target_dir)
+    lock_fp = os.path.join(target_dir, f".sniper_singleton_{slug}.lock")
+    old_u = os.umask(0)
+    fd = -1
+    try:
+        fd = os.open(lock_fp, os.O_CREAT | os.O_RDWR, 0o666)
+        for attempt in range(2):
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                os.ftruncate(fd, 0)
+                os.lseek(fd, 0, os.SEEK_SET)
+                os.write(fd, f"{os.getpid()}\n".encode("utf-8"))
+                _SINGLETON_LOCK_FD = fd
+                return True
+            except (BlockingIOError, OSError):
+                if attempt == 0:
+                    reap_duplicate_zombie_bots_sync(
+                        target_dir, yield_to_systemd=True
+                    )
+                    time.sleep(0.2)
+                    continue
+                break
+        os.close(fd)
+        return False
+    except Exception:
+        if fd >= 0:
+            try:
+                os.close(fd)
+            except Exception:
+                pass
+        return False
+    finally:
+        os.umask(old_u)
 
 
 # ---------------------------------------------------------------------------
@@ -217,6 +720,14 @@ def perform_self_restart_execv(reason: str = "AUTO_UPDATE") -> None:
         except Exception:
             pass
 
+        # NEW [Case 108]: 재기동 직전 싱글톤 락 해제 · 잔존 유령 좀비 전수 사살 · __pycache__ 소각 및 '-B' 강제 주입
+        os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
+        release_bot_singleton_lock_sync()
+        reap_duplicate_zombie_bots_sync(target_dir, yield_to_systemd=True)
+        emergency_free_disk_space_sync(
+            base_dir=target_dir, keep_backup_days=14, remove_pycache=True
+        )
+
         python_exe = sys.executable or "/usr/bin/python3"
         raw_argv = (
             list(sys.argv)
@@ -225,14 +736,15 @@ def perform_self_restart_execv(reason: str = "AUTO_UPDATE") -> None:
         )
         if not raw_argv[0] or "--verify-only" in raw_argv:
             script_path = os.path.join(target_dir, "main.py")
-            exec_argv = [python_exe, script_path]
+            exec_argv = [python_exe, "-B", script_path]
         else:
             script_arg = raw_argv[0]
             if not os.path.isabs(script_arg):
                 cand_abs = os.path.join(target_dir, script_arg)
                 if os.path.isfile(cand_abs):
                     script_arg = cand_abs
-            exec_argv = [python_exe, script_arg] + raw_argv[1:]
+            tail_args = [a for a in raw_argv[1:] if a != "-B"]
+            exec_argv = [python_exe, "-B", script_arg] + tail_args
 
         try:
             os.execv(python_exe, exec_argv)
@@ -934,11 +1446,29 @@ def _execute_git_pull_and_preflight_sync(
                     timeout_sec=25.0,
                 )
             if rc_f != 0:
+                reaped_fb, yield_fb = _scan_and_reap_zombies_for_preflight_sync(
+                    target_dir
+                )
                 ok_local, msg_local = verify_all_modules_compile(target_dir)
+                cur_sha_fb = compute_core_modules_sha256_sync(target_dir)
+                drift_fb = bool(
+                    ok_local
+                    and (
+                        yield_fb
+                        or (
+                            BOOT_CODE_SHA256
+                            and cur_sha_fb
+                            and cur_sha_fb != BOOT_CODE_SHA256
+                        )
+                    )
+                )
+                z_note_fb = (
+                    f" · 🧹유령좀비 {len(reaped_fb)}개 소각" if reaped_fb else ""
+                )
                 return (
                     ok_local,
-                    f"로컬 검증 완료 (git fetch 스킵): {msg_local}",
-                    False,
+                    f"로컬 검증 완료 (git fetch 스킵): {msg_local}{z_note_fb}",
+                    drift_fb,
                 )
 
         target_ref = f"origin/{branch_name}"
@@ -958,11 +1488,17 @@ def _execute_git_pull_and_preflight_sync(
         remote_ahead = safe_int(cnt_str, 0) if rc_cnt == 0 else 0
 
         if remote_ahead <= 0:
+            reaped_z, need_svc_yield = _scan_and_reap_zombies_for_preflight_sync(
+                target_dir
+            )
             purged_list = purge_deprecated_legacy_files(target_dir)
             ok_local, msg_local = verify_all_modules_compile(target_dir)
             short_hash = prev_hash[:7] if prev_hash else "local"
             purge_note = (
                 f" · 폐기파일 {len(purged_list)}개 소각" if purged_list else ""
+            )
+            zombie_note = (
+                f" · 🧹유령좀비 {len(reaped_z)}개 소각" if reaped_z else ""
             )
             if not ok_local:
                 return (
@@ -970,9 +1506,26 @@ def _execute_git_pull_and_preflight_sync(
                     f"🚨 로컬 프리플라이트 검증 실패:\n{msg_local}",
                     False,
                 )
+            cur_disk_sha = compute_core_modules_sha256_sync(target_dir)
+            code_drift = bool(
+                BOOT_CODE_SHA256
+                and cur_disk_sha
+                and cur_disk_sha != BOOT_CODE_SHA256
+            )
+            should_restart_now = bool(code_drift or need_svc_yield)
+            if should_restart_now:
+                _flush_telegram_pending_updates_sync(target_dir)
+                _write_shm_update_beacon_sync(
+                    prev_hash or cur_disk_sha[:12], target_dir
+                )
+                return (
+                    True,
+                    f"디스크 패치 동기화 감지({short_hash}) · 구버전 RAM 교체 재기동 · {msg_local}{zombie_note}{purge_note}",
+                    True,
+                )
             return (
                 True,
-                f"현재 버전({short_hash}) 유지 · 원장 100% 보존 · {msg_local}{purge_note}",
+                f"현재 버전({short_hash}) 유지 · 원장 100% 보존 · {msg_local}{zombie_note}{purge_note}",
                 False,
             )
 
@@ -1062,6 +1615,24 @@ def _execute_git_pull_and_preflight_sync(
                 False,
             )
 
+        reaped_post, need_svc_yield_post = (
+            _scan_and_reap_zombies_for_preflight_sync(target_dir)
+        )
+        post_disk_sha = compute_core_modules_sha256_sync(target_dir)
+        changed = bool(
+            changed
+            or need_svc_yield_post
+            or (
+                BOOT_CODE_SHA256
+                and post_disk_sha
+                and post_disk_sha != BOOT_CODE_SHA256
+            )
+        )
+        if changed:
+            _write_shm_update_beacon_sync(
+                new_hash or post_disk_sha[:12], target_dir
+            )
+
         short_hash = new_hash[:7] if new_hash else "local"
         status_note = (
             f"신규 커밋({short_hash}) 적용 · 원장 100% 보존"
@@ -1073,10 +1644,13 @@ def _execute_git_pull_and_preflight_sync(
             if out_v
             else f"✅ {len(REQUIRED_CORE_MODULES)}대 코어 모듈 검증 통과 ({len(REQUIRED_CORE_MODULES)}개 파일)"
         )
+        zombie_post_note = (
+            f" · 🧹유령좀비 {len(reaped_post)}개 소각" if reaped_post else ""
+        )
         purge_note = (
             f" · 폐기파일 {len(purged_list)}개 소각" if purged_list else ""
         )
-        summary_msg = f"{status_note} · {verify_note}{purge_note}"
+        summary_msg = f"{status_note} · {verify_note}{zombie_post_note}{purge_note}"
         return True, summary_msg, changed
 
     except Exception as exc:
@@ -1142,24 +1716,141 @@ def _has_active_orders_or_live_assn_for_update(context: Any) -> bool:
     return False
 
 
+def start_kernel_zombie_watchdog_thread(
+    context: Any,
+    stall_timeout_sec: float = ZOMBIE_HEARTBEAT_STALL_SEC,
+) -> Optional[threading.Thread]:
+    # NEW [Case 108]: asyncio 루프 완전 정지(Deaf Zombie) 시에도 독립 작동하는 순수 OS 커널 데몬 워치독 스레드
+    global _KERNEL_WATCHDOG_STARTED
+    with _KERNEL_WATCHDOG_LOCK:
+        if _KERNEL_WATCHDOG_STARTED:
+            return None
+        _KERNEL_WATCHDOG_STARTED = True
+
+    touch_bot_heartbeat()
+    base_dir = get_bot_base_dir(getattr(context, "base_dir", None))
+    max_stall = max(
+        120.0, float(stall_timeout_sec or ZOMBIE_HEARTBEAT_STALL_SEC)
+    )
+
+    def _kernel_watchdog_worker() -> None:
+        while True:
+            time.sleep(30.0)
+            try:
+                ev = getattr(context, "shutdown_event", None)
+                if (
+                    ev is not None
+                    and ev.is_set()
+                    and not bool(getattr(context, "restart_requested", False))
+                ):
+                    return
+                age_s = get_bot_heartbeat_age_sec()
+                if age_s < max_stall:
+                    continue
+                logger.error(
+                    "🚨 [Case 108 커널 스레드 워치독 격발] 메인 이벤트 루프 무응답 %.1f초(한도 %.1f초) 감지 -> 먹통 좀비 자동 부활 집행!",
+                    age_s,
+                    max_stall,
+                )
+                if not _is_weekday_market_busy_est(datetime.now(EST_TZ)):
+                    try:
+                        _execute_git_pull_and_preflight_sync(base_dir)
+                    except Exception:
+                        pass
+                perform_self_restart_execv(
+                    reason=f"KERNEL_WATCHDOG_STALL_{int(age_s)}S"
+                )
+                return
+            except Exception as wd_exc:
+                logger.debug("커널 워치독 점검 예외: %s", wd_exc)
+
+    th = threading.Thread(
+        target=_kernel_watchdog_worker,
+        name="sniper_kernel_watchdog",
+        daemon=True,
+    )
+    th.start()
+    logger.info(
+        "🛡️ [Case 108 OS 커널 스레드 좀비 부활 워치독 가동 완료] 무응답 한도=%.0f초 · 장외 업데이트 주기=%.0f초",
+        max_stall,
+        AUTO_UPDATE_CHECK_INTERVAL_SEC,
+    )
+    return th
+
+
+def run_plugin_updater_zombie_guard_tdd(
+    base_dir: Optional[str] = None,
+) -> bool:
+    t_dir = get_bot_base_dir(base_dir)
+    sha_now = compute_core_modules_sha256_sync(t_dir)
+    assert len(sha_now) == 64, f"Case 108 SHA-256 산출 실패: {sha_now}"
+    assert (
+        _extract_python_main_script_from_cmdline(
+            ["/usr/bin/python3", "-B", "/home/pipiosToss/main.py"]
+        )
+        == "/home/pipiosToss/main.py"
+    )
+    assert (
+        _extract_python_main_script_from_cmdline(
+            ["python3", "-c", "import main"]
+        )
+        == ""
+    )
+    fam = _collect_protected_family_pids(os.getpid())
+    assert os.getpid() in fam
+    touch_bot_heartbeat()
+    assert get_bot_heartbeat_age_sec() < 5.0
+    return True
+
+
 async def run_auto_update_loop(
     context: Any,
-    interval_sec: float = 3600.0,
+    interval_sec: float = AUTO_UPDATE_CHECK_INTERVAL_SEC,
 ) -> None:
-    wait_s = max(300.0, float(interval_sec or 3600.0))
+    raw_iv = float(interval_sec or AUTO_UPDATE_CHECK_INTERVAL_SEC)
+    if raw_iv >= 3600.0:
+        raw_iv = AUTO_UPDATE_CHECK_INTERVAL_SEC
+    wait_s = max(120.0, raw_iv)
     base_dir = get_bot_base_dir(getattr(context, "base_dir", None))
     # NEW [Case 81]: 미결주문 유예 시 차기 주기 재기동 신호 증발 차단용 래치
     pending_restart_msg: str = ""
+    last_seen_beacon_ts: float = float(
+        (_read_shm_update_beacon_sync().get("ts") or 0.0)
+    )
 
     while not context.shutdown_event.is_set():
         eff_wait_s = 60.0 if pending_restart_msg else wait_s
-        try:
-            await asyncio.wait_for(
-                context.shutdown_event.wait(), timeout=eff_wait_s
+        slept_s = 0.0
+        while slept_s < eff_wait_s and not context.shutdown_event.is_set():
+            step_s = min(FLEET_BEACON_POLL_STEP_SEC, eff_wait_s - slept_s)
+            try:
+                await asyncio.wait_for(
+                    context.shutdown_event.wait(), timeout=step_s
+                )
+                break
+            except asyncio.TimeoutError:
+                slept_s += step_s
+
+            if _is_weekday_market_busy_est(datetime.now(EST_TZ)):
+                continue
+            if _has_active_orders_or_live_assn_for_update(context):
+                continue
+
+            beacon_d = await asyncio.to_thread(_read_shm_update_beacon_sync)
+            b_ts = float(beacon_d.get("ts") or 0.0)
+            if b_ts > (last_seen_beacon_ts + 0.5):
+                last_seen_beacon_ts = b_ts
+                break
+
+            cur_sha = await asyncio.to_thread(
+                compute_core_modules_sha256_sync, base_dir
             )
-            break
-        except asyncio.TimeoutError:
-            pass
+            if (
+                BOOT_CODE_SHA256
+                and cur_sha
+                and cur_sha != BOOT_CODE_SHA256
+            ):
+                break
 
         if context.shutdown_event.is_set():
             break

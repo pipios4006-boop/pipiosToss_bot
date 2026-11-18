@@ -2148,6 +2148,9 @@ async def _run_auto_update_loop_dynamic(context: Any) -> None:
         ),
     )
     if callable(fn):
+        iv_sec = float(
+            getattr(plugin_updater, "AUTO_UPDATE_CHECK_INTERVAL_SEC", 600.0)
+        )
         await _call_plugin_adaptive(
-            fn, context=context, interval_sec=3600.0
+            fn, context=context, interval_sec=iv_sec
         )

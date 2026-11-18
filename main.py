@@ -53,9 +53,16 @@ from main_runtime import (
     _run_auto_update_loop_dynamic,
 )
 from plugin_updater import (
+    acquire_bot_singleton_lock_sync,
     arm_hard_restart_watchdog,
     perform_self_restart_execv,
     purge_deprecated_legacy_files,
+    refresh_boot_code_sha256,
+    release_bot_singleton_lock_sync,
+    run_plugin_updater_zombie_guard_tdd,
+    start_kernel_zombie_watchdog_thread,
+    touch_bot_heartbeat,
+    trigger_graceful_restart,
     verify_all_modules_compile,
 )
 from quant_engine import (
@@ -435,6 +442,7 @@ async def main_sniper_loop(context: SniperAppContext) -> None:
     last_reconcile_mono: float = 0.0
 
     while not context.shutdown_event.is_set():
+        touch_bot_heartbeat()
         now_est = datetime.now(EST_TZ)
         if _check_weekend_nyse_closed_dynamic(now_est):
             context.fast_shield_mode = False
@@ -869,17 +877,25 @@ async def async_main() -> int:
     if not ok_comp:
         logger.error("🚨 부팅 프리플라이트 검증 실패:\n%s", comp_msg)
         return 1
+    refresh_boot_code_sha256(base_dir)
+    if not acquire_bot_singleton_lock_sync(base_dir):
+        logger.warning(
+            "🛑 [Case 108 싱글톤 배타 락 획득 보류] 동일 폴더 정규 프로세스가 이미 가동 중이므로 중복 기동을 종료합니다."
+        )
+        return 0
     logger.info("🛡️ %s", comp_msg)
 
-    # 3대 코어 엔진 TDD 자가 검증
+    # 3대 코어 엔진 + Case 108 좀비 방어망 TDD 자가 검증
     run_quant_engine_tdd()
     run_barbell_plugin_tdd()
     run_assassin_plugin_tdd()
+    run_plugin_updater_zombie_guard_tdd(base_dir)
     logger.info(
         "✅ [QuantEngine TDD · Barbell 60/30/10 TDD · Assassin 10 Truth Gates TDD] 전수 검증 통과!"
     )
 
     context = SniperAppContext(base_dir=base_dir)
+    start_kernel_zombie_watchdog_thread(context)
 
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
@@ -987,9 +1003,34 @@ async def async_main() -> int:
         ),
     ]
 
+    touch_bot_heartbeat()
+    shutdown_wait_task = asyncio.create_task(
+        context.shutdown_event.wait(), name="shutdown_event_wait"
+    )
     try:
-        await context.shutdown_event.wait()
+        done_set, _ = await asyncio.wait(
+            [*tasks, shutdown_wait_task],
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        if not context.shutdown_event.is_set():
+            dead_workers = [
+                t.get_name()
+                for t in done_set
+                if t is not shutdown_wait_task
+            ]
+            logger.error(
+                "🚨 [Case 108 코어 워커 비정상 종료(반쪽 좀비) 감지 -> 즉시 자가 부활] 종료태스크=%s",
+                dead_workers,
+            )
+            trigger_graceful_restart(
+                context=context,
+                shutdown_event=context.shutdown_event,
+                reason=f"WORKER_DIED_{'_'.join(dead_workers) or 'UNKNOWN'}",
+                watchdog_delay_sec=3.5,
+            )
     finally:
+        if not shutdown_wait_task.done():
+            shutdown_wait_task.cancel()
         if context.restart_requested:
             arm_hard_restart_watchdog(
                 delay_sec=3.5,
@@ -1001,7 +1042,10 @@ async def async_main() -> int:
                 t.cancel()
         try:
             await asyncio.wait_for(
-                asyncio.gather(*tasks, return_exceptions=True), timeout=2.0
+                asyncio.gather(
+                    *tasks, shutdown_wait_task, return_exceptions=True
+                ),
+                timeout=2.0,
             )
         except Exception:
             pass
@@ -1017,6 +1061,8 @@ async def async_main() -> int:
             await asyncio.wait_for(context.api.close(), timeout=1.5)
         except Exception:
             pass
+
+        release_bot_singleton_lock_sync()
 
         if context.restart_requested:
             perform_self_restart_execv(
