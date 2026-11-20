@@ -24,7 +24,21 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import toss_api
-from toss_api import safe_float, safe_int
+from toss_api import (
+    PRIMER_1SH_LOT_TAG,
+    PRIMER_1SH_MAX_INV_DROP_PCT,
+    PRIMER_1SH_MIN_L1_GAP_PCT,
+    PRIMER_1SH_MIN_LOCKED_LOTS,
+    PRIMER_1SH_VAC_LOT_TAG,
+    PRIMER_MODE_AUTO_SMART,
+    PRIMER_MODE_OFF,
+    VALID_PRIMER_MODES,
+    is_primer_1sh_tag,
+    resolve_smart_primer_policy,
+    safe_bucket_lot_count,
+    safe_float,
+    safe_int,
+)
 
 logger = logging.getLogger("toss_sniper.quant_engine_core")
 
@@ -297,6 +311,10 @@ class StratumBucket:
             return 0.0
         return round(self.actual_cost_usd / float(self.qty), 4)
 
+    @property
+    def is_primer_1sh(self) -> bool:
+        return is_primer_1sh_tag(self.lot_type)
+
     def to_dict(self) -> Dict[str, Any]:
         q_int = max(1, safe_int(self.qty, 1))
         a_cost = round(
@@ -313,14 +331,25 @@ class StratumBucket:
             4,
         )
         pure_p = round(max(0.0001, a_cost / float(q_int)), 4)
-        l_cnt = max(1, safe_int(self.lot_count, 1))
+        l_type = str(self.lot_type or "QUOTA_L1").upper().strip()
+        if l_type == PRIMER_1SH_VAC_LOT_TAG:
+            l_type = PRIMER_1SH_LOT_TAG
+        raw_lc = safe_int(
+            self.lot_count,
+            0 if l_type == PRIMER_1SH_LOT_TAG else 1,
+        )
+        l_cnt = (
+            0
+            if (l_type == PRIMER_1SH_LOT_TAG and raw_lc <= 0)
+            else max(1, raw_lc)
+        )
         return {
             "qty": q_int,
             "book_price": pure_p,
             "book_invested_usd": a_cost,
             "actual_cost_usd": a_cost,
             "lot_count": l_cnt,
-            "lot_type": str(self.lot_type or "QUOTA_L1").upper().strip(),
+            "lot_type": l_type,
         }
 
     @classmethod
@@ -343,8 +372,18 @@ class StratumBucket:
             return None
         clean_cost = round(a_cost, 4)
         pure_p = round(clean_cost / float(q_int), 4)
-        l_cnt = max(1, safe_int(data.get("lot_count"), 1))
         l_type = str(data.get("lot_type") or "QUOTA_L1").upper().strip()
+        if l_type == PRIMER_1SH_VAC_LOT_TAG:
+            l_type = PRIMER_1SH_LOT_TAG
+        raw_lc = safe_int(
+            data.get("lot_count"),
+            0 if l_type == PRIMER_1SH_LOT_TAG else 1,
+        )
+        l_cnt = (
+            0
+            if (l_type == PRIMER_1SH_LOT_TAG and raw_lc <= 0)
+            else max(1, raw_lc)
+        )
         return cls(
             qty=q_int,
             book_price=pure_p,
@@ -468,7 +507,10 @@ def relabel_upper_grid_tiers(
 
             m_qty = low_b.qty + high_b.qty
             m_cost = round(low_b.actual_cost_usd + high_b.actual_cost_usd, 4)
-            m_lots = max(1, low_b.lot_count) + max(1, high_b.lot_count)
+            m_lots = max(
+                1,
+                safe_bucket_lot_count(low_b) + safe_bucket_lot_count(high_b),
+            )
             overall_book_avg = (
                 float(low_b.qty) * low_b.book_price
                 + float(high_b.qty) * high_b.book_price
@@ -490,7 +532,9 @@ def relabel_upper_grid_tiers(
             overflow = valid[max_upper_cnt - 1 :]
             tot_q = sum(b.qty for b in overflow)
             tot_cost = round(sum(b.actual_cost_usd for b in overflow), 4)
-            tot_lots = sum(max(1, b.lot_count) for b in overflow)
+            tot_lots = max(
+                1, sum(safe_bucket_lot_count(b) for b in overflow)
+            )
             overall_book_avg = (
                 sum(float(b.qty) * b.book_price for b in overflow)
                 / float(max(1, tot_q))
@@ -643,7 +687,7 @@ def enforce_true_breakeven_floor_on_buckets(
                 book_price=pure_p,
                 book_invested_usd=pure_cost,
                 actual_cost_usd=pure_cost,
-                lot_count=max(1, b.lot_count),
+                lot_count=safe_bucket_lot_count(b),
                 lot_type=str(b.lot_type or "QUOTA_L1").upper().strip(),
             )
         )
@@ -1905,3 +1949,198 @@ def evaluate_sub_grid_dip_signal(
         "sub_max_total_lots": max_lots_cap,
         "next_sub_cycle_min_price": round(eff_min_p, 4),
     }
+
+
+# ---------------------------------------------------------------------------
+# [핵심 3-D · Case 110] 옵션 3 운용모드별 스마트 연동 역산 5.50% · -3.50% 가드 1주 마중물 판별기
+# ---------------------------------------------------------------------------
+def compute_inverse_primer_buy_price(
+    cycle_min_buy_price: float,
+    inv_drop_abs_pct: float = PRIMER_1SH_MAX_INV_DROP_PCT,
+) -> float:
+    """
+    # NEW [Case 110]: 저가기억(cycle_min_buy_price)에서 단차(d%) 역산 상한가 floor(c_min / (1 - d/100)) 산출
+    - 예: 저가기억 $44.36, 11회차+ 단차 5.50% -> $44.36 / 0.945 = $46.9417... -> $46.94
+    """
+    c_min = safe_float(cycle_min_buy_price, 0.0)
+    d_abs = abs(safe_float(inv_drop_abs_pct, PRIMER_1SH_MAX_INV_DROP_PCT))
+    if c_min <= 0.0 or d_abs <= 0.0 or d_abs >= 95.0:
+        return 0.0
+    denom = max(0.05, 1.0 - (d_abs / 100.0))
+    raw_inv = c_min / denom
+    return round(math.floor((raw_inv + 1e-9) * 100.0) / 100.0, 2)
+
+
+def is_l1_held_primer_allowed_by_vacancy(
+    buckets: Sequence[StratumBucket],
+    vacancy_mode: str,
+) -> bool:
+    """
+    # NEW [Case 110]: 활성 1층 보유 중 공석 모드(vacancy_mode)별 1주 마중물 허용 판별기
+    - NO_7FULL_MERGE (복리)        : 2층 공석이거나 총 지층 <= 6개층(무합병)일 때만 허용 (7층 만석 합병 차단)
+    - ALL_PLUS_L1_VAC (바벨/단리)  : 전 지층 상태(7층 만석 포함) 허용 (단, 1층이 이미 PRIMER_1SH 이면 자가 잠금)
+    """
+    valid = [
+        b for b in (buckets or []) if isinstance(b, StratumBucket) and b.qty > 0
+    ]
+    if not valid or not has_active_l1_bucket(valid):
+        return False
+    if is_primer_1sh_tag(valid[0]):
+        return False
+    vmode = str(vacancy_mode or "ALL_L1_HELD").upper().strip()
+    if vmode in ("OFF", "NONE", "DISABLED"):
+        return False
+    l2_vacant = not has_active_l2_bucket(valid)
+    if vmode in ("ONLY_L2_VACANT", "L1_OR_L2_VACANT"):
+        return l2_vacant
+    if vmode == "NO_7FULL_MERGE":
+        return bool(l2_vacant or len(valid) <= (MAX_GRID_TIERS_7 - 1))
+    return True
+
+
+def evaluate_smart_primer_1sh_signal(
+    live_price: float,
+    buckets: Sequence[StratumBucket],
+    anchor_price: float,
+    cycle_min_buy_price: float,
+    drop_buy_pct: float,
+    cycle_ratchet_max_lots: int = 0,
+    portion_mode: str = PORTION_MODE_COMPOUND,
+    primer_1sh_mode: str = PRIMER_MODE_AUTO_SMART,
+    hm: Optional[int] = None,
+) -> Dict[str, Any]:
+    """
+    # NEW [Case 110 · 옵션 3 스마트 연동 1주 마중물 통합 시그널 판별기]:
+    1) [1층 보유 상태] : 정규 추매/스텝업 미충족 시 10분 게이트에서 역산상한(저가/(1-d)) & -3.50% 가드 동시 충족 시 1주 발주
+       - 복리(COMP_08PCT) : NO_7FULL_MERGE (6층 이하 또는 2층 공석만 허용 · 7층 만석 합병 차단)
+       - 바벨/단리        : ALL_PLUS_L1_VAC (7층 만석 포함 전 상태 허용)
+    2) [1층 공석 상태] : 바벨/단리(allow_vacant_l1_rescue=True)에서 정규 8% 재장전 불발 시 10분 게이트 쌍바닥 1주 구제 발주
+    """
+    policy = resolve_smart_primer_policy(
+        portion_mode=portion_mode, primer_1sh_mode=primer_1sh_mode
+    )
+    valid = [
+        b for b in (buckets or []) if isinstance(b, StratumBucket) and b.qty > 0
+    ]
+    lp = safe_float(live_price, 0.0)
+    anc = safe_float(anchor_price, 0.0)
+    c_min = round(max(0.0, safe_float(cycle_min_buy_price, 0.0)), 4)
+    inv_drop_abs = abs(safe_float(drop_buy_pct, -1.0))
+    min_gap_cfg = safe_float(policy.get("min_l1_gap_pct"), PRIMER_1SH_MIN_L1_GAP_PCT)
+    eff_gap_pct = round(max(inv_drop_abs, min_gap_cfg), 4)
+
+    held_lots = sum(safe_bucket_lot_count(b) for b in valid)
+    eff_lots = max(
+        held_lots, max(0, safe_int(cycle_ratchet_max_lots, 0))
+    )
+    active_l1 = has_active_l1_bucket(valid)
+    is_l1_primer = bool(active_l1 and valid and is_primer_1sh_tag(valid[0]))
+
+    base_out: Dict[str, Any] = {
+        "eligible": False,
+        "should_buy": False,
+        "signal_type": "PRIMER_DISABLED",
+        "lot_type": PRIMER_1SH_LOT_TAG,
+        "policy": policy,
+        "vacancy_mode": str(policy.get("vacancy_mode") or "OFF"),
+        "is_l1_primer_1sh": is_l1_primer,
+        "eff_lots": eff_lots,
+        "cycle_min_buy_price": c_min,
+        "inv_drop_abs_pct": round(inv_drop_abs, 2),
+        "eff_gap_pct": eff_gap_pct,
+        "inv_target_price": 0.0,
+        "gap_target_price": 0.0,
+        "trigger_price": 0.0,
+        "exec_limit_price": 0.0,
+    }
+
+    if not bool(policy.get("enabled", False)):
+        return base_out
+    if not valid:
+        base_out["signal_type"] = "NO_BUCKETS"
+        return base_out
+    if eff_lots < PRIMER_1SH_MIN_LOCKED_LOTS or c_min <= 0.0:
+        base_out["signal_type"] = "WAIT_MIN_LOTS_2"
+        return base_out
+
+    inv_tp = compute_inverse_primer_buy_price(c_min, inv_drop_abs)
+    base_out["inv_target_price"] = inv_tp
+    if inv_tp <= 0.0:
+        base_out["signal_type"] = "INVALID_INV_PRICE"
+        return base_out
+
+    reg_7m_blocked = bool(
+        hm is not None
+        and REG_OPEN_VWAP_SHIELD_START_HM
+        <= safe_int(hm, 0)
+        <= REG_OPEN_VWAP_SHIELD_END_HM
+    )
+
+    # 분기 1: 활성 1층 보유 중 역산 마중물 판정
+    if active_l1:
+        if is_l1_primer:
+            base_out["signal_type"] = "LOCKED_L1_ALREADY_PRIMER_1SH"
+            return base_out
+        if not is_l1_held_primer_allowed_by_vacancy(valid, base_out["vacancy_mode"]):
+            base_out["signal_type"] = "BLOCKED_BY_VACANCY_MODE"
+            return base_out
+        l1_p = valid[0].book_price
+        if l1_p <= c_min + 1e-6:
+            base_out["signal_type"] = "L1_AT_CYCLE_MIN"
+            return base_out
+        gap_tp = round(
+            math.floor((l1_p * (1.0 - eff_gap_pct / 100.0) + 1e-9) * 100.0)
+            / 100.0,
+            2,
+        )
+        trig_p = round(min(inv_tp, gap_tp), 2)
+        base_out["eligible"] = bool(trig_p > 0.0)
+        base_out["gap_target_price"] = gap_tp
+        base_out["trigger_price"] = trig_p
+        base_out["lot_type"] = PRIMER_1SH_LOT_TAG
+        if trig_p <= 0.0 or lp <= 0.0:
+            base_out["signal_type"] = "HOLD_WAIT_PRICE"
+            return base_out
+        if reg_7m_blocked:
+            base_out["signal_type"] = "HOLD_REG_OPEN_7M_VWAP_SHIELD"
+            return base_out
+        if lp <= trig_p + 1e-9:
+            cur_lim = math.floor((lp + 1e-9) * 100.0) / 100.0
+            base_out["should_buy"] = True
+            base_out["signal_type"] = "PRIMER_1SH_L1_HELD"
+            base_out["exec_limit_price"] = round(max(0.01, min(cur_lim, trig_p)), 2)
+            return base_out
+        base_out["signal_type"] = "HOLD_ABOVE_PRIMER_TARGET"
+        return base_out
+
+    # 분기 2: [1층: 공석] 중 쌍바닥 1주 구제 판정 (바벨/단리 전용)
+    if not bool(policy.get("allow_vacant_l1_rescue", False)):
+        base_out["signal_type"] = "VACANT_L1_RESCUE_OFF_IN_COMPOUND"
+        return base_out
+    min_upper_p = min(b.book_price for b in valid)
+    re_ref = anc if anc > 0.0 else min_upper_p
+    ceil_ref = min(re_ref, min_upper_p) if re_ref > 0.0 else min_upper_p
+    gap_tp_vac = round(
+        math.floor((ceil_ref * (1.0 - eff_gap_pct / 100.0) + 1e-9) * 100.0)
+        / 100.0,
+        2,
+    )
+    trig_vac = round(min(inv_tp, gap_tp_vac, min_upper_p), 2)
+    base_out["eligible"] = bool(trig_vac > 0.0)
+    base_out["gap_target_price"] = gap_tp_vac
+    base_out["trigger_price"] = trig_vac
+    base_out["lot_type"] = PRIMER_1SH_VAC_LOT_TAG
+    if trig_vac <= 0.0 or lp <= 0.0:
+        base_out["signal_type"] = "HOLD_WAIT_PRICE"
+        return base_out
+    if reg_7m_blocked:
+        base_out["signal_type"] = "HOLD_REG_OPEN_7M_VWAP_SHIELD"
+        return base_out
+    if lp <= (min_upper_p + 1e-6) and lp <= (trig_vac + 1e-9):
+        cur_lim_v = math.floor((lp + 1e-9) * 100.0) / 100.0
+        base_out["should_buy"] = True
+        base_out["signal_type"] = "PRIMER_1SH_VAC_L1_RESCUE"
+        base_out["exec_limit_price"] = round(max(0.01, min(cur_lim_v, trig_vac)), 2)
+        return base_out
+    base_out["signal_type"] = "HOLD_ABOVE_VAC_PRIMER_TARGET"
+    return base_out

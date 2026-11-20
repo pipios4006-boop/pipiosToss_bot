@@ -1799,6 +1799,7 @@ class _AdaptiveTelegramBridge:
                 bool(st.get("is_active", True)),
                 portion_mode=st.get("portion_mode"),
                 assassin_exec_mode=self._current_assassin_exec_mode(),
+                primer_1sh_mode=st.get("primer_1sh_mode"),
             ),
         )
 
@@ -1872,11 +1873,15 @@ class _AdaptiveTelegramBridge:
 
         next_bud = safe_float(summary.get("next_portion_budget"), 800.0)
         sub_bud = safe_float(summary.get("sub_next_portion_budget"), 400.0)
+        primer_b_lbl = _escape_html(
+            str(summary.get("primer_policy_badge") or "🧠스마트ON")
+        )
         await self.send_message(
             chat_id=chat_id,
             text=(
                 "🔄 <b>[3단 운용 정량모드 순환 완료]</b>\n"
                 f"▫️ 현재 모드: <b>{m_lbl}</b>\n"
+                f"▫️ 1주 마중물 연동: <b>{primer_b_lbl}</b>\n"
                 f"▫️ 본그리드 1회(8%): <b>${next_bud:,.2f}</b> ({_format_case67_quota_badge(summary)})\n"
                 f"▫️ 서브그리드 1회(4%): <b>${sub_bud:,.2f}</b> ({_format_sub_quota_badge(summary)})"
             ),
@@ -1971,6 +1976,7 @@ class _AdaptiveTelegramBridge:
                 bool(updated_st.get("is_active", True)),
                 portion_mode=updated_st.get("portion_mode"),
                 assassin_exec_mode=self._current_assassin_exec_mode(),
+                primer_1sh_mode=updated_st.get("primer_1sh_mode"),
             ),
         )
         return True
@@ -2086,6 +2092,11 @@ class _AdaptiveTelegramBridge:
 
         if first_token == "/mode":
             await self._toggle_portion_mode_command(chat_id=chat_id)
+            return
+
+        if first_token in ("/primer", "/primer_mode"):
+            ctrl = self._get_shared_ctrl()
+            await ctrl._toggle_primer_mode_command(chat_id=chat_id)
             return
 
         if first_token == "/seed":

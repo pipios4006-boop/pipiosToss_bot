@@ -52,12 +52,14 @@ from quant_engine import (
     compute_reserve_repayment_on_zero,
     enforce_true_breakeven_floor_on_buckets,
     has_active_l1_bucket,
+    is_primer_1sh_tag,
     is_simple_income_mode,
     match_and_remove_sold_buckets_7tier,
     relabel_sub_upper_grid_tiers,
     relabel_upper_grid_tiers,
     resolve_effective_round_trip_fee_rate_pct,
     resolve_portion_budget_base_equity,
+    safe_bucket_lot_count,
     summarize_stratum_portfolio,
     vrev_add_quota_lot_and_merge_2tier,
 )
@@ -538,6 +540,46 @@ async def reconcile_stratum_with_broker_holdings_plugin(
             sub_fee_usd = safe_float(s_pnl.get("fee_usd"), 0.0)
             sub_net_pnl = safe_float(s_pnl.get("net_pnl_usd"), 0.0)
 
+        primer_sold_zero = [
+            sb for sb in match_res.get("sold_buckets", []) if is_primer_1sh_tag(sb)
+        ]
+        sold_any_primer_zero = bool(len(primer_sold_zero) > 0)
+        sold_only_primer_zero = bool(
+            grid_qty > 0
+            and sub_qty == 0
+            and len(primer_sold_zero) == len(buckets)
+        )
+        primer_net_zero = 0.0
+        if sold_any_primer_zero:
+            if sold_only_primer_zero:
+                primer_net_zero = net_pnl
+            else:
+                pz_q = sum(pb.qty for pb in primer_sold_zero)
+                pz_cost = round(sum(pb.actual_cost_usd for pb in primer_sold_zero), 4)
+                pz_fee: Optional[float] = None
+                if probed_fee is not None and ledger_qty > 0:
+                    pz_fee = round(
+                        probed_fee * (float(pz_q) / float(ledger_qty)), 4
+                    )
+                pz_pnl = calc_sell_realized_pnl(
+                    sold_qty=pz_q,
+                    sell_exec_price=manual_sell_p,
+                    sold_actual_cost_usd=pz_cost,
+                    round_trip_fee_rate_pct=eff_rt_pct,
+                    actual_sell_fee_usd=pz_fee,
+                )
+                primer_net_zero = safe_float(pz_pnl.get("net_pnl_usd"), 0.0)
+        primer_sell_ev_zero = safe_int(st.get("primer_1sh_sell_events"), 0) + (
+            1 if sold_any_primer_zero else 0
+        )
+        day_primer_sell_zero = safe_int(st.get("daily_primer_1sh_sell_cnt"), 0) + (
+            1 if sold_any_primer_zero else 0
+        )
+        primer_net_cum_zero = round(
+            safe_float(st.get("primer_1sh_realized_net_usd"), 0.0) + primer_net_zero,
+            4,
+        )
+
         tot_sell_ev = safe_int(st.get("total_sell_events"), 0) + 1
         tot_sold_sh = safe_int(st.get("total_sold_shares"), 0) + ledger_qty
         win_ev = safe_int(st.get("win_sell_events"), 0) + (
@@ -545,7 +587,7 @@ async def reconcile_stratum_with_broker_holdings_plugin(
         )
         day_sell_ev = safe_int(st.get("daily_sell_events"), 0) + 1
         day_main_sell_cnt = safe_int(st.get("daily_main_sell_cnt"), 0) + (
-            1 if grid_qty > 0 else 0
+            1 if (grid_qty > 0 and not sold_only_primer_zero) else 0
         )
 
         wma_inc_zero = (
@@ -710,6 +752,9 @@ async def reconcile_stratum_with_broker_holdings_plugin(
             main_consec_frozen_days=0,
             sub_consec_frozen_days=0,
             daily_main_sell_cnt=day_main_sell_cnt,
+            primer_1sh_sell_events=primer_sell_ev_zero,
+            daily_primer_1sh_sell_cnt=day_primer_sell_zero,
+            primer_1sh_realized_net_usd=primer_net_cum_zero,
             wma_grad_sell_cnt=wma_cnt,
             daily_wma_grad_sell_cnt=day_wma_cnt,
             sub_sell_events=sub_sell_ev,
@@ -930,7 +975,7 @@ async def reconcile_stratum_with_broker_holdings_plugin(
                 and vault_qty == h_qty
                 and (len(vault_buckets) > 0 or len(vault_sub_buckets) > 0)
             ):
-                vault_lots = sum(max(1, b.lot_count) for b in vault_buckets)
+                vault_lots = sum(safe_bucket_lot_count(b) for b in vault_buckets)
                 vault_ratchet_lots = (
                     max(
                         vault_lots,
@@ -966,10 +1011,13 @@ async def reconcile_stratum_with_broker_holdings_plugin(
                 restored_kw["pending_sub_step_up_min_price"] = 0.0
                 if has_active_l1_bucket(vault_buckets):
                     restored_kw["last_reentry_eval_ts"] = 0.0
-                    restored_kw["l1_target_quota_qty"] = max(
-                        vault_buckets[0].qty,
-                        safe_int(vault_st.get("l1_target_quota_qty"), 0),
-                    )
+                    if is_primer_1sh_tag(vault_buckets[0]):
+                        restored_kw["l1_target_quota_qty"] = vault_buckets[0].qty
+                    else:
+                        restored_kw["l1_target_quota_qty"] = max(
+                            vault_buckets[0].qty,
+                            safe_int(vault_st.get("l1_target_quota_qty"), 0),
+                        )
                 else:
                     restored_kw["l1_target_quota_qty"] = 0
 
@@ -1171,6 +1219,10 @@ async def reconcile_stratum_with_broker_holdings_plugin(
                 "cumulative_reserve_repaid_usd",
                 "dust_guard_blocked_cnt",
                 "extra_13plus_buy_events",
+                "primer_1sh_buy_events",
+                "primer_1sh_sell_events",
+                "primer_1sh_absorbed_events",
+                "primer_1sh_realized_net_usd",
                 "total_buy_events",
                 "total_sell_events",
                 "win_sell_events",
@@ -1179,6 +1231,8 @@ async def reconcile_stratum_with_broker_holdings_plugin(
                     vault_st.get(stat_k), 0.0
                 ) != 0.0:
                     update_kw[stat_k] = vault_st[stat_k]
+            if vault_st.get("primer_1sh_mode"):
+                update_kw["primer_1sh_mode"] = str(vault_st["primer_1sh_mode"])
 
         updated_st = await context.ledger.update_state(
             TARGET_SYMBOL, **update_kw
@@ -1235,6 +1289,9 @@ async def reconcile_stratum_with_broker_holdings_plugin(
             fallback_price=fb_buy_p,
         )
         prev_had_active_l1 = has_active_l1_bucket(buckets)
+        prev_had_primer_l1 = bool(
+            prev_had_active_l1 and buckets and is_primer_1sh_tag(buckets[0])
+        )
         prev_l1_p = buckets[0].book_price if buckets else 0.0
         added_spent_usd = round(float(delta_q) * est_buy_p, 4)
 
@@ -1292,7 +1349,9 @@ async def reconcile_stratum_with_broker_holdings_plugin(
             and abs(merged_buckets[0].book_price - prev_l1_p) < 1e-4
         )
         if merged_buckets and has_active_l1_bucket(merged_buckets):
-            if is_mid_tier_inserted:
+            if is_primer_1sh_tag(merged_buckets[0]):
+                next_l1_target_q_manual = merged_buckets[0].qty
+            elif is_mid_tier_inserted:
                 next_l1_target_q_manual = max(
                     merged_buckets[0].qty,
                     safe_int(st.get("l1_target_quota_qty"), 0),
@@ -1302,7 +1361,20 @@ async def reconcile_stratum_with_broker_holdings_plugin(
         else:
             next_l1_target_q_manual = 0
 
-        new_held_lots = sum(max(1, b.lot_count) for b in merged_buckets)
+        primer_abs_manual_inc = (
+            1
+            if (
+                prev_had_primer_l1
+                and merged_buckets
+                and not is_primer_1sh_tag(merged_buckets[0])
+            )
+            else 0
+        )
+        primer_abs_ev_manual = (
+            safe_int(st.get("primer_1sh_absorbed_events"), 0)
+            + primer_abs_manual_inc
+        )
+        new_held_lots = sum(safe_bucket_lot_count(b) for b in merged_buckets)
         new_ratchet_lots = max(
             new_held_lots, safe_int(st.get("cycle_ratchet_max_lots"), 0)
         )
@@ -1360,6 +1432,7 @@ async def reconcile_stratum_with_broker_holdings_plugin(
             cycle_reanchor_credit_usd=0.0,
             l1_target_quota_qty=next_l1_target_q_manual,
             main_consec_frozen_days=0,
+            primer_1sh_absorbed_events=primer_abs_ev_manual,
             injected_reserve_usd=next_inj_res_add,
             used_reserve_portions_cnt=next_used_res_add,
             total_buy_events=tot_buy_ev_add,
@@ -1532,6 +1605,8 @@ async def reconcile_stratum_with_broker_holdings_plugin(
         or bool(match_res.get("sold_l1_completely"))
     ):
         next_l1_target_q = 0
+    elif is_primer_1sh_tag(rem_buckets[0]):
+        next_l1_target_q = rem_buckets[0].qty
     elif orig_l1_qty > 0 and rem_buckets[0].qty < orig_l1_qty:
         next_l1_target_q = rem_buckets[0].qty
     else:
@@ -1555,7 +1630,7 @@ async def reconcile_stratum_with_broker_holdings_plugin(
         )
 
     prev_ratchet_lots = max(0, safe_int(st.get("cycle_ratchet_max_lots"), 0))
-    rem_held_lots = sum(max(1, b.lot_count) for b in rem_buckets)
+    rem_held_lots = sum(safe_bucket_lot_count(b) for b in rem_buckets)
     next_ratchet_lots = (
         max(rem_held_lots, prev_ratchet_lots) if rem_buckets else 0
     )
@@ -1566,6 +1641,46 @@ async def reconcile_stratum_with_broker_holdings_plugin(
         max(rem_sub_held_lots, prev_sub_ratchet_lots) if rem_sub_buckets else 0
     )
 
+    sold_buckets_part = match_res.get("sold_buckets", [])
+    primer_sold_part = [sb for sb in sold_buckets_part if is_primer_1sh_tag(sb)]
+    sold_any_primer_part = bool(len(primer_sold_part) > 0)
+    sold_main_only_primer_part = bool(
+        sold_main_q > 0
+        and (not sold_main_upper_flag)
+        and len(sold_buckets_part) > 0
+        and len(primer_sold_part) == len(sold_buckets_part)
+    )
+    primer_net_part = 0.0
+    if sold_any_primer_part:
+        if sold_main_only_primer_part and sold_sub_q == 0:
+            primer_net_part = net_pnl
+        else:
+            pp_q = sum(pb.qty for pb in primer_sold_part)
+            pp_cost = round(sum(pb.actual_cost_usd for pb in primer_sold_part), 4)
+            pp_fee: Optional[float] = None
+            if probed_part_fee is not None and delta_remove > 0:
+                pp_fee = round(
+                    probed_part_fee * (float(pp_q) / float(delta_remove)), 4
+                )
+            pp_pnl = calc_sell_realized_pnl(
+                sold_qty=pp_q,
+                sell_exec_price=manual_sell_p,
+                sold_actual_cost_usd=pp_cost,
+                round_trip_fee_rate_pct=eff_rt_pct,
+                actual_sell_fee_usd=pp_fee,
+            )
+            primer_net_part = safe_float(pp_pnl.get("net_pnl_usd"), 0.0)
+    primer_sell_ev_part = safe_int(st.get("primer_1sh_sell_events"), 0) + (
+        1 if sold_any_primer_part else 0
+    )
+    day_primer_sell_part = safe_int(st.get("daily_primer_1sh_sell_cnt"), 0) + (
+        1 if sold_any_primer_part else 0
+    )
+    primer_net_cum_part = round(
+        safe_float(st.get("primer_1sh_realized_net_usd"), 0.0) + primer_net_part,
+        4,
+    )
+
     tot_sell_ev = safe_int(st.get("total_sell_events"), 0) + 1
     tot_sold_sh = safe_int(st.get("total_sold_shares"), 0) + delta_remove
     win_ev = safe_int(st.get("win_sell_events"), 0) + (
@@ -1573,11 +1688,14 @@ async def reconcile_stratum_with_broker_holdings_plugin(
     )
     day_sell_ev = safe_int(st.get("daily_sell_events"), 0) + 1
     day_main_sell_cnt = safe_int(st.get("daily_main_sell_cnt"), 0) + (
-        1 if sold_main_q > 0 else 0
+        1 if (sold_main_q > 0 and not sold_main_only_primer_part) else 0
     )
     next_main_frozen_d = (
         0
-        if (sold_main_q > 0 or not rem_buckets)
+        if (
+            not rem_buckets
+            or (sold_main_q > 0 and not sold_main_only_primer_part)
+        )
         else max(0, safe_int(st.get("main_consec_frozen_days"), 0))
     )
 
@@ -1759,6 +1877,9 @@ async def reconcile_stratum_with_broker_holdings_plugin(
         "main_consec_frozen_days": next_main_frozen_d,
         "sub_consec_frozen_days": next_sub_frozen_d,
         "daily_main_sell_cnt": day_main_sell_cnt,
+        "primer_1sh_sell_events": primer_sell_ev_part,
+        "daily_primer_1sh_sell_cnt": day_primer_sell_part,
+        "primer_1sh_realized_net_usd": primer_net_cum_part,
         "indiv_grid_sell_cnt": indiv_cnt,
         "daily_indiv_grid_sell_cnt": day_indiv_cnt,
         "wma_grad_sell_cnt": wma_cnt,
@@ -2359,6 +2480,12 @@ async def execute_1600_daily_closing_settlement_plugin(
     day_indiv_sell = safe_int(updated_st.get("daily_indiv_grid_sell_cnt"), 0)
     day_pass = safe_int(updated_st.get("daily_seed_protect_pass_cnt"), 0)
     day_saved = safe_float(updated_st.get("daily_leftover_saved_usd"), 0.0)
+    day_primer_buy = safe_int(updated_st.get("daily_primer_1sh_buy_cnt"), 0)
+    day_primer_sell = safe_int(updated_st.get("daily_primer_1sh_sell_cnt"), 0)
+    cum_primer_buy = safe_int(updated_st.get("primer_1sh_buy_events"), 0)
+    cum_primer_sell = safe_int(updated_st.get("primer_1sh_sell_events"), 0)
+    cum_primer_abs = safe_int(updated_st.get("primer_1sh_absorbed_events"), 0)
+    cum_primer_net = safe_float(updated_st.get("primer_1sh_realized_net_usd"), 0.0)
 
     if hasattr(context, "send_slim_alert"):
         d_sign = "+" if day_net >= 0.0 else "-"
@@ -2394,6 +2521,18 @@ async def execute_1600_daily_closing_settlement_plugin(
             if (day_res_inj > 0 or used_res_cnt > 0 or tot_res_cnt > 0)
             else " · 💉예비수혈: 0회(대기)"
         )
+        p_sign = "+" if cum_primer_net >= 0.0 else "-"
+        primer_day_note = (
+            f" · 🌱마중물(당일 매수{day_primer_buy}/익절{day_primer_sell} · "
+            f"누적 매수{cum_primer_buy}/익절{cum_primer_sell}/흡수{cum_primer_abs} · {p_sign}${abs(cum_primer_net):,.2f})"
+            if (
+                day_primer_buy > 0
+                or day_primer_sell > 0
+                or cum_primer_buy > 0
+                or cum_primer_sell > 0
+            )
+            else ""
+        )
 
         if is_barbell:
             b_stat = summarize_barbell_status(context, st_soxl=updated_st)
@@ -2427,7 +2566,7 @@ async def execute_1600_daily_closing_settlement_plugin(
                 f"· 🔄이번사이클: {cyc_sign}${abs(cyc_net):,.2f}({cyc_ev}회) "
                 f"· 💰누적실현: {c_sign}${abs(cum_net):,.2f} ({c_sign}{abs(cum_roi):.2f}% · 졸업 {comp_cycles}회) "
                 f"· 당일 매수 {day_buy_ev}회{unlock_note} / 익절 {day_sell_ev}회(2~7층이평졸업 {day_wma_grad}회·개별층 {day_indiv_sell}회)"
-                f"{sub_day_note}{res_note} "
+                f"{sub_day_note}{primer_day_note}{res_note} "
                 f"· 🛡️시드패스 {day_pass:,}회 / 자투리절약 +${day_saved:,.2f} "
                 f"· 오버나이트 이월: 본 {held_sh}주({held_tiers}개층·{lot_carry_str}){sub_carry_note} · 가용현금 ${free_cash:,.2f} "
                 f"(🌇애프터·🌃데이장 ⚡1.5s 본1·2층 개별채굴 & 3~7층 통합졸업 연속가동 · 매수잠금)"

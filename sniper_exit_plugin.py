@@ -60,10 +60,12 @@ from quant_engine import (
     get_golden8_prog_thresholds,
     has_active_l1_bucket,
     has_active_l2_bucket,
+    is_primer_1sh_tag,
     is_simple_income_mode,
     relabel_sub_upper_grid_tiers,
     relabel_upper_grid_tiers,
     resolve_effective_round_trip_fee_rate_pct,
+    safe_bucket_lot_count,
     vrev_reanchor_single_tier_quota,
 )
 from quant_indicators_plugin import (
@@ -1366,7 +1368,7 @@ async def _commit_filled_sell_and_reanchor_ledger(
                     book_price=b.book_price,
                     book_invested_usd=sold_cost_part,
                     actual_cost_usd=sold_cost_part,
-                    lot_count=1,
+                    lot_count=0 if is_primer_1sh_tag(b) else 1,
                     lot_type=b.lot_type,
                 )
             )
@@ -1376,7 +1378,7 @@ async def _commit_filled_sell_and_reanchor_ledger(
                     book_price=b.book_price,
                     book_invested_usd=rem_cost_part,
                     actual_cost_usd=rem_cost_part,
-                    lot_count=max(1, b.lot_count),
+                    lot_count=safe_bucket_lot_count(b),
                     lot_type=b.lot_type,
                 )
             )
@@ -1463,7 +1465,7 @@ async def _commit_filled_sell_and_reanchor_ledger(
                         book_price=bf.book_price,
                         book_invested_usd=sold_cost_part,
                         actual_cost_usd=sold_cost_part,
-                        lot_count=1,
+                        lot_count=0 if is_primer_1sh_tag(bf) else 1,
                         lot_type=bf.lot_type,
                     )
                 )
@@ -1473,7 +1475,7 @@ async def _commit_filled_sell_and_reanchor_ledger(
                         book_price=bf.book_price,
                         book_invested_usd=rem_cost_part,
                         actual_cost_usd=rem_cost_part,
-                        lot_count=max(1, bf.lot_count),
+                        lot_count=safe_bucket_lot_count(bf),
                         lot_type=bf.lot_type,
                     )
                 )
@@ -1521,6 +1523,8 @@ async def _commit_filled_sell_and_reanchor_ledger(
     rem_has_active_l1 = has_active_l1_bucket(rem_buckets)
     if not rem_buckets or not rem_has_active_l1 or sold_l1_flag:
         next_l1_target_q = 0
+    elif is_primer_1sh_tag(rem_buckets[0]):
+        next_l1_target_q = rem_buckets[0].qty
     elif orig_l1_qty > 0 and rem_buckets[0].qty < orig_l1_qty:
         next_l1_target_q = rem_buckets[0].qty
     else:
@@ -1586,7 +1590,7 @@ async def _commit_filled_sell_and_reanchor_ledger(
     )
 
     prev_ratchet_lots = max(0, safe_int(st.get("cycle_ratchet_max_lots"), 0))
-    rem_held_lots = sum(max(1, b.lot_count) for b in rem_buckets)
+    rem_held_lots = sum(safe_bucket_lot_count(b) for b in rem_buckets)
     next_ratchet_max_lots = (
         0 if is_grid_empty else max(rem_held_lots, prev_ratchet_lots)
     )
@@ -1621,6 +1625,51 @@ async def _commit_filled_sell_and_reanchor_ledger(
         )
         next_sub_cycle_min_p = round(old_sub_cycle_min_p, 4)
 
+    primer_sold_buckets = [sb for sb in sold_buckets if is_primer_1sh_tag(sb)]
+    sold_any_primer_1sh = bool(len(primer_sold_buckets) > 0)
+    sold_main_is_only_primer_1sh = bool(
+        sold_grid_q > 0
+        and (not sold_main_upper_flag)
+        and len(sold_buckets) > 0
+        and len(primer_sold_buckets) == len(sold_buckets)
+    )
+    primer_net_inc = 0.0
+    if sold_any_primer_1sh:
+        if sold_main_is_only_primer_1sh and sold_sub_q == 0:
+            primer_net_inc = net_pnl
+        else:
+            p_q = sum(pb.qty for pb in primer_sold_buckets)
+            p_cost = round(sum(pb.actual_cost_usd for pb in primer_sold_buckets), 4)
+            p_sell_fee: Optional[float] = None
+            if (
+                actual_sell_fee_usd is not None
+                and safe_float(actual_sell_fee_usd, 0.0) > 0.0
+                and sold_q > 0
+            ):
+                p_sell_fee = round(
+                    safe_float(actual_sell_fee_usd, 0.0)
+                    * (float(p_q) / float(sold_q)),
+                    4,
+                )
+            p_pnl_info = calc_sell_realized_pnl(
+                sold_qty=p_q,
+                sell_exec_price=fill_p,
+                sold_actual_cost_usd=p_cost,
+                round_trip_fee_rate_pct=eff_rt_pct,
+                actual_sell_fee_usd=p_sell_fee,
+            )
+            primer_net_inc = p_pnl_info["net_pnl_usd"]
+
+    primer_sell_ev = safe_int(st.get("primer_1sh_sell_events"), 0) + (
+        1 if sold_any_primer_1sh else 0
+    )
+    day_primer_sell_cnt = safe_int(st.get("daily_primer_1sh_sell_cnt"), 0) + (
+        1 if sold_any_primer_1sh else 0
+    )
+    primer_net_cum = round(
+        safe_float(st.get("primer_1sh_realized_net_usd"), 0.0) + primer_net_inc, 4
+    )
+
     tot_sell_ev = safe_int(st.get("total_sell_events"), 0) + 1
     tot_sold_sh = safe_int(st.get("total_sold_shares"), 0) + sold_q
     win_ev = safe_int(st.get("win_sell_events"), 0) + (
@@ -1628,11 +1677,14 @@ async def _commit_filled_sell_and_reanchor_ledger(
     )
     day_sell_ev = safe_int(st.get("daily_sell_events"), 0) + 1
     day_main_sell_cnt = safe_int(st.get("daily_main_sell_cnt"), 0) + (
-        1 if sold_grid_q > 0 else 0
+        1 if (sold_grid_q > 0 and not sold_main_is_only_primer_1sh) else 0
     )
     next_main_frozen_d = (
         0
-        if (sold_grid_q > 0 or is_grid_empty)
+        if (
+            is_grid_empty
+            or (sold_grid_q > 0 and not sold_main_is_only_primer_1sh)
+        )
         else max(0, safe_int(st.get("main_consec_frozen_days"), 0))
     )
 
@@ -1851,6 +1903,9 @@ async def _commit_filled_sell_and_reanchor_ledger(
         "main_consec_frozen_days": next_main_frozen_d,
         "sub_consec_frozen_days": next_sub_frozen_d,
         "daily_main_sell_cnt": day_main_sell_cnt,
+        "primer_1sh_sell_events": primer_sell_ev,
+        "daily_primer_1sh_sell_cnt": day_primer_sell_cnt,
+        "primer_1sh_realized_net_usd": primer_net_cum,
         "sub_sell_events": sub_sell_ev,
         "sub_sold_shares": sub_sold_sh,
         "daily_sub_sell_cnt": day_sub_sell_cnt,
@@ -2127,8 +2182,13 @@ async def _commit_filled_sell_and_reanchor_ledger(
                         reload_guide = (
                             f"🛡️60초 타임쉴드 후 1층재장전(눌림<=세션VWAP · 최저가돌파 <${next_cycle_min_p:.2f}{ratchet_lock_note} · 상한 ${l2_cap_p:.2f})"
                         )
+                    primer_reset_prefix = (
+                        f"🎯앵커 ${old_anchor_p:.2f}➔${next_anchor_p:.2f} 리셋 완료(정식 8% 공격수 해금 · 본동결 {next_main_frozen_d}일 보존) · "
+                        if sold_main_is_only_primer_1sh
+                        else ""
+                    )
                     note_str = (
-                        f"🔄이번사이클 누적: {cyc_sign}${abs(cur_cyc_net):,.2f}({cur_cyc_ev}회) · "
+                        f"{primer_reset_prefix}🔄이번사이클 누적: {cyc_sign}${abs(cur_cyc_net):,.2f}({cur_cyc_ev}회) · "
                         f"{co_sold_note}📦 잔여 2~{u_cnt + 1}층({u_cnt}개층·{u_qty}주) 순수이평 ${u_wma_p:.2f}(목표 ${u_wma_t:.2f}) 1.5초 실시간 익절감시 "
                         f"· {reload_guide}"
                     )
@@ -2149,10 +2209,20 @@ async def _commit_filled_sell_and_reanchor_ledger(
                         f"{co_sold_note}📦 잔여 1층 단독({b1_rem.qty}주 · 단가 ${b1_rem.book_price:.2f} ➔ 목표 ${b1_rem_target:.2f}) 1.5초 실시간 익절감시 "
                         f"· 10분게이트 대기(기억저가 ${next_cycle_min_p:.2f}{ratchet_lock_note} 잠금)"
                     )
-            title_msg = (
-                f"🔴 [SOXL 지정가 익절 체결 ({mode}{sess_tag})] "
-                f"{sold_q}주 @ ${fill_p:.2f} ({r_sign}{net_rate:.2f}%)"
-            )
+            if (
+                sold_main_is_only_primer_1sh
+                and sold_sub_q == 0
+                and not is_graduated_zero
+            ):
+                title_msg = (
+                    f"🌱 [SOXL 1주 마중물 익절 & 8% 앵커리셋 ({mode}{sess_tag})] "
+                    f"{sold_q}주 @ ${fill_p:.2f} ({r_sign}{net_rate:.2f}%)"
+                )
+            else:
+                title_msg = (
+                    f"🔴 [SOXL 지정가 익절 체결 ({mode}{sess_tag})] "
+                    f"{sold_q}주 @ ${fill_p:.2f} ({r_sign}{net_rate:.2f}%)"
+                )
             body_msg = (
                 f"세후순익 {sign}${abs(net_pnl):,.2f} {credit_mode_desc} · "
                 f"{note_str} · {cash_lbl} ${free_cash_now:,.2f}"
@@ -2782,7 +2852,7 @@ async def execute_1m_sniper_sell_and_reanchor_plugin(
         context, TARGET_SYMBOL, h_qty, avg_p, live_p
     )
 
-    held_lots = max(1, sum(b.lot_count for b in buckets))
+    held_lots = max(1, sum(safe_bucket_lot_count(b) for b in buckets))
     ratchet_max_lots = max(
         held_lots, safe_int(st.get("cycle_ratchet_max_lots"), 0)
     )

@@ -100,6 +100,16 @@ RESERVE_DEPOSIT_TOLERANCE_RATIO: float = 0.95
 # [Case 84 : 정규장 마감 30분 전(15:30 ~ 16:00 EST) 본·서브 0주 새 사이클 첫 1층 진입 및 상단층 보유 중 1층 공석 +1.0% 돌파 추격 동시 차단 기준 시각(HHMM)]
 NEW_CYCLE_BUY_CUTOFF_HM: int = 1530
 
+# NEW [Case 110 : 옵션 3 운용모드별 스마트 연동 역산 5.50% · -3.50% 가드 1주 마중물(Smart Primer 1-Share) 전역 상수]
+PRIMER_1SH_MIN_L1_GAP_PCT: float = 3.50
+PRIMER_1SH_MAX_INV_DROP_PCT: float = 5.50
+PRIMER_1SH_MIN_LOCKED_LOTS: int = 2
+PRIMER_1SH_LOT_TAG: str = "PRIMER_1SH"
+PRIMER_1SH_VAC_LOT_TAG: str = "PRIMER_1SH_VAC_L1"
+PRIMER_MODE_AUTO_SMART: str = "AUTO_SMART"
+PRIMER_MODE_OFF: str = "OFF"
+VALID_PRIMER_MODES: Tuple[str, ...] = (PRIMER_MODE_AUTO_SMART, PRIMER_MODE_OFF)
+
 LOCKED_BUY_INTERVAL_MIN: int = 10
 LOCKED_SELL_INTERVAL_MIN: int = 1
 DEFAULT_US_COMMISSION_RATE: float = 0.0007
@@ -188,6 +198,88 @@ def next_cycled_portion_mode(cur_mode: Any) -> str:
     if is_simple_income_mode(cur_mode):
         return PORTION_MODE_BARBELL
     return PORTION_MODE_SIMPLE
+
+
+def is_primer_1sh_tag(bucket_or_tag: Any) -> bool:
+    """
+    # NEW [Case 110]: 버킷 객체/딕셔너리/문자열이 1주 마중물(PRIMER_1SH / PRIMER_1SH_VAC_L1)인지 판별한다.
+    """
+    if isinstance(bucket_or_tag, dict):
+        raw_t = str(bucket_or_tag.get("lot_type") or "")
+    elif hasattr(bucket_or_tag, "lot_type"):
+        raw_t = str(getattr(bucket_or_tag, "lot_type", "") or "")
+    else:
+        raw_t = str(bucket_or_tag or "")
+    return raw_t.upper().strip() in (PRIMER_1SH_LOT_TAG, PRIMER_1SH_VAC_LOT_TAG)
+
+
+def safe_bucket_lot_count(bucket_or_dict: Any) -> int:
+    """
+    # NEW [Case 110]: 1주 마중물(PRIMER_1SH) 버킷의 lot_count=0 을 보존하여 회차 래칫 부풀림을 원천 차단한다.
+    """
+    if isinstance(bucket_or_dict, dict):
+        raw_lc = safe_int(
+            bucket_or_dict.get("lot_count"),
+            0 if is_primer_1sh_tag(bucket_or_dict) else 1,
+        )
+    elif hasattr(bucket_or_dict, "lot_count"):
+        raw_lc = safe_int(
+            getattr(bucket_or_dict, "lot_count", None),
+            0 if is_primer_1sh_tag(bucket_or_dict) else 1,
+        )
+    else:
+        raw_lc = safe_int(bucket_or_dict, 1)
+    if is_primer_1sh_tag(bucket_or_dict) and raw_lc <= 0:
+        return 0
+    return max(1, raw_lc)
+
+
+def resolve_smart_primer_policy(
+    portion_mode: Any,
+    primer_1sh_mode: Any = PRIMER_MODE_AUTO_SMART,
+) -> Dict[str, Any]:
+    """
+    # NEW [Case 110 · 옵션 3 운용모드별 스마트 연동 정책 해석기]:
+    - BARBELL_60_30_10 / SIMPLE_08PCT ➔ ALL_PLUS_L1_VAC (-3.50% 가드 · 전상태 + 1층공석 쌍바닥구제 · 서브ON)
+    - COMP_08PCT (연속 복리)          ➔ NO_7FULL_MERGE (-3.50% 가드 · 6층이하/2층공석만 출동[7층만석 합병차단] · 서브신규진입OFF)
+    - primer_1sh_mode == OFF          ➔ 1주 마중물 비활성화 (기존 v3.0 정본 동작 유지)
+    """
+    raw_pm = str(primer_1sh_mode or PRIMER_MODE_AUTO_SMART).upper().strip()
+    is_off = raw_pm in ("OFF", "FALSE", "0", "DISABLED", "NONE")
+    is_barbell = is_barbell_mode(portion_mode)
+    is_simple = (not is_barbell) and is_simple_income_mode(portion_mode)
+    if is_off:
+        return {
+            "primer_1sh_mode": PRIMER_MODE_OFF,
+            "enabled": False,
+            "vacancy_mode": "OFF",
+            "min_l1_gap_pct": PRIMER_1SH_MIN_L1_GAP_PCT,
+            "allow_vacant_l1_rescue": False,
+            "block_7full_merge": True,
+            "allow_new_sub_entry": True,
+            "policy_badge": "🔴OFF(마중물정지)",
+        }
+    if is_barbell or is_simple:
+        return {
+            "primer_1sh_mode": PRIMER_MODE_AUTO_SMART,
+            "enabled": True,
+            "vacancy_mode": "ALL_PLUS_L1_VAC",
+            "min_l1_gap_pct": PRIMER_1SH_MIN_L1_GAP_PCT,
+            "allow_vacant_l1_rescue": True,
+            "block_7full_merge": False,
+            "allow_new_sub_entry": True,
+            "policy_badge": "🧠스마트ON(만석+1층공석구제·서브ON)",
+        }
+    return {
+        "primer_1sh_mode": PRIMER_MODE_AUTO_SMART,
+        "enabled": True,
+        "vacancy_mode": "NO_7FULL_MERGE",
+        "min_l1_gap_pct": PRIMER_1SH_MIN_L1_GAP_PCT,
+        "allow_vacant_l1_rescue": False,
+        "block_7full_merge": True,
+        "allow_new_sub_entry": False,
+        "policy_badge": "🧠스마트ON(무합병6층↓·서브신규OFF)",
+    }
 
 
 def resolve_trading_session_date_est(
@@ -711,6 +803,13 @@ class SoxlStratumLedger:
             "daily_sub_realized_net_usd": 0.0,
             "daily_main_buy_cnt": 0,
             "daily_main_sell_cnt": 0,
+            "primer_1sh_mode": PRIMER_MODE_AUTO_SMART,
+            "primer_1sh_buy_events": 0,
+            "primer_1sh_sell_events": 0,
+            "primer_1sh_absorbed_events": 0,
+            "primer_1sh_realized_net_usd": 0.0,
+            "daily_primer_1sh_buy_cnt": 0,
+            "daily_primer_1sh_sell_cnt": 0,
             "unlock_mode": DEFAULT_UNLOCK_MODE,
             "buy_interval_min": LOCKED_BUY_INTERVAL_MIN,
             "sell_interval_min": LOCKED_SELL_INTERVAL_MIN,
@@ -854,8 +953,10 @@ class SoxlStratumLedger:
                     + safe_float(high_b.get("actual_cost_usd"), 0.0),
                     4,
                 )
-                tot_lc = max(1, safe_int(low_b.get("lot_count"), 1)) + max(
-                    1, safe_int(high_b.get("lot_count"), 1)
+                tot_lc = max(
+                    1,
+                    safe_bucket_lot_count(low_b)
+                    + safe_bucket_lot_count(high_b),
                 )
                 overall_book_avg = (
                     float(q_low) * safe_float(low_b.get("book_price"), 0.0)
@@ -891,8 +992,8 @@ class SoxlStratumLedger:
                     ),
                     4,
                 )
-                tot_lc = sum(
-                    max(1, safe_int(b.get("lot_count"), 1)) for b in overflow
+                tot_lc = max(
+                    1, sum(safe_bucket_lot_count(b) for b in overflow)
                 )
                 pure_p = round(max(0.01, tot_ac / float(max(1, tot_q))), 4)
                 merged_top = {
@@ -1072,6 +1173,35 @@ class SoxlStratumLedger:
         st["sub_max_tiers"] = SUB_MAX_TIERS_3
         st["sub_max_total_lots"] = SUB_MAX_TOTAL_LOTS_4
 
+        raw_primer_m = (
+            str(st.get("primer_1sh_mode") or PRIMER_MODE_AUTO_SMART)
+            .upper()
+            .strip()
+        )
+        st["primer_1sh_mode"] = (
+            PRIMER_MODE_OFF
+            if raw_primer_m in ("OFF", "FALSE", "0", "DISABLED", "NONE")
+            else PRIMER_MODE_AUTO_SMART
+        )
+        st["primer_1sh_buy_events"] = max(
+            0, safe_int(st.get("primer_1sh_buy_events"), 0)
+        )
+        st["primer_1sh_sell_events"] = max(
+            0, safe_int(st.get("primer_1sh_sell_events"), 0)
+        )
+        st["primer_1sh_absorbed_events"] = max(
+            0, safe_int(st.get("primer_1sh_absorbed_events"), 0)
+        )
+        st["primer_1sh_realized_net_usd"] = round(
+            safe_float(st.get("primer_1sh_realized_net_usd"), 0.0), 4
+        )
+        st["daily_primer_1sh_buy_cnt"] = max(
+            0, safe_int(st.get("daily_primer_1sh_buy_cnt"), 0)
+        )
+        st["daily_primer_1sh_sell_cnt"] = max(
+            0, safe_int(st.get("daily_primer_1sh_sell_cnt"), 0)
+        )
+
         st["cond_unlock_buy_events"] = max(
             0, safe_int(st.get("cond_unlock_buy_events"), 0)
         )
@@ -1176,8 +1306,14 @@ class SoxlStratumLedger:
                         ),
                         4,
                     )
-                    lc = max(1, safe_int(b.get("lot_count"), 1))
                     lt = str(b.get("lot_type") or "QUOTA_L1").upper().strip()
+                    if lt == PRIMER_1SH_VAC_LOT_TAG:
+                        lt = PRIMER_1SH_LOT_TAG
+                    lc = (
+                        0
+                        if (lt == PRIMER_1SH_LOT_TAG and safe_int(b.get("lot_count"), 0) <= 0)
+                        else max(1, safe_int(b.get("lot_count"), 1))
+                    )
                     pure_avg_p = round(max(0.01, ac / float(q)), 4)
                     clean_buckets.append(
                         {
@@ -1245,7 +1381,7 @@ class SoxlStratumLedger:
         st["sub_buckets"] = clean_sub_buckets
 
         held_lots_now = sum(
-            max(1, safe_int(b.get("lot_count"), 1)) for b in clean_buckets
+            safe_bucket_lot_count(b) for b in clean_buckets
         )
         raw_ratchet_lots = max(
             0, safe_int(st.get("cycle_ratchet_max_lots"), 0)
@@ -1320,6 +1456,8 @@ class SoxlStratumLedger:
                             ord_q_pending if ord_q_pending > 0 else cur_l1_q
                         )
                     )
+                elif is_primer_1sh_tag(clean_buckets[0]):
+                    st["l1_target_quota_qty"] = cur_l1_q
                 else:
                     st["l1_target_quota_qty"] = max(cur_l1_q, raw_target_q)
             else:
@@ -1718,7 +1856,7 @@ class SoxlStratumLedger:
                         for b in sanitized.get("buckets", [])
                     )
                     held_l = sum(
-                        max(1, safe_int(b.get("lot_count"), 1))
+                        safe_bucket_lot_count(b)
                         for b in sanitized.get("buckets", [])
                     )
                     ratchet_l = safe_int(
@@ -2153,6 +2291,29 @@ class SoxlStratumLedger:
             next_mode = next_cycled_portion_mode(cur_mode)
         return await self.update_state(TARGET_SYMBOL, portion_mode=next_mode)
 
+    async def toggle_primer_1sh_mode(
+        self, target_mode: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        # NEW [Case 110]: 1주 마중물 스마트 연동(AUTO_SMART) ⇄ 정지(OFF) 토글기
+        """
+        st = self.get_state(TARGET_SYMBOL)
+        cur_pm = str(st.get("primer_1sh_mode") or PRIMER_MODE_AUTO_SMART).upper().strip()
+        if target_mode is not None and str(target_mode).strip():
+            t_up = str(target_mode).upper().strip()
+            next_pm = (
+                PRIMER_MODE_OFF
+                if t_up in ("OFF", "FALSE", "0", "DISABLED", "NONE")
+                else PRIMER_MODE_AUTO_SMART
+            )
+        else:
+            next_pm = (
+                PRIMER_MODE_OFF
+                if cur_pm == PRIMER_MODE_AUTO_SMART
+                else PRIMER_MODE_AUTO_SMART
+            )
+        return await self.update_state(TARGET_SYMBOL, primer_1sh_mode=next_pm)
+
     async def rollover_daily_counters_if_needed(
         self, logical_date: str
     ) -> Dict[str, Any]:
@@ -2174,6 +2335,8 @@ class SoxlStratumLedger:
             "daily_sub_realized_net_usd": 0.0,
             "daily_main_buy_cnt": 0,
             "daily_main_sell_cnt": 0,
+            "daily_primer_1sh_buy_cnt": 0,
+            "daily_primer_1sh_sell_cnt": 0,
             "daily_reserve_injected_cnt": 0,
             "daily_dust_guard_blocked_cnt": 0,
             "daily_sell_events": 0,
