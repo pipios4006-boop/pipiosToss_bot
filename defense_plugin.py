@@ -1815,21 +1815,24 @@ async def reconcile_stratum_with_broker_holdings_plugin(
         round(total_rem_cost / float(h_qty), 4) if h_qty > 0 else 0.0
     )
 
+    # MODIFIED [Audit-110-05]: 수동 부분매도 시에도 활성 1층이 유지된 채 상단만 매도된 경우 1층 단가 보존
     old_anchor_p = safe_float(st.get("anchor_price"), manual_sell_p)
-    next_anchor_p = (
-        manual_sell_p
-        if (sold_main_q > 0 or not rem_buckets)
-        else (old_anchor_p if old_anchor_p > 0.0 else manual_sell_p)
-    )
+    if (not rem_buckets) or (not rem_has_l1) or bool(match_res.get("sold_l1_completely")):
+        next_anchor_p = manual_sell_p
+    elif sold_main_q > 0:
+        next_anchor_p = rem_buckets[0].book_price
+    else:
+        next_anchor_p = old_anchor_p if old_anchor_p > 0.0 else manual_sell_p
     old_cycle_min_p = safe_float(st.get("cycle_min_buy_price"), 0.0)
     next_cycle_min_p = round(old_cycle_min_p, 4) if rem_buckets else 0.0
 
     old_sub_anchor_p = safe_float(st.get("sub_anchor_price"), manual_sell_p)
-    next_sub_anchor_p = (
-        manual_sell_p
-        if (sold_sub_q > 0 or not rem_sub_buckets)
-        else (old_sub_anchor_p if old_sub_anchor_p > 0.0 else manual_sell_p)
-    )
+    if (not rem_sub_buckets) or (not rem_sub_has_l1) or bool(match_res.get("sold_sub_l1_completely")):
+        next_sub_anchor_p = manual_sell_p
+    elif sold_sub_q > 0:
+        next_sub_anchor_p = rem_sub_buckets[0].book_price
+    else:
+        next_sub_anchor_p = old_sub_anchor_p if old_sub_anchor_p > 0.0 else manual_sell_p
     old_sub_cycle_min_p = safe_float(st.get("sub_cycle_min_buy_price"), 0.0)
     next_sub_cycle_min_p = (
         round(old_sub_cycle_min_p, 4) if rem_sub_buckets else 0.0

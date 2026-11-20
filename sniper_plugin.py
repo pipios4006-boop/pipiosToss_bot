@@ -1615,6 +1615,7 @@ async def _try_execute_smart_primer_1sh_order(
     buy_interval_min: int = LOCKED_BUY_INTERVAL_MIN,
     threshold_mode: str = "WIDE_RUNWAY",
     already_in_mutex: bool = False,
+    ignore_bucket_gate: bool = False,
 ) -> Optional[Dict[str, Any]]:
     """
     # NEW [Case 110 · 옵션 3 스마트 연동 1주 마중물 원자적 발주 실행기]:
@@ -1650,9 +1651,14 @@ async def _try_execute_smart_primer_1sh_order(
             ),
             last_evaluated_date=str(st_m.get("last_evaluated_date") or ""),
         )
-        if not gate_ok_m:
+        if (not gate_ok_m) and (not ignore_bucket_gate):
             return None
 
+        # MODIFIED [Case 98-B · Audit-110-03]: 실주문 직전 뮤텍스 내부 2차 브로커 실호가(bypass_shm_cache=True) 재검증
+        live_2nd_p = await _fetch_fresh_current_soxl_price(
+            context, fallback_price=fresh_live_p, now_est=dt_now
+        )
+        eff_primer_lp = live_2nd_p if live_2nd_p > 0.0 else fresh_live_p
         hm_m = dt_now.hour * 100 + dt_now.minute
         held_lots_m = sum(safe_bucket_lot_count(b) for b in now_bks)
         ratchet_m = max(
@@ -1680,7 +1686,7 @@ async def _try_execute_smart_primer_1sh_order(
         c_min_m = safe_float(st_m.get("cycle_min_buy_price"), 0.0)
 
         p_sig = evaluate_smart_primer_1sh_signal(
-            live_price=fresh_live_p,
+            live_price=eff_primer_lp,
             buckets=now_bks,
             anchor_price=anc_m,
             cycle_min_buy_price=c_min_m,
@@ -1694,7 +1700,7 @@ async def _try_execute_smart_primer_1sh_order(
             return None
 
         exec_1sh_p = max(
-            0.01, safe_float(p_sig.get("exec_limit_price"), fresh_live_p)
+            0.01, safe_float(p_sig.get("exec_limit_price"), eff_primer_lp)
         )
         lot_tag_1sh = str(p_sig.get("lot_type") or PRIMER_1SH_LOT_TAG)
         desc_1sh = (
@@ -2779,6 +2785,7 @@ async def execute_seed_protected_buy_gate_plugin(
                         buy_interval_min=buy_interval_min,
                         threshold_mode=threshold_mode,
                         already_in_mutex=True,
+                        ignore_bucket_gate=True,
                     )
                     if isinstance(vac_rescue_in_mtx, dict) and str(
                         vac_rescue_in_mtx.get("status") or ""
@@ -3112,7 +3119,10 @@ async def execute_seed_protected_buy_gate_plugin(
             in_re_l2v, _ = is_within_reentry_monitor_time_shield(
                 context, st, TARGET_SYMBOL, now_est=dt_now
             )
-            if not in_re_l2v:
+            in_res_l2v, _ = is_within_reserve_deposit_check_shield(
+                context, st, TARGET_SYMBOL
+            )
+            if (not in_re_l2v) and (not in_res_l2v):
                 fresh_l2v_p = await _fetch_fresh_current_soxl_price(
                     context, fallback_price=live_p, now_est=dt_now
                 )
@@ -3303,15 +3313,36 @@ async def execute_seed_protected_buy_gate_plugin(
                                     st_now=st_now,
                                     exec_order_p=exec_order_p,
                                     portion_budget=portion_budget,
-                                    l1_actual_cost_usd=now_buckets[
-                                        0
-                                    ].actual_cost_usd,
+                                    l1_actual_cost_usd=(
+                                        0.0
+                                        if is_primer_1sh_tag(now_buckets[0])
+                                        else now_buckets[0].actual_cost_usd
+                                    ),
                                     is_dip_promotion=True,
                                     is_vacant_l1_reentry=False,
                                     trigger_desc="2층공석 최저가 돌파매수",
                                     target_qty=target_qty,
                                 )
                                 if not can_proc_l2v:
+                                    # MODIFIED [Audit-110-04]: 60초 쉴드 각인(1.5초 스레싱 및 B-2/서브 아사 원천 차단) & 즉시 1주 마중물 구제 시도!
+                                    mark_reentry_monitor_60s_cycle_shield(
+                                        context=context,
+                                        symbol=TARGET_SYMBOL,
+                                        eval_price=exec_order_p,
+                                    )
+                                    l2v_primer_res = await _try_execute_smart_primer_1sh_order(
+                                        context=context,
+                                        dt_now=dt_now,
+                                        fresh_live_p=fresh_l2v_p,
+                                        expect_vacant_l1=False,
+                                        buy_interval_min=buy_interval_min,
+                                        threshold_mode=threshold_mode,
+                                        already_in_mutex=True,
+                                    )
+                                    if isinstance(l2v_primer_res, dict) and str(
+                                        l2v_primer_res.get("status") or ""
+                                    ).endswith("_ORDERED"):
+                                        return l2v_primer_res
                                     return {
                                         "status": "HOLD_L2_VACANT_LOW_BREAK_GUARD30",
                                         "guard_eval": guard_res_l2v,
@@ -3777,6 +3808,20 @@ async def execute_seed_protected_buy_gate_plugin(
                 target_qty=target_qty,
             )
             if not can_proceed_dip:
+                # NEW [Case 110 · Audit-110-03]: 정규 8% 추매가 30% 시드가드에 차단된 경우 자투리 현금으로 1주 마중물 즉시 구제 시도!
+                dip_primer_rescue = await _try_execute_smart_primer_1sh_order(
+                    context=context,
+                    dt_now=dt_now,
+                    fresh_live_p=fresh_live_p,
+                    expect_vacant_l1=False,
+                    buy_interval_min=buy_interval_min,
+                    threshold_mode=threshold_mode,
+                    already_in_mutex=True,
+                )
+                if isinstance(dip_primer_rescue, dict) and str(
+                    dip_primer_rescue.get("status") or ""
+                ).endswith("_ORDERED"):
+                    return dip_primer_rescue
                 return {
                     "status": "HOLD_DIP_GUARD30_WAITING_RESERVE_DEPOSIT",
                     "trigger_tag": trigger_tag,

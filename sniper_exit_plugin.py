@@ -1601,10 +1601,14 @@ async def _commit_filled_sell_and_reanchor_ledger(
         0 if is_sub_empty else max(rem_sub_held_lots, prev_sub_ratchet_lots)
     )
 
+    # MODIFIED [Audit-110-05]: 활성 1층이 유지된 채 2층 등 상단층만 단독 익절될 때는 백테스트 정본과 동일하게 1층 단가를 앵커로 보존
     old_anchor_p = safe_float(st.get("anchor_price"), fill_p)
     old_cycle_min_p = safe_float(st.get("cycle_min_buy_price"), 0.0)
     if sold_grid_q > 0 or is_grid_empty:
-        next_anchor_p = fill_p
+        if is_grid_empty or (not rem_has_active_l1) or sold_l1_flag:
+            next_anchor_p = fill_p
+        else:
+            next_anchor_p = rem_buckets[0].book_price
         next_cycle_min_p = (
             round(old_cycle_min_p, 4) if not is_grid_empty else 0.0
         )
@@ -1615,7 +1619,10 @@ async def _commit_filled_sell_and_reanchor_ledger(
     old_sub_anchor_p = safe_float(st.get("sub_anchor_price"), fill_p)
     old_sub_cycle_min_p = safe_float(st.get("sub_cycle_min_buy_price"), 0.0)
     if sold_sub_q > 0 or is_sub_empty:
-        next_sub_anchor_p = fill_p
+        if is_sub_empty or (not rem_sub_has_active_l1) or sold_sub_l1_flag:
+            next_sub_anchor_p = fill_p
+        else:
+            next_sub_anchor_p = rem_sub_buckets[0].book_price
         next_sub_cycle_min_p = (
             round(old_sub_cycle_min_p, 4) if not is_sub_empty else 0.0
         )
