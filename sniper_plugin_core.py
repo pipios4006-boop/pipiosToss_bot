@@ -21,8 +21,10 @@ from barbell_plugin import (
     PORTION_MODE_BARBELL,
     ensure_barbell_ledger,
     evaluate_and_execute_barbell_guard30_or_injection,
+    execute_barbell_sgov_tick_plugin,
     initialize_or_sync_barbell_on_mode_enter,
     is_barbell_mode,
+    is_sgov_regular_trading_window,
 )
 from quant_engine import (
     BASE_MAX_LOTS_8PCT,
@@ -1264,21 +1266,107 @@ async def _check_and_prepare_primer_1sh_cash(
                 },
             )
 
-        # 2~3순위: 현금버킷마저 소진된 경우 정규 바벨 워터폴(SGOV 10% 매도 / 수익금고 대여)로 위임
-        can_b, eff_c_b, bp_b, g_b = await evaluate_and_execute_barbell_guard30_or_injection(
-            context=context,
-            st_now=st_now,
-            raw_bp_usd=raw_bp_usd,
-            exec_order_p=clean_p,
-            portion_budget=unit_8pct,
-            l1_actual_cost_usd=0.0,
-            is_dip_promotion=False,
-            trigger_desc=trigger_desc,
-            target_qty=1,
+        # MODIFIED [Case 110 · Audit-110-02]: 바벨 2~4순위에서도 30% 시드가드($144) 부활 및 8%($480) 과다 대여를 원천 차단하고 1주 부족분(shortfall_1sh)만 정밀 수혈(회차 분모는 unit_8pct 유지)
+        sgov_qty_p = max(0, safe_int(bst.get("sgov_held_qty"), 0))
+        if sgov_qty_p > 0:
+            next_sells_p = max(1, safe_int(bst.get("pending_sgov_tranche_sells"), 0))
+            await b_ledger.update_state(
+                cash_bucket_usd=cash_bucket,
+                pending_sgov_buy_budget_usd=pending_sgov_buy,
+                pending_sgov_tranche_sells=next_sells_p,
+                sgov_wait_alert_sent=True,
+            )
+            now_est_p = datetime.now(EST_TZ)
+            if is_sgov_regular_trading_window(now_est=now_est_p):
+                await execute_barbell_sgov_tick_plugin(context, now_est=now_est_p)
+            return (
+                False,
+                now_free_cash,
+                0.0,
+                {"action": "HOLD_PRIMER_BARBELL_WAIT_SGOV_LIQUIDATION", "should_proceed": False},
+            )
+
+        pooled_v_p = usable_shield + vault_avail
+        if (
+            vault_avail > 0.0
+            and raw_bp_safe >= req_1sh_cash - 1e-6
+            and (now_free_cash + pooled_v_p) >= req_1sh_cash - 1e-6
+        ):
+            take_cb_p = round(min(usable_shield, shortfall_1sh), 4)
+            rem_need_p = round(max(0.0, shortfall_1sh - take_cb_p), 4)
+            take_vt_p = round(min(vault_avail, rem_need_p), 4)
+            inj_vt_tot = round(take_cb_p + take_vt_p, 4)
+            if inj_vt_tot > 0.0:
+                v_tot_p = safe_float(bst.get("vault_realized_profit_usd"), 0.0)
+                new_v_inj_p = round(safe_float(bst.get("vault_injected_to_soxl_usd"), 0.0) + take_vt_p, 4)
+                new_v_av_p = round(max(0.0, v_tot_p - new_v_inj_p), 4)
+                new_inj_p = round(cur_inj_usd + inj_vt_tot, 4)
+                new_used_p = max(1, int(math.ceil((new_inj_p - 1e-9) / unit_8pct)))
+                inc_vt_p = max(0, new_used_p - cur_used_res)
+                await b_ledger.update_state(
+                    cash_bucket_usd=round(max(0.0, cash_bucket - take_cb_p), 4),
+                    pending_sgov_buy_budget_usd=pending_sgov_buy,
+                    cash_injected_to_soxl_usd=round(safe_float(bst.get("cash_injected_to_soxl_usd"), 0.0) + take_cb_p, 4),
+                    vault_injected_to_soxl_usd=new_v_inj_p,
+                    vault_available_usd=new_v_av_p,
+                    barbell_seed_exhausted=True,
+                )
+                upd_st_vp = await context.ledger.update_state(
+                    TARGET_SYMBOL,
+                    used_reserve_portions_cnt=new_used_p,
+                    injected_reserve_usd=new_inj_p,
+                    total_reserve_injected_cnt=safe_int(st_now.get("total_reserve_injected_cnt"), 0) + inc_vt_p,
+                    daily_reserve_injected_cnt=safe_int(st_now.get("daily_reserve_injected_cnt"), 0) + inc_vt_p,
+                )
+                upd_fc_vp = max(0.0, safe_float(upd_st_vp.get("free_cash_usd"), now_free_cash + inj_vt_tot))
+                return (
+                    True,
+                    upd_fc_vp,
+                    round(min(raw_bp_safe, upd_fc_vp), 4),
+                    {"action": "PRIMER_BARBELL_VAULT_MICRO_TOPUP", "should_proceed": True, "inject_usd": inj_vt_tot},
+                )
+
+        extra_bp_p = max(0.0, raw_bp_safe - (now_free_cash + cash_bucket + pending_sgov_buy + vault_avail))
+        if (
+            extra_bp_p > 0.0
+            and raw_bp_safe >= req_1sh_cash - 1e-6
+            and (now_free_cash + usable_shield + extra_bp_p) >= req_1sh_cash - 1e-6
+        ):
+            take_cb_e = round(min(usable_shield, shortfall_1sh), 4)
+            take_ex_e = round(min(extra_bp_p, max(0.0, shortfall_1sh - take_cb_e)), 4)
+            inj_ex_tot = round(take_cb_e + take_ex_e, 4)
+            if inj_ex_tot > 0.0:
+                new_inj_e = round(cur_inj_usd + inj_ex_tot, 4)
+                new_used_e = max(1, int(math.ceil((new_inj_e - 1e-9) / unit_8pct)))
+                inc_ex_e = max(0, new_used_e - cur_used_res)
+                await b_ledger.update_state(
+                    cash_bucket_usd=round(max(0.0, cash_bucket - take_cb_e), 4),
+                    pending_sgov_buy_budget_usd=pending_sgov_buy,
+                    cash_injected_to_soxl_usd=round(safe_float(bst.get("cash_injected_to_soxl_usd"), 0.0) + take_cb_e, 4),
+                    external_injected_to_soxl_usd=round(safe_float(bst.get("external_injected_to_soxl_usd"), 0.0) + take_ex_e, 4),
+                    barbell_seed_exhausted=True,
+                )
+                upd_st_ep = await context.ledger.update_state(
+                    TARGET_SYMBOL,
+                    used_reserve_portions_cnt=new_used_e,
+                    injected_reserve_usd=new_inj_e,
+                    total_reserve_injected_cnt=safe_int(st_now.get("total_reserve_injected_cnt"), 0) + inc_ex_e,
+                    daily_reserve_injected_cnt=safe_int(st_now.get("daily_reserve_injected_cnt"), 0) + inc_ex_e,
+                )
+                upd_fc_ep = max(0.0, safe_float(upd_st_ep.get("free_cash_usd"), now_free_cash + inj_ex_tot))
+                return (
+                    True,
+                    upd_fc_ep,
+                    round(min(raw_bp_safe, upd_fc_ep), 4),
+                    {"action": "PRIMER_BARBELL_EXTERNAL_MICRO_TOPUP", "should_proceed": True, "inject_usd": inj_ex_tot},
+                )
+
+        return (
+            False,
+            now_free_cash,
+            0.0,
+            {"action": "PRIMER_BARBELL_INSUFFICIENT_1SH_CASH", "should_proceed": False},
         )
-        if can_b and eff_c_b >= req_1sh_cash - 1e-6:
-            return True, eff_c_b, bp_b, g_b
-        return False, eff_c_b, 0.0, g_b
 
     # [복리 / 단리 모드]: 격리수익 제외 실예수금 및 free_cash 가 1주 실비용 이상이면 즉시 집행
     vault_locked = max(0.0, safe_float(st_now.get("vaulted_profit_locked_usd"), 0.0))

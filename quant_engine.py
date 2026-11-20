@@ -221,12 +221,13 @@ def vrev_add_quota_lot_and_merge_2tier(
         )
         return [merged_l1] + preserved_uppers
 
-    # NEW [Case 110]: 기존 활성 1층이 PRIMER_1SH(1주 마중물)이고 정규 8% 추매가 유입되면 2층 승격 없이 1층 무승격 흡수 합산!
+    # MODIFIED [Case 110 · Audit-110-01]: 진성 하방 추매(pure_p <= 1층 마중물 단가)일 때만 1층 무승격 흡수 합산 (고가 수동매수 시 1층>2층 단가역전 차단)
     if (
         (not is_primer_buy)
         and tag != "TOPUP_1FL"
         and is_primer_1sh_tag(existing[0])
         and absorb_primer_on_dip
+        and pure_p <= existing[0].book_price + 1e-6
     ):
         old_p1 = existing[0]
         abs_qty = old_p1.qty + q_int
@@ -3050,6 +3051,19 @@ def run_quant_engine_tdd() -> bool:
         )
         assert sig_vac_bar["should_buy"] is True and sig_vac_bar["signal_type"] == "PRIMER_1SH_VAC_L1_RESCUE"
         assert sig_vac_cmp["should_buy"] is False and sig_vac_cmp["signal_type"] == "VACANT_L1_RESCUE_OFF_IN_COMPOUND"
+
+        # [Audit-110-01] PRIMER_1SH 보유 중 고가 수동매수 유입 시 1층 마중물 보존 및 지층 단가역전 원천 차단 검증
+        b_hi_manual = vrev_add_quota_lot_and_merge_2tier(
+            queue=after_p1,
+            buy_qty=10,
+            buy_price=65.00,
+            lot_type="MANUAL_SYNC_L1",
+        )
+        assert (
+            b_hi_manual[0].is_primer_1sh is True
+            and abs(b_hi_manual[0].book_price - 46.90) < 1e-4
+            and b_hi_manual[0].book_price <= b_hi_manual[1].book_price + 1e-6
+        ), f"Audit-110-01 고가 수동매수 단가역전 방어 실패: {b_hi_manual[:3]}"
 
     finally:
         set_runtime_round_trip_fee_rate_pct(prev_rt, us_commission_rate=prev_one)
