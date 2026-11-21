@@ -1995,6 +1995,24 @@ async def _commit_filled_sell_and_reanchor_ledger(
         "last_sell_gate_eval_ts": 0.0,
         "last_reentry_eval_ts": 0.0,
         "last_sub_reentry_eval_ts": 0.0,
+        **(
+            {
+                "stalk_l1_active": False,
+                "stalk_l1_low_price": 0.0,
+                "stalk_add_active": False,
+                "stalk_add_low_price": 0.0,
+            }
+            if (sold_grid_q > 0 or is_grid_empty)
+            else {}
+        ),
+        **(
+            {
+                "stalk_sub_active": False,
+                "stalk_sub_low_price": 0.0,
+            }
+            if (sold_sub_q > 0 or is_sub_empty)
+            else {}
+        ),
         "sell_order_id": "",
         "ordered_qty": 0,
         "target_sell_price": 0.0,

@@ -785,6 +785,12 @@ async def reconcile_stratum_with_broker_holdings_plugin(
             last_sell_gate_eval_ts=0.0,
             last_reentry_eval_ts=0.0,
             last_sub_reentry_eval_ts=0.0,
+            stalk_l1_active=False,
+            stalk_l1_low_price=0.0,
+            stalk_sub_active=False,
+            stalk_sub_low_price=0.0,
+            stalk_add_active=False,
+            stalk_add_low_price=0.0,
             buy_order_id="",
             sell_order_id="",
             ordered_qty=0,
@@ -1013,6 +1019,12 @@ async def reconcile_stratum_with_broker_holdings_plugin(
                 restored_kw["pending_sub_sell_indices"] = []
                 restored_kw["pending_step_up_min_price"] = 0.0
                 restored_kw["pending_sub_step_up_min_price"] = 0.0
+                restored_kw["stalk_l1_active"] = False
+                restored_kw["stalk_l1_low_price"] = 0.0
+                restored_kw["stalk_sub_active"] = False
+                restored_kw["stalk_sub_low_price"] = 0.0
+                restored_kw["stalk_add_active"] = False
+                restored_kw["stalk_add_low_price"] = 0.0
                 if has_active_l1_bucket(vault_buckets):
                     restored_kw["last_reentry_eval_ts"] = 0.0
                     if is_primer_1sh_tag(vault_buckets[0]):
@@ -1183,6 +1195,12 @@ async def reconcile_stratum_with_broker_holdings_plugin(
             "last_buy_fill_ts": now_sync_ts,
             "last_reentry_eval_ts": 0.0,
             "last_sub_reentry_eval_ts": 0.0,
+            "stalk_l1_active": False,
+            "stalk_l1_low_price": 0.0,
+            "stalk_sub_active": False,
+            "stalk_sub_low_price": 0.0,
+            "stalk_add_active": False,
+            "stalk_add_low_price": 0.0,
         }
         is_ledger_brand_new = bool(
             safe_int(st.get("total_buy_events"), 0) == 0
@@ -1453,6 +1471,10 @@ async def reconcile_stratum_with_broker_holdings_plugin(
             entry_ts=now_sync_ts,
             last_buy_fill_ts=now_sync_ts,
             last_reentry_eval_ts=0.0,
+            stalk_l1_active=False,
+            stalk_l1_low_price=0.0,
+            stalk_add_active=False,
+            stalk_add_low_price=0.0,
         )
         if is_barbell:
             await initialize_or_sync_barbell_on_mode_enter(
@@ -1910,6 +1932,24 @@ async def reconcile_stratum_with_broker_holdings_plugin(
         "last_sell_gate_eval_ts": 0.0,
         "last_reentry_eval_ts": 0.0,
         "last_sub_reentry_eval_ts": 0.0,
+        **(
+            {
+                "stalk_l1_active": False,
+                "stalk_l1_low_price": 0.0,
+                "stalk_add_active": False,
+                "stalk_add_low_price": 0.0,
+            }
+            if (sold_main_q > 0 or not rem_buckets)
+            else {}
+        ),
+        **(
+            {
+                "stalk_sub_active": False,
+                "stalk_sub_low_price": 0.0,
+            }
+            if (sold_sub_q > 0 or not rem_sub_buckets)
+            else {}
+        ),
         "pending_sell_indices": [],
         "pending_sub_sell_indices": [],
         "pending_step_up_min_price": 0.0,

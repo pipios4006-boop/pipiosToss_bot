@@ -709,13 +709,17 @@ def _format_sub_grid_stratum_lines(
             sl1_ign_p = safe_float(
                 summary.get("sub_l1_ignite_100_price"), sl1_t
             )
+            scap_pct_u = safe_float(
+                tr_s.get("hard_cap_pct"),
+                safe_float(summary.get("rebound_hard_cap_pct"), 5.0),
+            )
             if bool(tr_s.get("armed")):
                 sst_p = safe_float(tr_s.get("active_stop_p"), 0.0)
                 slk_pct_u = safe_float(tr_s.get("active_lock_pct"), 1.60)
                 if bool(tr_s.get("stepped_125")) and sst_p > 0.0:
                     lines.append(
                         f"  ⚡ <b>[서브1층: {sl1_label}·${sb1.actual_cost_usd:,.0f}]</b> "
-                        f"<b>${sb1.book_price:.2f}</b> ➔ <b>다단래칫추적</b>(보존${sst_p:.2f}) ({sg1_s}{sl1_g:.2f}%·👑+{slk_pct_u:.2f}%락)"
+                        f"<b>${sb1.book_price:.2f}</b> ➔ <b>다단래칫추적</b>(보존${sst_p:.2f}) ({sg1_s}{sl1_g:.2f}%·👑+{slk_pct_u:.2f}%락·캡+{scap_pct_u:.0f}%)"
                     )
                 else:
                     slk_p = safe_float(
@@ -726,11 +730,15 @@ def _format_sub_grid_stratum_lines(
                     )
                     lines.append(
                         f"  ⚡ <b>[서브1층: {sl1_label}·${sb1.actual_cost_usd:,.0f}]</b> "
-                        f"<b>${sb1.book_price:.2f}</b> ➔ <b>강세HA추적</b>(락${slk_p:.2f}) ({sg1_s}{sl1_g:.2f}%·🔥무스탑)"
+                        f"<b>${sb1.book_price:.2f}</b> ➔ <b>다단래칫추적</b>(락${slk_p:.2f}) ({sg1_s}{sl1_g:.2f}%·🔥무스탑·캡+{scap_pct_u:.0f}%)"
                     )
             else:
                 sfg_c = safe_int(tr_s.get("forgive_count"), 0)
-                sfg_b = f"·💡용서{sfg_c}" if sfg_c > 0 else "·점화1.50%"
+                sfg_b = (
+                    f"·💡용서{sfg_c}·캡+{scap_pct_u:.0f}%"
+                    if sfg_c > 0
+                    else f"·점화1.5%·캡+{scap_pct_u:.0f}%"
+                )
                 lines.append(
                     f"  ⚡ <b>[서브1층: {sl1_label}·${sb1.actual_cost_usd:,.0f}]</b> "
                     f"<b>${sb1.book_price:.2f}</b> ➔ <b>${sl1_ign_p:.2f}</b> ({sg1_s}{sl1_g:.2f}%{sfg_b})"

@@ -658,28 +658,42 @@ async def _execute_sub_grid_buy_engine_plugin(
                 next_s_low = safe_float(
                     s_stalk_ev.get("stalk_low_price"), fresh_live_p
                 )
+                # MODIFIED [Audit-112-01]: 서브 스토커 바닥 반등 시 기준가·2층상한 미만 정당 반등 전면 허용 및 저가돌파 기준가 보존
                 sub_pb_d = safe_float(
                     sub_re_sig.get("pullback_drop_pct"), -1.0
                 )
                 sub_chg_ex = safe_float(
                     sub_re_sig.get("chg_from_exit_pct"), 0.0
                 )
+                sub_ceil_lim = (
+                    min(sub_anchor_p, sub_min_upper_p)
+                    if sub_anchor_p > 0.0
+                    else sub_min_upper_p
+                )
                 still_in_sub_dip = bool(
                     sub_chg_ex <= (sub_pb_d * 0.5)
-                    or fresh_live_p < sub_min_upper_p
+                    or (
+                        (cur_stalk_sub_act or bool(sub_re_sig.get("should_buy")))
+                        and fresh_live_p < (sub_ceil_lim - 1e-6)
+                    )
                 )
                 if bool(s_stalk_ev.get("should_fire")) and still_in_sub_dip:
                     sub_re_sig = dict(sub_re_sig)
                     sub_re_sig["should_buy"] = True
+                    is_sub_lb_fire = bool(
+                        sub_cycle_min_p_re > 0.0
+                        and min(fresh_live_p, next_s_low)
+                        < (sub_cycle_min_p_re - 1e-6)
+                        and fresh_live_p <= sub_cycle_min_p_re * 1.005
+                    )
                     sub_sig_type = (
                         "LOW_BREAK_RELOAD"
-                        if (
-                            sub_cycle_min_p_re > 0.0
-                            and fresh_live_p < sub_cycle_min_p_re
-                        )
+                        if is_sub_lb_fire
                         else "PULLBACK_RELOAD"
                     )
                     sub_re_sig["signal_type"] = sub_sig_type
+                    if is_sub_lb_fire:
+                        sub_re_sig["quota_ref_price"] = sub_cycle_min_p_re
                 elif not still_in_sub_dip:
                     if cur_stalk_sub_act:
                         await context.ledger.update_state(
@@ -904,11 +918,14 @@ async def _execute_sub_grid_buy_engine_plugin(
                             "closed_ha_shaved_bear": m_sub_shaved_bear,
                             "closed_ha_bull": m_sub_ha_bull,
                         }
+                    m_sub_lb_ceil = (
+                        m_sub_c_min * 1.005 if m_use_sub_stalk else m_sub_c_min
+                    )
                     if (
                         sub_sig_type == "LOW_BREAK_RELOAD"
                         and (
                             m_sub_c_min <= 0.0
-                            or m_exec_p_chk >= (m_sub_c_min - 1e-6)
+                            or m_exec_p_chk >= (m_sub_lb_ceil - 1e-6)
                         )
                     ):
                         sub_re_epoch = mark_sub_reentry_monitor_60s_cycle_shield(
@@ -932,10 +949,16 @@ async def _execute_sub_grid_buy_engine_plugin(
                         if raw_m_sanc > 0.0
                         else min(sb.book_price for sb in now_sub_buckets)
                     )
+                    # MODIFIED [Audit-112-01]: 서브 스토커 발사 시 기준가 미만 정당 반등 보호 (모드 전환으로 스토커 OFF 시 정식 눌림폭 강제)
                     m_spb = resolve_smart_pullback_drop_pct(m_spm)
-                    m_spb_lim = (
-                        (m_spb * 0.5) if m_use_sub_stalk else m_spb
+                    m_was_sub_stalk = bool(
+                        m_use_sub_stalk
+                        and (
+                            cur_stalk_sub_act
+                            or bool(st_now.get("stalk_sub_active", False))
+                        )
                     )
+                    m_spb_lim = -0.01 if m_was_sub_stalk else m_spb
                     if (
                         sub_sig_type == "PULLBACK_RELOAD"
                         and m_sanc > 0.0
@@ -2413,25 +2436,42 @@ async def execute_seed_protected_buy_gate_plugin(
                 next_l1_low = safe_float(
                     l1_stalk_ev.get("stalk_low_price"), fresh_live_p
                 )
+                # MODIFIED [Audit-112-01]: 본 1층 스토커 바닥 반등 시 기준가·2층상한 미만 정당 반등 전면 허용 및 저가돌파 기준가 보존
                 pb_d_val = safe_float(
                     reentry_sig.get("pullback_drop_pct"), -1.0
                 )
                 chg_ex_val = safe_float(
                     reentry_sig.get("chg_from_exit_pct"), 0.0
                 )
+                l1_ceil_lim = (
+                    min(anchor_p, min_upper_tier_p)
+                    if anchor_p > 0.0
+                    else min_upper_tier_p
+                )
                 still_in_l1_dip = bool(
                     chg_ex_val <= (pb_d_val * 0.5)
-                    or fresh_live_p < min_upper_tier_p
+                    or (
+                        (cur_stalk_l1_act or bool(reentry_sig.get("should_buy")))
+                        and fresh_live_p < (l1_ceil_lim - 1e-6)
+                    )
                 )
                 if bool(l1_stalk_ev.get("should_fire")) and still_in_l1_dip:
                     reentry_sig = dict(reentry_sig)
                     reentry_sig["should_buy"] = True
+                    is_l1_lb_fire = bool(
+                        cycle_min_p_re > 0.0
+                        and min(fresh_live_p, next_l1_low)
+                        < (cycle_min_p_re - 1e-6)
+                        and fresh_live_p <= cycle_min_p_re * 1.005
+                    )
                     sig_type = (
                         "LOW_BREAK_RELOAD"
-                        if (cycle_min_p_re > 0.0 and fresh_live_p < cycle_min_p_re)
+                        if is_l1_lb_fire
                         else "PULLBACK_RELOAD"
                     )
                     reentry_sig["signal_type"] = sig_type
+                    if is_l1_lb_fire:
+                        reentry_sig["quota_ref_price"] = cycle_min_p_re
                 elif not still_in_l1_dip:
                     if cur_stalk_l1_act:
                         await context.ledger.update_state(
@@ -2887,11 +2927,14 @@ async def execute_seed_protected_buy_gate_plugin(
                             "closed_ha_bull": m_ha_bull,
                             "seed_protect_pass_cnt": new_day_pass,
                         }
+                    m_l1_lb_ceil = (
+                        m_c_min_now * 1.005 if m_use_l1_stalk else m_c_min_now
+                    )
                     if (
                         sig_type == "LOW_BREAK_RELOAD"
                         and (
                             m_c_min_now <= 0.0
-                            or m_exec_chk >= (m_c_min_now - 1e-6)
+                            or m_exec_chk >= (m_l1_lb_ceil - 1e-6)
                         )
                     ):
                         re_eval_epoch = mark_reentry_monitor_60s_cycle_shield(
@@ -2907,7 +2950,7 @@ async def execute_seed_protected_buy_gate_plugin(
                             "signal_type": "HOLD_ABOVE_CYCLE_MIN",
                             "live_price": fresh_live_p,
                         }
-                    # MODIFIED [Audit-111-02]: anchor_price=0.0 시 상단 최저단가 폴백 보장
+                    # MODIFIED [Audit-111-02 & Audit-112-01]: 본 1층 스토커 발사 시 기준가 미만 정당 반등 보호
                     m_pm = str(st_now.get("portion_mode") or "")
                     raw_m_anc = safe_float(st_now.get("anchor_price"), 0.0)
                     m_anc = (
@@ -2916,9 +2959,14 @@ async def execute_seed_protected_buy_gate_plugin(
                         else min(b.book_price for b in now_buckets)
                     )
                     m_pb_r = resolve_smart_pullback_drop_pct(m_pm)
-                    m_pb_lim = (
-                        (m_pb_r * 0.5) if m_use_l1_stalk else m_pb_r
+                    m_was_l1_stalk = bool(
+                        m_use_l1_stalk
+                        and (
+                            cur_stalk_l1_act
+                            or bool(st_now.get("stalk_l1_active", False))
+                        )
                     )
+                    m_pb_lim = -0.01 if m_was_l1_stalk else m_pb_r
                     if (
                         sig_type == "PULLBACK_RELOAD"
                         and m_anc > 0.0
@@ -3890,9 +3938,14 @@ async def execute_seed_protected_buy_gate_plugin(
             next_add_low = safe_float(
                 add_stalk_ev.get("stalk_low_price"), fresh_live_p
             )
+            # MODIFIED [Audit-112-02]: 단차 비례 반등 허용폭(min(-0.50, drop*0.5)) 및 1층 단가 하단 강제
+            add_reb_ceil_pct = min(-0.50, drop_buy_pct * 0.50)
             still_valid_add_dip = bool(
-                chg_for_buy_pct <= (drop_buy_pct + 0.60)
-                or bool(dip_eval.get("should_buy"))
+                fresh_live_p < (buckets[0].book_price - 1e-6)
+                and (
+                    chg_for_buy_pct <= add_reb_ceil_pct
+                    or bool(dip_eval.get("should_buy"))
+                )
             )
             if bool(add_stalk_ev.get("should_fire")) and still_valid_add_dip:
                 fresh_2nd = await _fetch_fresh_current_soxl_price(
@@ -4195,6 +4248,15 @@ async def execute_seed_protected_buy_gate_plugin(
             cur_limit_p = (
                 math.floor((fresh_live_p + 1e-9) * 100.0) / 100.0
             )
+            if fired_by_crash_stalker and cur_limit_p >= (
+                now_buckets[0].book_price - 1e-6
+            ):
+                await context.ledger.update_state(
+                    TARGET_SYMBOL,
+                    stalk_add_active=False,
+                    stalk_add_low_price=0.0,
+                )
+                return {"status": "CRASH_STALK_ABOVE_L1_ABORTED"}
             exec_order_p = (
                 max(0.01, cur_limit_p)
                 if fired_by_crash_stalker
