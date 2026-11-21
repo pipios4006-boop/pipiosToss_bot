@@ -2947,6 +2947,35 @@ def run_quant_engine_tdd() -> bool:
             and sig_l2_vac_ok["should_buy"] is True
             and sig_l2_vac_ok["signal_type"] == "LOW_BREAK_L2_VAC_RELOAD"
         )
+        # [충돌-01 회귀검증]: 1층($44.90)과 기억저가($44.90) 근접 시 -$0.01 연타 추매 원천 차단 & 1주마중물 보유 시 비활성 검증
+        sig_l2_close_blk = evaluate_l2_vacant_low_break_signal(
+            live_price=44.89,
+            buckets=[
+                StratumBucket(18, 44.90, 808.2, 808.2, 1, "REENTRY_1FL"),
+                StratumBucket(15, 52.00, 780.0, 780.0, 2, "GRID_L3"),
+            ],
+            cycle_min_buy_price=44.90,
+            cycle_ratchet_max_lots=11,
+            closed_ha_shaved_bear=False,
+            closed_ha_ready=True,
+        )
+        sig_l2_primer_blk = evaluate_l2_vacant_low_break_signal(
+            live_price=44.20,
+            buckets=[
+                StratumBucket(1, 46.90, 46.9, 46.9, 0, "PRIMER_1SH"),
+                StratumBucket(15, 52.00, 780.0, 780.0, 2, "GRID_L3"),
+            ],
+            cycle_min_buy_price=44.36,
+            cycle_ratchet_max_lots=11,
+            closed_ha_shaved_bear=False,
+            closed_ha_ready=True,
+        )
+        assert (
+            sig_l2_close_blk["eligible"] is False
+            and sig_l2_close_blk["should_buy"] is False
+            and sig_l2_primer_blk["eligible"] is False
+            and sig_l2_primer_blk["should_buy"] is False
+        ), f"충돌-01 방어 실패: {sig_l2_close_blk} / {sig_l2_primer_blk}"
 
         # 6) Case 88 & Case 91 인출형(단리) 및 바벨 모드(60/30/10) 검증
         mock_simple_st = {

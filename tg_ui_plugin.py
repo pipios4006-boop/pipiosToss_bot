@@ -281,44 +281,31 @@ def _build_settlement_inline_keyboard(
     assassin_exec_mode = str(
         kwargs.get("assassin_exec_mode") or ASSASSIN_MODE_SIMULATED
     ).upper()
-    primer_1sh_mode = str(
-        kwargs.get("primer_1sh_mode") or PRIMER_MODE_AUTO_SMART
-    ).upper()
-    primer_pol = resolve_smart_primer_policy(
-        portion_mode=portion_mode, primer_1sh_mode=primer_1sh_mode
-    )
 
     is_barbell = _is_barbell_portion_mode(portion_mode)
     is_simple = _is_simple_portion_mode(portion_mode)
 
     power_label = (
-        "🔴 스나이퍼 작동 OFF 로 전환"
+        "🔴 스나이퍼 작동 OFF 전환"
         if is_active
-        else "🟢 스나이퍼 작동 ON 으로 전환"
+        else "🟢 스나이퍼 작동 ON 전환"
     )
 
     if is_barbell:
-        mode_label = "🔄 현재: ⚖️바벨모드(60/30/10) ➔ 📈스나이퍼(복리)"
+        mode_label = "🔄 모드: ⚖️바벨(60/30/10) ➔ 📈복리"
     elif is_simple:
-        mode_label = "🔄 현재: 💵스나이퍼(단리) ➔ ⚖️바벨모드(60/30/10)"
+        mode_label = "🔄 모드: 💵단리 ➔ ⚖️바벨(60/30/10)"
     else:
-        mode_label = "🔄 현재: 📈스나이퍼(복리) ➔ 💵스나이퍼(단리)"
+        mode_label = "🔄 모드: 📈복리 ➔ 💵단리"
 
     if assassin_exec_mode == ASSASSIN_MODE_LIVE:
-        assn_toggle_label = "🔥 암살자: [실전] 단독가동중 ➔ 🧪[모의] 복귀"
+        assn_toggle_label = "🔥 암살자: [실전] 가동중 ➔ 🧪[모의] 복귀"
     elif assassin_exec_mode == ASSASSIN_MODE_ARMED_ON_ZERO:
-        assn_toggle_label = "⏳ 암살자: SOXL 0주 전환예약 ➔ 🧪예약 취소"
+        assn_toggle_label = "⏳ 암살자: 0주 전환예약 ➔ 🧪예약 취소"
     else:
-        assn_toggle_label = "🗡️ 암살자: 🧪[모의] ➔ 🔥[실전] 승격(0주시 전환)"
+        assn_toggle_label = "🗡️ 암살자: 🧪[모의] ➔ 🔥[실전] 승격(0주시)"
 
-    if bool(primer_pol.get("enabled", True)):
-        if is_barbell or is_simple:
-            primer_toggle_label = "🌱 1주마중물: 🧠스마트ON(전상태+1층공석) ➔ 🔴OFF"
-        else:
-            primer_toggle_label = "🌱 1주마중물: 🧠스마트ON(6층이하·서브잠금) ➔ 🔴OFF"
-    else:
-        primer_toggle_label = "🌱 1주마중물: 🔴OFF(정본v3.0) ➔ 🧠스마트ON"
-
+    # MODIFIED [Case 110 Default-ON]: 1주 마중물은 상시 기본 내장되어 제어반 버튼에서 제거 및 모바일 폭 최적화
     return {
         "inline_keyboard": [
             [
@@ -326,12 +313,6 @@ def _build_settlement_inline_keyboard(
             ],
             [
                 {"text": mode_label, "callback_data": "toggle_portion_mode"},
-            ],
-            [
-                {
-                    "text": primer_toggle_label,
-                    "callback_data": "toggle_primer_1sh_mode",
-                },
             ],
             [
                 {
@@ -347,11 +328,11 @@ def _build_settlement_inline_keyboard(
             ],
             [
                 {
-                    "text": "⚖️ 바벨 관제 (/barbell)",
+                    "text": "⚖️ 바벨 관제보드",
                     "callback_data": "cmd_barbell",
                 },
                 {
-                    "text": "🗡️ 암살자 관제 (/assassin)",
+                    "text": "🗡️ 암살자 관제보드",
                     "callback_data": "cmd_assassin",
                 },
             ],
@@ -1651,7 +1632,7 @@ def build_settlement_control_message(
             f"   ▫️ 리바운드 [{escape_html(str(summary.get('rebound_spec_id') or 'C-112'))}]: "
             f"<b>{escape_html(str(summary.get('rebound_policy_badge') or ''))}</b>"
         ),
-        f"   ▫️ 1주 마중물: <b>{escape_html(primer_badge)}</b> (<code>/primer</code> · 매수{p_buy_c}/익절{p_sell_c}/흡수{p_abs_c} · {p_net_sign}${abs(p_net_u):,.2f})",
+        f"   ▫️ 1주 마중물(상시): <b>{escape_html(primer_badge)}</b> (매수{p_buy_c}/익절{p_sell_c}/흡수{p_abs_c} · {p_net_sign}${abs(p_net_u):,.2f})",
         f"3️⃣ 암살자 승격: <b>{assn_mode_str}</b> (<code>/assassin_mode</code>)",
         f"4️⃣ 기준 시드: <b>${init_seed:,.2f}</b> (확정자산 ${real_eq:,.2f})",
         f"   ▫️ 이번사이클익: <b>{cyc_sign}${abs(cyc_net):,.2f}</b> ({cyc_ev}회 익절 · 졸업 {comp_cycles}회)",
@@ -2290,20 +2271,12 @@ class TelegramCommandController:
         p_badge = escape_html(
             str(summary.get("primer_policy_badge") or "🧠스마트ON")
         )
-        p_on = bool(summary.get("primer_enabled", True))
-        if p_on:
-            if bool(summary.get("primer_allow_vacant_l1_rescue", False)):
-                rule_desc = "바벨/단리 맞춤 — 만석포함 전 상태 역산(-3.5% 가드) + 1층 공석 10분 구제 + 서브 상시 ON"
-            else:
-                rule_desc = "연속복리 맞춤 — 6층 이하/2층 공석 역산(-3.5% 가드 · 7층 만석 합병차단) + 신규 0주 서브 잠금(기보유 졸업유지)"
-        else:
-            rule_desc = "1주 마중물 완전 비활성화 (기존 v3.0 정본 8%/4% 그리드 단독 운용)"
         await self.send_message(
             chat_id=chat_id,
             text=(
-                "🌱 <b>[1주 마중물 스마트 연동 스위치 전환]</b>\n"
-                f"▫️ 현재 상태: <b>{p_badge}</b>\n"
-                f"▫️ 적용 규율: {escape_html(rule_desc)}"
+                "🌱 <b>[1주 마중물 상시 Default-ON 적용 안내]</b>\n"
+                f"▫️ 현재 상태: <b>{p_badge}</b> (스위치 없는 상시 자동연동)\n"
+                "▫️ 운용모드(<code>/mode</code>)에 맞춰 바벨·단리는 만석+1층공석 구제, 복리는 6층이하 무합병 모드로 100% 자동 작동합니다."
             ),
             reply_markup=_build_main_reply_keyboard(),
         )

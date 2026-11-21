@@ -1272,16 +1272,8 @@ class SoxlStratumLedger:
         st["sub_max_tiers"] = SUB_MAX_TIERS_3
         st["sub_max_total_lots"] = SUB_MAX_TOTAL_LOTS_4
 
-        raw_primer_m = (
-            str(st.get("primer_1sh_mode") or PRIMER_MODE_AUTO_SMART)
-            .upper()
-            .strip()
-        )
-        st["primer_1sh_mode"] = (
-            PRIMER_MODE_OFF
-            if raw_primer_m in ("OFF", "FALSE", "0", "DISABLED", "NONE")
-            else PRIMER_MODE_AUTO_SMART
-        )
+        # MODIFIED [Case 110 Default-ON]: 3층 서브 그리드와 동일하게 스위치 없는 100% 상시 AUTO_SMART 고정
+        st["primer_1sh_mode"] = PRIMER_MODE_AUTO_SMART
         st["primer_1sh_buy_events"] = max(
             0, safe_int(st.get("primer_1sh_buy_events"), 0)
         )
@@ -2429,24 +2421,12 @@ class SoxlStratumLedger:
         self, target_mode: Optional[str] = None
     ) -> Dict[str, Any]:
         """
-        # NEW [Case 110]: 1주 마중물 스마트 연동(AUTO_SMART) ⇄ 정지(OFF) 토글기
+        # MODIFIED [Case 110 Default-ON]: 스위치 없는 100% 상시 AUTO_SMART 고정 유지
         """
-        st = self.get_state(TARGET_SYMBOL)
-        cur_pm = str(st.get("primer_1sh_mode") or PRIMER_MODE_AUTO_SMART).upper().strip()
-        if target_mode is not None and str(target_mode).strip():
-            t_up = str(target_mode).upper().strip()
-            next_pm = (
-                PRIMER_MODE_OFF
-                if t_up in ("OFF", "FALSE", "0", "DISABLED", "NONE")
-                else PRIMER_MODE_AUTO_SMART
-            )
-        else:
-            next_pm = (
-                PRIMER_MODE_OFF
-                if cur_pm == PRIMER_MODE_AUTO_SMART
-                else PRIMER_MODE_AUTO_SMART
-            )
-        return await self.update_state(TARGET_SYMBOL, primer_1sh_mode=next_pm)
+        _ = target_mode
+        return await self.update_state(
+            TARGET_SYMBOL, primer_1sh_mode=PRIMER_MODE_AUTO_SMART
+        )
 
     async def rollover_daily_counters_if_needed(
         self, logical_date: str

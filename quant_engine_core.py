@@ -1568,13 +1568,36 @@ def evaluate_l2_vacant_low_break_signal(
     ]
     lp = safe_float(live_price, 0.0)
     c_min = round(max(0.0, safe_float(cycle_min_buy_price, 0.0)), 4)
-    held_lots = sum(max(1, b.lot_count) for b in valid)
+    held_lots = sum(safe_bucket_lot_count(b) for b in valid)
     eff_ratchet = max(held_lots, max(0, safe_int(cycle_ratchet_max_lots, 0)))
 
     active_l1 = has_active_l1_bucket(valid)
+    is_l1_primer = bool(active_l1 and valid and is_primer_1sh_tag(valid[0]))
     active_l2 = has_active_l2_bucket(valid)
+    drop_req_l2v, _, _ = get_golden8_prog_thresholds(
+        held_lots=max(1, held_lots),
+        cycle_ratchet_max_lots=eff_ratchet,
+    )
+    l1_wide_gap_ceil = (
+        round(
+            math.floor(
+                (valid[0].book_price * (1.0 + drop_req_l2v / 100.0) + 1e-9)
+                * 100.0
+            )
+            / 100.0,
+            2,
+        )
+        if (active_l1 and valid)
+        else 0.0
+    )
     is_eligible_l2_vac = bool(
-        active_l1 and (not active_l2) and eff_ratchet >= 2 and c_min > 0.0
+        active_l1
+        and (not is_l1_primer)
+        and (not active_l2)
+        and eff_ratchet >= 2
+        and c_min > 0.0
+        and l1_wide_gap_ceil > 0.0
+        and c_min <= (l1_wide_gap_ceil + 1e-6)
     )
 
     has_ha_filter = closed_ha_shaved_bear is not None
@@ -1623,13 +1646,18 @@ def evaluate_l2_vacant_low_break_signal(
         }
 
     exec_lp = max(0.01, math.floor((lp + 1e-9) * 100.0) / 100.0)
-    if exec_lp >= (c_min - 1e-6):
+    if exec_lp >= (c_min - 1e-6) or exec_lp > (l1_wide_gap_ceil + 1e-6):
         return {
             "eligible": True,
             "should_buy": False,
-            "signal_type": "HOLD_ABOVE_CYCLE_MIN",
+            "signal_type": (
+                "HOLD_ABOVE_CYCLE_MIN"
+                if exec_lp >= (c_min - 1e-6)
+                else "HOLD_L1_WIDE_GRID_GAP_GUARD"
+            ),
             "quota_ref_price": c_min,
             "cycle_min_buy_price": c_min,
+            "l1_wide_gap_ceil_price": l1_wide_gap_ceil,
             "min_upper_tier_price": min_upper_p,
             "pullback_ha_blocked": is_ha_blocked,
             "closed_ha_shaved_bear": eff_shaved_bear,

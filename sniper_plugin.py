@@ -1439,6 +1439,35 @@ async def _execute_sub_grid_buy_engine_plugin(
     if not sub_gate_open:
         return None
 
+    # NEW [충돌-02 방어]: 본대 VWAP 폭락 브레이커 구간에서는 서브 S-B2 추매도 완결 반전봉 확인 전까지 유예(버킷 보존)
+    sub_dip_pol = resolve_smart_rebound_policy(portion_mode)
+    sub_vwap_g_pct = safe_float(sub_dip_pol.get("vwap_crash_guard_pct"), 0.0)
+    if sub_vwap_g_pct < -0.1:
+        sub_dip_vwap = _get_cached_soxl_session_vwap(
+            context, live_price=live_p, now_est=eff_dt_now
+        )
+        in_sub_vwap_crash = bool(
+            bool(st.get("stalk_add_active", False))
+            or (
+                sub_dip_vwap > 0.0
+                and live_p <= sub_dip_vwap * (1.0 + sub_vwap_g_pct / 100.0)
+            )
+        )
+        if in_sub_vwap_crash:
+            sub_dip_snap = _get_live_soxl_stalker_bar_snapshot(
+                context, live_price=live_p, now_est=eff_dt_now
+            )
+            if not (
+                bool(sub_dip_snap.get("closed_ha_ready"))
+                and bool(sub_dip_snap.get("closed_real_reversal"))
+                and live_p >= safe_float(sub_dip_snap.get("cur_bar_open"), live_p) - 1e-9
+            ):
+                return {
+                    "status": "SUB_DIP_HOLD_VWAP_CRASH_GUARD",
+                    "live_price": live_p,
+                    "session_vwap": sub_dip_vwap,
+                }
+
     fresh_live_p = await _fetch_fresh_current_soxl_price(
         context, fallback_price=live_p
     )
@@ -3452,8 +3481,24 @@ async def execute_seed_protected_buy_gate_plugin(
         exec_pre_l2v = max(
             0.01, math.floor((live_p + 1e-9) * 100.0) / 100.0
         )
+        l2v_reb_pol = resolve_smart_rebound_policy(portion_mode)
+        l2v_vwap_g = safe_float(l2v_reb_pol.get("vwap_crash_guard_pct"), 0.0)
+        l2v_sess_vwap = _get_cached_soxl_session_vwap(
+            context, live_price=live_p, now_est=dt_now
+        )
+        defer_l2v_to_crash_stalker = bool(
+            l2v_vwap_g < -0.1
+            and (
+                bool(st.get("stalk_add_active", False))
+                or (
+                    l2v_sess_vwap > 0.0
+                    and live_p <= l2v_sess_vwap * (1.0 + l2v_vwap_g / 100.0)
+                )
+            )
+        )
         if (
-            ratchet_l2v >= 2
+            (not defer_l2v_to_crash_stalker)
+            and ratchet_l2v >= 2
             and c_min_l2v > 0.0
             and exec_pre_l2v < (c_min_l2v - 1e-6)
         ):
