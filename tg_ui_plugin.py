@@ -73,6 +73,7 @@ from quant_engine import (
     next_cycled_portion_mode,
     resolve_smart_primer_policy,
     resolve_smart_pullback_drop_pct,
+    resolve_smart_rebound_policy,
     summarize_stratum_portfolio,
 )
 from quant_indicators_plugin import (
@@ -440,12 +441,17 @@ def _format_multi_grid_stratum_lines(
         if SNIPER_L1_TRAIL_ENABLED and not is_ext_sell_only:
             tr_m = main_trail_ui if isinstance(main_trail_ui, dict) else {}
             l1_ign_p = safe_float(summary.get("l1_ignite_100_price"), l1_t)
+            cap_pct_u = safe_float(
+                tr_m.get("hard_cap_pct"),
+                safe_float(summary.get("rebound_hard_cap_pct"), 5.0),
+            )
             if bool(tr_m.get("armed")):
                 st_p = safe_float(tr_m.get("active_stop_p"), 0.0)
+                lk_pct_u = safe_float(tr_m.get("active_lock_pct"), 1.60)
                 if bool(tr_m.get("stepped_125")) and st_p > 0.0:
                     lines.append(
                         f"{l1_icon} <b>[1층: {l1_qty_label}·${b1.actual_cost_usd:,.0f}]</b> "
-                        f"<b>${b1.book_price:.2f}</b> ➔ <b>강세HA추적</b>(보존${st_p:.2f}) ({g1_sign}{l1_g:.2f}%·👑1.60%락)"
+                        f"<b>${b1.book_price:.2f}</b> ➔ <b>다단래칫추적</b>(보존${st_p:.2f}) ({g1_sign}{l1_g:.2f}%·👑+{lk_pct_u:.2f}%락·캡+{cap_pct_u:.0f}%)"
                     )
                 else:
                     lk_m_p = safe_float(
@@ -454,11 +460,15 @@ def _format_multi_grid_stratum_lines(
                     )
                     lines.append(
                         f"{l1_icon} <b>[1층: {l1_qty_label}·${b1.actual_cost_usd:,.0f}]</b> "
-                        f"<b>${b1.book_price:.2f}</b> ➔ <b>강세HA추적</b>(락${lk_m_p:.2f}) ({g1_sign}{l1_g:.2f}%·🔥무스탑)"
+                        f"<b>${b1.book_price:.2f}</b> ➔ <b>다단래칫추적</b>(락${lk_m_p:.2f}) ({g1_sign}{l1_g:.2f}%·🔥무스탑·캡+{cap_pct_u:.0f}%)"
                     )
             else:
                 fg_c = safe_int(tr_m.get("forgive_count"), 0)
-                fg_b = f"·💡용서{fg_c}" if fg_c > 0 else "·점화1.50%"
+                fg_b = (
+                    f"·💡용서{fg_c}·캡+{cap_pct_u:.0f}%"
+                    if fg_c > 0
+                    else f"·점화1.5%·캡+{cap_pct_u:.0f}%"
+                )
                 lines.append(
                     f"{l1_icon} <b>[1층: {l1_qty_label}·${b1.actual_cost_usd:,.0f}]</b> "
                     f"<b>${b1.book_price:.2f}</b> ➔ <b>${l1_ign_p:.2f}</b> ({g1_sign}{l1_g:.2f}%{fg_b})"
@@ -493,9 +503,16 @@ def _format_multi_grid_stratum_lines(
         sess_vwap_u = safe_float(summary.get("session_vwap"), 0.0)
         c_min_u = safe_float(summary.get("cycle_min_buy_price"), 0.0)
         lb_note = f"·저가&lt;${c_min_u:.2f}" if c_min_u > 0.0 else ""
+        stalk_l1_act_u = bool(summary.get("stalk_l1_active", False))
+        stalk_l1_low_u = safe_float(summary.get("stalk_l1_low_price"), 0.0)
+        stalk_reb_u = safe_float(summary.get("rebound_stalk_pct"), 0.25)
         if is_ext_sell_only:
             lines.append(
                 f"⚡ <b>[1층: 공석]</b> 🔒장외잠금 · 04:07 재장전{cap_note}"
+            )
+        elif stalk_l1_act_u and stalk_l1_low_u > 0.0:
+            lines.append(
+                f"⚡ <b>[1층: 공석]</b> 🕵️스토커 저점추적(최저 <b>${stalk_l1_low_u:.2f}</b> ➔ +{stalk_reb_u:.2f}%/양봉 타격){cap_note}"
             )
         elif low_brk_ha_wait:
             lines.append(
@@ -694,10 +711,11 @@ def _format_sub_grid_stratum_lines(
             )
             if bool(tr_s.get("armed")):
                 sst_p = safe_float(tr_s.get("active_stop_p"), 0.0)
+                slk_pct_u = safe_float(tr_s.get("active_lock_pct"), 1.60)
                 if bool(tr_s.get("stepped_125")) and sst_p > 0.0:
                     lines.append(
                         f"  ⚡ <b>[서브1층: {sl1_label}·${sb1.actual_cost_usd:,.0f}]</b> "
-                        f"<b>${sb1.book_price:.2f}</b> ➔ <b>강세HA추적</b>(보존${sst_p:.2f}) ({sg1_s}{sl1_g:.2f}%·👑1.60%락)"
+                        f"<b>${sb1.book_price:.2f}</b> ➔ <b>다단래칫추적</b>(보존${sst_p:.2f}) ({sg1_s}{sl1_g:.2f}%·👑+{slk_pct_u:.2f}%락)"
                     )
                 else:
                     slk_p = safe_float(
@@ -760,6 +778,10 @@ def _format_sub_grid_stratum_lines(
         elif is_ext_sell_only:
             lines.append(
                 f"  ⚡ <b>[서브1층: 공석]</b> 🔒장외잠금 · 04:07 재장전{s_cap_note}"
+            )
+        elif bool(summary.get("stalk_sub_active", False)) and safe_float(summary.get("stalk_sub_low_price"), 0.0) > 0.0:
+            lines.append(
+                f"  ⚡ <b>[서브1층: 공석]</b> 🕵️스토커 저점추적(최저 <b>${safe_float(summary.get('stalk_sub_low_price'), 0.0):.2f}</b> ➔ 완결양봉 타격){s_cap_note}"
             )
         elif sub_lb_ha_wait:
             lines.append(
@@ -1146,9 +1168,21 @@ def build_avwap_radar_message(
             gate_cond_lines.append(
                 f"▫️ 2층공석 저가돌파(8%): <b>&lt;${c_min_act:.2f}</b> ({pull_ha_badge}) 시 즉시 충전"
             )
-        gate_cond_lines.append(
-            f"▫️ 추매타점(8%): <b>${trig_p:.2f}</b> 이하 시 {quota_badge_str} 매수{step_note}"
+        vwap_g_pct = safe_float(summary.get("rebound_vwap_crash_guard_pct"), 0.0)
+        stalk_add_act_u = bool(summary.get("stalk_add_active", False))
+        stalk_add_low_u = safe_float(summary.get("stalk_add_low_price"), 0.0)
+        crash_g_note = (
+            f" · 🛡️VWAP{vwap_g_pct:.1f}%방어"
+            if vwap_g_pct < -0.1
+            else ""
         )
+        gate_cond_lines.append(
+            f"▫️ 추매타점(8%): <b>${trig_p:.2f}</b> 이하 시 {quota_badge_str} 매수{step_note}{crash_g_note}"
+        )
+        if stalk_add_act_u and stalk_add_low_u > 0.0:
+            gate_cond_lines.append(
+                f"▫️ 🕵️폭락추매 스토킹중: 최저 <b>${stalk_add_low_u:.2f}</b> 추적 ➔ 반전양봉/+0.30% 타격!"
+            )
         if bool(summary.get("is_l1_primer_1sh", False)):
             gate_cond_lines.append(
                 "▫️ 🌱1주마중물 장전중: 추가마중물 자동잠금 (익절리셋·8%흡수 대기)"
@@ -1604,6 +1638,10 @@ def build_settlement_control_message(
             f"   ▫️ 공석 눌림목: "
             f"<b>{resolve_smart_pullback_drop_pct(st.get('portion_mode')):.2f}%</b>"
             f" (바벨-1.0 · 단리-1.5 · 복리-2.0%)"
+        ),
+        (
+            f"   ▫️ 리바운드 [{escape_html(str(summary.get('rebound_spec_id') or 'C-112'))}]: "
+            f"<b>{escape_html(str(summary.get('rebound_policy_badge') or ''))}</b>"
         ),
         f"   ▫️ 1주 마중물: <b>{escape_html(primer_badge)}</b> (<code>/primer</code> · 매수{p_buy_c}/익절{p_sell_c}/흡수{p_abs_c} · {p_net_sign}${abs(p_net_u):,.2f})",
         f"3️⃣ 암살자 승격: <b>{assn_mode_str}</b> (<code>/assassin_mode</code>)",
@@ -2220,6 +2258,8 @@ class TelegramCommandController:
                 f"▫️ 공석 눌림목 연동: "
                 f"<b>{resolve_smart_pullback_drop_pct(updated_st.get('portion_mode')):.2f}%</b> "
                 f"(스마트 자동연동)\n"
+                f"▫️ 리바운드 [{escape_html(str(summary.get('rebound_spec_id') or 'C-112'))}]: "
+                f"<b>{escape_html(str(summary.get('rebound_policy_badge') or ''))}</b>\n"
                 f"▫️ 본그리드 1회(8%): <b>${next_bud:,.2f}</b> ({_format_case67_quota_badge(summary)})\n"
                 f"▫️ 서브그리드 1회(4%): <b>${sub_bud:,.2f}</b> ({_format_sub_quota_badge(summary)})"
             ),

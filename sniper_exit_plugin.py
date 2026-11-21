@@ -33,6 +33,8 @@ from quant_engine import (
     PORTION_MODE_COMPOUND,
     PORTION_MODE_SIMPLE,
     REANCHOR_NET_BUFFER_MULT,
+    SNIPER_CLIMAX_MIN_PEAK_GAIN_PCT,
+    SNIPER_CLIMAX_PULLBACK_RATIO,
     SNIPER_L1_TRAIL_BOOST_TIER2_PCT,
     SNIPER_L1_TRAIL_CB_TIGHT_PCT,
     SNIPER_L1_TRAIL_CB_WIDE_PCT,
@@ -66,6 +68,7 @@ from quant_engine import (
     relabel_upper_grid_tiers,
     resolve_effective_round_trip_fee_rate_pct,
     resolve_smart_pullback_drop_pct,
+    resolve_smart_rebound_policy,
     safe_bucket_lot_count,
     vrev_reanchor_single_tier_quota,
 )
@@ -128,6 +131,13 @@ class SniperL1TrailSlot:
     grid_kind: str = "MAIN"
     qty: int = 0
     ref_cost: float = 0.0
+    portion_mode: str = PORTION_MODE_COMPOUND
+    spec_id: str = "C-112"
+    hard_cap_pct: float = SNIPER_L1_TRAIL_SAFE_CAP_PCT
+    ratchet_steps: Tuple[Tuple[float, float], ...] = ((1.75, 1.60),)
+    use_vwap_ha_hold: bool = True
+    climax_rsi_thr: float = 62.0
+    active_lock_pct: float = 0.0
     arm_100_p: float = 0.0
     step_trig_145_p: float = 0.0
     lock_125_p: float = 0.0
@@ -146,6 +156,7 @@ class SniperL1TrailSlot:
     def full_reset(self) -> None:
         self.qty = 0
         self.ref_cost = 0.0
+        self.active_lock_pct = 0.0
         self.arm_100_p = 0.0
         self.step_trig_145_p = 0.0
         self.lock_125_p = 0.0
@@ -161,7 +172,32 @@ class SniperL1TrailSlot:
         self.lock_floor_p = 0.0
         self.active_stop_p = 0.0
 
-    def sync_fingerprint(self, qty: int, book_price: float) -> None:
+    def _apply_mode_policy(self, portion_mode: Any) -> None:
+        pol = resolve_smart_rebound_policy(portion_mode)
+        self.portion_mode = str(portion_mode or PORTION_MODE_COMPOUND).upper().strip()
+        self.spec_id = str(pol.get("spec_id") or "C-112")
+        self.hard_cap_pct = safe_float(
+            pol.get("hard_cap_pct"), SNIPER_L1_TRAIL_SAFE_CAP_PCT
+        )
+        raw_steps = pol.get("ratchet_steps")
+        self.ratchet_steps = (
+            tuple(raw_steps)
+            if isinstance(raw_steps, (list, tuple)) and len(raw_steps) > 0
+            else ((1.75, 1.60),)
+        )
+        self.use_vwap_ha_hold = bool(pol.get("use_vwap_ha_hold", True))
+        self.climax_rsi_thr = safe_float(pol.get("climax_rsi_thr"), 62.0)
+        if self.ref_cost > 0.0:
+            self.cap_500_p = round(
+                self.ref_cost * (1.0 + self.hard_cap_pct / 100.0), 2
+            )
+
+    def sync_fingerprint(
+        self,
+        qty: int,
+        book_price: float,
+        portion_mode: Any = PORTION_MODE_COMPOUND,
+    ) -> None:
         q_clean = max(0, safe_int(qty, 0))
         bp_clean = round(max(0.0, safe_float(book_price, 0.0)), 4)
         if q_clean <= 0 or bp_clean <= 0.0:
@@ -198,25 +234,42 @@ class SniperL1TrailSlot:
                 math.ceil((bp_clean * (1.0 + lock_pct / 100.0) - 1e-9) * 100.0)
                 / 100.0
             )
-            self.cap_500_p = round(
-                bp_clean * (1.0 + SNIPER_L1_TRAIL_SAFE_CAP_PCT / 100.0), 2
-            )
+            self._apply_mode_policy(portion_mode)
+        else:
+            prev_spec = self.spec_id
+            self._apply_mode_policy(portion_mode)
+            if self.armed and self.spec_id != prev_spec:
+                self.refresh_stop_price()
 
     def refresh_stop_price(self) -> float:
-        # MODIFIED [Case 106]: 스텝 돌파 전 무스탑(0.0) · 돌파 후 오직 +1.60% 하드보존선만 잠금(실시간 틱 콜백 가로채기 영구 소각)
+        # MODIFIED [Case 112]: 운용모드별 다단 하드보존선 래칫(샤프래칫 1.60~4.80% vs 표준래칫 1.60~4.00%) 단방향 상향 잠금!
         if not self.armed or self.ref_cost <= 0.0:
             self.active_stop_p = 0.0
             return 0.0
-        if (not self.stepped_125) and (
-            self.peak_p >= self.step_trig_145_p - 1e-9
-        ):
+        pk_gain = ((self.peak_p - self.ref_cost) / self.ref_cost) * 100.0
+        best_floor = self.lock_floor_p
+        best_lock_pct = self.active_lock_pct
+        for trig_g, lock_g in self.ratchet_steps:
+            if pk_gain >= (float(trig_g) - 1e-9):
+                cand_fl = (
+                    math.ceil(
+                        (self.ref_cost * (1.0 + float(lock_g) / 100.0) - 1e-9)
+                        * 100.0
+                    )
+                    / 100.0
+                )
+                if cand_fl > best_floor:
+                    best_floor = cand_fl
+                if float(lock_g) > best_lock_pct:
+                    best_lock_pct = float(lock_g)
+        if best_floor > 0.0:
             self.stepped_125 = True
-            self.lock_floor_p = self.lock_125_p
+            self.lock_floor_p = round(best_floor, 2)
+            self.active_lock_pct = round(best_lock_pct, 2)
         if not self.stepped_125:
             self.active_stop_p = 0.0
             return 0.0
         if SNIPER_L1_TRAIL_CB_WIDE_PCT > 0.0:
-            pk_gain = ((self.peak_p - self.ref_cost) / self.ref_cost) * 100.0
             if pk_gain >= SNIPER_L1_TRAIL_BOOST_TIER2_PCT:
                 cb_raw = round(
                     self.peak_p
@@ -231,6 +284,7 @@ class SniperL1TrailSlot:
     def release_forgive(self, bad_ha_minute_key: str = "") -> None:
         self.armed = False
         self.stepped_125 = False
+        self.active_lock_pct = 0.0
         self.armed_minute_key = ""
         self.armed_wall_minute_key = ""
         self.armed_closed_bar_key = ""
@@ -245,6 +299,7 @@ class SniperL1TrailSlot:
         if self.armed:
             self.armed = False
             self.stepped_125 = False
+            self.active_lock_pct = 0.0
             self.armed_minute_key = ""
             self.armed_wall_minute_key = ""
             self.armed_closed_bar_key = ""
@@ -256,8 +311,12 @@ class SniperL1TrailSlot:
         return {
             "armed": bool(self.armed),
             "stepped_125": bool(self.stepped_125),
+            "spec_id": self.spec_id,
+            "hard_cap_pct": round(self.hard_cap_pct, 2),
+            "active_lock_pct": round(self.active_lock_pct, 2),
             "arm_100_p": round(self.arm_100_p, 2),
             "lock_125_p": round(self.lock_125_p, 2),
+            "cap_500_p": round(self.cap_500_p, 2),
             "peak_p": round(self.peak_p, 2),
             "lock_floor_p": round(self.lock_floor_p, 2),
             "active_stop_p": round(self.active_stop_p, 2),
@@ -2534,10 +2593,10 @@ async def _get_closed_1m_ha_and_qqq_snapshot(
     context: Any,
     live_p: float,
     dt_now: datetime,
-) -> Tuple[str, bool, bool, float]:
+) -> Tuple[str, bool, bool, bool, float, float, float]:
     """
-    # NEW [Case 99 : 완결 1분봉(closed_bar_minute_key) 확정 HA 음봉 여부 및 QQQ 단기 변화율 추출기]
-    반환값: (closed_bar_minute_key, closed_ha_ready, closed_ha_bull, qqq_vel_max_pct)
+    # MODIFIED [Case 99 & Case 112 : 완결 1분봉 확정 HA · 확정 RSI(14) · 세션별 VWAP · QQQ 변화율 추출기]
+    반환값: (closed_bar_minute_key, closed_ha_ready, closed_ha_bull, closed_ha_shaved_bull, qqq_vel_max_pct, closed_rsi_14, sess_vwap)
     """
     global _LAST_EXIT_CANDLE_WARM_MONO
     raw_cache = getattr(context, "candle_metrics_cache", None)
@@ -2612,6 +2671,30 @@ async def _get_closed_1m_ha_and_qqq_snapshot(
         if isinstance(soxl_met, dict) and "closed_ha_shaved_bull" in soxl_met
         else closed_bull
     )
+    closed_rsi_14 = (
+        safe_float(
+            soxl_met.get("closed_rsi_14"),
+            safe_float(soxl_met.get("rsi_14"), 50.0),
+        )
+        if isinstance(soxl_met, dict)
+        else 50.0
+    )
+    hm_s = dt_now.hour * 100 + dt_now.minute
+    if isinstance(soxl_met, dict):
+        if 407 <= hm_s <= 929:
+            sess_vwap = safe_float(
+                soxl_met.get("premarket_vwap"),
+                safe_float(soxl_met.get("vwap"), 0.0),
+            )
+        elif 930 <= hm_s <= 1600:
+            sess_vwap = safe_float(
+                soxl_met.get("regular_vwap"),
+                safe_float(soxl_met.get("vwap"), 0.0),
+            )
+        else:
+            sess_vwap = safe_float(soxl_met.get("vwap"), 0.0)
+    else:
+        sess_vwap = 0.0
     qqq_met = (
         raw_cache.get("QQQ") if isinstance(raw_cache, dict) else None
     )
@@ -2626,6 +2709,8 @@ async def _get_closed_1m_ha_and_qqq_snapshot(
         closed_bull,
         closed_shaved_bull,
         qqq_vel_max,
+        closed_rsi_14,
+        round(max(0.0, sess_vwap), 4),
     )
 
 
@@ -2640,6 +2725,8 @@ def _step_l1_trail_slot_candidate(
     qqq_vel_max: float,
     closed_ha_shaved_bull: Optional[bool] = None,
     cur_bar_min_key: str = "",
+    session_vwap: float = 0.0,
+    closed_rsi_14: float = 50.0,
 ) -> Tuple[str, bool]:
     """
     # MODIFIED [Case 99 & Case 103 : 점화 시 기완결 분봉(armed_closed_bar_key) 3중 분리 락온으로 +1분 오프셋 1초 조기청산 차단]
@@ -2665,6 +2752,7 @@ def _step_l1_trail_slot_candidate(
             slot.peak_p = probe_h
             slot.stepped_125 = True
             slot.lock_floor_p = slot.lock_125_p
+            slot.active_lock_pct = SNIPER_L1_TRAIL_STEP_LOCK_PCT
             slot.refresh_stop_price()
             return "TRAIL_CAP_500", True
 
@@ -2700,11 +2788,35 @@ def _step_l1_trail_slot_candidate(
     if stop_now > 0.0 and live_p < stop_now - 1e-9:
         return "TRAIL_CB_STOP", False
 
-    # MODIFIED [Case 103]: 점화 이후 새로 마감된 완결 1분봉에서만 무밑꼬리 강세 HA양봉 패스/익절 판정
+    # MODIFIED [Case 103 & Case 112]:
+    # - 본 1층(MAIN)이 세션 VWAP 하단 리바운드 중일 때는 완결 1분봉 일반 HA 양봉(closed_ha_bull)까지 홀딩 연장!
+    # - 최고 수익률 +3.00% 이상 & 직전 완결 RSI(14) >= 65/62 과열 후 고점 대비 -0.50% 이탈 시 선제 피로 수확!
     eff_shaved_bull = (
         bool(closed_ha_bull and closed_ha_shaved_bull)
         if closed_ha_shaved_bull is not None
         else bool(closed_ha_bull)
+    )
+    is_main_slot = str(slot.grid_kind or "").upper().strip() != "SUB"
+    below_vwap_rebound = bool(
+        is_main_slot
+        and slot.use_vwap_ha_hold
+        and session_vwap > 0.0
+        and live_p < (session_vwap * 0.998)
+    )
+    hold_candle_ok = (
+        bool(closed_ha_bull) if below_vwap_rebound else eff_shaved_bull
+    )
+    pk_gain_now = (
+        ((slot.peak_p - slot.ref_cost) / slot.ref_cost) * 100.0
+        if slot.ref_cost > 0.0
+        else 0.0
+    )
+    climax_exhaust = bool(
+        is_main_slot
+        and slot.climax_rsi_thr > 0.0
+        and pk_gain_now >= SNIPER_CLIMAX_MIN_PEAK_GAIN_PCT
+        and closed_rsi_14 >= slot.climax_rsi_thr
+        and live_p <= (slot.peak_p * SNIPER_CLIMAX_PULLBACK_RATIO)
     )
     is_post_ignition_closed_bar = bool(
         bool(c_mk)
@@ -2722,12 +2834,22 @@ def _step_l1_trail_slot_candidate(
     )
     if (
         closed_ha_ready
-        and (not eff_shaved_bull)
         and is_post_ignition_closed_bar
         and (c_mk != slot.forgiven_ha_minute_key)
-        and (qqq_vel_max < SNIPER_L1_TRAIL_QQQ_BYPASS_PCT)
+        and (
+            climax_exhaust
+            or (
+                (not hold_candle_ok)
+                and (qqq_vel_max < SNIPER_L1_TRAIL_QQQ_BYPASS_PCT)
+            )
+        )
     ):
-        return "TRAIL_CLOSED_HA_RED", False
+        return (
+            "TRAIL_CLIMAX_EXHAUST"
+            if climax_exhaust
+            else "TRAIL_CLOSED_HA_RED",
+            False,
+        )
 
     return "", False
 
@@ -2812,14 +2934,19 @@ async def execute_1m_sniper_sell_and_reanchor_plugin(
         main_slot.release_overnight()
         sub_slot.release_overnight()
 
+    cur_p_mode_exit = st.get("portion_mode")
     if buckets and has_active_l1_bucket(buckets):
-        main_slot.sync_fingerprint(buckets[0].qty, buckets[0].book_price)
+        main_slot.sync_fingerprint(
+            buckets[0].qty, buckets[0].book_price, portion_mode=cur_p_mode_exit
+        )
     else:
         main_slot.full_reset()
 
     if sub_buckets and has_active_l1_bucket(sub_buckets):
         sub_slot.sync_fingerprint(
-            sub_buckets[0].qty, sub_buckets[0].book_price
+            sub_buckets[0].qty,
+            sub_buckets[0].book_price,
+            portion_mode=cur_p_mode_exit,
         )
     else:
         sub_slot.full_reset()
@@ -2984,6 +3111,8 @@ async def execute_1m_sniper_sell_and_reanchor_plugin(
             closed_bull,
             closed_shaved_bull,
             qqq_vel_max,
+            closed_rsi_14,
+            sess_vwap_exit,
         ) = await _get_closed_1m_ha_and_qqq_snapshot(context, live_p, dt_now)
         raw_c_map = getattr(context, "candle_metrics_cache", None)
         cur_bar_mk = (
@@ -3008,14 +3137,18 @@ async def execute_1m_sniper_sell_and_reanchor_plugin(
                 qqq_vel_max=qqq_vel_max,
                 closed_ha_shaved_bull=closed_shaved_bull,
                 cur_bar_min_key=cur_bar_mk,
+                session_vwap=sess_vwap_exit,
+                closed_rsi_14=closed_rsi_14,
             )
             if ign_m:
                 just_ignited_any = True
                 logger.info(
-                    "🔥 [SOXL 본 1층 완결1분HA 트레일링 점화] 단가=$%.2f ➔ 점화가=$%.2f(스텝락=$%.2f) · 점화분=%s(기완결=%s) · 강세HA양봉 홀딩 추적 개시",
+                    "🔥 [Case 112(%s) SOXL 본 1층 다단래칫 트레일링 점화] 단가=$%.2f ➔ 점화가=$%.2f(상단캡=$%.2f[+%.1f%%]) · 점화분=%s(기완결=%s) · 추적 개시",
+                    main_slot.spec_id,
                     main_slot.ref_cost,
                     main_slot.arm_100_p,
-                    main_slot.lock_125_p,
+                    main_slot.cap_500_p,
+                    main_slot.hard_cap_pct,
                     main_slot.armed_minute_key,
                     main_slot.armed_closed_bar_key or "-",
                 )
@@ -3034,6 +3167,8 @@ async def execute_1m_sniper_sell_and_reanchor_plugin(
                 qqq_vel_max=qqq_vel_max,
                 closed_ha_shaved_bull=closed_shaved_bull,
                 cur_bar_min_key=cur_bar_mk,
+                session_vwap=sess_vwap_exit,
+                closed_rsi_14=closed_rsi_14,
             )
             if ign_s:
                 just_ignited_any = True

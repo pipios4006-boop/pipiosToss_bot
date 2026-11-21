@@ -35,10 +35,24 @@ from toss_api import (
     REENTRY_PULLBACK_BARBELL_PCT,
     REENTRY_PULLBACK_COMPOUND_PCT,
     REENTRY_PULLBACK_SIMPLE_PCT,
+    SNIPER_CLIMAX_MIN_PEAK_GAIN_PCT,
+    SNIPER_CLIMAX_PULLBACK_RATIO,
+    SNIPER_CLIMAX_RSI_BARBELL_SIMPLE,
+    SNIPER_CLIMAX_RSI_COMPOUND,
+    SNIPER_HARD_CAP_BARBELL_SIMPLE_PCT,
+    SNIPER_HARD_CAP_COMPOUND_PCT,
+    SNIPER_RATCHET_STEPS_SHARP,
+    SNIPER_RATCHET_STEPS_STD,
+    STALKER_DIP_ADD_EXTRA_REBOUND_PCT,
+    STALKER_REBOUND_BARBELL_SIMPLE_PCT,
     VALID_PRIMER_MODES,
+    VWAP_CRASH_GUARD_BARBELL_PCT,
+    VWAP_CRASH_GUARD_COMPOUND_PCT,
+    VWAP_CRASH_GUARD_SIMPLE_PCT,
     is_primer_1sh_tag,
     resolve_smart_primer_policy,
     resolve_smart_pullback_drop_pct,
+    resolve_smart_rebound_policy,
     safe_bucket_lot_count,
     safe_float,
     safe_int,
@@ -2185,3 +2199,82 @@ def evaluate_smart_primer_1sh_signal(
         return base_out
     base_out["signal_type"] = "HOLD_ABOVE_VAC_PRIMER_TARGET"
     return base_out
+
+
+def evaluate_stalker_reversal_fire(
+    live_price: float,
+    cur_bar_open: float,
+    cur_bar_low: float,
+    prev_stalk_low: float,
+    closed_real_reversal: bool,
+    closed_ha_shaved_bear: bool,
+    closed_ha_ready: bool,
+    stalk_rebound_pct: float = STALKER_REBOUND_BARBELL_SIMPLE_PCT,
+    hm: Optional[int] = None,
+    is_dip_add: bool = False,
+    is_sub_grid: bool = False,
+) -> Dict[str, Any]:
+    """
+    # NEW [Case 112 : 리바운드 스토커(Rebound Stalker) 저점 추적 갱신 및 바닥 반전 타격 순수 판정기]
+    - 잠복 점화 이후 매 1.5초 루프에서 최저점(stalk_low)을 바닥 끝까지 갱신하고,
+      직전 완결 1분봉 실제 반전(양봉/망치) 확정 OR 추적 저점 대비 +0.25%(추매 +0.30%) 실시간 양봉 전환 시 발사한다.
+    """
+    lp = max(0.0, safe_float(live_price, 0.0))
+    b_open = safe_float(cur_bar_open, lp)
+    if b_open <= 0.0:
+        b_open = lp
+    b_low_raw = safe_float(cur_bar_low, lp)
+    b_low = min(lp, b_low_raw) if (b_low_raw > 0.0 and lp > 0.0) else max(lp, b_low_raw)
+    prev_low = safe_float(prev_stalk_low, 0.0)
+    cand_low = b_low if b_low > 0.0 else lp
+    new_stalk_low = (
+        round(min(prev_low, cand_low), 4)
+        if (prev_low > 0.0 and cand_low > 0.0)
+        else round(max(prev_low, cand_low), 4)
+    )
+
+    is_7m_shield = bool(
+        hm is not None
+        and REG_OPEN_VWAP_SHIELD_START_HM
+        <= safe_int(hm, -1)
+        <= REG_OPEN_VWAP_SHIELD_END_HM
+    )
+    if lp <= 0.0 or new_stalk_low <= 0.0 or is_7m_shield:
+        return {
+            "should_fire": False,
+            "stalk_low_price": new_stalk_low,
+            "rebound_from_low_pct": 0.0,
+            "fire_reason": "HOLD_STALK_7M_OR_NO_PRICE",
+        }
+
+    reb_pct = ((lp - new_stalk_low) / new_stalk_low) * 100.0
+    req_reb = safe_float(stalk_rebound_pct, STALKER_REBOUND_BARBELL_SIMPLE_PCT) + (
+        STALKER_DIP_ADD_EXTRA_REBOUND_PCT if is_dip_add else 0.0
+    )
+
+    cond_closed_rev = bool(
+        closed_ha_ready
+        and closed_real_reversal
+        and ((not closed_ha_shaved_bear) or is_dip_add or is_sub_grid)
+        and (lp >= b_open - 1e-9)
+    )
+    cond_live_reb = bool(
+        (not is_sub_grid)
+        and (reb_pct >= req_reb - 1e-9)
+        and (lp > b_open + 1e-9)
+    )
+
+    if cond_closed_rev or cond_live_reb:
+        return {
+            "should_fire": True,
+            "stalk_low_price": new_stalk_low,
+            "rebound_from_low_pct": round(reb_pct, 3),
+            "fire_reason": "STALK_CLOSED_BAR_REV" if cond_closed_rev else "STALK_LIVE_REBOUND",
+        }
+
+    return {
+        "should_fire": False,
+        "stalk_low_price": new_stalk_low,
+        "rebound_from_low_pct": round(reb_pct, 3),
+        "fire_reason": "STALKING_FALLING_KNIFE",
+    }

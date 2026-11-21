@@ -1074,6 +1074,8 @@ def _compute_vectorized_heikin_ashi_and_rsi(
             "closed_ha_bull": True,
             "closed_ha_shaved_bear": False,
             "closed_ha_shaved_bull": False,
+            "closed_real_reversal": False,
+            "closed_rsi_14": 50.0,
             "closed_ha_ready": False,
             "cur_bar_open": 0.0,
             "cur_bar_high": 0.0,
@@ -1121,6 +1123,8 @@ def _compute_vectorized_heikin_ashi_and_rsi(
     rsi_val = 50.0
     prev_avg_g = 0.0
     prev_avg_l = 0.0
+    avg_gain_arr = np.empty(0, dtype=float)
+    avg_loss_arr = np.empty(0, dtype=float)
 
     if n >= 15:
         deltas = np.diff(closes)
@@ -1238,6 +1242,51 @@ def _compute_vectorized_heikin_ashi_and_rsi(
                     )
                     if _idx_c >= 0
                     else False
+                ),
+                # NEW [Case 112]: 직전 완결 1분봉 실제 반전캔들(양봉 또는 아랫꼬리 45%+ 망치형) 및 완결봉 확정 Wilder RSI(14)
+                "closed_real_reversal": (
+                    bool(
+                        (float(closes[_idx_c]) >= float(opens[_idx_c]) - 1e-9)
+                        or (
+                            (
+                                (min(float(opens[_idx_c]), float(closes[_idx_c])) - float(lows[_idx_c]))
+                                / max(1e-6, float(highs[_idx_c]) - float(lows[_idx_c]))
+                                >= 0.45
+                            )
+                            and (
+                                (float(closes[_idx_c]) - float(lows[_idx_c]))
+                                / max(1e-6, float(highs[_idx_c]) - float(lows[_idx_c]))
+                                >= 0.55
+                            )
+                        )
+                    )
+                    if _idx_c >= 0
+                    else False
+                ),
+                "closed_rsi_14": (
+                    round(
+                        50.0
+                        if (
+                            float(avg_gain_arr[_idx_c - 1]) <= 1e-12
+                            and float(avg_loss_arr[_idx_c - 1]) <= 1e-12
+                        )
+                        else (
+                            100.0
+                            if float(avg_loss_arr[_idx_c - 1]) <= 1e-12
+                            else 100.0
+                            - (
+                                100.0
+                                / (
+                                    1.0
+                                    + float(avg_gain_arr[_idx_c - 1])
+                                    / float(avg_loss_arr[_idx_c - 1])
+                                )
+                            )
+                        ),
+                        2,
+                    )
+                    if (_idx_c >= 14 and len(avg_gain_arr) >= _idx_c)
+                    else clean_rsi
                 ),
                 "closed_ha_ready": bool(_idx_c >= 14),
             }
@@ -1687,6 +1736,8 @@ def compute_soxl_quant_metrics_1m(
         "closed_ha_bull": True,
         "closed_ha_shaved_bear": False,
         "closed_ha_shaved_bull": False,
+        "closed_real_reversal": False,
+        "closed_rsi_14": 50.0,
         "closed_ha_ready": False,
         "cur_bar_open": round(lp, 4),
         "cur_bar_high": round(lp, 4),

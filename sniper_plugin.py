@@ -66,6 +66,7 @@ from quant_engine import (
     evaluate_l2_only_hybrid_reentry_signal,
     evaluate_l2_vacant_low_break_signal,
     evaluate_smart_primer_1sh_signal,
+    evaluate_stalker_reversal_fire,
     evaluate_step_up_2x_dip_signal,
     evaluate_sub_grid_dip_signal,
     get_golden8_prog_thresholds,
@@ -78,6 +79,7 @@ from quant_engine import (
     resolve_portion_budget_base_equity,
     resolve_smart_primer_policy,
     resolve_smart_pullback_drop_pct,
+    resolve_smart_rebound_policy,
     safe_bucket_lot_count,
 )
 from quant_indicators_plugin import (
@@ -111,6 +113,7 @@ from sniper_plugin_core import (
     _get_live_soxl_price,
     _get_live_soxl_reentry_snapshot,
     _get_live_soxl_rsi_14,
+    _get_live_soxl_stalker_bar_snapshot,
     is_within_auto_fill_grace_shield,
     is_within_reentry_monitor_time_shield,
     is_within_reserve_deposit_check_shield,
@@ -550,21 +553,33 @@ async def _execute_sub_grid_buy_engine_plugin(
                 "sub_max_total_lots": sub_max_lots_cap,
             }
 
+        sub_rebound_pol = resolve_smart_rebound_policy(portion_mode)
+        use_sub_stalker = bool(sub_rebound_pol.get("use_stalker_l1", False))
+        cur_stalk_sub_act = bool(
+            use_sub_stalker and st.get("stalk_sub_active", False)
+        )
+
         in_sub_re_sh, rem_sub_re = is_within_sub_reentry_monitor_time_shield(
             context, st, TARGET_SYMBOL, now_est=eff_dt_now
         )
-        if in_sub_re_sh:
+        if in_sub_re_sh and (not cur_stalk_sub_act):
             return {
                 "status": "HOLD_SUB_REENTRY_60S_TIME_SHIELD",
                 "remain_shield_sec": rem_sub_re,
             }
 
-        fresh_live_p = await _fetch_fresh_current_soxl_price(
-            context, fallback_price=live_p, now_est=eff_dt_now
+        fresh_live_p = (
+            live_p
+            if (cur_stalk_sub_act and live_p > 0.0)
+            else await _fetch_fresh_current_soxl_price(
+                context, fallback_price=live_p, now_est=eff_dt_now
+            )
         )
         if fresh_live_p <= 0.0:
             return {"status": "NO_FRESH_LIVE_PRICE"}
-        sub_re_price_mono = time.monotonic()  # NEW [Audit-111-02]
+        sub_re_price_mono = (
+            0.0 if cur_stalk_sub_act else time.monotonic()
+        )  # MODIFIED [Case 112]: 스토커 추적 발사 시 뮤텍스 2차 실호가 강제 보장
 
         (
             live_rsi_14,
@@ -598,9 +613,9 @@ async def _execute_sub_grid_buy_engine_plugin(
             is_late_cutoff=is_late_cutoff,
             rsi_14=live_rsi_14,
             breakout_max_rsi=REENTRY_BREAKOUT_MAX_RSI_50,
-            closed_ha_shaved_bear=sub_shaved_bear,
+            closed_ha_shaved_bear=(False if use_sub_stalker else sub_shaved_bear),
             closed_ha_bull=sub_ha_bull,
-            closed_ha_ready=sub_ha_ready,
+            closed_ha_ready=(True if use_sub_stalker else sub_ha_ready),
             session_vwap=sub_sess_vwap,
             hm=hm,
             cycle_min_buy_price=(
@@ -609,6 +624,85 @@ async def _execute_sub_grid_buy_engine_plugin(
             portion_mode=portion_mode,
         )
         sub_sig_type = str(sub_re_sig.get("signal_type") or "HOLD_WAIT_GATE")
+
+        # NEW [Case 112 : 바벨/단리 서브 1층 공석 리바운드 스토커 저점 추적 & 완결 양봉 반전 타격]
+        if use_sub_stalker:
+            s_bar_snap = _get_live_soxl_stalker_bar_snapshot(
+                context, live_price=fresh_live_p, now_est=eff_dt_now
+            )
+            prev_s_low = safe_float(st.get("stalk_sub_low_price"), 0.0)
+            want_s_stalk = bool(
+                cur_stalk_sub_act
+                or (
+                    bool(sub_re_sig.get("should_buy"))
+                    and sub_sig_type in ("PULLBACK_RELOAD", "LOW_BREAK_RELOAD")
+                )
+            )
+            if want_s_stalk and fresh_live_p <= (sub_min_upper_p + 1e-6):
+                s_stalk_ev = evaluate_stalker_reversal_fire(
+                    live_price=fresh_live_p,
+                    cur_bar_open=s_bar_snap["cur_bar_open"],
+                    cur_bar_low=s_bar_snap["cur_bar_low"],
+                    prev_stalk_low=(
+                        prev_s_low if cur_stalk_sub_act else s_bar_snap["cur_bar_low"]
+                    ),
+                    closed_real_reversal=s_bar_snap["closed_real_reversal"],
+                    closed_ha_shaved_bear=s_bar_snap["closed_ha_shaved_bear"],
+                    closed_ha_ready=s_bar_snap["closed_ha_ready"],
+                    stalk_rebound_pct=safe_float(
+                        sub_rebound_pol.get("stalk_rebound_pct"), 0.25
+                    ),
+                    hm=hm,
+                    is_sub_grid=True,
+                )
+                next_s_low = safe_float(
+                    s_stalk_ev.get("stalk_low_price"), fresh_live_p
+                )
+                sub_pb_d = safe_float(
+                    sub_re_sig.get("pullback_drop_pct"), -1.0
+                )
+                sub_chg_ex = safe_float(
+                    sub_re_sig.get("chg_from_exit_pct"), 0.0
+                )
+                still_in_sub_dip = bool(
+                    sub_chg_ex <= (sub_pb_d * 0.5)
+                    or fresh_live_p < sub_min_upper_p
+                )
+                if bool(s_stalk_ev.get("should_fire")) and still_in_sub_dip:
+                    sub_re_sig = dict(sub_re_sig)
+                    sub_re_sig["should_buy"] = True
+                    sub_sig_type = (
+                        "LOW_BREAK_RELOAD"
+                        if (
+                            sub_cycle_min_p_re > 0.0
+                            and fresh_live_p < sub_cycle_min_p_re
+                        )
+                        else "PULLBACK_RELOAD"
+                    )
+                    sub_re_sig["signal_type"] = sub_sig_type
+                elif not still_in_sub_dip:
+                    if cur_stalk_sub_act:
+                        await context.ledger.update_state(
+                            TARGET_SYMBOL,
+                            stalk_sub_active=False,
+                            stalk_sub_low_price=0.0,
+                        )
+                else:
+                    if (not cur_stalk_sub_act) or (
+                        next_s_low > 0.0 and abs(next_s_low - prev_s_low) > 1e-4
+                    ):
+                        await context.ledger.update_state(
+                            TARGET_SYMBOL,
+                            stalk_sub_active=True,
+                            stalk_sub_low_price=next_s_low,
+                            last_sub_reentry_eval_ts=0.0,
+                        )
+                    return {
+                        "status": "SUB_STALKING_REBOUND_WAIT",
+                        "signal_type": s_stalk_ev.get("fire_reason"),
+                        "live_price": fresh_live_p,
+                        "stalk_low_price": next_s_low,
+                    }
 
         if not bool(sub_re_sig.get("should_buy")):
             if sub_sig_type in (
@@ -783,7 +877,14 @@ async def _execute_sub_grid_buy_engine_plugin(
                             "status": "SUB_L2_ONLY_REG_OPEN_7M_SHIELD",
                             "signal_type": "HOLD_REG_OPEN_7M_VWAP_SHIELD",
                         }
-                    if (not m_sub_ha_ready) or m_sub_shaved_bear:
+                    m_use_sub_stalk = bool(
+                        resolve_smart_rebound_policy(
+                            st_now.get("portion_mode")
+                        ).get("use_stalker_l1", False)
+                    )
+                    if (not m_use_sub_stalk) and (
+                        (not m_sub_ha_ready) or m_sub_shaved_bear
+                    ):
                         mark_sub_pullback_ha_bear_minute_wait(
                             context=context,
                             symbol=TARGET_SYMBOL,
@@ -832,11 +933,14 @@ async def _execute_sub_grid_buy_engine_plugin(
                         else min(sb.book_price for sb in now_sub_buckets)
                     )
                     m_spb = resolve_smart_pullback_drop_pct(m_spm)
+                    m_spb_lim = (
+                        (m_spb * 0.5) if m_use_sub_stalk else m_spb
+                    )
                     if (
                         sub_sig_type == "PULLBACK_RELOAD"
                         and m_sanc > 0.0
                         and ((fresh_live_p - m_sanc) / m_sanc * 100.0)
-                        > (m_spb + 1e-6)
+                        > (m_spb_lim + 1e-6)
                     ):
                         s_ep = mark_sub_reentry_monitor_60s_cycle_shield(
                             context=context,
@@ -2196,10 +2300,16 @@ async def execute_seed_protected_buy_gate_plugin(
     #    - 본 그리드가 60초 재장전 쉴드 중이거나 패스했을 때는 즉시 Default-ON 3층 서브 그리드 엔진을 가동!
     # -----------------------------------------------------------------------
     if is_l2_only_vacant_l1:
+        rebound_pol_l1 = resolve_smart_rebound_policy(portion_mode)
+        use_stalker_l1 = bool(rebound_pol_l1.get("use_stalker_l1", False))
+        cur_stalk_l1_act = bool(
+            use_stalker_l1 and st.get("stalk_l1_active", False)
+        )
+
         in_re_shield, rem_re_sec = is_within_reentry_monitor_time_shield(
             context, st, TARGET_SYMBOL, now_est=dt_now
         )
-        if in_re_shield:
+        if in_re_shield and (not cur_stalk_l1_act):
             sub_res_re = await _execute_sub_grid_buy_engine_plugin(
                 context=context,
                 holdings=eff_holdings,
@@ -2216,12 +2326,18 @@ async def execute_seed_protected_buy_gate_plugin(
                 "remain_shield_sec": rem_re_sec,
             }
 
-        fresh_live_p = await _fetch_fresh_current_soxl_price(
-            context, fallback_price=live_p, now_est=dt_now
+        fresh_live_p = (
+            live_p
+            if (cur_stalk_l1_act and live_p > 0.0)
+            else await _fetch_fresh_current_soxl_price(
+                context, fallback_price=live_p, now_est=dt_now
+            )
         )
         if fresh_live_p <= 0.0:
             return {"status": "NO_FRESH_LIVE_PRICE"}
-        re_price_mono = time.monotonic()  # NEW [Audit-111-02]
+        re_price_mono = (
+            0.0 if cur_stalk_l1_act else time.monotonic()
+        )  # MODIFIED [Case 112]: 스토커 반전 포착 시 뮤텍스 2차 브로커 실호가 강제 재동기화
 
         (
             live_rsi_14,
@@ -2255,15 +2371,105 @@ async def execute_seed_protected_buy_gate_plugin(
             is_late_cutoff=is_late_cutoff,
             rsi_14=live_rsi_14,
             breakout_max_rsi=REENTRY_BREAKOUT_MAX_RSI_50,
-            closed_ha_shaved_bear=closed_shaved_bear,
+            closed_ha_shaved_bear=(False if use_stalker_l1 else closed_shaved_bear),
             closed_ha_bull=closed_ha_bull,
-            closed_ha_ready=closed_ha_ready,
+            closed_ha_ready=(True if use_stalker_l1 else closed_ha_ready),
             session_vwap=sess_vwap,
             hm=hm,
             cycle_min_buy_price=(cycle_min_p_re if cycle_min_p_re > 0.0 else None),
             portion_mode=portion_mode,
         )
         sig_type = str(reentry_sig.get("signal_type") or "HOLD_WAIT_GATE")
+
+        # NEW [Case 112 : 바벨(B-12)·단리(S-112) 본 1층 공석 리바운드 스토커(+0.25% 반등 / 완결양봉 반전 타격)]
+        if use_stalker_l1:
+            l1_bar_snap = _get_live_soxl_stalker_bar_snapshot(
+                context, live_price=fresh_live_p, now_est=dt_now
+            )
+            prev_l1_low = safe_float(st.get("stalk_l1_low_price"), 0.0)
+            want_l1_stalk = bool(
+                cur_stalk_l1_act
+                or (
+                    bool(reentry_sig.get("should_buy"))
+                    and sig_type in ("PULLBACK_RELOAD", "LOW_BREAK_RELOAD")
+                )
+            )
+            if want_l1_stalk and fresh_live_p <= (min_upper_tier_p + 1e-6):
+                l1_stalk_ev = evaluate_stalker_reversal_fire(
+                    live_price=fresh_live_p,
+                    cur_bar_open=l1_bar_snap["cur_bar_open"],
+                    cur_bar_low=l1_bar_snap["cur_bar_low"],
+                    prev_stalk_low=(
+                        prev_l1_low if cur_stalk_l1_act else l1_bar_snap["cur_bar_low"]
+                    ),
+                    closed_real_reversal=l1_bar_snap["closed_real_reversal"],
+                    closed_ha_shaved_bear=l1_bar_snap["closed_ha_shaved_bear"],
+                    closed_ha_ready=l1_bar_snap["closed_ha_ready"],
+                    stalk_rebound_pct=safe_float(
+                        rebound_pol_l1.get("stalk_rebound_pct"), 0.25
+                    ),
+                    hm=hm,
+                )
+                next_l1_low = safe_float(
+                    l1_stalk_ev.get("stalk_low_price"), fresh_live_p
+                )
+                pb_d_val = safe_float(
+                    reentry_sig.get("pullback_drop_pct"), -1.0
+                )
+                chg_ex_val = safe_float(
+                    reentry_sig.get("chg_from_exit_pct"), 0.0
+                )
+                still_in_l1_dip = bool(
+                    chg_ex_val <= (pb_d_val * 0.5)
+                    or fresh_live_p < min_upper_tier_p
+                )
+                if bool(l1_stalk_ev.get("should_fire")) and still_in_l1_dip:
+                    reentry_sig = dict(reentry_sig)
+                    reentry_sig["should_buy"] = True
+                    sig_type = (
+                        "LOW_BREAK_RELOAD"
+                        if (cycle_min_p_re > 0.0 and fresh_live_p < cycle_min_p_re)
+                        else "PULLBACK_RELOAD"
+                    )
+                    reentry_sig["signal_type"] = sig_type
+                elif not still_in_l1_dip:
+                    if cur_stalk_l1_act:
+                        await context.ledger.update_state(
+                            TARGET_SYMBOL,
+                            stalk_l1_active=False,
+                            stalk_l1_low_price=0.0,
+                        )
+                else:
+                    if (not cur_stalk_l1_act) or (
+                        next_l1_low > 0.0
+                        and abs(next_l1_low - prev_l1_low) > 1e-4
+                    ):
+                        await context.ledger.update_state(
+                            TARGET_SYMBOL,
+                            stalk_l1_active=True,
+                            stalk_l1_low_price=next_l1_low,
+                            last_reentry_eval_ts=0.0,
+                        )
+                    sub_res_st = await _execute_sub_grid_buy_engine_plugin(
+                        context=context,
+                        holdings=eff_holdings,
+                        prices=eff_prices,
+                        dt_now=dt_now,
+                        live_p=fresh_live_p,
+                    )
+                    if isinstance(sub_res_st, dict) and str(
+                        sub_res_st.get("status") or ""
+                    ).endswith("_ORDERED"):
+                        return sub_res_st
+                    return {
+                        "status": "L1_VACANT_STALKING_FALLING_KNIFE",
+                        "signal_type": l1_stalk_ev.get("fire_reason"),
+                        "live_price": fresh_live_p,
+                        "stalk_low_price": next_l1_low,
+                        "rebound_from_low_pct": l1_stalk_ev.get(
+                            "rebound_from_low_pct"
+                        ),
+                    }
 
         if not bool(reentry_sig.get("should_buy")):
             # NEW [Case 110]: 바벨/단리 모드에서 [1층 공석] 정규 재장전 미충족 시 10분 게이트 쌍바닥 1주 마중물 구제 검문
@@ -2507,7 +2713,7 @@ async def execute_seed_protected_buy_gate_plugin(
                 in_re_m, _ = is_within_reentry_monitor_time_shield(
                     context, st_now, TARGET_SYMBOL
                 )
-                if in_re_m:
+                if in_re_m and not bool(st_now.get("stalk_l1_active", False)):
                     return {"status": "HOLD_60S_REENTRY_TIME_SHIELD_IN_MUTEX"}
 
                 # [Case 84 : 뮤텍스 내부 15:29:59 -> 15:30:00 경계 돌파 추격 2차 차단]
@@ -2640,7 +2846,14 @@ async def execute_seed_protected_buy_gate_plugin(
                             "live_price": fresh_live_p,
                             "seed_protect_pass_cnt": new_day_pass,
                         }
-                    if (not m_ha_ready) or m_shaved_bear:
+                    m_use_l1_stalk = bool(
+                        resolve_smart_rebound_policy(
+                            st_now.get("portion_mode")
+                        ).get("use_stalker_l1", False)
+                    )
+                    if (not m_use_l1_stalk) and (
+                        (not m_ha_ready) or m_shaved_bear
+                    ):
                         new_pass_cnt = (
                             safe_int(st_now.get("seed_protect_pass_cnt"), 0)
                             + 1
@@ -2703,11 +2916,14 @@ async def execute_seed_protected_buy_gate_plugin(
                         else min(b.book_price for b in now_buckets)
                     )
                     m_pb_r = resolve_smart_pullback_drop_pct(m_pm)
+                    m_pb_lim = (
+                        (m_pb_r * 0.5) if m_use_l1_stalk else m_pb_r
+                    )
                     if (
                         sig_type == "PULLBACK_RELOAD"
                         and m_anc > 0.0
                         and ((fresh_live_p - m_anc) / m_anc * 100.0)
-                        > (m_pb_r + 1e-6)
+                        > (m_pb_lim + 1e-6)
                     ):
                         m_ep = mark_reentry_monitor_60s_cycle_shield(
                             context=context,
@@ -2945,6 +3161,8 @@ async def execute_seed_protected_buy_gate_plugin(
                     pending_sub_step_up_min_price=0.0,
                     last_modify_mono=time.monotonic(),
                     last_reentry_eval_ts=re_eval_epoch,
+                    stalk_l1_active=False,
+                    stalk_l1_low_price=0.0,
                 )
                 context.wakeup_event.set()
                 logger.info(
@@ -3538,10 +3756,24 @@ async def execute_seed_protected_buy_gate_plugin(
                                 }
 
     # -----------------------------------------------------------------------
-    # [분기 B-2 · Case 60, Case 72, Case 76, Case 77, Case 87, Case 88 & Case 91 : 본 그리드 활성 1층 보유 중 (has_active_l1_bucket(buckets) == True)]
-    # -> 04:07 EST 기점 10분 고정 매수 게이트 신규 버킷 도래 시 정적 기억 최저가 및 최고 도달 회차(cycle_ratchet_max_lots) 잠금 기준
-    #    4단 와이드(무필터) OR STEP2X_15PCT_C20 스텝업 추매 판정! (본 그리드 대기/패스 시 Default-ON 3층 서브 그리드 엔진 연속 가동)
+    # [분기 B-2 · Case 60 ~ 112 : 본 그리드 활성 1층 보유 중 추매 및 바벨(VWAP -4.5%)·단리(VWAP -3.0%) 심층 폭락 스토커 방어막]
     # -----------------------------------------------------------------------
+    rebound_pol_b2 = resolve_smart_rebound_policy(portion_mode)
+    vwap_guard_pct = safe_float(
+        rebound_pol_b2.get("vwap_crash_guard_pct"), 0.0
+    )
+    sess_vwap_b2 = _get_cached_soxl_session_vwap(
+        context, live_price=live_p, now_est=dt_now
+    )
+    cur_stalk_add_act = bool(
+        vwap_guard_pct < -0.1 and st.get("stalk_add_active", False)
+    )
+    deep_below_vwap = bool(
+        vwap_guard_pct < -0.1
+        and sess_vwap_b2 > 0.0
+        and live_p <= sess_vwap_b2 * (1.0 + vwap_guard_pct / 100.0)
+    )
+
     is_gate_open, cur_bucket_id, today_str, b_info = (
         evaluate_buy_gate_bucket_status(
             now_est=dt_now,
@@ -3553,7 +3785,8 @@ async def execute_seed_protected_buy_gate_plugin(
         )
     )
 
-    if not is_gate_open:
+    bypass_10m_for_crash_stalk = bool(deep_below_vwap or cur_stalk_add_act)
+    if (not is_gate_open) and (not bypass_10m_for_crash_stalk):
         sub_res_wait = await _execute_sub_grid_buy_engine_plugin(
             context=context,
             holdings=eff_holdings,
@@ -3580,8 +3813,12 @@ async def execute_seed_protected_buy_gate_plugin(
             "next_gate": b_info.get("next_gate_hm_str", ""),
         }
 
-    fresh_live_p = await _fetch_fresh_current_soxl_price(
-        context, fallback_price=live_p
+    fresh_live_p = (
+        live_p
+        if (bypass_10m_for_crash_stalk and (not is_gate_open) and live_p > 0.0)
+        else await _fetch_fresh_current_soxl_price(
+            context, fallback_price=live_p, now_est=dt_now
+        )
     )
     if fresh_live_p <= 0.0:
         return {"status": "NO_FRESH_LIVE_PRICE"}
@@ -3620,6 +3857,108 @@ async def execute_seed_protected_buy_gate_plugin(
     )
     chg_for_buy_pct = safe_float(dip_eval.get("chg_static_pct"), 0.0)
     lot_tag = "DIP_1FL"
+
+    # NEW [Case 112 : 바벨(B-12 : VWAP -4.5%) · 단리(S-112 : VWAP -3.0%) 심층 폭락장 추매 칼날받이 스토커 방어막]
+    fired_by_crash_stalker = False
+    fresh_deep_vwap = bool(
+        vwap_guard_pct < -0.1
+        and sess_vwap_b2 > 0.0
+        and fresh_live_p <= sess_vwap_b2 * (1.0 + vwap_guard_pct / 100.0)
+    )
+    if fresh_deep_vwap or cur_stalk_add_act:
+        add_bar_snap = _get_live_soxl_stalker_bar_snapshot(
+            context, live_price=fresh_live_p, now_est=dt_now
+        )
+        prev_add_low = safe_float(st.get("stalk_add_low_price"), 0.0)
+        if bool(dip_eval.get("should_buy")) or cur_stalk_add_act:
+            add_stalk_ev = evaluate_stalker_reversal_fire(
+                live_price=fresh_live_p,
+                cur_bar_open=add_bar_snap["cur_bar_open"],
+                cur_bar_low=add_bar_snap["cur_bar_low"],
+                prev_stalk_low=(
+                    prev_add_low if cur_stalk_add_act else add_bar_snap["cur_bar_low"]
+                ),
+                closed_real_reversal=add_bar_snap["closed_real_reversal"],
+                closed_ha_shaved_bear=add_bar_snap["closed_ha_shaved_bear"],
+                closed_ha_ready=add_bar_snap["closed_ha_ready"],
+                stalk_rebound_pct=safe_float(
+                    rebound_pol_b2.get("stalk_rebound_pct"), 0.25
+                ),
+                hm=hm,
+                is_dip_add=True,
+            )
+            next_add_low = safe_float(
+                add_stalk_ev.get("stalk_low_price"), fresh_live_p
+            )
+            still_valid_add_dip = bool(
+                chg_for_buy_pct <= (drop_buy_pct + 0.60)
+                or bool(dip_eval.get("should_buy"))
+            )
+            if bool(add_stalk_ev.get("should_fire")) and still_valid_add_dip:
+                fresh_2nd = await _fetch_fresh_current_soxl_price(
+                    context, fallback_price=fresh_live_p, now_est=dt_now
+                )
+                if fresh_2nd > 0.0:
+                    fresh_live_p = fresh_2nd
+                dip_eval = dict(dip_eval)
+                dip_eval["should_buy"] = True
+                fired_by_crash_stalker = True
+            elif not still_valid_add_dip:
+                if cur_stalk_add_act:
+                    await context.ledger.update_state(
+                        TARGET_SYMBOL,
+                        stalk_add_active=False,
+                        stalk_add_low_price=0.0,
+                    )
+                if not is_gate_open:
+                    return {"status": "CRASH_STALK_REBOUNDED_CLEARED"}
+                dip_eval = dict(dip_eval)
+                dip_eval["should_buy"] = False
+            else:
+                if (not cur_stalk_add_act) or (
+                    next_add_low > 0.0
+                    and abs(next_add_low - prev_add_low) > 1e-4
+                ):
+                    await context.ledger.update_state(
+                        TARGET_SYMBOL,
+                        stalk_add_active=True,
+                        stalk_add_low_price=next_add_low,
+                    )
+                sub_res_cs = await _execute_sub_grid_buy_engine_plugin(
+                    context=context,
+                    holdings=eff_holdings,
+                    prices=eff_prices,
+                    dt_now=dt_now,
+                    live_p=fresh_live_p,
+                )
+                if isinstance(sub_res_cs, dict) and str(
+                    sub_res_cs.get("status") or ""
+                ).endswith("_ORDERED"):
+                    return sub_res_cs
+                return {
+                    "status": "DIP_ADD_STALKING_VWAP_CRASH",
+                    "signal_type": add_stalk_ev.get("fire_reason"),
+                    "live_price": fresh_live_p,
+                    "session_vwap": sess_vwap_b2,
+                    "stalk_low_price": next_add_low,
+                    "vwap_crash_guard_pct": vwap_guard_pct,
+                }
+        elif not is_gate_open:
+            sub_res_cs2 = await _execute_sub_grid_buy_engine_plugin(
+                context=context,
+                holdings=eff_holdings,
+                prices=eff_prices,
+                dt_now=dt_now,
+                live_p=fresh_live_p,
+            )
+            if isinstance(sub_res_cs2, dict) and str(
+                sub_res_cs2.get("status") or ""
+            ).endswith("_ORDERED"):
+                return sub_res_cs2
+            return {
+                "status": "WAIT_NEXT_BUY_GATE",
+                "next_gate": b_info.get("next_gate_hm_str", ""),
+            }
 
     if not bool(dip_eval.get("should_buy")):
         # NEW [Case 110]: 정규 신저가/스텝업 미충족 시 모드별 스마트 역산 1주 마중물(PRIMER_1SH) 타점 검문!
@@ -3735,7 +4074,7 @@ async def execute_seed_protected_buy_gate_plugin(
             if not now_buckets or not has_active_l1_bucket(now_buckets):
                 return {"status": "L1_STATE_CHANGED_IN_MUTEX"}
 
-            gate_open_m, _, _, _ = evaluate_buy_gate_bucket_status(
+            gate_open_m, cur_b10_m, today_m_b2, _ = evaluate_buy_gate_bucket_status(
                 now_est=dt_now,
                 buy_interval_min=buy_interval_min,
                 last_evaluated_bucket_id=safe_int(
@@ -3745,8 +4084,10 @@ async def execute_seed_protected_buy_gate_plugin(
                     st_now.get("last_evaluated_date") or ""
                 ),
             )
-            if not gate_open_m:
+            if (not gate_open_m) and (not fired_by_crash_stalker):
                 return {"status": "BUCKET_ALREADY_EVALUATED_IN_MUTEX"}
+            cur_bucket_id = max(cur_bucket_id, cur_b10_m)
+            today_str = today_m_b2
 
             in_s_sh, _ = is_within_post_sell_time_shield(
                 context, st_now, TARGET_SYMBOL
@@ -3815,7 +4156,9 @@ async def execute_seed_protected_buy_gate_plugin(
                 min_rebound_mult=STEP_UP_2X_MIN_REBOUND_MULT,
                 max_tiers_for_unlock=STEP_UP_2X_MAX_TIERS,
             )
-            if not bool(now_dip_eval.get("should_buy")):
+            if (not bool(now_dip_eval.get("should_buy"))) and (
+                not fired_by_crash_stalker
+            ):
                 return {"status": "DIP_SIGNAL_CHANGED_IN_MUTEX"}
 
             is_step_up_unlock = bool(
@@ -3852,7 +4195,11 @@ async def execute_seed_protected_buy_gate_plugin(
             cur_limit_p = (
                 math.floor((fresh_live_p + 1e-9) * 100.0) / 100.0
             )
-            exec_order_p = max(0.01, min(cur_limit_p, max_trigger_p))
+            exec_order_p = (
+                max(0.01, cur_limit_p)
+                if fired_by_crash_stalker
+                else max(0.01, min(cur_limit_p, max_trigger_p))
+            )
 
             target_qty, portion_budget = compute_golden8_quota_qty(
                 anchor_price=quota_ref_p,
@@ -3958,6 +4305,8 @@ async def execute_seed_protected_buy_gate_plugin(
                 last_evaluated_buy_bucket_id=cur_bucket_id,
                 last_evaluated_date=today_str,
                 last_modify_mono=time.monotonic(),
+                stalk_add_active=False,
+                stalk_add_low_price=0.0,
             )
             context.wakeup_event.set()
             if is_step_up_unlock:

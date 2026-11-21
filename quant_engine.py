@@ -55,6 +55,19 @@ from quant_engine_core import (
     REENTRY_PULLBACK_COMPOUND_PCT,
     REENTRY_PULLBACK_DROP_PCT,
     REENTRY_PULLBACK_SIMPLE_PCT,
+    SNIPER_CLIMAX_MIN_PEAK_GAIN_PCT,
+    SNIPER_CLIMAX_PULLBACK_RATIO,
+    SNIPER_CLIMAX_RSI_BARBELL_SIMPLE,
+    SNIPER_CLIMAX_RSI_COMPOUND,
+    SNIPER_HARD_CAP_BARBELL_SIMPLE_PCT,
+    SNIPER_HARD_CAP_COMPOUND_PCT,
+    SNIPER_RATCHET_STEPS_SHARP,
+    SNIPER_RATCHET_STEPS_STD,
+    STALKER_DIP_ADD_EXTRA_REBOUND_PCT,
+    STALKER_REBOUND_BARBELL_SIMPLE_PCT,
+    VWAP_CRASH_GUARD_BARBELL_PCT,
+    VWAP_CRASH_GUARD_COMPOUND_PCT,
+    VWAP_CRASH_GUARD_SIMPLE_PCT,
     REG_OPEN_VWAP_SHIELD_END_HM,
     REG_OPEN_VWAP_SHIELD_START_HM,
     RESERVE_DEPOSIT_TOLERANCE_RATIO,
@@ -101,6 +114,7 @@ from quant_engine_core import (
     evaluate_l2_only_hybrid_reentry_signal,
     evaluate_l2_vacant_low_break_signal,
     evaluate_smart_primer_1sh_signal,
+    evaluate_stalker_reversal_fire,
     evaluate_step_up_2x_dip_signal,
     evaluate_sub_grid_dip_signal,
     get_golden8_prog_thresholds,
@@ -123,6 +137,7 @@ from quant_engine_core import (
     resolve_portion_budget_base_equity,
     resolve_smart_primer_policy,
     resolve_smart_pullback_drop_pct,
+    resolve_smart_rebound_policy,
     safe_bucket_lot_count,
     set_runtime_round_trip_fee_rate_pct,
 )
@@ -1769,6 +1784,16 @@ def summarize_stratum_portfolio(
     rebound_mult = safe_float(step_up_eval.get("rebound_mult"), 0.0)
     cash_ratio_pct = safe_float(step_up_eval.get("cash_ratio_pct"), 0.0)
 
+    rebound_pol = resolve_smart_rebound_policy(portion_mode)
+    rebound_hard_cap_pct = safe_float(
+        rebound_pol.get("hard_cap_pct"), SNIPER_L1_TRAIL_SAFE_CAP_PCT
+    )
+    l1_cap_price = (
+        round(buckets[0].book_price * (1.0 + rebound_hard_cap_pct / 100.0), 2)
+        if (active_l1 and buckets)
+        else 0.0
+    )
+
     primer_1sh_mode = (
         str(st.get("primer_1sh_mode") or PRIMER_MODE_AUTO_SMART)
         .upper()
@@ -2645,6 +2670,30 @@ def summarize_stratum_portfolio(
         "primer_1sh_realized_net_usd": primer_1sh_realized_net_usd,
         "daily_primer_1sh_buy_cnt": daily_primer_1sh_buy_cnt,
         "daily_primer_1sh_sell_cnt": daily_primer_1sh_sell_cnt,
+        "rebound_spec_id": str(rebound_pol.get("spec_id") or "C-112"),
+        "rebound_policy_badge": str(rebound_pol.get("policy_badge") or ""),
+        "rebound_use_stalker_l1": bool(rebound_pol.get("use_stalker_l1", False)),
+        "rebound_stalk_pct": safe_float(rebound_pol.get("stalk_rebound_pct"), 0.25),
+        "rebound_vwap_crash_guard_pct": safe_float(
+            rebound_pol.get("vwap_crash_guard_pct"), 0.0
+        ),
+        "rebound_hard_cap_pct": rebound_hard_cap_pct,
+        "rebound_climax_rsi_thr": safe_float(
+            rebound_pol.get("climax_rsi_thr"), 62.0
+        ),
+        "l1_cap_price": l1_cap_price,
+        "stalk_l1_active": bool(st.get("stalk_l1_active", False)),
+        "stalk_l1_low_price": round(
+            max(0.0, safe_float(st.get("stalk_l1_low_price"), 0.0)), 4
+        ),
+        "stalk_sub_active": bool(st.get("stalk_sub_active", False)),
+        "stalk_sub_low_price": round(
+            max(0.0, safe_float(st.get("stalk_sub_low_price"), 0.0)), 4
+        ),
+        "stalk_add_active": bool(st.get("stalk_add_active", False)),
+        "stalk_add_low_price": round(
+            max(0.0, safe_float(st.get("stalk_add_low_price"), 0.0)), 4
+        ),
     }
 
 
@@ -3106,6 +3155,60 @@ def run_quant_engine_tdd() -> bool:
             assert bool(r111["should_buy"]) is ex_b
             assert r111["pullback_target_price"] == ex_tp
             assert r111["pullback_drop_pct"] == ex_d
+
+        # 9) [Case 112 TDD] B-12 · S-112 · C-112 리바운드 스토커 & 다단 래칫 정책 및 반전 판정 검증
+        p_b12 = resolve_smart_rebound_policy("BARBELL_60_30_10")
+        p_s112 = resolve_smart_rebound_policy("SIMPLE_08PCT")
+        p_c112 = resolve_smart_rebound_policy("COMP_08PCT")
+        assert (
+            p_b12["spec_id"] == "B-12"
+            and p_b12["use_stalker_l1"] is True
+            and abs(p_b12["vwap_crash_guard_pct"] - (-4.50)) < 1e-6
+            and abs(p_b12["hard_cap_pct"] - 6.00) < 1e-6
+        ), f"B-12 정책 오류: {p_b12}"
+        assert (
+            p_s112["spec_id"] == "S-112"
+            and p_s112["use_stalker_l1"] is True
+            and abs(p_s112["vwap_crash_guard_pct"] - (-3.00)) < 1e-6
+            and abs(p_s112["hard_cap_pct"] - 6.00) < 1e-6
+        ), f"S-112 정책 오류: {p_s112}"
+        assert (
+            p_c112["spec_id"] == "C-112"
+            and p_c112["use_stalker_l1"] is False
+            and abs(p_c112["vwap_crash_guard_pct"]) < 1e-6
+            and abs(p_c112["hard_cap_pct"] - 5.00) < 1e-6
+        ), f"C-112 정책 오류: {p_c112}"
+
+        st_knife = evaluate_stalker_reversal_fire(
+            live_price=39.20,
+            cur_bar_open=39.80,
+            cur_bar_low=39.10,
+            prev_stalk_low=39.50,
+            closed_real_reversal=False,
+            closed_ha_shaved_bear=True,
+            closed_ha_ready=True,
+            stalk_rebound_pct=0.25,
+            hm=941,
+        )
+        assert (
+            st_knife["should_fire"] is False
+            and abs(st_knife["stalk_low_price"] - 39.10) < 1e-6
+        ), f"스토커 칼날추적 오류: {st_knife}"
+        st_fire = evaluate_stalker_reversal_fire(
+            live_price=39.12,
+            cur_bar_open=39.00,
+            cur_bar_low=38.99,
+            prev_stalk_low=39.10,
+            closed_real_reversal=False,
+            closed_ha_shaved_bear=False,
+            closed_ha_ready=True,
+            stalk_rebound_pct=0.25,
+            hm=942,
+        )
+        assert (
+            st_fire["should_fire"] is True
+            and abs(st_fire["stalk_low_price"] - 38.99) < 1e-6
+        ), f"스토커 +0.25% 반등격발 오류: {st_fire}"
 
     finally:
         set_runtime_round_trip_fee_rate_pct(prev_rt, us_commission_rate=prev_one)

@@ -55,6 +55,7 @@ from quant_engine import (
     buckets_from_dicts,
     buckets_to_dicts,
     evaluate_guard30_and_reserve_injection,
+    evaluate_stalker_reversal_fire,
     has_active_l1_bucket,
     has_active_l2_bucket,
     is_primer_1sh_tag,
@@ -63,6 +64,7 @@ from quant_engine import (
     resolve_portion_budget_base_equity,
     resolve_smart_primer_policy,
     resolve_smart_pullback_drop_pct,
+    resolve_smart_rebound_policy,
     safe_bucket_lot_count,
     summarize_stratum_portfolio,
     vrev_add_quota_lot_and_merge_2tier,
@@ -783,6 +785,45 @@ async def _get_live_soxl_reentry_snapshot(
         closed_ready,
         closed_mk,
     )
+
+
+def _get_live_soxl_stalker_bar_snapshot(
+    context: Any,
+    live_price: float = 0.0,
+    now_est: Optional[datetime] = None,
+) -> Dict[str, Any]:
+    """
+    # NEW [Case 112 : 매수 스토커(Rebound Stalker) 전용 O(1) 무부하 진행봉·완결반전 스냅샷 추출기]
+    """
+    dt_now = now_est.astimezone(EST_TZ) if now_est else datetime.now(EST_TZ)
+    lp = max(0.0, safe_float(live_price, 0.0))
+    raw_cache = getattr(context, "candle_metrics_cache", None)
+    base_met = (
+        raw_cache.get(TARGET_SYMBOL) if isinstance(raw_cache, dict) else None
+    )
+    met = refresh_metrics_with_live_tick(
+        base_met if isinstance(base_met, dict) else {},
+        lp,
+        now_est=dt_now,
+    )
+    if isinstance(raw_cache, dict) and lp > 0.0:
+        raw_cache[TARGET_SYMBOL] = met
+    b_open = safe_float(met.get("cur_bar_open"), lp)
+    if b_open <= 0.0:
+        b_open = lp
+    b_low_raw = safe_float(met.get("cur_bar_low"), lp)
+    b_low = (
+        min(lp, b_low_raw)
+        if (b_low_raw > 0.0 and lp > 0.0)
+        else max(lp, b_low_raw)
+    )
+    return {
+        "cur_bar_open": round(b_open, 4),
+        "cur_bar_low": round(b_low, 4),
+        "closed_real_reversal": bool(met.get("closed_real_reversal", False)),
+        "closed_ha_shaved_bear": bool(met.get("closed_ha_shaved_bear", False)),
+        "closed_ha_ready": bool(met.get("closed_ha_ready", False)),
+    }
 
 
 def _get_cached_soxl_session_vwap(
@@ -1660,6 +1701,8 @@ async def _commit_filled_buy_to_stratum_ledger(
             last_buy_fill_ts=now_buy_epoch,
             last_sub_buy_fill_ts=now_buy_epoch,
             last_sub_reentry_eval_ts=0.0,
+            stalk_sub_active=False,
+            stalk_sub_low_price=0.0,
         )
 
         context.wakeup_event.set()
@@ -1970,6 +2013,10 @@ async def _commit_filled_buy_to_stratum_ledger(
         entry_ts=now_buy_epoch,
         last_buy_fill_ts=now_buy_epoch,
         last_reentry_eval_ts=0.0,
+        stalk_l1_active=False,
+        stalk_l1_low_price=0.0,
+        stalk_add_active=False,
+        stalk_add_low_price=0.0,
     )
 
     context.wakeup_event.set()

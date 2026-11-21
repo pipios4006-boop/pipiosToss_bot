@@ -115,6 +115,32 @@ REENTRY_PULLBACK_SIMPLE_PCT: float = -1.50
 REENTRY_PULLBACK_COMPOUND_PCT: float = -2.00
 VALID_PRIMER_MODES: Tuple[str, ...] = (PRIMER_MODE_AUTO_SMART, PRIMER_MODE_OFF)
 
+# NEW [Case 112 : 운용모드별 스마트 리바운드 스토커 & 다단 보존선 래칫(B-12 · S-112 · C-112) 상수]
+STALKER_REBOUND_BARBELL_SIMPLE_PCT: float = 0.25
+STALKER_DIP_ADD_EXTRA_REBOUND_PCT: float = 0.05
+VWAP_CRASH_GUARD_BARBELL_PCT: float = -4.50
+VWAP_CRASH_GUARD_SIMPLE_PCT: float = -3.00
+VWAP_CRASH_GUARD_COMPOUND_PCT: float = 0.00
+SNIPER_RATCHET_STEPS_SHARP: Tuple[Tuple[float, float], ...] = (
+    (1.75, 1.60),
+    (2.50, 2.15),
+    (3.50, 3.10),
+    (4.50, 4.10),
+    (5.30, 4.80),
+)
+SNIPER_RATCHET_STEPS_STD: Tuple[Tuple[float, float], ...] = (
+    (1.75, 1.60),
+    (2.50, 2.10),
+    (3.50, 3.00),
+    (4.50, 4.00),
+)
+SNIPER_HARD_CAP_BARBELL_SIMPLE_PCT: float = 6.00
+SNIPER_HARD_CAP_COMPOUND_PCT: float = 5.00
+SNIPER_CLIMAX_RSI_BARBELL_SIMPLE: float = 65.0
+SNIPER_CLIMAX_RSI_COMPOUND: float = 62.0
+SNIPER_CLIMAX_MIN_PEAK_GAIN_PCT: float = 3.00
+SNIPER_CLIMAX_PULLBACK_RATIO: float = 0.995
+
 LOCKED_BUY_INTERVAL_MIN: int = 10
 LOCKED_SELL_INTERVAL_MIN: int = 1
 DEFAULT_US_COMMISSION_RATE: float = 0.0007
@@ -301,6 +327,52 @@ def resolve_smart_pullback_drop_pct(
     if is_simple_income_mode(portion_mode):
         return REENTRY_PULLBACK_SIMPLE_PCT
     return REENTRY_PULLBACK_COMPOUND_PCT
+
+
+def resolve_smart_rebound_policy(
+    portion_mode: Any,
+) -> Dict[str, Any]:
+    """
+    # NEW [Case 112 : 5개년 1분봉 전수 백테스트 최종 우승 스펙(B-12 · S-112 · C-112) 해석기]
+    - BARBELL_60_30_10 (B-12) : +0.25% 민첩 스토커 · VWAP -4.5% 심층 추매방어 · 샤프래칫 · 캡 6.0% · RSI 65
+    - SIMPLE_08PCT     (S-112): +0.25% 민첩 스토커 · VWAP -3.0% 폭락 추매방어 · 샤프래칫 · 캡 6.0% · RSI 65
+    - COMP_08PCT       (C-112): -2.00% 직격타격 유지 · 표준래칫(2.1/3.0/4.0) · 캡 5.0% · RSI 62
+    """
+    if is_barbell_mode(portion_mode):
+        return {
+            "spec_id": "B-12",
+            "use_stalker_l1": True,
+            "stalk_rebound_pct": STALKER_REBOUND_BARBELL_SIMPLE_PCT,
+            "vwap_crash_guard_pct": VWAP_CRASH_GUARD_BARBELL_PCT,
+            "ratchet_steps": SNIPER_RATCHET_STEPS_SHARP,
+            "hard_cap_pct": SNIPER_HARD_CAP_BARBELL_SIMPLE_PCT,
+            "use_vwap_ha_hold": True,
+            "climax_rsi_thr": SNIPER_CLIMAX_RSI_BARBELL_SIMPLE,
+            "policy_badge": "🕵️스토커+0.25%·VWAP-4.5%방어·샤프래칫·캡6.0%",
+        }
+    if is_simple_income_mode(portion_mode):
+        return {
+            "spec_id": "S-112",
+            "use_stalker_l1": True,
+            "stalk_rebound_pct": STALKER_REBOUND_BARBELL_SIMPLE_PCT,
+            "vwap_crash_guard_pct": VWAP_CRASH_GUARD_SIMPLE_PCT,
+            "ratchet_steps": SNIPER_RATCHET_STEPS_SHARP,
+            "hard_cap_pct": SNIPER_HARD_CAP_BARBELL_SIMPLE_PCT,
+            "use_vwap_ha_hold": True,
+            "climax_rsi_thr": SNIPER_CLIMAX_RSI_BARBELL_SIMPLE,
+            "policy_badge": "🕵️스토커+0.25%·VWAP-3.0%방어·샤프래칫·캡6.0%",
+        }
+    return {
+        "spec_id": "C-112",
+        "use_stalker_l1": False,
+        "stalk_rebound_pct": 0.40,
+        "vwap_crash_guard_pct": VWAP_CRASH_GUARD_COMPOUND_PCT,
+        "ratchet_steps": SNIPER_RATCHET_STEPS_STD,
+        "hard_cap_pct": SNIPER_HARD_CAP_COMPOUND_PCT,
+        "use_vwap_ha_hold": True,
+        "climax_rsi_thr": SNIPER_CLIMAX_RSI_COMPOUND,
+        "policy_badge": "⚡직격타격·표준래칫(2.1~4.0%)·RSI62·캡5.0%",
+    }
 
 
 def resolve_trading_session_date_est(
@@ -831,6 +903,12 @@ class SoxlStratumLedger:
             "primer_1sh_realized_net_usd": 0.0,
             "daily_primer_1sh_buy_cnt": 0,
             "daily_primer_1sh_sell_cnt": 0,
+            "stalk_l1_active": False,
+            "stalk_l1_low_price": 0.0,
+            "stalk_sub_active": False,
+            "stalk_sub_low_price": 0.0,
+            "stalk_add_active": False,
+            "stalk_add_low_price": 0.0,
             "unlock_mode": DEFAULT_UNLOCK_MODE,
             "buy_interval_min": LOCKED_BUY_INTERVAL_MIN,
             "sell_interval_min": LOCKED_SELL_INTERVAL_MIN,
@@ -1223,6 +1301,25 @@ class SoxlStratumLedger:
             0, safe_int(st.get("daily_primer_1sh_sell_cnt"), 0)
         )
 
+        reb_pol_s = resolve_smart_rebound_policy(st["portion_mode"])
+        if not bool(reb_pol_s.get("use_stalker_l1", False)):
+            st["stalk_l1_active"] = False
+            st["stalk_l1_low_price"] = 0.0
+            st["stalk_sub_active"] = False
+            st["stalk_sub_low_price"] = 0.0
+            st["stalk_add_active"] = False
+            st["stalk_add_low_price"] = 0.0
+        else:
+            s_l1_p = round(max(0.0, safe_float(st.get("stalk_l1_low_price"), 0.0)), 4)
+            st["stalk_l1_active"] = bool(st.get("stalk_l1_active", False) and s_l1_p > 0.0)
+            st["stalk_l1_low_price"] = s_l1_p if st["stalk_l1_active"] else 0.0
+            s_sub_p = round(max(0.0, safe_float(st.get("stalk_sub_low_price"), 0.0)), 4)
+            st["stalk_sub_active"] = bool(st.get("stalk_sub_active", False) and s_sub_p > 0.0)
+            st["stalk_sub_low_price"] = s_sub_p if st["stalk_sub_active"] else 0.0
+            s_add_p = round(max(0.0, safe_float(st.get("stalk_add_low_price"), 0.0)), 4)
+            st["stalk_add_active"] = bool(st.get("stalk_add_active", False) and s_add_p > 0.0)
+            st["stalk_add_low_price"] = s_add_p if st["stalk_add_active"] else 0.0
+
         st["cond_unlock_buy_events"] = max(
             0, safe_int(st.get("cond_unlock_buy_events"), 0)
         )
@@ -1441,6 +1538,10 @@ class SoxlStratumLedger:
             st["cycle_ratchet_max_lots"] = 0
             st["cycle_min_buy_price"] = 0.0
             st["main_consec_frozen_days"] = 0
+            st["stalk_l1_active"] = False
+            st["stalk_l1_low_price"] = 0.0
+            st["stalk_add_active"] = False
+            st["stalk_add_low_price"] = 0.0
             st["last_sell_gate_eval_ts"] = 0.0
             st["last_reentry_eval_ts"] = 0.0
             st["pending_sell_indices"] = []
@@ -1482,6 +1583,8 @@ class SoxlStratumLedger:
                 else:
                     st["l1_target_quota_qty"] = max(cur_l1_q, raw_target_q)
             else:
+                st["stalk_add_active"] = False
+                st["stalk_add_low_price"] = 0.0
                 st["last_reentry_eval_ts"] = round(
                     max(0.0, safe_float(st.get("last_reentry_eval_ts"), 0.0)),
                     4,
@@ -1520,6 +1623,8 @@ class SoxlStratumLedger:
             st["sub_ratchet_max_lots"] = 0
             st["sub_cycle_min_buy_price"] = 0.0
             st["sub_consec_frozen_days"] = 0
+            st["stalk_sub_active"] = False
+            st["stalk_sub_low_price"] = 0.0
             st["last_sub_reentry_eval_ts"] = 0.0
             st["pending_sub_sell_indices"] = []
             st["pending_sub_step_up_min_price"] = 0.0
@@ -1537,6 +1642,8 @@ class SoxlStratumLedger:
                 str(clean_sub_buckets[0].get("lot_type") or "")
             )
             if has_sub_active_l1:
+                st["stalk_sub_active"] = False
+                st["stalk_sub_low_price"] = 0.0
                 st["last_sub_reentry_eval_ts"] = 0.0
                 cur_sub_l1_q = max(
                     1, safe_int(clean_sub_buckets[0].get("qty"), 1)
@@ -2236,6 +2343,12 @@ class SoxlStratumLedger:
             last_sell_gate_eval_ts=0.0,
             last_reentry_eval_ts=0.0,
             last_sub_reentry_eval_ts=0.0,
+            stalk_l1_active=False,
+            stalk_l1_low_price=0.0,
+            stalk_sub_active=False,
+            stalk_sub_low_price=0.0,
+            stalk_add_active=False,
+            stalk_add_low_price=0.0,
             buy_order_id="",
             sell_order_id="",
             client_order_id="",
@@ -2369,6 +2482,12 @@ class SoxlStratumLedger:
             "daily_realized_net_usd": 0.0,
             "last_reentry_eval_ts": 0.0,
             "last_sub_reentry_eval_ts": 0.0,
+            "stalk_l1_active": False,
+            "stalk_l1_low_price": 0.0,
+            "stalk_sub_active": False,
+            "stalk_sub_low_price": 0.0,
+            "stalk_add_active": False,
+            "stalk_add_low_price": 0.0,
         }
         if cal_today >= target_d:
             upd_kw["last_evaluated_buy_bucket_id"] = -1

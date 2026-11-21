@@ -2240,6 +2240,12 @@ async def execute_0400_premarket_stabilization_plugin(
         last_reentry_eval_ts=0.0,
         last_sub_reentry_eval_ts=0.0,
         last_reserve_check_ts=0.0,
+        stalk_l1_active=False,
+        stalk_l1_low_price=0.0,
+        stalk_sub_active=False,
+        stalk_sub_low_price=0.0,
+        stalk_add_active=False,
+        stalk_add_low_price=0.0,
     )
 
     sync_res = await reconcile_stratum_with_broker_holdings_plugin(
@@ -2422,6 +2428,12 @@ async def execute_1600_daily_closing_settlement_plugin(
         sub_consec_frozen_days=next_sub_frozen,
         last_frozen_eval_date=today_str,
         last_closing_report_date=today_str,
+        stalk_l1_active=False,
+        stalk_l1_low_price=0.0,
+        stalk_sub_active=False,
+        stalk_sub_low_price=0.0,
+        stalk_add_active=False,
+        stalk_add_low_price=0.0,
         **clear_1600_ord_kw,
     )
 
@@ -2676,6 +2688,12 @@ async def execute_daily_1700_gc_and_backup_plugin(
             sub_last_evaluated_buy_bucket_id=-1,
             last_reentry_eval_ts=0.0,
             last_sub_reentry_eval_ts=0.0,
+            stalk_l1_active=False,
+            stalk_l1_low_price=0.0,
+            stalk_sub_active=False,
+            stalk_sub_low_price=0.0,
+            stalk_add_active=False,
+            stalk_add_low_price=0.0,
         )
     collected = gc.collect()
     logger.info(
