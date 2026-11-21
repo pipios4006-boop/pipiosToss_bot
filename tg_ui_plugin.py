@@ -72,6 +72,7 @@ from quant_engine import (
     is_primer_1sh_tag,
     next_cycled_portion_mode,
     resolve_smart_primer_policy,
+    resolve_smart_pullback_drop_pct,
     summarize_stratum_portfolio,
 )
 from quant_indicators_plugin import (
@@ -482,6 +483,13 @@ def _format_multi_grid_stratum_lines(
         low_brk_ha_wait = bool(re_sig_t == "HOLD_LOW_BREAK_SHAVED_HA_BEAR")
         reg_7m_wait = bool(re_sig_t == "HOLD_REG_OPEN_7M_VWAP_SHIELD")
         vwap_wait = bool(re_sig_t == "HOLD_PULLBACK_ABOVE_SESSION_VWAP")
+        m_pb_u = safe_float(
+            summary.get("reentry_pullback_drop_pct"),
+            resolve_smart_pullback_drop_pct(
+                summary.get("portion_mode")
+            ),
+        )
+        m_pb_s = f"{m_pb_u:.1f}%"
         sess_vwap_u = safe_float(summary.get("session_vwap"), 0.0)
         c_min_u = safe_float(summary.get("cycle_min_buy_price"), 0.0)
         lb_note = f"·저가&lt;${c_min_u:.2f}" if c_min_u > 0.0 else ""
@@ -499,23 +507,23 @@ def _format_multi_grid_stratum_lines(
             )
         elif pull_ha_wait:
             lines.append(
-                f"⚡ <b>[1층: 공석]</b> 🌑눌림(-1%) 무머리1분HA음봉 패스(다음1분 대기){cap_note}"
+                f"⚡ <b>[1층: 공석]</b> 🌑눌림({m_pb_s}) 무머리1분HA음봉 패스(다음1분 대기){cap_note}"
             )
         elif vwap_wait:
             lines.append(
-                f"⚡ <b>[1층: 공석]</b> 🛡️눌림&gt;VWAP(${sess_vwap_u:.2f}) 패스{lb_note}{cap_note}"
+                f"⚡ <b>[1층: 공석]</b> 🛡️눌림({m_pb_s})&gt;VWAP(${sess_vwap_u:.2f}) 패스{lb_note}{cap_note}"
             )
         elif is_late_cutoff:
             lines.append(
-                f"⚡ <b>[1층: 공석]</b> 🛡️돌파차단 · 눌림(&lt;=VWAP·{ha_tag}){lb_note}{cap_note}"
+                f"⚡ <b>[1층: 공석]</b> 🛡️돌파차단 · 눌림({m_pb_s}·&lt;=VWAP·{ha_tag}){lb_note}{cap_note}"
             )
         elif live_rsi_14 > 50.0:
             lines.append(
-                f"⚡ <b>[1층: 공석]</b> 눌림(&lt;=VWAP){lb_note}/🛡️돌파차단(RSI {live_rsi_14:.1f}&gt;50){cap_note}"
+                f"⚡ <b>[1층: 공석]</b> 눌림({m_pb_s}·&lt;=VWAP){lb_note}/🛡️돌파차단(RSI {live_rsi_14:.1f}&gt;50){cap_note}"
             )
         else:
             lines.append(
-                f"⚡ <b>[1층: 공석]</b> 눌림(&lt;=VWAP){lb_note}/돌파(RSI&lt;=50){cap_note}"
+                f"⚡ <b>[1층: 공석]</b> 눌림({m_pb_s}·&lt;=VWAP){lb_note}/돌파(RSI&lt;=50){cap_note}"
             )
 
     act_l2 = bool(summary.get("has_active_l2", False))
@@ -733,6 +741,13 @@ def _format_sub_grid_stratum_lines(
         sub_vwap_wait = bool(
             sub_re_sig_t == "HOLD_PULLBACK_ABOVE_SESSION_VWAP"
         )
+        s_pb_u = safe_float(
+            summary.get("sub_reentry_pullback_drop_pct"),
+            resolve_smart_pullback_drop_pct(
+                summary.get("portion_mode")
+            ),
+        )
+        s_pb_s = f"{s_pb_u:.1f}%"
         sub_vwap_u = safe_float(summary.get("session_vwap"), 0.0)
         sub_c_min_u = safe_float(summary.get("sub_cycle_min_buy_price"), 0.0)
         sub_lb_note = (
@@ -756,23 +771,23 @@ def _format_sub_grid_stratum_lines(
             )
         elif sub_pull_ha_wait:
             lines.append(
-                f"  ⚡ <b>[서브1층: 공석]</b> 🌑눌림(-1%) 무머리1분HA음봉 패스(다음1분 대기){s_cap_note}"
+                f"  ⚡ <b>[서브1층: 공석]</b> 🌑눌림({s_pb_s}) 무머리1분HA음봉 패스(다음1분 대기){s_cap_note}"
             )
         elif sub_vwap_wait:
             lines.append(
-                f"  ⚡ <b>[서브1층: 공석]</b> 🛡️눌림&gt;VWAP(${sub_vwap_u:.2f}) 패스{sub_lb_note}{s_cap_note}"
+                f"  ⚡ <b>[서브1층: 공석]</b> 🛡️눌림({s_pb_s})&gt;VWAP(${sub_vwap_u:.2f}) 패스{sub_lb_note}{s_cap_note}"
             )
         elif is_late_cutoff:
             lines.append(
-                f"  ⚡ <b>[서브1층: 공석]</b> 🛡️돌파차단 · 눌림(&lt;=VWAP·{s_ha_tag}){sub_lb_note}{s_cap_note}"
+                f"  ⚡ <b>[서브1층: 공석]</b> 🛡️돌파차단 · 눌림({s_pb_s}·&lt;=VWAP·{s_ha_tag}){sub_lb_note}{s_cap_note}"
             )
         elif live_rsi_14 > 50.0:
             lines.append(
-                f"  ⚡ <b>[서브1층: 공석]</b> 눌림(&lt;=VWAP){sub_lb_note}/🛡️돌파차단(RSI {live_rsi_14:.1f}&gt;50){s_cap_note}"
+                f"  ⚡ <b>[서브1층: 공석]</b> 눌림({s_pb_s}·&lt;=VWAP){sub_lb_note}/🛡️돌파차단(RSI {live_rsi_14:.1f}&gt;50){s_cap_note}"
             )
         else:
             lines.append(
-                f"  ⚡ <b>[서브1층: 공석]</b> 눌림(&lt;=VWAP){sub_lb_note}/돌파(RSI&lt;=50){s_cap_note}"
+                f"  ⚡ <b>[서브1층: 공석]</b> 눌림({s_pb_s}·&lt;=VWAP){sub_lb_note}/돌파(RSI&lt;=50){s_cap_note}"
             )
 
     if sub_upper_buckets:
@@ -1074,6 +1089,12 @@ def build_avwap_radar_message(
                 f"▫️ 본그리드(8%): 현재가 <b>${lp:.2f}</b> 기준 {quota_badge_str} (${next_bud:,.0f})"
             )
     elif is_l2_only:
+        g_pb_u = safe_float(
+            summary.get("reentry_pullback_drop_pct"),
+            resolve_smart_pullback_drop_pct(
+                st.get("portion_mode")
+            ),
+        )
         pull_p = safe_float(summary.get("reentry_pullback_price"), 0.0)
         brk_p = safe_float(summary.get("reentry_breakout_price"), 0.0)
         c_min_re = safe_float(summary.get("cycle_min_buy_price"), 0.0)
@@ -1093,7 +1114,7 @@ def build_avwap_radar_message(
         vwap_str = f"&lt;=VWAP(${sess_vwap:.2f})·" if sess_vwap > 0.0 else ""
         lb_re_str = f" · 저가 <b>&lt;${c_min_re:.2f}</b>" if c_min_re > 0.0 else ""
         gate_cond_lines.append(
-            f"▫️ 눌림 <b>${pull_p:.2f}</b>({vwap_str}{pull_ha_badge}){lb_re_str} / {brk_str} 시 {quota_badge_str}"
+            f"▫️ 눌림({g_pb_u:.1f}%) <b>${pull_p:.2f}</b>({vwap_str}{pull_ha_badge}){lb_re_str} / {brk_str} 시 {quota_badge_str}"
         )
         if bool(summary.get("primer_eligible", False)):
             p_trig_re = safe_float(summary.get("primer_trigger_price"), 0.0)
@@ -1578,6 +1599,11 @@ def build_settlement_control_message(
         "──────────────",
         f"1️⃣ 스나이퍼 전원: <b>{power_str}</b> (수수료 {rt_fee_pct:.2f}%)",
         f"2️⃣ 운용 정량모드: <b>{p_mode_str}</b> (<code>/mode</code>)",
+        (
+            f"   ▫️ 공석 눌림목: "
+            f"<b>{resolve_smart_pullback_drop_pct(st.get('portion_mode')):.2f}%</b>"
+            f" (바벨-1.0 · 단리-1.5 · 복리-2.0%)"
+        ),
         f"   ▫️ 1주 마중물: <b>{escape_html(primer_badge)}</b> (<code>/primer</code> · 매수{p_buy_c}/익절{p_sell_c}/흡수{p_abs_c} · {p_net_sign}${abs(p_net_u):,.2f})",
         f"3️⃣ 암살자 승격: <b>{assn_mode_str}</b> (<code>/assassin_mode</code>)",
         f"4️⃣ 기준 시드: <b>${init_seed:,.2f}</b> (확정자산 ${real_eq:,.2f})",
@@ -2190,6 +2216,9 @@ class TelegramCommandController:
                 "🔄 <b>[3단 운용 정량모드 순환 완료]</b>\n"
                 f"▫️ 현재 모드: <b>{m_lbl}</b>\n"
                 f"▫️ 1주 마중물 연동: <b>{primer_b_lbl}</b>\n"
+                f"▫️ 공석 눌림목 연동: "
+                f"<b>{resolve_smart_pullback_drop_pct(updated_st.get('portion_mode')):.2f}%</b> "
+                f"(스마트 자동연동)\n"
                 f"▫️ 본그리드 1회(8%): <b>${next_bud:,.2f}</b> ({_format_case67_quota_badge(summary)})\n"
                 f"▫️ 서브그리드 1회(4%): <b>${sub_bud:,.2f}</b> ({_format_sub_quota_badge(summary)})"
             ),

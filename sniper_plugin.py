@@ -77,6 +77,7 @@ from quant_engine import (
     resolve_effective_round_trip_fee_rate_pct,
     resolve_portion_budget_base_equity,
     resolve_smart_primer_policy,
+    resolve_smart_pullback_drop_pct,
     safe_bucket_lot_count,
 )
 from quant_indicators_plugin import (
@@ -604,6 +605,7 @@ async def _execute_sub_grid_buy_engine_plugin(
             cycle_min_buy_price=(
                 sub_cycle_min_p_re if sub_cycle_min_p_re > 0.0 else None
             ),
+            portion_mode=portion_mode,
         )
         sub_sig_type = str(sub_re_sig.get("signal_type") or "HOLD_WAIT_GATE")
 
@@ -812,6 +814,30 @@ async def _execute_sub_grid_buy_engine_plugin(
                         return {
                             "status": "SUB_L2_ONLY_LOW_BREAK_REBOUNDED",
                             "signal_type": "HOLD_ABOVE_CYCLE_MIN",
+                        }
+                    m_spm = str(st_now.get("portion_mode") or "")
+                    m_sanc = safe_float(
+                        st_now.get("sub_anchor_price"),
+                        min(sb.book_price for sb in now_sub_buckets),
+                    )
+                    m_spb = resolve_smart_pullback_drop_pct(m_spm)
+                    if (
+                        sub_sig_type == "PULLBACK_RELOAD"
+                        and m_sanc > 0.0
+                        and ((fresh_live_p - m_sanc) / m_sanc * 100.0)
+                        > (m_spb + 1e-6)
+                    ):
+                        s_ep = mark_sub_reentry_monitor_60s_cycle_shield(
+                            context=context,
+                            symbol=TARGET_SYMBOL,
+                            eval_price=fresh_live_p,
+                        )
+                        await context.ledger.update_state(
+                            TARGET_SYMBOL, last_sub_reentry_eval_ts=s_ep
+                        )
+                        return {
+                            "status": "SUB_PULLBACK_MODE_SHIFT_HOLD",
+                            "signal_type": "HOLD_WAIT_GATE",
                         }
                     if (
                         sub_sig_type == "PULLBACK_RELOAD"
@@ -2223,6 +2249,7 @@ async def execute_seed_protected_buy_gate_plugin(
             session_vwap=sess_vwap,
             hm=hm,
             cycle_min_buy_price=(cycle_min_p_re if cycle_min_p_re > 0.0 else None),
+            portion_mode=portion_mode,
         )
         sig_type = str(reentry_sig.get("signal_type") or "HOLD_WAIT_GATE")
 
@@ -2367,7 +2394,7 @@ async def execute_seed_protected_buy_gate_plugin(
                 }
             if sig_type == "HOLD_PULLBACK_ABOVE_SESSION_VWAP":
                 logger.info(
-                    "🛡️ [Case 105 1층 공석 -1.0%% 눌림목 > 세션VWAP 패스] 현재가 $%.2f > 세션VWAP $%.2f (직전익절 $%.2f 대비 %+.2f%%) -> 고가매수 차단 & 60초 타임쉴드",
+                    "🛡️ [Case 105/111 1층 공석 스마트눌림목 > 세션VWAP 패스] 현재가 $%.2f > 세션VWAP $%.2f (직전익절 $%.2f 대비 %+.2f%%) -> 고가매수 차단 & 60초 타임쉴드",
                     fresh_live_p,
                     sess_vwap,
                     safe_float(reentry_sig.get("ref_anchor"), anchor_p),
@@ -2645,6 +2672,30 @@ async def execute_seed_protected_buy_gate_plugin(
                             "status": "L2_ONLY_LOW_BREAK_REBOUNDED",
                             "signal_type": "HOLD_ABOVE_CYCLE_MIN",
                             "live_price": fresh_live_p,
+                        }
+                    m_pm = str(st_now.get("portion_mode") or "")
+                    m_anc = safe_float(
+                        st_now.get("anchor_price"),
+                        min(b.book_price for b in now_buckets),
+                    )
+                    m_pb_r = resolve_smart_pullback_drop_pct(m_pm)
+                    if (
+                        sig_type == "PULLBACK_RELOAD"
+                        and m_anc > 0.0
+                        and ((fresh_live_p - m_anc) / m_anc * 100.0)
+                        > (m_pb_r + 1e-6)
+                    ):
+                        m_ep = mark_reentry_monitor_60s_cycle_shield(
+                            context=context,
+                            symbol=TARGET_SYMBOL,
+                            eval_price=fresh_live_p,
+                        )
+                        await context.ledger.update_state(
+                            TARGET_SYMBOL, last_reentry_eval_ts=m_ep
+                        )
+                        return {
+                            "status": "L2_PULLBACK_MODE_SHIFT_HOLD",
+                            "signal_type": "HOLD_WAIT_GATE",
                         }
                     if (
                         sig_type == "PULLBACK_RELOAD"

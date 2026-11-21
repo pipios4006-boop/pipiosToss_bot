@@ -51,7 +51,10 @@ from quant_engine_core import (
     REANCHOR_NET_BUFFER_MULT,
     REENTRY_BREAKOUT_MAX_RSI_50,
     REENTRY_BREAKOUT_RISE_PCT,
+    REENTRY_PULLBACK_BARBELL_PCT,
+    REENTRY_PULLBACK_COMPOUND_PCT,
     REENTRY_PULLBACK_DROP_PCT,
+    REENTRY_PULLBACK_SIMPLE_PCT,
     REG_OPEN_VWAP_SHIELD_END_HM,
     REG_OPEN_VWAP_SHIELD_START_HM,
     RESERVE_DEPOSIT_TOLERANCE_RATIO,
@@ -119,6 +122,7 @@ from quant_engine_core import (
     resolve_effective_round_trip_fee_rate_pct,
     resolve_portion_budget_base_equity,
     resolve_smart_primer_policy,
+    resolve_smart_pullback_drop_pct,
     safe_bucket_lot_count,
     set_runtime_round_trip_fee_rate_pct,
 )
@@ -1680,6 +1684,7 @@ def summarize_stratum_portfolio(
         session_vwap=eff_sess_vwap,
         hm=eff_hm_for_re,
         cycle_min_buy_price=(cycle_min_p if cycle_min_p > 0.0 else None),
+        portion_mode=portion_mode,
     )
     l2_vac_low_brk_sig = evaluate_l2_vacant_low_break_signal(
         live_price=lp,
@@ -1976,6 +1981,7 @@ def summarize_stratum_portfolio(
         cycle_min_buy_price=(
             sub_cycle_min_p if sub_cycle_min_p > 0.0 else None
         ),
+        portion_mode=portion_mode,
     )
     sub_reentry_ref_anchor = safe_float(
         sub_reentry_sig.get("ref_anchor"), sub_anchor_p
@@ -2416,6 +2422,12 @@ def summarize_stratum_portfolio(
         "sub_stepped_trigger_price": sub_stepped_trigger_price,
         "sub_trigger_tag": sub_trigger_tag,
         "sub_reentry_ref_anchor": round(sub_reentry_ref_anchor, 4),
+        "sub_reentry_pullback_drop_pct": safe_float(
+            sub_reentry_sig.get("pullback_drop_pct"),
+            resolve_smart_pullback_drop_pct(
+                portion_mode
+            ),
+        ),
         "sub_reentry_pullback_price": sub_reentry_pullback_price,
         "sub_reentry_breakout_price": sub_reentry_breakout_price,
         "sub_chg_from_reentry_anchor_pct": sub_chg_from_reentry_anchor_pct,
@@ -2556,6 +2568,12 @@ def summarize_stratum_portfolio(
         "cond_unlock_buy_events": cond_unlock_buy_events,
         "daily_unlock_buy_events": daily_unlock_buy_events,
         "reentry_ref_anchor": round(reentry_ref_anchor, 4),
+        "reentry_pullback_drop_pct": safe_float(
+            reentry_sig.get("pullback_drop_pct"),
+            resolve_smart_pullback_drop_pct(
+                portion_mode
+            ),
+        ),
         "reentry_pullback_price": reentry_pullback_price,
         "reentry_breakout_price": reentry_breakout_price,
         "chg_from_reentry_anchor_pct": chg_from_reentry_anchor_pct,
@@ -3064,6 +3082,30 @@ def run_quant_engine_tdd() -> bool:
             and abs(b_hi_manual[0].book_price - 46.90) < 1e-4
             and b_hi_manual[0].book_price <= b_hi_manual[1].book_price + 1e-6
         ), f"Audit-110-01 고가 수동매수 단가역전 방어 실패: {b_hi_manual[:3]}"
+
+        # [Case 111 TDD] 스마트 눌림목 검증
+        t_cases = (
+            ("BARBELL_60_30_10", 98.8, True, 99.0, -1.0),
+            ("SIMPLE_08PCT", 98.8, False, 98.5, -1.5),
+            ("SIMPLE_08PCT", 98.4, True, 98.5, -1.5),
+            ("COMP_08PCT", 98.4, False, 98.0, -2.0),
+            ("COMP_08PCT", 97.95, True, 98.0, -2.0),
+            (None, 98.8, True, 99.0, -1.0),
+        )
+        for mk, lpv, ex_b, ex_tp, ex_d in t_cases:
+            r111 = evaluate_l2_only_hybrid_reentry_signal(
+                live_price=lpv,
+                anchor_price=100.00,
+                min_upper_tier_price=105.00,
+                closed_ha_shaved_bear=False,
+                closed_ha_ready=True,
+                session_vwap=99.20,
+                hm=1030,
+                portion_mode=mk,
+            )
+            assert bool(r111["should_buy"]) is ex_b
+            assert r111["pullback_target_price"] == ex_tp
+            assert r111["pullback_drop_pct"] == ex_d
 
     finally:
         set_runtime_round_trip_fee_rate_pct(prev_rt, us_commission_rate=prev_one)

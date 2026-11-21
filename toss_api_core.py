@@ -108,6 +108,11 @@ PRIMER_1SH_LOT_TAG: str = "PRIMER_1SH"
 PRIMER_1SH_VAC_LOT_TAG: str = "PRIMER_1SH_VAC_L1"
 PRIMER_MODE_AUTO_SMART: str = "AUTO_SMART"
 PRIMER_MODE_OFF: str = "OFF"
+
+# NEW [Case 111 : 모드별 스마트 눌림목 상수]
+REENTRY_PULLBACK_BARBELL_PCT: float = -1.00
+REENTRY_PULLBACK_SIMPLE_PCT: float = -1.50
+REENTRY_PULLBACK_COMPOUND_PCT: float = -2.00
 VALID_PRIMER_MODES: Tuple[str, ...] = (PRIMER_MODE_AUTO_SMART, PRIMER_MODE_OFF)
 
 LOCKED_BUY_INTERVAL_MIN: int = 10
@@ -280,6 +285,22 @@ def resolve_smart_primer_policy(
         "allow_new_sub_entry": False,
         "policy_badge": "🧠스마트ON(무합병6층↓·서브신규OFF)",
     }
+
+
+def resolve_smart_pullback_drop_pct(
+    portion_mode: Any,
+) -> float:
+    """
+    # NEW [Case 111 : 모드별 스마트 눌림목 해석기]
+    - BARBELL_60_30_10 : -1.00%
+    - SIMPLE_08PCT     : -1.50%
+    - COMP_08PCT       : -2.00%
+    """
+    if is_barbell_mode(portion_mode):
+        return REENTRY_PULLBACK_BARBELL_PCT
+    if is_simple_income_mode(portion_mode):
+        return REENTRY_PULLBACK_SIMPLE_PCT
+    return REENTRY_PULLBACK_COMPOUND_PCT
 
 
 def resolve_trading_session_date_est(

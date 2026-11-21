@@ -65,6 +65,7 @@ from quant_engine import (
     relabel_sub_upper_grid_tiers,
     relabel_upper_grid_tiers,
     resolve_effective_round_trip_fee_rate_pct,
+    resolve_smart_pullback_drop_pct,
     safe_bucket_lot_count,
     vrev_reanchor_single_tier_quota,
 )
@@ -2183,11 +2184,11 @@ async def _commit_filled_sell_and_reanchor_ledger(
                     elif will_hit_late_cutoff_after_shield:
                         reload_guide = (
                             f"🛡️60초 타임쉴드 후 장마감 30분전(15:30 ~ 16:00) +1.0% 돌파차단 · "
-                            f"2층상한 ${l2_cap_p:.2f} 이하 눌림(-1%·<=세션VWAP) & 최저가돌파(<${next_cycle_min_p:.2f}{ratchet_lock_note}) 감시"
+                            f"2층상한 ${l2_cap_p:.2f} 이하 눌림({resolve_smart_pullback_drop_pct(st.get('portion_mode')):.1f}%·<=세션VWAP) & 최저가돌파(<${next_cycle_min_p:.2f}{ratchet_lock_note}) 감시"
                         )
                     else:
                         reload_guide = (
-                            f"🛡️60초 타임쉴드 후 1층재장전(눌림<=세션VWAP · 최저가돌파 <${next_cycle_min_p:.2f}{ratchet_lock_note} · 상한 ${l2_cap_p:.2f})"
+                            f"🛡️60초 타임쉴드 후 1층재장전(눌림 {resolve_smart_pullback_drop_pct(st.get('portion_mode')):.1f}%·<=세션VWAP · 최저가돌파 <${next_cycle_min_p:.2f}{ratchet_lock_note} · 상한 ${l2_cap_p:.2f})"
                         )
                     primer_reset_prefix = (
                         f"🎯앵커 ${old_anchor_p:.2f}➔${next_anchor_p:.2f} 리셋 완료(정식 8% 공격수 해금 · 본동결 {next_main_frozen_d}일 보존) · "

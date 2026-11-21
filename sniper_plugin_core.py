@@ -62,6 +62,7 @@ from quant_engine import (
     resolve_effective_round_trip_fee_rate_pct,
     resolve_portion_budget_base_equity,
     resolve_smart_primer_policy,
+    resolve_smart_pullback_drop_pct,
     safe_bucket_lot_count,
     summarize_stratum_portfolio,
     vrev_add_quota_lot_and_merge_2tier,
@@ -1704,11 +1705,15 @@ async def _commit_filled_buy_to_stratum_ledger(
                     f"{q_int}주 @ ${fill_p:.2f}"
                 )
             elif was_sub_l2_only and sub_tag == "SUB_REENTRY_1FL":
-                sub_re_lbl = (
-                    "최저가 돌파 재장전"
-                    if raw_tag == "SUB_REENTRY_1FL_LOW_BREAK"
-                    else "재장전"
+                s_pb = resolve_smart_pullback_drop_pct(
+                    st.get("portion_mode")
                 )
+                if raw_tag == "SUB_REENTRY_1FL_LOW_BREAK":
+                    sub_re_lbl = "최저가 돌파 재장전"
+                elif raw_tag == "SUB_REENTRY_1FL_BREAKOUT":
+                    sub_re_lbl = "+1% 돌파 재장전"
+                else:
+                    sub_re_lbl = f"{s_pb:.1f}% 눌림 재장전"
                 title_str = (
                     f"🛡️ [SOXL 서브그리드 1층 {sub_re_lbl} 체결 ({new_sub_lots}/{SUB_MAX_TOTAL_LOTS_4}회분 · {new_sub_tiers}개층)] "
                     f"{q_int}주 @ ${fill_p:.2f}"
@@ -2037,7 +2042,12 @@ async def _commit_filled_buy_to_stratum_ledger(
             elif raw_tag == "REENTRY_1FL_BREAKOUT":
                 re_mode_lbl = "1층공석 +1% 돌파"
             else:
-                re_mode_lbl = "1층공석 -1% 눌림목"
+                m_pb = resolve_smart_pullback_drop_pct(
+                    st.get("portion_mode")
+                )
+                re_mode_lbl = (
+                    f"1층공석 {m_pb:.1f}% 눌림목"
+                )
             title_str = (
                 f"🔥 [SOXL {re_mode_lbl} 재장전 체결] {q_int}주 @ ${fill_p:.2f} (상단 {u_cnt}개층 비병합)"
             )

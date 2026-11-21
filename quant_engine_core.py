@@ -32,9 +32,13 @@ from toss_api import (
     PRIMER_1SH_VAC_LOT_TAG,
     PRIMER_MODE_AUTO_SMART,
     PRIMER_MODE_OFF,
+    REENTRY_PULLBACK_BARBELL_PCT,
+    REENTRY_PULLBACK_COMPOUND_PCT,
+    REENTRY_PULLBACK_SIMPLE_PCT,
     VALID_PRIMER_MODES,
     is_primer_1sh_tag,
     resolve_smart_primer_policy,
+    resolve_smart_pullback_drop_pct,
     safe_bucket_lot_count,
     safe_float,
     safe_int,
@@ -1166,6 +1170,8 @@ def evaluate_l2_only_hybrid_reentry_signal(
     session_vwap: Optional[float] = None,
     hm: Optional[int] = None,
     cycle_min_buy_price: Optional[float] = None,
+    portion_mode: Optional[Any] = None,
+    pullback_drop_pct: Optional[float] = None,
 ) -> Dict[str, Any]:
     # MODIFIED [Case 101 & Case 105]:
     # 1) 최저가 돌파매수(LOW_BREAK_RELOAD): 지정가 < 기억저가 도달 시 무머리 1분봉 HA음봉만 패스 후 즉시 매수
@@ -1236,8 +1242,31 @@ def evaluate_l2_only_hybrid_reentry_signal(
         else (ceil_p if ceil_p > 0.0 else (b2_p if b2_p > 0.0 else lp))
     )
 
+    if pullback_drop_pct is not None:
+        raw_pb = safe_float(
+            pullback_drop_pct,
+            REENTRY_PULLBACK_DROP_PCT,
+        )
+        eff_pb_drop_pct = (
+            -abs(raw_pb)
+            if abs(raw_pb) > 1e-6
+            else REENTRY_PULLBACK_DROP_PCT
+        )
+    elif (
+        portion_mode is not None
+        and str(portion_mode).strip() != ""
+    ):
+        eff_pb_drop_pct = (
+            resolve_smart_pullback_drop_pct(
+                portion_mode
+            )
+        )
+    else:
+        eff_pb_drop_pct = REENTRY_PULLBACK_DROP_PCT
+
+    pb_mult = 1.0 + eff_pb_drop_pct / 100.0
     pullback_target_p = (
-        round(ref_anchor * (1.0 + REENTRY_PULLBACK_DROP_PCT / 100.0), 2)
+        round(ref_anchor * pb_mult, 2)
         if ref_anchor > 0.0
         else 0.0
     )
@@ -1254,6 +1283,7 @@ def evaluate_l2_only_hybrid_reentry_signal(
             "ref_anchor": round(ref_anchor, 4),
             "quota_ref_price": round(ref_anchor, 4),
             "chg_from_exit_pct": 0.0,
+            "pullback_drop_pct": round(eff_pb_drop_pct, 2),
             "pullback_target_price": pullback_target_p,
             "breakout_target_price": breakout_target_p,
             "l2_ceiling_price": round(ceil_p, 4),
@@ -1279,6 +1309,7 @@ def evaluate_l2_only_hybrid_reentry_signal(
             "ref_anchor": round(ref_anchor, 4),
             "quota_ref_price": round(ref_anchor, 4),
             "chg_from_exit_pct": round(chg_from_exit_pct, 2),
+            "pullback_drop_pct": round(eff_pb_drop_pct, 2),
             "pullback_target_price": pullback_target_p,
             "breakout_target_price": breakout_target_p,
             "l2_ceiling_price": round(ceil_p, 4),
@@ -1305,7 +1336,8 @@ def evaluate_l2_only_hybrid_reentry_signal(
                 "ref_anchor": round(ref_anchor, 4),
                 "quota_ref_price": c_min_p,
                 "chg_from_exit_pct": round(chg_from_exit_pct, 2),
-                "pullback_target_price": pullback_target_p,
+                "pullback_drop_pct": round(eff_pb_drop_pct, 2),
+            "pullback_target_price": pullback_target_p,
                 "breakout_target_price": breakout_target_p,
                 "l2_ceiling_price": round(ceil_p, 4),
                 "rsi_14": eff_rsi_val,
@@ -1326,6 +1358,7 @@ def evaluate_l2_only_hybrid_reentry_signal(
             "ref_anchor": round(ref_anchor, 4),
             "quota_ref_price": c_min_p,
             "chg_from_exit_pct": round(chg_from_exit_pct, 2),
+            "pullback_drop_pct": round(eff_pb_drop_pct, 2),
             "pullback_target_price": pullback_target_p,
             "breakout_target_price": breakout_target_p,
             "l2_ceiling_price": round(ceil_p, 4),
@@ -1343,7 +1376,7 @@ def evaluate_l2_only_hybrid_reentry_signal(
         }
 
     # [Case 101 & Case 105 경로 2 : -1.00% 눌림목 재장전 (7분쉴드 + 무머리HA음봉 패스 + 현재가 > 세션VWAP 패스)]
-    if chg_from_exit_pct <= REENTRY_PULLBACK_DROP_PCT:
+    if chg_from_exit_pct <= eff_pb_drop_pct:
         if is_reg_open_7m_shield:
             return {
                 "should_buy": False,
@@ -1351,7 +1384,8 @@ def evaluate_l2_only_hybrid_reentry_signal(
                 "ref_anchor": round(ref_anchor, 4),
                 "quota_ref_price": round(ref_anchor, 4),
                 "chg_from_exit_pct": round(chg_from_exit_pct, 2),
-                "pullback_target_price": pullback_target_p,
+                "pullback_drop_pct": round(eff_pb_drop_pct, 2),
+            "pullback_target_price": pullback_target_p,
                 "breakout_target_price": breakout_target_p,
                 "l2_ceiling_price": round(ceil_p, 4),
                 "rsi_14": eff_rsi_val,
@@ -1373,7 +1407,8 @@ def evaluate_l2_only_hybrid_reentry_signal(
                 "ref_anchor": round(ref_anchor, 4),
                 "quota_ref_price": round(ref_anchor, 4),
                 "chg_from_exit_pct": round(chg_from_exit_pct, 2),
-                "pullback_target_price": pullback_target_p,
+                "pullback_drop_pct": round(eff_pb_drop_pct, 2),
+            "pullback_target_price": pullback_target_p,
                 "breakout_target_price": breakout_target_p,
                 "l2_ceiling_price": round(ceil_p, 4),
                 "rsi_14": eff_rsi_val,
@@ -1395,7 +1430,8 @@ def evaluate_l2_only_hybrid_reentry_signal(
                 "ref_anchor": round(ref_anchor, 4),
                 "quota_ref_price": round(ref_anchor, 4),
                 "chg_from_exit_pct": round(chg_from_exit_pct, 2),
-                "pullback_target_price": pullback_target_p,
+                "pullback_drop_pct": round(eff_pb_drop_pct, 2),
+            "pullback_target_price": pullback_target_p,
                 "breakout_target_price": breakout_target_p,
                 "l2_ceiling_price": round(ceil_p, 4),
                 "rsi_14": eff_rsi_val,
@@ -1416,6 +1452,7 @@ def evaluate_l2_only_hybrid_reentry_signal(
             "ref_anchor": round(ref_anchor, 4),
             "quota_ref_price": round(ref_anchor, 4),
             "chg_from_exit_pct": round(chg_from_exit_pct, 2),
+            "pullback_drop_pct": round(eff_pb_drop_pct, 2),
             "pullback_target_price": pullback_target_p,
             "breakout_target_price": breakout_target_p,
             "l2_ceiling_price": round(ceil_p, 4),
@@ -1440,7 +1477,8 @@ def evaluate_l2_only_hybrid_reentry_signal(
                 "ref_anchor": round(ref_anchor, 4),
                 "quota_ref_price": round(ref_anchor, 4),
                 "chg_from_exit_pct": round(chg_from_exit_pct, 2),
-                "pullback_target_price": pullback_target_p,
+                "pullback_drop_pct": round(eff_pb_drop_pct, 2),
+            "pullback_target_price": pullback_target_p,
                 "breakout_target_price": breakout_target_p,
                 "l2_ceiling_price": round(ceil_p, 4),
                 "rsi_14": eff_rsi_val,
@@ -1454,7 +1492,8 @@ def evaluate_l2_only_hybrid_reentry_signal(
                 "ref_anchor": round(ref_anchor, 4),
                 "quota_ref_price": round(ref_anchor, 4),
                 "chg_from_exit_pct": round(chg_from_exit_pct, 2),
-                "pullback_target_price": pullback_target_p,
+                "pullback_drop_pct": round(eff_pb_drop_pct, 2),
+            "pullback_target_price": pullback_target_p,
                 "breakout_target_price": breakout_target_p,
                 "l2_ceiling_price": round(ceil_p, 4),
                 "rsi_14": eff_rsi_val,
@@ -1467,6 +1506,7 @@ def evaluate_l2_only_hybrid_reentry_signal(
             "ref_anchor": round(ref_anchor, 4),
             "quota_ref_price": round(ref_anchor, 4),
             "chg_from_exit_pct": round(chg_from_exit_pct, 2),
+            "pullback_drop_pct": round(eff_pb_drop_pct, 2),
             "pullback_target_price": pullback_target_p,
             "breakout_target_price": breakout_target_p,
             "l2_ceiling_price": round(ceil_p, 4),
@@ -1481,7 +1521,8 @@ def evaluate_l2_only_hybrid_reentry_signal(
         "ref_anchor": round(ref_anchor, 4),
         "quota_ref_price": round(ref_anchor, 4),
         "chg_from_exit_pct": round(chg_from_exit_pct, 2),
-        "pullback_target_price": pullback_target_p,
+        "pullback_drop_pct": round(eff_pb_drop_pct, 2),
+            "pullback_target_price": pullback_target_p,
         "breakout_target_price": breakout_target_p,
         "l2_ceiling_price": round(ceil_p, 4),
         "rsi_14": eff_rsi_val,
