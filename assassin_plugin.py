@@ -6221,7 +6221,9 @@ async def execute_simulated_assassin_tick_plugin(
                 hard_fl = _resolve_live_profit_exit_floor_price(
                     st, exit_code, peak_override=eval_pk
                 )
-                base_arm_fl = safe_float(st.get("arm_100_price"), hard_fl)
+                # MODIFIED [Audit-111-03]: arm_100_price=0.0 시 hard_fl 폴백 무결성 보장
+                raw_arm_fl = safe_float(st.get("arm_100_price"), 0.0)
+                base_arm_fl = raw_arm_fl if raw_arm_fl > 0.0 else hard_fl
                 # NEW [Case 107]: 발주 직전 2차 실호가가 +1.00% 점화선 미만으로 급락 시 허공 발주 없이 즉시 용서 릴리스
                 if (
                     exit_code in _TRAIL_LOCKED_EXIT_CODES

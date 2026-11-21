@@ -418,9 +418,13 @@ async def reconcile_stratum_with_broker_holdings_plugin(
         ),
         4,
     )
-    live_p = safe_float(
-        (prices or {}).get(TARGET_SYMBOL),
-        safe_float(h_info.get("last_price"), h_avg),
+    # MODIFIED [Audit-111-01]: 시세 0.0 전달 시 브로커 보유 현재가 및 평단가 폴백 보장
+    raw_p_in = safe_float((prices or {}).get(TARGET_SYMBOL), 0.0)
+    hold_last_p = safe_float(h_info.get("last_price"), 0.0)
+    live_p = (
+        raw_p_in
+        if raw_p_in > 0.0
+        else (hold_last_p if hold_last_p > 0.0 else h_avg)
     )
 
     if pending_buy_oid or pending_sell_oid:
@@ -2428,12 +2432,16 @@ async def execute_1600_daily_closing_settlement_plugin(
         except Exception as exc:
             logger.debug("16:00 마감 스냅샷 백업 예외(무시): %s", exc)
 
-    live_p = safe_float(
-        (prices or {}).get(TARGET_SYMBOL),
-        safe_float(
-            (holdings or {}).get(TARGET_SYMBOL, {}).get("last_price"),
-            safe_float(updated_st.get("anchor_price"), 0.0),
-        ),
+    # MODIFIED [Audit-111-01]: 16:00 마감 결산 시 시세 0.0 마스킹 차단 및 순차 폴백 보장
+    raw_p_eod = safe_float((prices or {}).get(TARGET_SYMBOL), 0.0)
+    hold_p_eod = safe_float(
+        (holdings or {}).get(TARGET_SYMBOL, {}).get("last_price"), 0.0
+    )
+    anc_p_eod = safe_float(updated_st.get("anchor_price"), 0.0)
+    live_p = (
+        raw_p_eod
+        if raw_p_eod > 0.0
+        else (hold_p_eod if hold_p_eod > 0.0 else anc_p_eod)
     )
     summary = summarize_stratum_portfolio(updated_st, live_price=live_p)
     fx_rate = await context.api.get_usd_krw_rate()

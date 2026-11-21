@@ -564,6 +564,7 @@ async def _execute_sub_grid_buy_engine_plugin(
         )
         if fresh_live_p <= 0.0:
             return {"status": "NO_FRESH_LIVE_PRICE"}
+        sub_re_price_mono = time.monotonic()  # NEW [Audit-111-02]
 
         (
             live_rsi_14,
@@ -698,6 +699,13 @@ async def _execute_sub_grid_buy_engine_plugin(
 
                 dt_re_m = datetime.now(EST_TZ)
                 hm_re_m = dt_re_m.hour * 100 + dt_re_m.minute
+                # NEW [Audit-111-02]: 뮤텍스 경합 대기(>=0.25s) 발생 시 브로커 2차 실호가 즉시 재동기화
+                if (time.monotonic() - sub_re_price_mono) >= 0.25:
+                    live_2nd_sub = await _fetch_fresh_current_soxl_price(
+                        context, fallback_price=fresh_live_p, now_est=dt_re_m
+                    )
+                    if live_2nd_sub > 0.0:
+                        fresh_live_p = live_2nd_sub
                 if (
                     sub_sig_type == "BREAKOUT_RELOAD"
                     and is_late_regular_new_cycle_cutoff_window(
@@ -815,10 +823,13 @@ async def _execute_sub_grid_buy_engine_plugin(
                             "status": "SUB_L2_ONLY_LOW_BREAK_REBOUNDED",
                             "signal_type": "HOLD_ABOVE_CYCLE_MIN",
                         }
+                    # MODIFIED [Audit-111-02]: sub_anchor_price=0.0 시 상단 최저단가 폴백 보장
                     m_spm = str(st_now.get("portion_mode") or "")
-                    m_sanc = safe_float(
-                        st_now.get("sub_anchor_price"),
-                        min(sb.book_price for sb in now_sub_buckets),
+                    raw_m_sanc = safe_float(st_now.get("sub_anchor_price"), 0.0)
+                    m_sanc = (
+                        raw_m_sanc
+                        if raw_m_sanc > 0.0
+                        else min(sb.book_price for sb in now_sub_buckets)
                     )
                     m_spb = resolve_smart_pullback_drop_pct(m_spm)
                     if (
@@ -2210,6 +2221,7 @@ async def execute_seed_protected_buy_gate_plugin(
         )
         if fresh_live_p <= 0.0:
             return {"status": "NO_FRESH_LIVE_PRICE"}
+        re_price_mono = time.monotonic()  # NEW [Audit-111-02]
 
         (
             live_rsi_14,
@@ -2430,10 +2442,11 @@ async def execute_seed_protected_buy_gate_plugin(
                 }
             if sig_type == "HOLD_LATE_SESSION_BREAKOUT_CUTOFF":
                 logger.info(
-                    "🛡️ [Case 84 장마감 30분전(15:30~16:00 EST) 1층 공석 +1.0%% 돌파 추격 원천 차단] 현재가 $%.2f (직전익절 $%.2f 대비 %+.2f%%) -> 돌파매수 패스 & 눌림목(-1.0%%)만 감시",
+                    "🛡️ [Case 84/111 장마감 30분전(15:30~16:00 EST) 1층 공석 +1.0%% 돌파 추격 원천 차단] 현재가 $%.2f (직전익절 $%.2f 대비 %+.2f%%) -> 돌파매수 패스 & 눌림목(%.1f%%)만 감시",
                     fresh_live_p,
                     safe_float(reentry_sig.get("ref_anchor"), anchor_p),
                     safe_float(reentry_sig.get("chg_from_exit_pct"), 0.0),
+                    resolve_smart_pullback_drop_pct(portion_mode),
                 )
                 return {
                     "status": "L2_ONLY_REENTRY_LATE_BREAKOUT_BLOCKED",
@@ -2448,12 +2461,13 @@ async def execute_seed_protected_buy_gate_plugin(
                 }
             if sig_type == "HOLD_BREAKOUT_RSI_OVER_50":
                 logger.info(
-                    "🛡️ [Case 92 1층 공석 +1.0%% 상승돌파 시 RSI(14) > 50.0 과열 차단] 현재가 $%.2f (직전익절 $%.2f 대비 %+.2f%%) · 실시간 RSI(14)=%.1f > %.1f -> 과열 돌파 패스 & 저점 눌림목(-1.0%%) 대기 (60초 타임쉴드 재장전)",
+                    "🛡️ [Case 92/111 1층 공석 +1.0%% 상승돌파 시 RSI(14) > 50.0 과열 차단] 현재가 $%.2f (직전익절 $%.2f 대비 %+.2f%%) · 실시간 RSI(14)=%.1f > %.1f -> 과열 돌파 패스 & 저점 눌림목(%.1f%%) 대기 (60초 타임쉴드 재장전)",
                     fresh_live_p,
                     safe_float(reentry_sig.get("ref_anchor"), anchor_p),
                     safe_float(reentry_sig.get("chg_from_exit_pct"), 0.0),
                     live_rsi_14,
                     REENTRY_BREAKOUT_MAX_RSI_50,
+                    resolve_smart_pullback_drop_pct(portion_mode),
                 )
                 return {
                     "status": "L2_ONLY_REENTRY_BREAKOUT_RSI_BLOCKED",
@@ -2503,6 +2517,13 @@ async def execute_seed_protected_buy_gate_plugin(
                     else datetime.now(EST_TZ)
                 )
                 hm_re_mutex = dt_re_mutex.hour * 100 + dt_re_mutex.minute
+                # NEW [Audit-111-02]: 뮤텍스 경합 대기(>=0.25s) 발생 시 브로커 2차 실호가 즉시 재동기화
+                if (time.monotonic() - re_price_mono) >= 0.25:
+                    live_2nd_re = await _fetch_fresh_current_soxl_price(
+                        context, fallback_price=fresh_live_p, now_est=dt_re_mutex
+                    )
+                    if live_2nd_re > 0.0:
+                        fresh_live_p = live_2nd_re
                 if (
                     sig_type == "BREAKOUT_RELOAD"
                     and is_late_regular_new_cycle_cutoff_window(
@@ -2673,10 +2694,13 @@ async def execute_seed_protected_buy_gate_plugin(
                             "signal_type": "HOLD_ABOVE_CYCLE_MIN",
                             "live_price": fresh_live_p,
                         }
+                    # MODIFIED [Audit-111-02]: anchor_price=0.0 시 상단 최저단가 폴백 보장
                     m_pm = str(st_now.get("portion_mode") or "")
-                    m_anc = safe_float(
-                        st_now.get("anchor_price"),
-                        min(b.book_price for b in now_buckets),
+                    raw_m_anc = safe_float(st_now.get("anchor_price"), 0.0)
+                    m_anc = (
+                        raw_m_anc
+                        if raw_m_anc > 0.0
+                        else min(b.book_price for b in now_buckets)
                     )
                     m_pb_r = resolve_smart_pullback_drop_pct(m_pm)
                     if (

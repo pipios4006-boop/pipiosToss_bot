@@ -1841,51 +1841,10 @@ class _AdaptiveTelegramBridge:
     async def _toggle_portion_mode_command(
         self, chat_id: str, edit_msg_id: Optional[int] = None
     ) -> None:
-        st_cur = self.context.ledger.get_state(TARGET_SYMBOL)
-        next_m = next_cycled_portion_mode(st_cur.get("portion_mode"))
-        updated_st = await self.context.ledger.update_state(
-            TARGET_SYMBOL, portion_mode=next_m
-        )
-        if is_barbell_mode(next_m):
-            if is_live_assassin_standalone_active(self.context):
-                await ensure_barbell_ledger(self.context).update_state(
-                    is_initialized=False
-                )
-            else:
-                await initialize_or_sync_barbell_on_mode_enter(self.context)
-                updated_st = self.context.ledger.get_state(TARGET_SYMBOL)
-
-        self.context.wakeup_event.set()
-        if edit_msg_id is not None and edit_msg_id > 0:
-            await self._render_and_send_settlement(
-                chat_id=chat_id, edit_msg_id=edit_msg_id
-            )
-            return
-
-        live_p, _ = await self._refresh_live_price_and_metrics()
-        summary = summarize_stratum_portfolio(updated_st, live_price=live_p)
-        if _is_barbell_portion_mode(updated_st):
-            m_lbl = "⚖️ 바벨모드 (60/30/10 · 수익금고 영구격리)"
-        elif _is_simple_portion_mode(updated_st):
-            m_lbl = "💵 스나이퍼 (단리 · SIMPLE_08PCT)"
-        else:
-            m_lbl = "📈 스나이퍼 (복리 · COMP_08PCT)"
-
-        next_bud = safe_float(summary.get("next_portion_budget"), 800.0)
-        sub_bud = safe_float(summary.get("sub_next_portion_budget"), 400.0)
-        primer_b_lbl = _escape_html(
-            str(summary.get("primer_policy_badge") or "🧠스마트ON")
-        )
-        await self.send_message(
-            chat_id=chat_id,
-            text=(
-                "🔄 <b>[3단 운용 정량모드 순환 완료]</b>\n"
-                f"▫️ 현재 모드: <b>{m_lbl}</b>\n"
-                f"▫️ 1주 마중물 연동: <b>{primer_b_lbl}</b>\n"
-                f"▫️ 본그리드 1회(8%): <b>${next_bud:,.2f}</b> ({_format_case67_quota_badge(summary)})\n"
-                f"▫️ 서브그리드 1회(4%): <b>${sub_bud:,.2f}</b> ({_format_sub_quota_badge(summary)})"
-            ),
-            reply_markup=_build_main_reply_keyboard(),
+        # MODIFIED [Audit-111-04]: TelegramUiController 공유 컨트롤러 단일 위임으로 Case 111 공석 눌림목 표기 100% 일원화
+        ctrl = self._get_shared_ctrl()
+        await ctrl._toggle_portion_mode_command(
+            chat_id=chat_id, edit_msg_id=edit_msg_id
         )
 
     async def _toggle_assassin_live_command(

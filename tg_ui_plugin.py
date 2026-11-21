@@ -856,12 +856,11 @@ def build_avwap_radar_message(
     )
 
     met = refresh_metrics_with_live_tick(metrics, live_price, now_est=dt_now)
-    lp = safe_float(
-        live_price,
-        safe_float(
-            met.get("live_price"), safe_float(st.get("anchor_price"), 0.0)
-        ),
-    )
+    # MODIFIED [Audit-111-01]: live_price=0.0 시 캔들지표 현재가 ➔ 원장 앵커 순차 폴백 보장
+    raw_lp = safe_float(live_price, 0.0)
+    met_lp = safe_float(met.get("live_price"), 0.0)
+    anc_lp = safe_float(st.get("anchor_price"), 0.0)
+    lp = raw_lp if raw_lp > 0.0 else (met_lp if met_lp > 0.0 else anc_lp)
     rsi_14 = safe_float(met.get("rsi_14"), 50.0)
     closed_ha_shaved_bear = bool(met.get("closed_ha_shaved_bear", False))
     closed_ha_bull = bool(met.get("closed_ha_bull", True))
@@ -1307,12 +1306,11 @@ def build_sync_instruction_message(
 ) -> str:
     dt_now = now_est.astimezone(EST_TZ) if now_est else datetime.now(EST_TZ)
     h_info = (holdings or {}).get(TARGET_SYMBOL, {})
-    lp = safe_float(
-        live_price,
-        safe_float(
-            h_info.get("last_price"), safe_float(st.get("anchor_price"), 0.0)
-        ),
-    )
+    # MODIFIED [Audit-111-01]: /sync 시 live_price=0.0 이면 브로커 보유 현재가 ➔ 앵커 폴백 보장
+    raw_lp = safe_float(live_price, 0.0)
+    hold_lp = safe_float(h_info.get("last_price"), 0.0)
+    anc_lp = safe_float(st.get("anchor_price"), 0.0)
+    lp = raw_lp if raw_lp > 0.0 else (hold_lp if hold_lp > 0.0 else anc_lp)
     summary = summarize_stratum_portfolio(st, live_price=lp, now_est=dt_now)
     is_barbell = _is_barbell_portion_mode(st)
     is_simple = _is_simple_portion_mode(st)
@@ -1499,7 +1497,10 @@ def build_settlement_control_message(
     context: Optional[Any] = None,
 ) -> str:
     dt_now = now_est.astimezone(EST_TZ) if now_est else datetime.now(EST_TZ)
-    lp = safe_float(live_price, safe_float(st.get("anchor_price"), 100.0))
+    # MODIFIED [Audit-111-01]: 기본값 live_price=0.0 호출 시 원장 앵커 ➔ $100.00 폴백 보장
+    raw_lp = safe_float(live_price, 0.0)
+    anc_lp = safe_float(st.get("anchor_price"), 0.0)
+    lp = raw_lp if raw_lp > 0.0 else (anc_lp if anc_lp > 0.0 else 100.0)
     summary = summarize_stratum_portfolio(st, live_price=lp, now_est=dt_now)
 
     is_active = bool(st.get("is_active", True))
