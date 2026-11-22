@@ -40,7 +40,10 @@ from quant_engine_core import (
     PORTION_MODE_BARBELL,
     PORTION_MODE_COMPOUND,
     PORTION_MODE_SIMPLE,
+    PORTION_RATIO_BARBELL,
+    PORTION_RATIO_COMPOUND,
     PORTION_RATIO_LOCKED,
+    PORTION_RATIO_SIMPLE,
     PRIMER_1SH_LOT_TAG,
     PRIMER_1SH_MAX_INV_DROP_PCT,
     PRIMER_1SH_MIN_L1_GAP_PCT,
@@ -63,6 +66,7 @@ from quant_engine_core import (
     SNIPER_HARD_CAP_COMPOUND_PCT,
     SNIPER_RATCHET_STEPS_SHARP,
     SNIPER_RATCHET_STEPS_STD,
+    SNIPER_RATCHET_STEPS_T4,
     STALKER_DIP_ADD_EXTRA_REBOUND_PCT,
     STALKER_REBOUND_BARBELL_SIMPLE_PCT,
     VWAP_CRASH_GUARD_BARBELL_PCT,
@@ -134,6 +138,7 @@ from quant_engine_core import (
     relabel_upper_grid_tiers,
     resolve_affordable_buy_qty,
     resolve_effective_round_trip_fee_rate_pct,
+    resolve_mode_portion_ratio,
     resolve_portion_budget_base_equity,
     resolve_smart_primer_policy,
     resolve_smart_pullback_drop_pct,
@@ -890,7 +895,7 @@ compute_upper_2_to_7_moving_avg = compute_upper_2_to_12_moving_avg
 def evaluate_multi_grid_sell_targets(
     buckets: Sequence[StratumBucket],
     live_price: float,
-    rise_l1_pct: float = 1.50,
+    rise_l1_pct: float = 1.00,
     rise_upper_pct: float = 1.00,
     is_overnight_session: bool = False,
     sub_buckets: Optional[Sequence[StratumBucket]] = None,
@@ -2400,7 +2405,7 @@ def summarize_stratum_portfolio(
         "daily_withdrawable_profit_usd": daily_withdrawable_profit_usd,
         "withdrawable_surplus_usd": withdrawable_surplus_usd,
         "self_reserve_portions": self_reserve_portions,
-        "sub_grid_enabled": True,
+        "sub_grid_enabled": False,
         "sub_merge_mode": sub_merge_mode,
         "sub_buckets": sub_buckets,
         "has_sub_buckets": bool(len(sub_buckets) > 0),
@@ -2698,9 +2703,110 @@ def summarize_stratum_portfolio(
 
 
 # ---------------------------------------------------------------------------
-# [핵심 6] TDD 사전 무결성 자동 검증 슈트 (Case 25 ~ 92 + 바벨 60/30/10 3단 순환 전수 검증)
+# [핵심 6] Case 113 TDD 사전 무결성 자동 검증 슈트 (단일 통합 T4 엔진 + 모드별 황금비율 10% / 8% / 15%)
 # ---------------------------------------------------------------------------
-def run_quant_engine_tdd() -> bool:
+def run_quant_engine_tdd_case113() -> bool:
+    prev_rt = get_runtime_round_trip_fee_rate_pct()
+    prev_one = get_runtime_us_commission_rate()
+    set_runtime_round_trip_fee_rate_pct(0.14, us_commission_rate=0.0007)
+    try:
+        assert DEFAULT_GRID_MERGE_MODE == "L2_L7_MERGE_SORT"
+        assert SUB_GRID_DEFAULT_ENABLED is False
+        assert NEW_CYCLE_BUY_CUTOFF_HM == 1500
+        assert abs(SNIPER_L1_TRAIL_IGNITE_PCT - 1.00) < 1e-6
+        assert abs(SNIPER_L1_TRAIL_STEP_TRIG_PCT - 1.35) < 1e-6
+        assert abs(SNIPER_L1_TRAIL_STEP_LOCK_PCT - 1.15) < 1e-6
+
+        # 1) Case 113 모드별 황금비율(단리 10% · 복리 8% · 바벨 코어 15% = 전체 9%) 정량 검증
+        q_comp, bud_comp = compute_golden8_quota_qty(
+            50.0, 10000.0, 10000.0, "COMP_08PCT", exec_price=50.0
+        )
+        q_simp, bud_simp = compute_golden8_quota_qty(
+            50.0, 25000.0, 10000.0, "SIMPLE_08PCT", exec_price=50.0
+        )
+        q_barb, bud_barb = compute_golden8_quota_qty(
+            45.0, 6000.0, 10000.0, "BARBELL_60_30_10", exec_price=45.0
+        )
+        assert q_comp == 16 and abs(bud_comp - 800.0) < 1e-4
+        assert q_simp == 20 and abs(bud_simp - 1000.0) < 1e-4
+        assert q_barb == 20 and abs(bud_barb - 900.0) < 1e-4
+
+        # 2) ±1.00% 대칭 데드존 무매매(+1% 돌파/저가돌파 영구 폐기 · min(직전매도가, 최하단상단가) -1.00% 눌림목 통일)
+        for m_chk in ("BARBELL_60_30_10", "SIMPLE_08PCT", "COMP_08PCT"):
+            sig_brk = evaluate_l2_only_hybrid_reentry_signal(
+                live_price=101.50,
+                anchor_price=100.00,
+                min_upper_tier_price=105.00,
+                rsi_14=35.0,
+                closed_ha_shaved_bear=False,
+                closed_ha_ready=True,
+                session_vwap=102.00,
+                hm=1030,
+                portion_mode=m_chk,
+            )
+            assert sig_brk["should_buy"] is False and sig_brk["signal_type"] == "HOLD_WAIT_GATE"
+
+            sig_ceil = evaluate_l2_only_hybrid_reentry_signal(
+                live_price=99.50,
+                anchor_price=102.00,
+                min_upper_tier_price=100.00,
+                closed_ha_shaved_bear=False,
+                closed_ha_ready=True,
+                session_vwap=100.50,
+                hm=1030,
+                cycle_min_buy_price=99.80,
+                portion_mode=m_chk,
+            )
+            assert sig_ceil["should_buy"] is False and abs(sig_ceil["ref_anchor"] - 100.00) < 1e-6
+
+            sig_pull_ok = evaluate_l2_only_hybrid_reentry_signal(
+                live_price=98.95,
+                anchor_price=102.00,
+                min_upper_tier_price=100.00,
+                closed_ha_shaved_bear=False,
+                closed_ha_ready=True,
+                session_vwap=99.50,
+                hm=1030,
+                portion_mode=m_chk,
+            )
+            assert sig_pull_ok["should_buy"] is True and sig_pull_ok["signal_type"] == "PULLBACK_RELOAD"
+
+        # 3) T4 통합 리바운드/래칫 정책 및 서브/마중물/스토커 OFF 검증
+        for m_pol, exp_id, exp_r in (
+            ("BARBELL_60_30_10", "T4-B15", 0.15),
+            ("SIMPLE_08PCT", "T4-S10", 0.10),
+            ("COMP_08PCT", "T4-C08", 0.08),
+        ):
+            r_pol = resolve_smart_rebound_policy(m_pol)
+            p_pol = resolve_smart_primer_policy(m_pol)
+            assert (
+                r_pol["spec_id"] == exp_id
+                and abs(r_pol["portion_ratio"] - exp_r) < 1e-6
+                and r_pol["use_stalker_l1"] is False
+                and abs(r_pol["hard_cap_pct"] - 6.00) < 1e-6
+                and r_pol["ratchet_steps"][0] == (1.35, 1.15)
+                and p_pol["enabled"] is False
+            )
+
+        # 4) 7층 L2_L7_MERGE_SORT 및 +1.00% 익절 타겟 검증
+        d1, s1, s2 = get_golden8_prog_thresholds(1, "WIDE_RUNWAY", 0)
+        assert d1 == -1.00 and s1 == 1.00 and s2 == 1.00
+        test_g = [
+            StratumBucket(10, 80.0, 800.0, 800.0, 1, "DIP_1FL"),
+            StratumBucket(10, 80.5, 805.0, 805.0, 1, "GRID_L2"),
+        ]
+        r_ov = evaluate_multi_grid_sell_targets(test_g, 81.31, is_overnight_session=True)
+        assert r_ov["should_sell"] and r_ov["sold_indices"] == [0, 1]
+    finally:
+        set_runtime_round_trip_fee_rate_pct(prev_rt, us_commission_rate=prev_one)
+
+    logger.info(
+        "✅ [QuantEngine Case 113 TDD 통과] 🔥 단일 통합 T4 엔진 × 모드별 황금비율(단리10%·복리8%·바벨15%) × ±1.00% 대칭 데드존 검증 완료"
+    )
+    return True
+
+
+def _legacy_run_quant_engine_tdd_disabled() -> bool:
     prev_rt = get_runtime_round_trip_fee_rate_pct()
     prev_one = get_runtime_us_commission_rate()
     set_runtime_round_trip_fee_rate_pct(0.14, us_commission_rate=0.0007)
@@ -3242,7 +3348,7 @@ def run_quant_engine_tdd() -> bool:
     finally:
         set_runtime_round_trip_fee_rate_pct(prev_rt, us_commission_rate=prev_one)
 
-    logger.info(
-        "✅ [QuantEngine TDD 사전 무결성 검증 통과] 챔피언 👑 06_L2L7_RATCHET_8PCT × 🛡️ 13_SUB_L1L3_RESV05_CAP4L(Default ON) × ⚖️ BARBELL_60_30_10 × 🔹 BRK_RSI50 전수 검증 완료"
-    )
     return True
+
+
+run_quant_engine_tdd = run_quant_engine_tdd_case113

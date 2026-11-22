@@ -61,6 +61,7 @@ from quant_engine import (
     is_primer_1sh_tag,
     is_simple_income_mode,
     resolve_effective_round_trip_fee_rate_pct,
+    resolve_mode_portion_ratio,
     resolve_portion_budget_base_equity,
     resolve_smart_primer_policy,
     resolve_smart_pullback_drop_pct,
@@ -1225,7 +1226,13 @@ async def _check_and_prepare_primer_1sh_cash(
 
     if is_barbell_mode(st_now.get("portion_mode")):
         unit_8pct = max(
-            1.0, round(init_seed * BARBELL_SOXL_WEIGHT * PORTION_RATIO_LOCKED, 4)
+            1.0,
+            round(
+                init_seed
+                * BARBELL_SOXL_WEIGHT
+                * resolve_mode_portion_ratio(PORTION_MODE_BARBELL),
+                4,
+            ),
         )
         b_ledger = ensure_barbell_ledger(context)
         bst = b_ledger.get_state()
@@ -1430,12 +1437,15 @@ async def _check_and_prepare_primer_1sh_cash(
             sb.actual_cost_usd for sb in sub_tmp
         )
         core_eq = max(init_seed, (now_free_cash + inv_tot) - cur_inj_usd)
+        p_mode_cs = str(st_now.get("portion_mode") or PORTION_MODE_COMPOUND)
         base_eq = resolve_portion_budget_base_equity(
             initial_seed_usd=init_seed,
             core_equity_usd=core_eq,
-            portion_mode=str(st_now.get("portion_mode") or PORTION_MODE_COMPOUND),
+            portion_mode=p_mode_cs,
         )
-        unit_8pct_cs = max(1.0, round(base_eq * PORTION_RATIO_LOCKED, 4))
+        unit_8pct_cs = max(
+            1.0, round(base_eq * resolve_mode_portion_ratio(p_mode_cs), 4)
+        )
         inj_1sh_cs = round(max(0.01, req_1sh_cash - now_free_cash), 4)
         new_inj_cs = round(cur_inj_usd + inj_1sh_cs, 4)
         new_used_cs = max(1, int(math.ceil((new_inj_cs - 1e-9) / unit_8pct_cs)))
@@ -2100,7 +2110,7 @@ async def _commit_filled_buy_to_stratum_ledger(
             )
             body_str = (
                 f"실사용 ${actual_spent:,.2f} (자투리 +${saved_from_portion:.2f} 시드보존) · "
-                f"🛡️60초 타임쉴드 후 1층목표 ${l1_target:.2f}(+1.5%) 감시{rem_quota_note} · "
+                f"🛡️60초 타임쉴드 후 1층목표 ${l1_target:.2f}(+1.0%) 감시{rem_quota_note} · "
                 f"2~{new_held_tiers}층({u_qty}주) 이평 ${u_wma_p:.2f}(목표 ${u_wma_t:.2f}) 유지 · "
                 f"기억저가 ${new_cycle_min_p:.2f}{ratchet_note}(와이드 {drop_req_p:.1f}% 추매가 ${trig_buy_p:.2f}) · "
                 f"{mode_cash_lbl} ${free_cash_now:,.2f} (총 {new_held_shares}주)"

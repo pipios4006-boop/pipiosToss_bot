@@ -44,6 +44,10 @@ ALLOWED_SYMBOLS: Tuple[str, ...] = ("SOXL",)
 
 DEFAULT_INITIAL_SEED_USD: float = 10000.0
 PORTION_RATIO_LOCKED: float = 0.08
+# NEW [Case 113 : 운용모드별 무고갈 황금비율 상수 (단리 10% · 복리 8% · 바벨 코어 15% = 전체 9%)]
+PORTION_RATIO_COMPOUND: float = 0.08
+PORTION_RATIO_SIMPLE: float = 0.10
+PORTION_RATIO_BARBELL: float = 0.15
 BASE_MAX_LOTS_8PCT: int = 12
 
 # MODIFIED [Case 91 + 바벨 모드 확장 : 📈 복리(COMP_08PCT) ➔ 💵 단리(SIMPLE_08PCT) ➔ ⚖️ 바벨(BARBELL_60_30_10) 3단 순환 상수]
@@ -71,7 +75,8 @@ MAX_GRID_TIERS_12: int = 7
 DEFAULT_GRID_MERGE_MODE: str = "L2_L7_MERGE_SORT"
 
 # [Case 88 : 🛡️ 13_SUB_L1L3_RESV05_CAP4L — 스위치 없는 100% 기본 상시 적용(Default ON) 3층 서브 그리드 상수 락온]
-SUB_GRID_DEFAULT_ENABLED: bool = True
+# MODIFIED [Case 113 : 서브 그리드 영구 폐기 (기보유 잔량 청산 호환만 유지)]
+SUB_GRID_DEFAULT_ENABLED: bool = False
 SUB_FROZEN_DAYS_TRIGGER: int = 5
 SUB_PORTION_RATIO_4PCT: float = 0.04
 SUB_MAX_TIERS_3: int = 3
@@ -97,47 +102,43 @@ MIN_DIP_BUDGET_RATIO: float = 0.30
 MIN_DIP_VS_L1_RATIO: float = 0.30
 RESERVE_DEPOSIT_TOLERANCE_RATIO: float = 0.95
 
-# [Case 84 : 정규장 마감 30분 전(15:30 ~ 16:00 EST) 본·서브 0주 새 사이클 첫 1층 진입 및 상단층 보유 중 1층 공석 +1.0% 돌파 추격 동시 차단 기준 시각(HHMM)]
-NEW_CYCLE_BUY_CUTOFF_HM: int = 1530
+# MODIFIED [Case 113 : 정규장 마감 1시간 전(15:00 ~ 16:00 EST) 0주 신규 진입 차단 기준 시각(HHMM)]
+NEW_CYCLE_BUY_CUTOFF_HM: int = 1500
 
-# NEW [Case 110 : 옵션 3 운용모드별 스마트 연동 역산 5.50% · -3.50% 가드 1주 마중물(Smart Primer 1-Share) 전역 상수]
+# MODIFIED [Case 113 : 1주 마중물 영구 폐기 (기존 원장 태그 호환용 상수만 유지)]
 PRIMER_1SH_MIN_L1_GAP_PCT: float = 3.50
 PRIMER_1SH_MAX_INV_DROP_PCT: float = 5.50
 PRIMER_1SH_MIN_LOCKED_LOTS: int = 2
 PRIMER_1SH_LOT_TAG: str = "PRIMER_1SH"
 PRIMER_1SH_VAC_LOT_TAG: str = "PRIMER_1SH_VAC_L1"
-PRIMER_MODE_AUTO_SMART: str = "AUTO_SMART"
+PRIMER_MODE_AUTO_SMART: str = "OFF"
 PRIMER_MODE_OFF: str = "OFF"
 
-# NEW [Case 111 : 모드별 스마트 눌림목 상수]
+# MODIFIED [Case 113 : 전 운용 모드 ±1.00% 대칭 데드존 무매매 & -1.00% 눌림목 통일]
 REENTRY_PULLBACK_BARBELL_PCT: float = -1.00
-REENTRY_PULLBACK_SIMPLE_PCT: float = -1.50
-REENTRY_PULLBACK_COMPOUND_PCT: float = -2.00
-VALID_PRIMER_MODES: Tuple[str, ...] = (PRIMER_MODE_AUTO_SMART, PRIMER_MODE_OFF)
+REENTRY_PULLBACK_SIMPLE_PCT: float = -1.00
+REENTRY_PULLBACK_COMPOUND_PCT: float = -1.00
+VALID_PRIMER_MODES: Tuple[str, ...] = ("OFF", "AUTO_SMART")
 
-# NEW [Case 112 : 운용모드별 스마트 리바운드 스토커 & 다단 보존선 래칫(B-12 · S-112 · C-112) 상수]
-STALKER_REBOUND_BARBELL_SIMPLE_PCT: float = 0.25
-STALKER_DIP_ADD_EXTRA_REBOUND_PCT: float = 0.05
-VWAP_CRASH_GUARD_BARBELL_PCT: float = -4.50
-VWAP_CRASH_GUARD_SIMPLE_PCT: float = -3.00
+# MODIFIED [Case 113 : 단일 통합 T4 엔진 — 스토커 영구 폐기 · +1.00% 점화 샤프래칫(1.35➔1.15 ~ 5.00➔4.50%) & 상단캡 +6.00% 전 모드 통일]
+STALKER_REBOUND_BARBELL_SIMPLE_PCT: float = 0.00
+STALKER_DIP_ADD_EXTRA_REBOUND_PCT: float = 0.00
+VWAP_CRASH_GUARD_BARBELL_PCT: float = 0.00
+VWAP_CRASH_GUARD_SIMPLE_PCT: float = 0.00
 VWAP_CRASH_GUARD_COMPOUND_PCT: float = 0.00
-SNIPER_RATCHET_STEPS_SHARP: Tuple[Tuple[float, float], ...] = (
-    (1.75, 1.60),
-    (2.50, 2.15),
-    (3.50, 3.10),
-    (4.50, 4.10),
-    (5.30, 4.80),
+SNIPER_RATCHET_STEPS_T4: Tuple[Tuple[float, float], ...] = (
+    (1.35, 1.15),
+    (2.00, 1.65),
+    (3.00, 2.60),
+    (4.00, 3.55),
+    (5.00, 4.50),
 )
-SNIPER_RATCHET_STEPS_STD: Tuple[Tuple[float, float], ...] = (
-    (1.75, 1.60),
-    (2.50, 2.10),
-    (3.50, 3.00),
-    (4.50, 4.00),
-)
+SNIPER_RATCHET_STEPS_SHARP: Tuple[Tuple[float, float], ...] = SNIPER_RATCHET_STEPS_T4
+SNIPER_RATCHET_STEPS_STD: Tuple[Tuple[float, float], ...] = SNIPER_RATCHET_STEPS_T4
 SNIPER_HARD_CAP_BARBELL_SIMPLE_PCT: float = 6.00
-SNIPER_HARD_CAP_COMPOUND_PCT: float = 5.00
-SNIPER_CLIMAX_RSI_BARBELL_SIMPLE: float = 65.0
-SNIPER_CLIMAX_RSI_COMPOUND: float = 62.0
+SNIPER_HARD_CAP_COMPOUND_PCT: float = 6.00
+SNIPER_CLIMAX_RSI_BARBELL_SIMPLE: float = 0.0
+SNIPER_CLIMAX_RSI_COMPOUND: float = 0.0
 SNIPER_CLIMAX_MIN_PEAK_GAIN_PCT: float = 3.00
 SNIPER_CLIMAX_PULLBACK_RATIO: float = 0.995
 
@@ -231,6 +232,23 @@ def next_cycled_portion_mode(cur_mode: Any) -> str:
     return PORTION_MODE_SIMPLE
 
 
+def resolve_mode_portion_ratio(portion_mode: Any) -> float:
+    """
+    # NEW [Case 113 : 운용 모드별 무고갈 1회 투입 황금비율 해석기]
+    - 💵 단리(SIMPLE_08PCT)     : 10.0% (0.10 · 10.0분할)
+    - 📈 복리(COMP_08PCT)       :  8.0% (0.08 · 12.5분할)
+    - ⚖️ 바벨(BARBELL_60_30_10) : 15.0% (0.15 · 코어60%의 15% = 전체시드의 9.0%)
+    """
+    m = str(portion_mode or PORTION_MODE_COMPOUND).upper().strip()
+    if m in ("SUB_04PCT", "COMP_04PCT", "SIMPLE_04PCT", "BARBELL_04PCT"):
+        return SUB_PORTION_RATIO_4PCT
+    if is_barbell_mode(m):
+        return PORTION_RATIO_BARBELL
+    if is_simple_income_mode(m):
+        return PORTION_RATIO_SIMPLE
+    return PORTION_RATIO_COMPOUND
+
+
 def is_primer_1sh_tag(bucket_or_tag: Any) -> bool:
     """
     # NEW [Case 110]: 버킷 객체/딕셔너리/문자열이 1주 마중물(PRIMER_1SH / PRIMER_1SH_VAC_L1)인지 판별한다.
@@ -267,49 +285,21 @@ def safe_bucket_lot_count(bucket_or_dict: Any) -> int:
 
 def resolve_smart_primer_policy(
     portion_mode: Any,
-    primer_1sh_mode: Any = PRIMER_MODE_AUTO_SMART,
+    primer_1sh_mode: Any = PRIMER_MODE_OFF,
 ) -> Dict[str, Any]:
     """
-    # NEW [Case 110 · 옵션 3 운용모드별 스마트 연동 정책 해석기]:
-    - BARBELL_60_30_10 / SIMPLE_08PCT ➔ ALL_PLUS_L1_VAC (-3.50% 가드 · 전상태 + 1층공석 쌍바닥구제 · 서브ON)
-    - COMP_08PCT (연속 복리)          ➔ NO_7FULL_MERGE (-3.50% 가드 · 6층이하/2층공석만 출동[7층만석 합병차단] · 서브신규진입OFF)
-    - primer_1sh_mode == OFF          ➔ 1주 마중물 비활성화 (기존 v3.0 정본 동작 유지)
+    # MODIFIED [Case 113 : 1주 마중물·서브그리드 전면 영구 폐기]
     """
-    raw_pm = str(primer_1sh_mode or PRIMER_MODE_AUTO_SMART).upper().strip()
-    is_off = raw_pm in ("OFF", "FALSE", "0", "DISABLED", "NONE")
-    is_barbell = is_barbell_mode(portion_mode)
-    is_simple = (not is_barbell) and is_simple_income_mode(portion_mode)
-    if is_off:
-        return {
-            "primer_1sh_mode": PRIMER_MODE_OFF,
-            "enabled": False,
-            "vacancy_mode": "OFF",
-            "min_l1_gap_pct": PRIMER_1SH_MIN_L1_GAP_PCT,
-            "allow_vacant_l1_rescue": False,
-            "block_7full_merge": True,
-            "allow_new_sub_entry": True,
-            "policy_badge": "🔴OFF(마중물정지)",
-        }
-    if is_barbell or is_simple:
-        return {
-            "primer_1sh_mode": PRIMER_MODE_AUTO_SMART,
-            "enabled": True,
-            "vacancy_mode": "ALL_PLUS_L1_VAC",
-            "min_l1_gap_pct": PRIMER_1SH_MIN_L1_GAP_PCT,
-            "allow_vacant_l1_rescue": True,
-            "block_7full_merge": False,
-            "allow_new_sub_entry": True,
-            "policy_badge": "🧠스마트ON(만석+1층공석구제·서브ON)",
-        }
+    _ = (portion_mode, primer_1sh_mode)
     return {
-        "primer_1sh_mode": PRIMER_MODE_AUTO_SMART,
-        "enabled": True,
-        "vacancy_mode": "NO_7FULL_MERGE",
+        "primer_1sh_mode": PRIMER_MODE_OFF,
+        "enabled": False,
+        "vacancy_mode": "OFF",
         "min_l1_gap_pct": PRIMER_1SH_MIN_L1_GAP_PCT,
         "allow_vacant_l1_rescue": False,
         "block_7full_merge": True,
         "allow_new_sub_entry": False,
-        "policy_badge": "🧠스마트ON(무합병6층↓·서브신규OFF)",
+        "policy_badge": "🧹폐기(Case113정량일원화)",
     }
 
 
@@ -317,61 +307,40 @@ def resolve_smart_pullback_drop_pct(
     portion_mode: Any,
 ) -> float:
     """
-    # NEW [Case 111 : 모드별 스마트 눌림목 해석기]
-    - BARBELL_60_30_10 : -1.00%
-    - SIMPLE_08PCT     : -1.50%
-    - COMP_08PCT       : -2.00%
+    # MODIFIED [Case 113 : 전 운용 모드 ±1.00% 대칭 데드존 무매매 & -1.00% 눌림목 단일 통일]
     """
-    if is_barbell_mode(portion_mode):
-        return REENTRY_PULLBACK_BARBELL_PCT
-    if is_simple_income_mode(portion_mode):
-        return REENTRY_PULLBACK_SIMPLE_PCT
-    return REENTRY_PULLBACK_COMPOUND_PCT
+    _ = portion_mode
+    return -1.00
 
 
 def resolve_smart_rebound_policy(
     portion_mode: Any,
 ) -> Dict[str, Any]:
     """
-    # NEW [Case 112 : 5개년 1분봉 전수 백테스트 최종 우승 스펙(B-12 · S-112 · C-112) 해석기]
-    - BARBELL_60_30_10 (B-12) : +0.25% 민첩 스토커 · VWAP -4.5% 심층 추매방어 · 샤프래칫 · 캡 6.0% · RSI 65
-    - SIMPLE_08PCT     (S-112): +0.25% 민첩 스토커 · VWAP -3.0% 폭락 추매방어 · 샤프래칫 · 캡 6.0% · RSI 65
-    - COMP_08PCT       (C-112): -2.00% 직격타격 유지 · 표준래칫(2.1/3.0/4.0) · 캡 5.0% · RSI 62
+    # MODIFIED [Case 113 : 단일 통합 T4 엔진 + 모드별 황금비율(단리10%·복리8%·바벨15%)]
+    - 전 모드 공통: 스토커 폐기 · ±1.0% 데드존 · 무꼬리HA 양방향 패스 · 24h +1.0% 점화 · 샤프래칫(1.35➔1.15 ~ 5.00➔4.50%) · 캡 +6.0%
     """
+    p_ratio = resolve_mode_portion_ratio(portion_mode)
     if is_barbell_mode(portion_mode):
-        return {
-            "spec_id": "B-12",
-            "use_stalker_l1": True,
-            "stalk_rebound_pct": STALKER_REBOUND_BARBELL_SIMPLE_PCT,
-            "vwap_crash_guard_pct": VWAP_CRASH_GUARD_BARBELL_PCT,
-            "ratchet_steps": SNIPER_RATCHET_STEPS_SHARP,
-            "hard_cap_pct": SNIPER_HARD_CAP_BARBELL_SIMPLE_PCT,
-            "use_vwap_ha_hold": True,
-            "climax_rsi_thr": SNIPER_CLIMAX_RSI_BARBELL_SIMPLE,
-            "policy_badge": "🕵️스토커+0.25%·VWAP-4.5%방어·샤프래칫·캡6.0%",
-        }
-    if is_simple_income_mode(portion_mode):
-        return {
-            "spec_id": "S-112",
-            "use_stalker_l1": True,
-            "stalk_rebound_pct": STALKER_REBOUND_BARBELL_SIMPLE_PCT,
-            "vwap_crash_guard_pct": VWAP_CRASH_GUARD_SIMPLE_PCT,
-            "ratchet_steps": SNIPER_RATCHET_STEPS_SHARP,
-            "hard_cap_pct": SNIPER_HARD_CAP_BARBELL_SIMPLE_PCT,
-            "use_vwap_ha_hold": True,
-            "climax_rsi_thr": SNIPER_CLIMAX_RSI_BARBELL_SIMPLE,
-            "policy_badge": "🕵️스토커+0.25%·VWAP-3.0%방어·샤프래칫·캡6.0%",
-        }
+        spec_id = "T4-B15"
+        badge = f"🔥T4통합·황금비율{p_ratio * 100.0:.0f}%(전체9%)·±1%데드존·샤프래칫·캡6%"
+    elif is_simple_income_mode(portion_mode):
+        spec_id = "T4-S10"
+        badge = f"🔥T4통합·황금비율{p_ratio * 100.0:.0f}%·±1%데드존·샤프래칫·캡6%"
+    else:
+        spec_id = "T4-C08"
+        badge = f"🔥T4통합·황금비율{p_ratio * 100.0:.0f}%·±1%데드존·샤프래칫·캡6%"
     return {
-        "spec_id": "C-112",
+        "spec_id": spec_id,
+        "portion_ratio": p_ratio,
         "use_stalker_l1": False,
-        "stalk_rebound_pct": 0.40,
-        "vwap_crash_guard_pct": VWAP_CRASH_GUARD_COMPOUND_PCT,
-        "ratchet_steps": SNIPER_RATCHET_STEPS_STD,
-        "hard_cap_pct": SNIPER_HARD_CAP_COMPOUND_PCT,
-        "use_vwap_ha_hold": True,
-        "climax_rsi_thr": SNIPER_CLIMAX_RSI_COMPOUND,
-        "policy_badge": "⚡직격타격·표준래칫(2.1~4.0%)·RSI62·캡5.0%",
+        "stalk_rebound_pct": 0.0,
+        "vwap_crash_guard_pct": 0.0,
+        "ratchet_steps": SNIPER_RATCHET_STEPS_T4,
+        "hard_cap_pct": 6.00,
+        "use_vwap_ha_hold": False,
+        "climax_rsi_thr": 0.0,
+        "policy_badge": badge,
     }
 
 
@@ -1264,16 +1233,15 @@ class SoxlStratumLedger:
         )
 
         st["threshold_mode"] = "WIDE_RUNWAY"
-        st["reentry_mode"] = "HYBRID_PULL_OR_BRK"
+        st["reentry_mode"] = "T4_PULLBACK_100_ONLY"
         st["grid_merge_mode"] = DEFAULT_GRID_MERGE_MODE
         st["unlock_mode"] = DEFAULT_UNLOCK_MODE
-        st["sub_grid_enabled"] = True
+        # MODIFIED [Case 113 : 서브그리드·1주마중물·스토커 전면 비활성화]
+        st["sub_grid_enabled"] = False
         st["sub_merge_mode"] = SUB_MERGE_MODE_L1_L3
         st["sub_max_tiers"] = SUB_MAX_TIERS_3
         st["sub_max_total_lots"] = SUB_MAX_TOTAL_LOTS_4
-
-        # MODIFIED [Case 110 Default-ON]: 3층 서브 그리드와 동일하게 스위치 없는 100% 상시 AUTO_SMART 고정
-        st["primer_1sh_mode"] = PRIMER_MODE_AUTO_SMART
+        st["primer_1sh_mode"] = PRIMER_MODE_OFF
         st["primer_1sh_buy_events"] = max(
             0, safe_int(st.get("primer_1sh_buy_events"), 0)
         )
@@ -2421,11 +2389,11 @@ class SoxlStratumLedger:
         self, target_mode: Optional[str] = None
     ) -> Dict[str, Any]:
         """
-        # MODIFIED [Case 110 Default-ON]: 스위치 없는 100% 상시 AUTO_SMART 고정 유지
+        # MODIFIED [Case 113]: 1주 마중물 영구 폐기 (OFF 고정)
         """
         _ = target_mode
         return await self.update_state(
-            TARGET_SYMBOL, primer_1sh_mode=PRIMER_MODE_AUTO_SMART
+            TARGET_SYMBOL, primer_1sh_mode=PRIMER_MODE_OFF
         )
 
     async def rollover_daily_counters_if_needed(

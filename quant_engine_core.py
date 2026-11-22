@@ -41,8 +41,12 @@ from toss_api import (
     SNIPER_CLIMAX_RSI_COMPOUND,
     SNIPER_HARD_CAP_BARBELL_SIMPLE_PCT,
     SNIPER_HARD_CAP_COMPOUND_PCT,
+    PORTION_RATIO_BARBELL,
+    PORTION_RATIO_COMPOUND,
+    PORTION_RATIO_SIMPLE,
     SNIPER_RATCHET_STEPS_SHARP,
     SNIPER_RATCHET_STEPS_STD,
+    SNIPER_RATCHET_STEPS_T4,
     STALKER_DIP_ADD_EXTRA_REBOUND_PCT,
     STALKER_REBOUND_BARBELL_SIMPLE_PCT,
     VALID_PRIMER_MODES,
@@ -50,6 +54,7 @@ from toss_api import (
     VWAP_CRASH_GUARD_COMPOUND_PCT,
     VWAP_CRASH_GUARD_SIMPLE_PCT,
     is_primer_1sh_tag,
+    resolve_mode_portion_ratio,
     resolve_smart_primer_policy,
     resolve_smart_pullback_drop_pct,
     resolve_smart_rebound_policy,
@@ -111,7 +116,7 @@ DEFAULT_GRID_MERGE_MODE: str = str(
 
 # [Case 88 : 🛡️ 13_SUB_L1L3_RESV05_CAP4L — 스위치 없는 100% 기본 상시 적용(Default ON) 3층 서브 그리드 상수 락온]
 SUB_GRID_DEFAULT_ENABLED: bool = bool(
-    getattr(toss_api, "SUB_GRID_DEFAULT_ENABLED", True)
+    getattr(toss_api, "SUB_GRID_DEFAULT_ENABLED", False)
 )
 SUB_FROZEN_DAYS_TRIGGER: int = int(
     getattr(toss_api, "SUB_FROZEN_DAYS_TRIGGER", 5)
@@ -148,24 +153,23 @@ REENTRY_BREAKOUT_MAX_RSI_50: float = float(
 REG_OPEN_VWAP_SHIELD_START_HM: int = 930
 REG_OPEN_VWAP_SHIELD_END_HM: int = 936
 
-# MODIFIED [제안 B 확정 : 본 1층 & 서브 1층 공격수 +1.50% 무스탑 점화 ➔ +1.75% 돌파 시 +1.60% 잠금 상향 통일]
+# MODIFIED [Case 113 : 단일 통합 T4 엔진 — 본·서브 1층 +1.00% 무스탑 점화 ➔ 샤프래칫(1.35➔1.15 ~ 5.00➔4.50%) & 상단캡 +6.00% 전 모드 통일]
 SNIPER_L1_TRAIL_ENABLED: bool = True
-SNIPER_L1_TRAIL_IGNITE_PCT: float = 1.50
-SNIPER_L1_TRAIL_STEP_TRIG_PCT: float = 1.75
-SNIPER_L1_TRAIL_STEP_LOCK_PCT: float = 1.60
-SUB_SNIPER_L1_TRAIL_IGNITE_PCT: float = 1.50
-SUB_SNIPER_L1_TRAIL_STEP_TRIG_PCT: float = 1.75
-SUB_SNIPER_L1_TRAIL_STEP_LOCK_PCT: float = 1.60
-# MODIFIED [Case 106]: 실시간 -0.35% 틱 콜백 영구 폐기(0.00) ➔ 하드보존(+1.60%) + 순수 완결 1분봉 강세HA 홀딩 단일화
-SNIPER_L1_TRAIL_SAFE_CAP_PCT: float = 5.00
+SNIPER_L1_TRAIL_IGNITE_PCT: float = 1.00
+SNIPER_L1_TRAIL_STEP_TRIG_PCT: float = 1.35
+SNIPER_L1_TRAIL_STEP_LOCK_PCT: float = 1.15
+SUB_SNIPER_L1_TRAIL_IGNITE_PCT: float = 1.00
+SUB_SNIPER_L1_TRAIL_STEP_TRIG_PCT: float = 1.35
+SUB_SNIPER_L1_TRAIL_STEP_LOCK_PCT: float = 1.15
+SNIPER_L1_TRAIL_SAFE_CAP_PCT: float = 6.00
 SNIPER_L1_TRAIL_BOOST_TIER2_PCT: float = 2.00
 SNIPER_L1_TRAIL_CB_TIGHT_PCT: float = 0.00
 SNIPER_L1_TRAIL_CB_WIDE_PCT: float = 0.00
 SNIPER_L1_TRAIL_QQQ_BYPASS_PCT: float = 0.20
 
-# [Case 84 & Case 88]: 정규장 마감 30분 전(15:30 ~ 16:00 EST) 본·서브 0주 새 사이클 첫 1층 진입 및 1층 공석 +1.0% 돌파 추격 동시 차단 기준 시각(HHMM)
+# MODIFIED [Case 113]: 정규장 마감 1시간 전(15:00 ~ 16:00 EST) 0주 신규 진입 차단 기준 시각(HHMM)
 NEW_CYCLE_BUY_CUTOFF_HM: int = int(
-    getattr(toss_api, "NEW_CYCLE_BUY_CUTOFF_HM", 1530)
+    getattr(toss_api, "NEW_CYCLE_BUY_CUTOFF_HM", 1500)
 )
 
 # Case 76: 🔓 06_STEP2X_15PCT_C20 3중 안전문 기반 조건부 스텝업 저가 해금 상수
@@ -753,7 +757,8 @@ def compute_golden8_quota_qty(
     ):
         eff_ratio = SUB_PORTION_RATIO_4PCT
     else:
-        eff_ratio = PORTION_RATIO_LOCKED
+        # MODIFIED [Case 113]: 운용모드별 황금비율(단리 10% · 복리 8% · 바벨 코어 15%) 자동 결속
+        eff_ratio = resolve_mode_portion_ratio(mode)
 
     if is_barbell_mode(mode):
         eff_p_mode = PORTION_MODE_BARBELL
@@ -849,7 +854,9 @@ def compute_sub_grid_available_idle_cash(
         core_equity_usd=c_eq,
         portion_mode=portion_mode,
     )
-    main_portion_budget = round(budget_base_eq * PORTION_RATIO_LOCKED, 4)
+    main_portion_budget = round(
+        budget_base_eq * resolve_mode_portion_ratio(portion_mode), 4
+    )
     sub_portion_budget = round(budget_base_eq * SUB_PORTION_RATIO_4PCT, 4)
     reserved_for_main_usd = round(main_portion_budget * res_mult, 4)
 
@@ -1115,7 +1122,9 @@ def compute_reserve_repayment_on_zero(
             core_equity_usd=(init_seed + max(0.0, eff_realized)),
             portion_mode=portion_mode,
         )
-        est_portion_unit = max(1.0, base_eq * PORTION_RATIO_LOCKED)
+        est_portion_unit = max(
+            1.0, base_eq * resolve_mode_portion_ratio(portion_mode)
+        )
         est_cnt = max(1, int(math.ceil(rem_inj_usd / est_portion_unit)))
         rem_used_cnt = (
             min(used_cnt, est_cnt) if used_cnt > 0 else est_cnt
@@ -1166,7 +1175,8 @@ def get_golden8_prog_thresholds(
     if mode == "01_PROG_LOT":
         prog_rise = 1.00 if lots <= 6 else (1.50 if lots <= 11 else 2.00)
         return drop_buy_pct, prog_rise, prog_rise
-    return drop_buy_pct, 1.50, 1.00
+    # MODIFIED [Case 113]: 주야간 24h 전 세션 1층 점화 및 상단 계단 익절 기준 +1.00% 대칭 통일
+    return drop_buy_pct, 1.00, 1.00
 
 
 def evaluate_l2_only_hybrid_reentry_signal(
@@ -1250,11 +1260,15 @@ def evaluate_l2_only_hybrid_reentry_signal(
         else 0.0
     )
 
-    ref_anchor = (
-        anc
-        if anc > 0.0
-        else (ceil_p if ceil_p > 0.0 else (b2_p if b2_p > 0.0 else lp))
-    )
+    # MODIFIED [Case 113 : T4 대칭 데드존 공석 재장전 기준가 = min(직전매도가, 최하단상단가)]
+    if anc > 0.0 and ceil_p > 0.0:
+        ref_anchor = min(anc, ceil_p)
+    elif anc > 0.0:
+        ref_anchor = anc
+    elif ceil_p > 0.0:
+        ref_anchor = ceil_p
+    else:
+        ref_anchor = b2_p if b2_p > 0.0 else lp
 
     if pullback_drop_pct is not None:
         raw_pb = safe_float(
@@ -1340,54 +1354,7 @@ def evaluate_l2_only_hybrid_reentry_signal(
             "closed_ha_ready": bool(closed_ha_ready),
         }
 
-    # [Case 105 신규 경로 1 : 최저가 돌파매수 (LOW_BREAK_RELOAD · 지정가 < 기억저가 & 무머리 HA음봉 패스)]
-    exec_lp = max(0.01, math.floor((lp + 1e-9) * 100.0) / 100.0)
-    if c_min_p > 0.0 and exec_lp < (c_min_p - 1e-6):
-        if is_pullback_ha_blocked:
-            return {
-                "should_buy": False,
-                "signal_type": "HOLD_LOW_BREAK_SHAVED_HA_BEAR",
-                "ref_anchor": round(ref_anchor, 4),
-                "quota_ref_price": c_min_p,
-                "chg_from_exit_pct": round(chg_from_exit_pct, 2),
-                "pullback_drop_pct": round(eff_pb_drop_pct, 2),
-            "pullback_target_price": pullback_target_p,
-                "breakout_target_price": breakout_target_p,
-                "l2_ceiling_price": round(ceil_p, 4),
-                "rsi_14": eff_rsi_val,
-                "breakout_max_rsi": round(max_rsi_cap, 2),
-                "breakout_rsi_blocked": False,
-                "pullback_ha_blocked": True,
-                "pullback_vwap_blocked": False,
-                "reg_open_7m_shield_blocked": False,
-                "session_vwap": sess_vwap_val,
-                "cycle_min_buy_price": c_min_p,
-                "closed_ha_shaved_bear": eff_shaved_bear,
-                "closed_ha_bull": eff_closed_ha_bull,
-                "closed_ha_ready": bool(closed_ha_ready),
-            }
-        return {
-            "should_buy": True,
-            "signal_type": "LOW_BREAK_RELOAD",
-            "ref_anchor": round(ref_anchor, 4),
-            "quota_ref_price": c_min_p,
-            "chg_from_exit_pct": round(chg_from_exit_pct, 2),
-            "pullback_drop_pct": round(eff_pb_drop_pct, 2),
-            "pullback_target_price": pullback_target_p,
-            "breakout_target_price": breakout_target_p,
-            "l2_ceiling_price": round(ceil_p, 4),
-            "rsi_14": eff_rsi_val,
-            "breakout_max_rsi": round(max_rsi_cap, 2),
-            "breakout_rsi_blocked": False,
-            "pullback_ha_blocked": False,
-            "pullback_vwap_blocked": False,
-            "reg_open_7m_shield_blocked": False,
-            "session_vwap": sess_vwap_val,
-            "cycle_min_buy_price": c_min_p,
-            "closed_ha_shaved_bear": eff_shaved_bear,
-            "closed_ha_bull": eff_closed_ha_bull,
-            "closed_ha_ready": bool(closed_ha_ready),
-        }
+    # MODIFIED [Case 113 : 1층 공석 최저가 돌파매수(LOW_BREAK_RELOAD) 영구 폐기 ➔ 순수 -1.00% 눌림목 일원화]
 
     # [Case 101 & Case 105 경로 2 : -1.00% 눌림목 재장전 (7분쉴드 + 무머리HA음봉 패스 + 현재가 > 세션VWAP 패스)]
     if chg_from_exit_pct <= eff_pb_drop_pct:
@@ -1483,51 +1450,8 @@ def evaluate_l2_only_hybrid_reentry_signal(
             "closed_ha_ready": bool(closed_ha_ready),
         }
 
-    if chg_from_exit_pct >= REENTRY_BREAKOUT_RISE_PCT:
-        if late_cutoff:
-            return {
-                "should_buy": False,
-                "signal_type": "HOLD_LATE_SESSION_BREAKOUT_CUTOFF",
-                "ref_anchor": round(ref_anchor, 4),
-                "quota_ref_price": round(ref_anchor, 4),
-                "chg_from_exit_pct": round(chg_from_exit_pct, 2),
-                "pullback_drop_pct": round(eff_pb_drop_pct, 2),
-            "pullback_target_price": pullback_target_p,
-                "breakout_target_price": breakout_target_p,
-                "l2_ceiling_price": round(ceil_p, 4),
-                "rsi_14": eff_rsi_val,
-                "breakout_max_rsi": round(max_rsi_cap, 2),
-                "breakout_rsi_blocked": is_breakout_rsi_blocked,
-            }
-        if is_breakout_rsi_blocked:
-            return {
-                "should_buy": False,
-                "signal_type": "HOLD_BREAKOUT_RSI_OVER_50",
-                "ref_anchor": round(ref_anchor, 4),
-                "quota_ref_price": round(ref_anchor, 4),
-                "chg_from_exit_pct": round(chg_from_exit_pct, 2),
-                "pullback_drop_pct": round(eff_pb_drop_pct, 2),
-            "pullback_target_price": pullback_target_p,
-                "breakout_target_price": breakout_target_p,
-                "l2_ceiling_price": round(ceil_p, 4),
-                "rsi_14": eff_rsi_val,
-                "breakout_max_rsi": round(max_rsi_cap, 2),
-                "breakout_rsi_blocked": True,
-            }
-        return {
-            "should_buy": True,
-            "signal_type": "BREAKOUT_RELOAD",
-            "ref_anchor": round(ref_anchor, 4),
-            "quota_ref_price": round(ref_anchor, 4),
-            "chg_from_exit_pct": round(chg_from_exit_pct, 2),
-            "pullback_drop_pct": round(eff_pb_drop_pct, 2),
-            "pullback_target_price": pullback_target_p,
-            "breakout_target_price": breakout_target_p,
-            "l2_ceiling_price": round(ceil_p, 4),
-            "rsi_14": eff_rsi_val,
-            "breakout_max_rsi": round(max_rsi_cap, 2),
-            "breakout_rsi_blocked": False,
-        }
+    # MODIFIED [Case 113 : ±1.00% 대칭 데드존 무매매 — +1.00% 상승돌파(BREAKOUT_RELOAD) 영구 폐기]
+    _ = late_cutoff
 
     return {
         "should_buy": False,
@@ -1590,15 +1514,9 @@ def evaluate_l2_vacant_low_break_signal(
         if (active_l1 and valid)
         else 0.0
     )
-    is_eligible_l2_vac = bool(
-        active_l1
-        and (not is_l1_primer)
-        and (not active_l2)
-        and eff_ratchet >= 2
-        and c_min > 0.0
-        and l1_wide_gap_ceil > 0.0
-        and c_min <= (l1_wide_gap_ceil + 1e-6)
-    )
+    # MODIFIED [Case 113 : 2층 공석 최저가 돌파매수 영구 폐기 (10분 와이드 추매 게이트 단일화)]
+    _ = (is_l1_primer, active_l2, eff_ratchet, l1_wide_gap_ceil)
+    is_eligible_l2_vac = False
 
     has_ha_filter = closed_ha_shaved_bear is not None
     eff_shaved_bear = bool(closed_ha_shaved_bear) if has_ha_filter else False

@@ -132,11 +132,17 @@ class SniperL1TrailSlot:
     qty: int = 0
     ref_cost: float = 0.0
     portion_mode: str = PORTION_MODE_COMPOUND
-    spec_id: str = "C-112"
+    spec_id: str = "T4-C08"
     hard_cap_pct: float = SNIPER_L1_TRAIL_SAFE_CAP_PCT
-    ratchet_steps: Tuple[Tuple[float, float], ...] = ((1.75, 1.60),)
-    use_vwap_ha_hold: bool = True
-    climax_rsi_thr: float = 62.0
+    ratchet_steps: Tuple[Tuple[float, float], ...] = (
+        (1.35, 1.15),
+        (2.00, 1.65),
+        (3.00, 2.60),
+        (4.00, 3.55),
+        (5.00, 4.50),
+    )
+    use_vwap_ha_hold: bool = False
+    climax_rsi_thr: float = 0.0
     active_lock_pct: float = 0.0
     arm_100_p: float = 0.0
     step_trig_145_p: float = 0.0
@@ -175,7 +181,7 @@ class SniperL1TrailSlot:
     def _apply_mode_policy(self, portion_mode: Any) -> None:
         pol = resolve_smart_rebound_policy(portion_mode)
         self.portion_mode = str(portion_mode or PORTION_MODE_COMPOUND).upper().strip()
-        self.spec_id = str(pol.get("spec_id") or "C-112")
+        self.spec_id = str(pol.get("spec_id") or "T4-C08")
         self.hard_cap_pct = safe_float(
             pol.get("hard_cap_pct"), SNIPER_L1_TRAIL_SAFE_CAP_PCT
         )
@@ -183,10 +189,16 @@ class SniperL1TrailSlot:
         self.ratchet_steps = (
             tuple(raw_steps)
             if isinstance(raw_steps, (list, tuple)) and len(raw_steps) > 0
-            else ((1.75, 1.60),)
+            else (
+                (1.35, 1.15),
+                (2.00, 1.65),
+                (3.00, 2.60),
+                (4.00, 3.55),
+                (5.00, 4.50),
+            )
         )
-        self.use_vwap_ha_hold = bool(pol.get("use_vwap_ha_hold", True))
-        self.climax_rsi_thr = safe_float(pol.get("climax_rsi_thr"), 62.0)
+        self.use_vwap_ha_hold = bool(pol.get("use_vwap_ha_hold", False))
+        self.climax_rsi_thr = safe_float(pol.get("climax_rsi_thr"), 0.0)
         if self.ref_cost > 0.0:
             self.cap_500_p = round(
                 self.ref_cost * (1.0 + self.hard_cap_pct / 100.0), 2
@@ -2286,7 +2298,7 @@ async def _commit_filled_sell_and_reanchor_ledger(
                 else:
                     b1_rem = rem_buckets[0]
                     b1_rem_target = (
-                        math.ceil((b1_rem.book_price * 1.015 - 1e-9) * 100.0)
+                        math.ceil((b1_rem.book_price * 1.010 - 1e-9) * 100.0)
                         / 100.0
                     )
                     note_str = (
@@ -3275,7 +3287,7 @@ async def execute_1m_sniper_sell_and_reanchor_plugin(
                 main_slot.release_forgive(bad_ha_minute_key=bad_ha_mk)
                 forgiven_any = True
                 logger.info(
-                    "💡 [제안 B 본 1층 '허락보다 용서를' 릴리스 & 기존 HA 망각] 실호가=$%.2f < +1.50%%($%.2f) -> 허공주문 차단 · 망각봉=%s",
+                    "💡 [Case 113 본 1층 '허락보다 용서를' 릴리스 & 기존 HA 망각] 실호가=$%.2f < +1.00%%($%.2f) -> 허공주문 차단 · 망각봉=%s",
                     fresh_live_p,
                     main_slot.arm_100_p,
                     bad_ha_mk or "-",
@@ -3342,7 +3354,7 @@ async def execute_1m_sniper_sell_and_reanchor_plugin(
                 sub_slot.release_forgive(bad_ha_minute_key=bad_ha_mk)
                 forgiven_any = True
                 logger.info(
-                    "💡 [제안 B 서브 1층 '허락보다 용서를' 릴리스 & 기존 HA 망각] 실호가=$%.2f < +1.50%%($%.2f) -> 허공주문 차단 · 망각봉=%s",
+                    "💡 [Case 113 서브 1층 '허락보다 용서를' 릴리스 & 기존 HA 망각] 실호가=$%.2f < +1.00%%($%.2f) -> 허공주문 차단 · 망각봉=%s",
                     fresh_live_p,
                     sub_slot.arm_100_p,
                     bad_ha_mk or "-",

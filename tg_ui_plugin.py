@@ -1095,9 +1095,19 @@ def build_avwap_radar_message(
                 "▫️ 15:30 ~ 16:00 고점방어 (익일 04:07 진입)"
             )
         else:
-            gate_cond_lines.append(
-                f"▫️ 본그리드(8%): 현재가 <b>${lp:.2f}</b> 기준 {quota_badge_str} (${next_bud:,.0f})"
+            # MODIFIED [Case 113]: 0주 첫 진입 방어지정가/타점 요약 키 존재 시 실시간 연동 표출
+            z_trig_p = safe_float(
+                summary.get("zero_entry_limit_price"),
+                safe_float(summary.get("vwap_defense_buy_price"), 0.0),
             )
+            if 0.0 < z_trig_p < (lp - 1e-6):
+                gate_cond_lines.append(
+                    f"▫️ 본그리드(8%): 방어지정가 <b>${z_trig_p:.2f}</b> (현재 ${lp:.2f}) · {quota_badge_str} (${next_bud:,.0f})"
+                )
+            else:
+                gate_cond_lines.append(
+                    f"▫️ 본그리드(8%): 현재가 <b>${lp:.2f}</b> 기준 {quota_badge_str} (${next_bud:,.0f})"
+                )
     elif is_l2_only:
         g_pb_u = safe_float(
             summary.get("reentry_pullback_drop_pct"),

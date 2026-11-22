@@ -46,8 +46,8 @@ GATE_START_MIN_OF_DAY: int = 4 * 60 + 7   # 247 (04:07 EST)
 GATE_END_MIN_OF_DAY: int = 16 * 60        # 960 (16:00 EST)
 REGULAR_START_MIN_OF_DAY: int = 9 * 60 + 30  # 570 (09:30 EST)
 
-# [Case 84 & Case 88]: 정규장 마감 30분 전(15:30 ~ 16:00 EST) 본·서브 0주 새 사이클 첫 1층 진입 및 1층 공석 +1.0% 돌파 추격 동시 차단 기준 시각(HHMM)
-NEW_CYCLE_BUY_CUTOFF_HM: int = safe_int(_API_NEW_CYCLE_BUY_CUTOFF_HM, 1530)
+# MODIFIED [Case 113]: 정규장 마감 1시간 전(15:00 ~ 16:00 EST) 0주 신규 진입 차단 기준 시각(HHMM)
+NEW_CYCLE_BUY_CUTOFF_HM: int = safe_int(_API_NEW_CYCLE_BUY_CUTOFF_HM, 1500)
 
 # [Case 93]: 프리장(323봉) 및 정규장(390봉)을 날짜변경선(00:00 EST) 야간 꼬리 침범 없이 커버하는 400봉 인메모리 링버퍼 상한 락온
 _LIVE_1M_BAR_LOCK = threading.RLock()
@@ -817,10 +817,10 @@ def get_market_session_label(now_est: Optional[datetime] = None) -> str:
         return "🌅 프리장 오프닝 안정화(04:00~04:06)"
     if 407 <= hm <= 929 and dt.weekday() < 5:
         return "🔫 프리장 스나이퍼 가동(04:07~09:29)"
-    if 1530 <= hm <= 1600 and dt.weekday() < 5:
-        return "🔥 정규장 마감30분전 가동(15:30~16:00·0주/돌파차단)"
-    if 930 <= hm <= 1529 and dt.weekday() < 5:
-        return "🔥 정규장 스나이퍼 가동(09:30~16:00)"
+    if 1500 <= hm <= 1600 and dt.weekday() < 5:
+        return "🔥 정규장 마감1시간전 가동(15:00~16:00·0주신규차단)"
+    if 930 <= hm <= 1459 and dt.weekday() < 5:
+        return "🔥 정규장 T4 스나이퍼 가동(09:30~16:00)"
     if 1601 <= hm <= 1959 and dt.weekday() < 5:
         return "🌇 애프터장 익절감시(16:00~19:59·매수잠금)"
     return "🌃 데이장 익절감시(20:00~03:59·매수잠금)"

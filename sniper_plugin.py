@@ -227,6 +227,9 @@ async def _execute_sub_grid_buy_engine_plugin(
         return None
 
     sub_buckets = buckets_from_dicts(st.get("sub_buckets", []))
+    # MODIFIED [Case 113 : 서브 그리드 신규 매수/추매 전면 영구 폐기 (기보유 잔량만 청산 엔진에서 익절 졸업)]
+    if not bool(st.get("sub_grid_enabled", False)):
+        return None
     main_frozen_d = max(0, safe_int(st.get("main_consec_frozen_days"), 0))
     if main_frozen_d < SUB_FROZEN_DAYS_TRIGGER and len(sub_buckets) == 0:
         return None
@@ -2144,6 +2147,42 @@ async def execute_seed_protected_buy_gate_plugin(
                 "hm": hm,
                 "cutoff_hm": NEW_CYCLE_BUY_CUTOFF_HM,
             }
+        # NEW [Case 113 : 0주 첫 1층 진입 시 정규장 개장 7분(09:30~09:36 EST) 안정화 쉴드 & 직전 완결 1분봉 무머리 HA음봉 패스]
+        if REG_OPEN_VWAP_SHIELD_START_HM <= hm <= REG_OPEN_VWAP_SHIELD_END_HM:
+            mark_pullback_ha_bear_minute_wait(
+                context=context,
+                symbol=TARGET_SYMBOL,
+                cur_min_key=dt_now.strftime("%Y-%m-%d %H:%M"),
+            )
+            return {
+                "status": "HOLD_ZERO_SHARES_REG_OPEN_7M_SHIELD",
+                "hm": hm,
+            }
+        (
+            _,
+            z_shaved_bear,
+            _,
+            z_ha_ready,
+            z_closed_mk,
+        ) = await _get_live_soxl_reentry_snapshot(
+            context, live_price=live_p, now_est=dt_now
+        )
+        if (not z_ha_ready) or z_shaved_bear:
+            mark_pullback_ha_bear_minute_wait(
+                context=context,
+                symbol=TARGET_SYMBOL,
+                cur_min_key=dt_now.strftime("%Y-%m-%d %H:%M"),
+            )
+            logger.info(
+                "🛡️ [Case 113 0주 첫 진입 무머리 HA음봉 패스] 현재가 $%.2f · 완결봉(%s) 무머리 HA음봉 -> 다음 1분 정각 최저가 대기",
+                live_p,
+                z_closed_mk or "-",
+            )
+            return {
+                "status": "HOLD_ZERO_SHARES_SHAVED_HA_BEAR",
+                "live_price": live_p,
+                "closed_bar_minute_key": z_closed_mk,
+            }
 
         async with context.in_memory_ordering_lock:
             async with context.dual_strike_mutex:
@@ -2192,10 +2231,39 @@ async def execute_seed_protected_buy_gate_plugin(
                     }
 
                 fresh_live_p = await _fetch_fresh_current_soxl_price(
-                    context, fallback_price=live_p
+                    context, fallback_price=live_p, now_est=dt_mutex
                 )
                 if fresh_live_p <= 0.0:
                     return {"status": "NO_FRESH_LIVE_PRICE"}
+
+                # NEW [Case 113 : 뮤텍스 내부 0주 진입 2차 무머리 HA음봉 & 개장 7분 쉴드 검문]
+                if (
+                    REG_OPEN_VWAP_SHIELD_START_HM
+                    <= hm_mutex
+                    <= REG_OPEN_VWAP_SHIELD_END_HM
+                ):
+                    mark_pullback_ha_bear_minute_wait(
+                        context=context,
+                        symbol=TARGET_SYMBOL,
+                        cur_min_key=dt_mutex.strftime("%Y-%m-%d %H:%M"),
+                    )
+                    return {"status": "HOLD_ZERO_SHARES_REG_OPEN_7M_SHIELD"}
+                (
+                    _,
+                    m_z_shaved_bear,
+                    _,
+                    m_z_ha_ready,
+                    _,
+                ) = await _get_live_soxl_reentry_snapshot(
+                    context, live_price=fresh_live_p, now_est=dt_mutex
+                )
+                if (not m_z_ha_ready) or m_z_shaved_bear:
+                    mark_pullback_ha_bear_minute_wait(
+                        context=context,
+                        symbol=TARGET_SYMBOL,
+                        cur_min_key=dt_mutex.strftime("%Y-%m-%d %H:%M"),
+                    )
+                    return {"status": "HOLD_ZERO_SHARES_SHAVED_HA_BEAR"}
 
                 exec_order_p = max(
                     0.01, math.floor((fresh_live_p + 1e-9) * 100.0) / 100.0
@@ -2979,13 +3047,14 @@ async def execute_seed_protected_buy_gate_plugin(
                             "signal_type": "HOLD_ABOVE_CYCLE_MIN",
                             "live_price": fresh_live_p,
                         }
-                    # MODIFIED [Audit-111-02 & Audit-112-01]: 본 1층 스토커 발사 시 기준가 미만 정당 반등 보호
+                    # MODIFIED [Case 113]: T4 대칭 데드존 공석 기준가 = min(직전매도가, 최하단상단가)
                     m_pm = str(st_now.get("portion_mode") or "")
                     raw_m_anc = safe_float(st_now.get("anchor_price"), 0.0)
+                    m_min_up = min(b.book_price for b in now_buckets)
                     m_anc = (
-                        raw_m_anc
-                        if raw_m_anc > 0.0
-                        else min(b.book_price for b in now_buckets)
+                        min(raw_m_anc, m_min_up)
+                        if (raw_m_anc > 0.0 and m_min_up > 0.0)
+                        else (raw_m_anc if raw_m_anc > 0.0 else m_min_up)
                     )
                     m_pb_r = resolve_smart_pullback_drop_pct(m_pm)
                     m_was_l1_stalk = bool(
@@ -3468,11 +3537,8 @@ async def execute_seed_protected_buy_gate_plugin(
                             )
 
     # -----------------------------------------------------------------------
-    # [분기 B-1B · Case 105 : 본 그리드 활성 1층 보유 중 진성 [2층 공석] 최저가 돌파매수 (LOW_BREAK_L2_VAC_RELOAD)]
-    # -> 활성 1층 보유 & 활성 2층 부재(not has_active_l2_bucket) & 사이클 최고 도달 회차 >= 2 상태에서
-    #    지정가 < 본 기억저가(cycle_min_buy_price) 도달 시 완결 1분봉 무머리 HA 음봉만 패스 후 공석 2층 슬롯 충전!
-    # -----------------------------------------------------------------------
-    if has_active_l1 and (not has_active_l2_bucket(buckets)):
+    # MODIFIED [Case 113 : 2층 공석 최저가 돌파매수 영구 폐기 -> 10분 와이드 추매 일원화]
+    if False and has_active_l1 and (not has_active_l2_bucket(buckets)):
         held_lots_l2v = sum(safe_bucket_lot_count(b) for b in buckets)
         ratchet_l2v = max(
             held_lots_l2v, safe_int(st.get("cycle_ratchet_max_lots"), 0)
@@ -4158,6 +4224,38 @@ async def execute_seed_protected_buy_gate_plugin(
             ),
             "seed_protect_pass_cnt": new_day_pass,
             "sub_grid_eval": sub_res_gate,
+        }
+
+    # NEW [Case 113 : 10분 게이트 추매(B-2) 시에도 직전 완결 1분봉 무머리 HA음봉이면 버킷 미소모 패스하여 진바닥 최저가 매수!]
+    if REG_OPEN_VWAP_SHIELD_START_HM <= hm <= REG_OPEN_VWAP_SHIELD_END_HM:
+        return {
+            "status": "HOLD_DIP_REG_OPEN_7M_SHIELD",
+            "hm": hm,
+            "live_price": fresh_live_p,
+        }
+    (
+        _,
+        b2_shaved_bear,
+        _,
+        b2_ha_ready,
+        b2_closed_mk,
+    ) = await _get_live_soxl_reentry_snapshot(
+        context, live_price=fresh_live_p, now_est=dt_now
+    )
+    if (not b2_ha_ready) or b2_shaved_bear:
+        logger.info(
+            "🛡️ [Case 113 10분게이트 추매 무머리 HA음봉 패스] 현재가 $%.2f (저가 $%.2f 대비 %.2f%% <= %.1f%%) · 완결봉(%s) 무머리 HA음봉 -> 버킷 미소모 다음 분 대기",
+            fresh_live_p,
+            ref_buy_anchor,
+            chg_for_buy_pct,
+            drop_buy_pct,
+            b2_closed_mk or "-",
+        )
+        return {
+            "status": "HOLD_DIP_SHAVED_HA_BEAR_WAIT",
+            "live_price": fresh_live_p,
+            "closed_bar_minute_key": b2_closed_mk,
+            "chg_pct": round(chg_for_buy_pct, 2),
         }
 
     async with context.in_memory_ordering_lock:
