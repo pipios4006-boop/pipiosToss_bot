@@ -58,6 +58,7 @@ from quant_engine import (
     relabel_sub_upper_grid_tiers,
     relabel_upper_grid_tiers,
     resolve_effective_round_trip_fee_rate_pct,
+    resolve_mode_portion_ratio,
     resolve_portion_budget_base_equity,
     safe_bucket_lot_count,
     summarize_stratum_portfolio,
@@ -225,9 +226,9 @@ async def _sync_barbell_sgov_holdings_if_idle(
         rt_sg = resolve_effective_round_trip_fee_rate_pct(
             state_dict=st_soxl_sg
         )
-        # MODIFIED [Case 100]: 수동 SGOV 매도 동기화 시 합산 유동성 100% 1회분 회복 기준으로 매도예약 해제
+        # MODIFIED [Case 100 & Case 113]: 수동 SGOV 매도 동기화 시 바벨 코어 15% 1회분 회복 기준으로 매도예약 해제
         guard_floor_sg = round(
-            init_seed_sg * 0.60 * 0.08 * (1.0 + rt_sg / 100.0), 4
+            init_seed_sg * 0.60 * resolve_mode_portion_ratio(PORTION_MODE_BARBELL) * (1.0 + rt_sg / 100.0), 4
         )
         soxl_free_sg = max(
             0.0, safe_float(st_soxl_sg.get("free_cash_usd"), 0.0)
@@ -896,10 +897,11 @@ async def reconcile_stratum_with_broker_holdings_plugin(
                 next_entry_note = (
                     "🔒장외 매수잠금 · 04:07 EST 프리장 개시 후 새 1층 진입 대기"
                 )
+            # MODIFIED [Case 113]: 15:00 ~ 16:00 EST 0주 신규진입 차단 시각 일치화
             elif will_hit_late_cutoff:
-                next_entry_note = "🔒장마감 30분전(15:30 ~ 16:00) 새 사이클 진입 차단 · 익일 04:07 EST 프리장 새 1층 진입 대기"
+                next_entry_note = "🔒장마감 1시간전(15:00 ~ 16:00) 새 사이클 진입 차단 · 익일 04:07 EST 프리장 새 1층 진입 대기"
             else:
-                next_entry_note = "🛡️04:07 ~ 15:29 EST 매수구간 내 60초 타임쉴드 후 새 1층 진입 대기"
+                next_entry_note = "🛡️04:07 ~ 14:59 EST 매수구간 내 60초 타임쉴드 후 새 1층 진입 대기"
 
             if is_barbell:
                 credit_note = f"별도 수익금고 영구격리(⚖️바벨 · 누적금고 +${barbell_vault_total:,.2f})"
@@ -1106,7 +1108,8 @@ async def reconcile_stratum_with_broker_holdings_plugin(
             ),
             portion_mode=portion_mode,
         )
-        est_p_unit_0sh = max(1.0, base_eq_0sh * 0.08)
+        # MODIFIED [Case 113]: 모드별 황금비율(10% / 8% / 15%) 단위 정산
+        est_p_unit_0sh = max(1.0, base_eq_0sh * resolve_mode_portion_ratio(portion_mode))
         if cost_u > (cur_free_cash_0sh + 0.01):
             excess_0sh_usd = round(cost_u - cur_free_cash_0sh, 4)
             next_inj_res_0sh = round(cur_inj_res_0sh + excess_0sh_usd, 4)
@@ -1278,7 +1281,7 @@ async def reconcile_stratum_with_broker_holdings_plugin(
                 title=f"➕ [SOXL 수동 신규매수 1층 동기화] {h_qty}주 @ ${pure_ref_p:.2f}",
                 body=(
                     f"실투입 원금 ${cost_u:,.2f} ({est_lots}회차분) · "
-                    f"🛡️60초 타임쉴드 후 1층 익절목표 ${l1_target_0sh:.2f}(+1.5%) ⚡1.5초 실시간 감시! · "
+                    f"🛡️60초 타임쉴드 후 1층 익절목표 ${l1_target_0sh:.2f}(+1.0%) ⚡1.5초 실시간 감시! · "
                     f"기억저가 ${pure_ref_p:.2f} 잠금(와이드 {drop_req_0sh:.1f}% 추매가 ${trig_buy_0sh:.2f}) · "
                     f"가용현금 ${free_cash_0sh:,.2f}"
                 ),
@@ -1345,7 +1348,8 @@ async def reconcile_stratum_with_broker_holdings_plugin(
         if added_spent_usd > (cur_free_cash_add + 0.01):
             excess_add_usd = round(added_spent_usd - cur_free_cash_add, 4)
             next_inj_res_add = round(cur_inj_res_add + excess_add_usd, 4)
-            est_p_unit_add = max(1.0, base_eq_add * 0.08)
+            # MODIFIED [Case 113]: 모드별 황금비율(10% / 8% / 15%) 단위 정산
+            est_p_unit_add = max(1.0, base_eq_add * resolve_mode_portion_ratio(portion_mode))
             add_p_cnt = max(
                 1, int(math.ceil((excess_add_usd - 1e-9) / est_p_unit_add))
             )
@@ -1532,7 +1536,7 @@ async def reconcile_stratum_with_broker_holdings_plugin(
                 ),
                 body=(
                     f"편입위치: {pos_desc} (추가원금 ${added_spent_usd:,.2f}) · "
-                    f"🛡️60초 타임쉴드 후 1층목표 ${l1_target_add:.2f}(+1.5%) 감시{upper_add_note} · "
+                    f"🛡️60초 타임쉴드 후 1층목표 ${l1_target_add:.2f}(+1.0%) 감시{upper_add_note} · "
                     f"기억저가 ${new_min_p:.2f}{ratchet_add_note} 잠금 · 가용현금 ${free_cash_add:,.2f}"
                 ),
             )
@@ -2559,15 +2563,11 @@ async def execute_1600_daily_closing_settlement_plugin(
             if (day_unlock_ev > 0 or cum_unlock_ev > 0)
             else ""
         )
+        # MODIFIED [Case 113]: 서브그리드 폐기 반영 -> 기보유 서브 잔량/당일매매 존재 시에만 표출
         sub_day_note = (
-            f" · 🛡️서브(매수 {day_sub_buy}/익절 {day_sub_sell}회 · 누적졸업 {sub_comp_cycles}회 · +${sub_net_cum:,.2f})"
-            if (
-                day_sub_buy > 0
-                or day_sub_sell > 0
-                or sub_comp_cycles > 0
-                or sub_sh > 0
-            )
-            else f" · 🛡️본동결 {next_main_frozen}/{SUB_FROZEN_DAYS_TRIGGER}일"
+            f" · 🛡️기보유서브(익절 {day_sub_sell}회 · 잔여 {sub_sh}주)"
+            if (day_sub_buy > 0 or day_sub_sell > 0 or sub_sh > 0)
+            else ""
         )
         sub_carry_note = (
             f"+서브 {sub_sh}주({sub_tiers}층·{sub_lots}/{SUB_MAX_TOTAL_LOTS_4}회분)"
@@ -2585,15 +2585,10 @@ async def execute_1600_daily_closing_settlement_plugin(
             else " · 💉예비수혈: 0회(대기)"
         )
         p_sign = "+" if cum_primer_net >= 0.0 else "-"
+        # MODIFIED [Case 113]: 1주 마중물 폐기 반영 -> 과거 누적치 상시 노출 제거
         primer_day_note = (
-            f" · 🌱마중물(당일 매수{day_primer_buy}/익절{day_primer_sell} · "
-            f"누적 매수{cum_primer_buy}/익절{cum_primer_sell}/흡수{cum_primer_abs} · {p_sign}${abs(cum_primer_net):,.2f})"
-            if (
-                day_primer_buy > 0
-                or day_primer_sell > 0
-                or cum_primer_buy > 0
-                or cum_primer_sell > 0
-            )
+            f" · 🌱기보유마중물(당일 익절{day_primer_sell})"
+            if (day_primer_buy > 0 or day_primer_sell > 0)
             else ""
         )
 

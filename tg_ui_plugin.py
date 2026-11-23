@@ -71,6 +71,7 @@ from quant_engine import (
     SUB_MAX_TOTAL_LOTS_4,
     is_primer_1sh_tag,
     next_cycled_portion_mode,
+    resolve_mode_portion_ratio,
     resolve_smart_primer_policy,
     resolve_smart_pullback_drop_pct,
     resolve_smart_rebound_policy,
@@ -239,6 +240,16 @@ def _format_sub_quota_badge(summary: Dict[str, Any]) -> str:
     return f"<b>{sub_next_qty}주</b>"
 
 
+def _format_mode_portion_pct_tag(
+    portion_mode: Any, full_barbell_note: bool = False
+) -> str:
+    # NEW [Case 113]: 운용모드별 황금비율(바벨 코어15%[전체9%] · 단리 10% · 복리 8%) 표기 헬퍼
+    if _is_barbell_portion_mode(portion_mode):
+        return "코어15%·전체9%" if full_barbell_note else "코어15%"
+    pct_val = resolve_mode_portion_ratio(portion_mode) * 100.0
+    return f"{pct_val:.0f}%"
+
+
 def _build_main_reply_keyboard() -> Dict[str, Any]:
     """하단 4대 핵심 고정 메뉴(2x2) 단일화 유지"""
     return {
@@ -388,9 +399,10 @@ def _format_multi_grid_stratum_lines(
             lines.append(
                 "⚪ <b>[본그리드: 0주]</b> 🔒장외 매수잠금 (04:07 해금)"
             )
+        # MODIFIED [Case 113]: 정규장 마감 1시간 전(15:00 ~ 16:00 EST) 0주 신규차단 시각 일치화
         elif is_late_cutoff:
             lines.append(
-                "⚪ <b>[본그리드: 0주]</b> 🔒15:30 ~ 16:00 신규진입 차단"
+                "⚪ <b>[본그리드: 0주]</b> 🔒15:00 ~ 16:00 신규진입 차단"
             )
         else:
             lines.append(
@@ -419,20 +431,21 @@ def _format_multi_grid_stratum_lines(
         else:
             l1_qty_label = f"{b1.qty}주"
 
+        # MODIFIED [Case 113]: T4 통합 출구(+1.0% 점화·샤프래칫·캡+6%) 및 1층 공석 -1.0% 눌림 단일화
         if SNIPER_L1_TRAIL_ENABLED and not is_ext_sell_only:
             tr_m = main_trail_ui if isinstance(main_trail_ui, dict) else {}
             l1_ign_p = safe_float(summary.get("l1_ignite_100_price"), l1_t)
             cap_pct_u = safe_float(
                 tr_m.get("hard_cap_pct"),
-                safe_float(summary.get("rebound_hard_cap_pct"), 5.0),
+                safe_float(summary.get("rebound_hard_cap_pct"), 6.0),
             )
             if bool(tr_m.get("armed")):
                 st_p = safe_float(tr_m.get("active_stop_p"), 0.0)
-                lk_pct_u = safe_float(tr_m.get("active_lock_pct"), 1.60)
+                lk_pct_u = safe_float(tr_m.get("active_lock_pct"), 1.15)
                 if bool(tr_m.get("stepped_125")) and st_p > 0.0:
                     lines.append(
                         f"{l1_icon} <b>[1층: {l1_qty_label}·${b1.actual_cost_usd:,.0f}]</b> "
-                        f"<b>${b1.book_price:.2f}</b> ➔ <b>다단래칫추적</b>(보존${st_p:.2f}) ({g1_sign}{l1_g:.2f}%·👑+{lk_pct_u:.2f}%락·캡+{cap_pct_u:.0f}%)"
+                        f"<b>${b1.book_price:.2f}</b> ➔ <b>샤프래칫추적</b>(보존${st_p:.2f}) ({g1_sign}{l1_g:.2f}%·👑+{lk_pct_u:.2f}%락·캡+{cap_pct_u:.0f}%)"
                     )
                 else:
                     lk_m_p = safe_float(
@@ -441,21 +454,21 @@ def _format_multi_grid_stratum_lines(
                     )
                     lines.append(
                         f"{l1_icon} <b>[1층: {l1_qty_label}·${b1.actual_cost_usd:,.0f}]</b> "
-                        f"<b>${b1.book_price:.2f}</b> ➔ <b>다단래칫추적</b>(락${lk_m_p:.2f}) ({g1_sign}{l1_g:.2f}%·🔥무스탑·캡+{cap_pct_u:.0f}%)"
+                        f"<b>${b1.book_price:.2f}</b> ➔ <b>샤프래칫추적</b>(락${lk_m_p:.2f}) ({g1_sign}{l1_g:.2f}%·🔥무스탑·캡+{cap_pct_u:.0f}%)"
                     )
             else:
                 fg_c = safe_int(tr_m.get("forgive_count"), 0)
                 fg_b = (
                     f"·💡용서{fg_c}·캡+{cap_pct_u:.0f}%"
                     if fg_c > 0
-                    else f"·점화1.5%·캡+{cap_pct_u:.0f}%"
+                    else f"·점화1.0%·캡+{cap_pct_u:.0f}%"
                 )
                 lines.append(
                     f"{l1_icon} <b>[1층: {l1_qty_label}·${b1.actual_cost_usd:,.0f}]</b> "
                     f"<b>${b1.book_price:.2f}</b> ➔ <b>${l1_ign_p:.2f}</b> ({g1_sign}{l1_g:.2f}%{fg_b})"
                 )
         else:
-            l1_ov_lock_note = "·장외+1.5%" if is_ext_sell_only else ""
+            l1_ov_lock_note = "·장외+1.0%" if is_ext_sell_only else ""
             lines.append(
                 f"{l1_icon} <b>[1층: {l1_qty_label}·${b1.actual_cost_usd:,.0f}]</b> "
                 f"<b>${b1.book_price:.2f}</b> ➔ <b>${l1_t:.2f}</b> ({g1_sign}{l1_g:.2f}%{l1_ov_lock_note})"
@@ -471,7 +484,6 @@ def _format_multi_grid_stratum_lines(
         )
         re_sig_t = str(summary.get("reentry_signal_type") or "")
         pull_ha_wait = bool(re_sig_t == "HOLD_PULLBACK_SHAVED_HA_BEAR")
-        low_brk_ha_wait = bool(re_sig_t == "HOLD_LOW_BREAK_SHAVED_HA_BEAR")
         reg_7m_wait = bool(re_sig_t == "HOLD_REG_OPEN_7M_VWAP_SHIELD")
         vwap_wait = bool(re_sig_t == "HOLD_PULLBACK_ABOVE_SESSION_VWAP")
         m_pb_u = safe_float(
@@ -482,46 +494,25 @@ def _format_multi_grid_stratum_lines(
         )
         m_pb_s = f"{m_pb_u:.1f}%"
         sess_vwap_u = safe_float(summary.get("session_vwap"), 0.0)
-        c_min_u = safe_float(summary.get("cycle_min_buy_price"), 0.0)
-        lb_note = f"·저가&lt;${c_min_u:.2f}" if c_min_u > 0.0 else ""
-        stalk_l1_act_u = bool(summary.get("stalk_l1_active", False))
-        stalk_l1_low_u = safe_float(summary.get("stalk_l1_low_price"), 0.0)
-        stalk_reb_u = safe_float(summary.get("rebound_stalk_pct"), 0.25)
         if is_ext_sell_only:
             lines.append(
                 f"⚡ <b>[1층: 공석]</b> 🔒장외잠금 · 04:07 재장전{cap_note}"
             )
-        elif stalk_l1_act_u and stalk_l1_low_u > 0.0:
-            lines.append(
-                f"⚡ <b>[1층: 공석]</b> 🕵️스토커 저점추적(최저 <b>${stalk_l1_low_u:.2f}</b> ➔ +{stalk_reb_u:.2f}%/양봉 타격){cap_note}"
-            )
-        elif low_brk_ha_wait:
-            lines.append(
-                f"⚡ <b>[1층: 공석]</b> 🌑저가돌파(&lt;${c_min_u:.2f}) 무머리1분HA음봉 패스(다음1분 대기)"
-            )
         elif reg_7m_wait:
             lines.append(
-                f"⚡ <b>[1층: 공석]</b> 🛡️정규개장7분(09:30~09:36) VWAP안정화 대기{lb_note}"
+                f"⚡ <b>[1층: 공석]</b> 🛡️정규개장7분(09:30~09:36) VWAP안정화 대기{cap_note}"
             )
         elif pull_ha_wait:
             lines.append(
-                f"⚡ <b>[1층: 공석]</b> 🌑눌림({m_pb_s}) 무머리1분HA음봉 패스(다음1분 대기){cap_note}"
+                f"⚡ <b>[1층: 공석]</b> 🌑눌림({m_pb_s}) 무머리1분HA음봉 패스(정각대기){cap_note}"
             )
         elif vwap_wait:
             lines.append(
-                f"⚡ <b>[1층: 공석]</b> 🛡️눌림({m_pb_s})&gt;VWAP(${sess_vwap_u:.2f}) 패스{lb_note}{cap_note}"
-            )
-        elif is_late_cutoff:
-            lines.append(
-                f"⚡ <b>[1층: 공석]</b> 🛡️돌파차단 · 눌림({m_pb_s}·&lt;=VWAP·{ha_tag}){lb_note}{cap_note}"
-            )
-        elif live_rsi_14 > 50.0:
-            lines.append(
-                f"⚡ <b>[1층: 공석]</b> 눌림({m_pb_s}·&lt;=VWAP){lb_note}/🛡️돌파차단(RSI {live_rsi_14:.1f}&gt;50){cap_note}"
+                f"⚡ <b>[1층: 공석]</b> 🛡️눌림({m_pb_s})&gt;VWAP(${sess_vwap_u:.2f}) 패스{cap_note}"
             )
         else:
             lines.append(
-                f"⚡ <b>[1층: 공석]</b> 눌림({m_pb_s}·&lt;=VWAP){lb_note}/돌파(RSI&lt;=50){cap_note}"
+                f"⚡ <b>[1층: 공석]</b> 눌림({m_pb_s}·&lt;=VWAP·{ha_tag}){cap_note}"
             )
 
     act_l2 = bool(summary.get("has_active_l2", False))
@@ -561,21 +552,8 @@ def _format_multi_grid_stratum_lines(
             f"({s2}{g2:.2f}%{ib})"
         )
     elif vac_l2:
-        c_min_v2 = safe_float(summary.get("cycle_min_buy_price"), 0.0)
-        l2v_sig = str(summary.get("l2_vacant_low_break_signal_type") or "")
-        if is_ext_sell_only or c_min_v2 <= 0.0:
-            lines.append("🗡️ <b>[2층: 공석]</b> 채굴완료 · 공석활주로 개방")
-        elif l2v_sig == "HOLD_LOW_BREAK_SHAVED_HA_BEAR":
-            lines.append(
-                f"🗡️ <b>[2층: 공석]</b> 🌑저가돌파(&lt;${c_min_v2:.2f}) 무머리1분HA음봉 패스(다음1분 대기)"
-            )
-        else:
-            ha_v2 = pull_ha_badge or (
-                "🕯️1분HA양봉OK" if closed_ha_ok else "🌑무머리HA음봉패스"
-            )
-            lines.append(
-                f"🗡️ <b>[2층: 공석]</b> 채굴완료 · 저가돌파(<b>&lt;${c_min_v2:.2f}</b>·{ha_v2}) 감시"
-            )
+        # MODIFIED [Case 113]: 2층 공석 저가돌파 폐기 -> 10분 와이드 추매 일원화
+        lines.append("🗡️ <b>[2층: 공석]</b> 채굴완료 · 10분 와이드 추매 대기")
 
     if i37_b:
         ic = len(i37_b)
@@ -638,25 +616,8 @@ def _format_sub_grid_stratum_lines(
     avail_idle = safe_float(summary.get("avail_idle_cash_usd"), 0.0)
     lines: List[str] = []
 
+    # MODIFIED [Case 113]: 서브 그리드 영구 폐기 -> 기보유 서브 잔량 0주 시 완전 비표출
     if sub_sh <= 0 or not sub_buckets:
-        if held_sh_main > 0 and main_frozen >= SUB_FROZEN_DAYS_TRIGGER:
-            wait_note = (
-                "🔒04:07 출격"
-                if is_ext_sell_only
-                else (
-                    "🔒익일 출격"
-                    if is_late_cutoff
-                    else f"유휴 ${avail_idle:,.0f} 진입대기"
-                )
-            )
-            lines.append(
-                f"🛡️ <b>[서브 가동 ({main_frozen}/{SUB_FROZEN_DAYS_TRIGGER}일)]</b> {wait_note}"
-            )
-        else:
-            grad_note = f"·졸업{sub_comp}회" if sub_comp > 0 else ""
-            lines.append(
-                f"🛡️ <b>[서브 대기]</b> 본그리드 5일 무매매 시 가동 ({main_frozen}/{SUB_FROZEN_DAYS_TRIGGER}일{grad_note})"
-            )
         return lines
 
     cap_badge = "·🔒캡" if sub_lots >= sub_max_lots else ""
@@ -1020,9 +981,10 @@ def build_avwap_radar_message(
             shield_line = (
                 "🌃 <b>[장외 익절감시]</b> 목표가 즉시 익절 (04:07 매수해금)"
             )
+    # MODIFIED [Case 113]: 15:00 ~ 16:00 EST 0주 신규차단 시각 일치화
     elif held_sh <= 0 and is_late_cutoff:
         shield_line = (
-            "🛡️ <b>[15:30 ~ 16:00 신규차단]</b> 익일 04:07 첫 1층 진입 대기"
+            "🛡️ <b>[15:00 ~ 16:00 신규차단]</b> 익일 04:07 첫 1층 진입 대기"
         )
     elif in_sell_shield:
         shield_line = (
@@ -1082,6 +1044,8 @@ def build_avwap_radar_message(
     chg_anchor = safe_float(summary.get("chg_from_buy_anchor_pct"), 0.0)
     c_sign = "+" if chg_anchor >= 0.0 else ""
 
+    # MODIFIED [Case 113]: 모드별 황금비율(코어15%·10%·8%) 동적 표기 및 폐기 타점(저가돌파·돌파·마중물·스토커·서브추매) 소각
+    p_pct_lbl = _format_mode_portion_pct_tag(st.get("portion_mode"), full_barbell_note=False)
     gate_cond_lines: List[str] = []
     if live_assn_active:
         gate_header_line = "🎯 <b>[다음 매수 타점 · 실전 암살자 위임]</b>"
@@ -1092,21 +1056,20 @@ def build_avwap_radar_message(
         gate_header_line = "🎯 <b>[다음 매수 타점 · 0주 첫 진입]</b>"
         if is_late_cutoff:
             gate_cond_lines.append(
-                "▫️ 15:30 ~ 16:00 고점방어 (익일 04:07 진입)"
+                "▫️ 15:00 ~ 16:00 고점방어 (익일 04:07 진입)"
             )
         else:
-            # MODIFIED [Case 113]: 0주 첫 진입 방어지정가/타점 요약 키 존재 시 실시간 연동 표출
             z_trig_p = safe_float(
                 summary.get("zero_entry_limit_price"),
                 safe_float(summary.get("vwap_defense_buy_price"), 0.0),
             )
             if 0.0 < z_trig_p < (lp - 1e-6):
                 gate_cond_lines.append(
-                    f"▫️ 본그리드(8%): 방어지정가 <b>${z_trig_p:.2f}</b> (현재 ${lp:.2f}) · {quota_badge_str} (${next_bud:,.0f})"
+                    f"▫️ 본그리드({p_pct_lbl}): 방어지정가 <b>${z_trig_p:.2f}</b> (현재 ${lp:.2f}) · {quota_badge_str} (${next_bud:,.0f})"
                 )
             else:
                 gate_cond_lines.append(
-                    f"▫️ 본그리드(8%): 현재가 <b>${lp:.2f}</b> 기준 {quota_badge_str} (${next_bud:,.0f})"
+                    f"▫️ 본그리드({p_pct_lbl}): 현재가 <b>${lp:.2f}</b> ({pull_ha_badge}) · {quota_badge_str} (${next_bud:,.0f})"
                 )
     elif is_l2_only:
         g_pb_u = safe_float(
@@ -1116,42 +1079,25 @@ def build_avwap_radar_message(
             ),
         )
         pull_p = safe_float(summary.get("reentry_pullback_price"), 0.0)
-        brk_p = safe_float(summary.get("reentry_breakout_price"), 0.0)
-        c_min_re = safe_float(summary.get("cycle_min_buy_price"), 0.0)
         l2_cap_p = safe_float(
             summary.get("l2_ceiling_price"),
             safe_float(summary.get("min_indiv_upper_price"), 0.0),
         )
         rem_re_note = f" (잔여 {rem_re_sec:.0f}초)" if in_re_shield else ""
         gate_header_line = f"🎯 <b>[다음 매수 타점 · 1층 재장전{rem_re_note}]</b>"
-        if is_late_cutoff:
-            brk_str = "돌파차단(15:30~)"
-        elif rsi_14 > 50.0:
-            brk_str = f"돌파차단(RSI {rsi_14:.1f}&gt;50)"
-        else:
-            brk_str = f"돌파 <b>${brk_p:.2f}</b>(RSI&lt;=50)"
         cap_str = f" · 상한 ${l2_cap_p:.2f}" if l2_cap_p > 0.0 else ""
         vwap_str = f"&lt;=VWAP(${sess_vwap:.2f})·" if sess_vwap > 0.0 else ""
-        lb_re_str = f" · 저가 <b>&lt;${c_min_re:.2f}</b>" if c_min_re > 0.0 else ""
         gate_cond_lines.append(
-            f"▫️ 눌림({g_pb_u:.1f}%) <b>${pull_p:.2f}</b>({vwap_str}{pull_ha_badge}){lb_re_str} / {brk_str} 시 {quota_badge_str}"
+            f"▫️ 눌림({g_pb_u:.1f}%) <b>${pull_p:.2f}</b> ({vwap_str}{pull_ha_badge}) 시 {quota_badge_str} ({p_pct_lbl})"
         )
-        if bool(summary.get("primer_eligible", False)):
-            p_trig_re = safe_float(summary.get("primer_trigger_price"), 0.0)
-            p_gap_re = safe_float(summary.get("primer_eff_gap_pct"), 3.5)
-            if p_trig_re > 0.0:
-                gate_cond_lines.append(
-                    f"▫️ 🌱마중물구제(1주): 10분검문 <b>${p_trig_re:.2f}</b> 이하 (-{p_gap_re:.1f}%가드)"
-                )
         gate_cond_lines.append(
-            f"▫️ 기준 ${ref_anchor:.2f} 대비 {c_sign}{chg_anchor:.2f}%{cap_str}"
+            f"▫️ 기준 ${ref_anchor:.2f} 대비 {c_sign}{chg_anchor:.2f}% (±1.0% 데드존{cap_str})"
         )
     else:
         drop_req = safe_float(summary.get("drop_buy_pct"), -1.0)
         trig_p = safe_float(summary.get("trigger_buy_price"), 0.0)
         step_eligible = bool(summary.get("step_up_eligible", False))
         step_trig_p = safe_float(summary.get("stepped_trigger_price"), 0.0)
-        c_min_act = safe_float(summary.get("cycle_min_buy_price"), 0.0)
         gate_header_line = (
             f"🎯 <b>[다음 매수 타점]</b> (차기 검문: {escape_html(next_gate_str)})"
         )
@@ -1163,55 +1109,17 @@ def build_avwap_radar_message(
         eff_lot_tag = (
             f"·잠금{eff_lots}회" if ratchet_lots > held_lots else ""
         )
-        if bool(summary.get("l2_vacant_low_break_eligible", False)) and c_min_act > 0.0:
-            gate_cond_lines.append(
-                f"▫️ 2층공석 저가돌파(8%): <b>&lt;${c_min_act:.2f}</b> ({pull_ha_badge}) 시 즉시 충전"
-            )
-        vwap_g_pct = safe_float(summary.get("rebound_vwap_crash_guard_pct"), 0.0)
-        stalk_add_act_u = bool(summary.get("stalk_add_active", False))
-        stalk_add_low_u = safe_float(summary.get("stalk_add_low_price"), 0.0)
-        crash_g_note = (
-            f" · 🛡️VWAP{vwap_g_pct:.1f}%방어"
-            if vwap_g_pct < -0.1
-            else ""
-        )
         gate_cond_lines.append(
-            f"▫️ 추매타점(8%): <b>${trig_p:.2f}</b> 이하 시 {quota_badge_str} 매수{step_note}{crash_g_note}"
+            f"▫️ 추매타점({p_pct_lbl}): <b>${trig_p:.2f}</b> 이하 시 {quota_badge_str} 매수{step_note}"
         )
-        if stalk_add_act_u and stalk_add_low_u > 0.0:
-            gate_cond_lines.append(
-                f"▫️ 🕵️폭락추매 스토킹중: 최저 <b>${stalk_add_low_u:.2f}</b> 추적 ➔ 반전양봉/+0.30% 타격!"
-            )
-        if bool(summary.get("is_l1_primer_1sh", False)):
-            gate_cond_lines.append(
-                "▫️ 🌱1주마중물 장전중: 추가마중물 자동잠금 (익절리셋·8%흡수 대기)"
-            )
-        elif bool(summary.get("primer_eligible", False)):
-            p_trig_act = safe_float(summary.get("primer_trigger_price"), 0.0)
-            p_gap_act = safe_float(summary.get("primer_eff_gap_pct"), 3.5)
-            if p_trig_act > 0.0:
-                gate_cond_lines.append(
-                    f"▫️ 🌱마중물타점(1주): <b>${p_trig_act:.2f}</b> 이하 (역산·-{p_gap_act:.1f}%가드)"
-                )
         gate_cond_lines.append(
             f"▫️ 현재위치: 저가 ${ref_anchor:.2f} 대비 {c_sign}{chg_anchor:.2f}% (목표 {drop_req:.1f}%{eff_lot_tag})"
         )
 
-    sub_lots = safe_int(summary.get("sub_held_lots"), 0)
-    sub_max_lots = safe_int(
-        summary.get("sub_max_total_lots"), SUB_MAX_TOTAL_LOTS_4
-    )
-    sub_trig_p = safe_float(summary.get("sub_trigger_buy_price"), 0.0)
-    sub_quota_badge = _format_sub_quota_badge(summary)
     if sub_sh > 0 and not live_assn_active:
-        if sub_lots >= sub_max_lots:
-            gate_cond_lines.append(
-                f"▫️ 서브(4%): 🔒<b>{sub_lots}/{sub_max_lots}회 상한 도달</b> (추매잠금)"
-            )
-        else:
-            gate_cond_lines.append(
-                f"▫️ 서브타점(4%): <b>${sub_trig_p:.2f}</b> 이하 시 {sub_quota_badge} 추매"
-            )
+        gate_cond_lines.append(
+            f"▫️ 기보유서브({sub_sh}주): 신규추매 폐기 · 익절 졸업 대기"
+        )
 
     cyc_net = safe_float(summary.get("cycle_realized_net_usd"), 0.0)
     cyc_ev = safe_int(summary.get("cycle_sell_events"), 0)
@@ -1452,22 +1360,35 @@ def build_sync_instruction_message(
 
     cash_row_label = "SOXL가용현금" if is_barbell else "가용현금"
 
+    # MODIFIED [Case 113]: 0주 서브그리드 자산줄 · 서브가용 $0 · 서브 +$0.00 표출 소각
+    cyc_sub_note = (
+        f" · 기보유서브 {cyc_sub_sign}${abs(cyc_sub_net):,.2f}"
+        if (sub_sh > 0 or abs(cyc_sub_net) >= 0.01)
+        else ""
+    )
     lines = [
         f"🔄 <b>[잔고 동기화 · {mode_title}]</b>",
         "──────────────",
         "📊 <b>[시드 배분 및 층별 자산 시각화]</b>",
         f"{gauge_bar} (주식 {stock_alloc_pct:.0f}% : 현금 {cash_alloc_pct:.0f}%)",
         f"▫️ 🟦본그리드: <b>${inv_main:,.0f}</b> ({main_alloc_pct:.0f}% · {held_tiers}개층 {held_sh}주)",
-        f"▫️ 🟨서브그리드: <b>${inv_sub:,.0f}</b> ({sub_alloc_pct:.0f}% · {sub_tiers}개층 {sub_sh}주)",
-        f"▫️ 🟩{cash_row_label}: <b>${free_cash:,.0f}</b> ({cash_alloc_pct:.0f}% · 서브가용 ${avail_idle:,.0f})",
-        "──────────────",
-        "🔄 <b>[현재 사이클 vs 전체 누적 수익]</b>",
-        f"▫️ 설정 기준시드: <b>${init_seed:,.2f}</b> ({mode_title})",
-        f"▫️ 금일 확정수익: <b>{d_sign}${abs(day_net):,.2f}</b> ({d_sign}{abs(day_krw):,}원)",
-        f"▫️ 이번사이클익: <b>{cyc_sign}${abs(cyc_net):,.2f}</b> ({cyc_ev}회 익절 · 서브 {cyc_sub_sign}${abs(cyc_sub_net):,.2f})",
-        f"▫️ 직전졸업수익: <b>{last_c_sign}${abs(last_cyc_net):,.2f}</b> (총 {comp_cycles}회 사이클 졸업)",
-        f"▫️ 전체누적수익: <b>{n_sign}${abs(cum_net):,.2f}</b> ({n_sign}{abs(real_roi):.2f}% 현금확정!)",
     ]
+    if sub_sh > 0:
+        lines.append(
+            f"▫️ 🟨기보유서브: <b>${inv_sub:,.0f}</b> ({sub_alloc_pct:.0f}% · {sub_tiers}개층 {sub_sh}주)"
+        )
+    lines.extend(
+        [
+            f"▫️ 🟩{cash_row_label}: <b>${free_cash:,.0f}</b> ({cash_alloc_pct:.0f}%)",
+            "──────────────",
+            "🔄 <b>[현재 사이클 vs 전체 누적 수익]</b>",
+            f"▫️ 설정 기준시드: <b>${init_seed:,.2f}</b> ({mode_title})",
+            f"▫️ 금일 확정수익: <b>{d_sign}${abs(day_net):,.2f}</b> ({d_sign}{abs(day_krw):,}원)",
+            f"▫️ 이번사이클익: <b>{cyc_sign}${abs(cyc_net):,.2f}</b> ({cyc_ev}회 익절{cyc_sub_note})",
+            f"▫️ 직전졸업수익: <b>{last_c_sign}${abs(last_cyc_net):,.2f}</b> (총 {comp_cycles}회 사이클 졸업)",
+            f"▫️ 전체누적수익: <b>{n_sign}${abs(cum_net):,.2f}</b> ({n_sign}{abs(real_roi):.2f}% 현금확정!)",
+        ]
+    )
     if is_barbell and context is not None:
         b_info = summarize_barbell_status(context, st_soxl=st)
         lines.append(
@@ -1552,13 +1473,14 @@ def build_settlement_control_message(
         except Exception:
             assn_exec_m = ASSASSIN_MODE_SIMULATED
 
+    # MODIFIED [Case 113]: 전술 제어반 구 눌림목·1주마중물·서브그리드 잔재 전수 소각 및 T4 정량 일원화
     power_str = "🟢 가동 중 (ON)" if is_active else "🔴 일시정지 (OFF)"
     if is_barbell:
         p_mode_str = "⚖️ 바벨모드 (60/30/10 · 수익금고 격리)"
     elif is_simple:
-        p_mode_str = "💵 스나이퍼 (단리 · 시드 8%/4% 고정)"
+        p_mode_str = "💵 스나이퍼 (단리 · 시드 10% 고정)"
     else:
-        p_mode_str = "📈 스나이퍼 (복리 · 코어자산 8%/4%)"
+        p_mode_str = "📈 스나이퍼 (복리 · 코어자산 8% 증액)"
 
     if assn_exec_m == ASSASSIN_MODE_LIVE:
         assn_mode_str = "🔥 [실전] 단독 가동중 (스나이퍼/바벨 정지)"
@@ -1577,10 +1499,9 @@ def build_settlement_control_message(
         summary.get("next_portion_budget"), init_seed * 0.08
     )
     quota_badge_str = _format_case67_quota_badge(summary)
-    sub_bud = safe_float(
-        summary.get("sub_next_portion_budget"), init_seed * 0.04
+    p_full_lbl = _format_mode_portion_pct_tag(
+        st.get("portion_mode"), full_barbell_note=True
     )
-    sub_quota_badge = _format_sub_quota_badge(summary)
 
     held_sh = safe_int(summary.get("held_shares"), 0)
     sub_sh = safe_int(summary.get("sub_held_shares"), 0)
@@ -1588,8 +1509,6 @@ def build_settlement_control_message(
     sub_max_lots = safe_int(
         summary.get("sub_max_total_lots"), SUB_MAX_TOTAL_LOTS_4
     )
-    sub_comp = safe_int(summary.get("sub_completed_cycles"), 0)
-    main_frozen = safe_int(summary.get("main_consec_frozen_days"), 0)
 
     held_tiers = safe_int(summary.get("held_tiers"), 0)
     held_lots = safe_int(summary.get("held_lots"), 0)
@@ -1613,47 +1532,34 @@ def build_settlement_control_message(
     )
     cyc_sign = "+" if cyc_net >= 0.0 else "-"
 
-    primer_badge = str(summary.get("primer_policy_badge") or "🧠스마트ON")
-    p_buy_c = safe_int(summary.get("primer_1sh_buy_events"), 0)
-    p_sell_c = safe_int(summary.get("primer_1sh_sell_events"), 0)
-    p_abs_c = safe_int(summary.get("primer_1sh_absorbed_events"), 0)
-    p_net_u = safe_float(summary.get("primer_1sh_realized_net_usd"), 0.0)
-    p_net_sign = "+" if p_net_u >= 0.0 else "-"
-    sub_ctrl_lbl = (
-        "서브(복리: 신규0주잠금)"
-        if (
-            not bool(summary.get("primer_allow_new_sub_entry", True))
-            and sub_sh <= 0
-        )
-        else "서브(상시)"
-    )
-
     lines = [
         "⚙️ <b>[전술 제어반]</b>",
         "──────────────",
         f"1️⃣ 스나이퍼 전원: <b>{power_str}</b> (수수료 {rt_fee_pct:.2f}%)",
         f"2️⃣ 운용 정량모드: <b>{p_mode_str}</b> (<code>/mode</code>)",
+        "   ▫️ 타점 방어: <b>±1.00% 데드존</b> · 공석 <b>-1.00%</b> 눌림통일 · 15시 0주차단",
         (
-            f"   ▫️ 공석 눌림목: "
-            f"<b>{resolve_smart_pullback_drop_pct(st.get('portion_mode')):.2f}%</b>"
-            f" (바벨-1.0 · 단리-1.5 · 복리-2.0%)"
-        ),
-        (
-            f"   ▫️ 리바운드 [{escape_html(str(summary.get('rebound_spec_id') or 'C-112'))}]: "
+            f"   ▫️ 출구 엔진 [{escape_html(str(summary.get('rebound_spec_id') or 'T4-C08'))}]: "
             f"<b>{escape_html(str(summary.get('rebound_policy_badge') or ''))}</b>"
         ),
-        f"   ▫️ 1주 마중물(상시): <b>{escape_html(primer_badge)}</b> (매수{p_buy_c}/익절{p_sell_c}/흡수{p_abs_c} · {p_net_sign}${abs(p_net_u):,.2f})",
         f"3️⃣ 암살자 승격: <b>{assn_mode_str}</b> (<code>/assassin_mode</code>)",
         f"4️⃣ 기준 시드: <b>${init_seed:,.2f}</b> (확정자산 ${real_eq:,.2f})",
         f"   ▫️ 이번사이클익: <b>{cyc_sign}${abs(cyc_net):,.2f}</b> ({cyc_ev}회 익절 · 졸업 {comp_cycles}회)",
-        f"   ▫️ 1회 정량: 본 ${next_bud:,.0f}({quota_badge_str}) · 서브 ${sub_bud:,.0f}({sub_quota_badge})",
+        f"   ▫️ 1회 정량({p_full_lbl}): <b>${next_bud:,.0f}</b> ({quota_badge_str})",
         f"   ▫️ 격리/잉여금: <b>${withdrawable_surplus_usd:,.0f}</b> (탄창 <b>+{self_reserve_portions:.1f}회분</b>)",
         f"5️⃣ 보유/자동수혈: 본 <b>{held_sh}주</b>({held_tiers}층·{lot_ctrl_str}) · 수혈 <b>{used_res_cnt}회분</b>(${inj_res_usd:,.0f})",
-        f"   ▫️ {sub_ctrl_lbl}: <b>{sub_sh}주</b>({sub_lots}/{sub_max_lots}회) · 동결 {main_frozen}/{SUB_FROZEN_DAYS_TRIGGER}일 · 졸업 {sub_comp}회",
-        "──────────────",
-        "🧹 <code>/reset_profit</code> : 수익/금고 0점 초기화 (주식·시드 보존)",
-        "⚖️ <code>/barbell</code> : 바벨 60/30/10 상세 · 🗡️ <code>/assassin</code> : 암살자 상세",
     ]
+    if sub_sh > 0:
+        lines.append(
+            f"   ▫️ 기보유서브(청산대기): <b>{sub_sh}주</b>({sub_lots}/{sub_max_lots}회)"
+        )
+    lines.extend(
+        [
+            "──────────────",
+            "🧹 <code>/reset_profit</code> : 수익/금고 0점 초기화 (주식·시드 보존)",
+            "⚖️ <code>/barbell</code> : 바벨 60/30/10 상세 · 🗡️ <code>/assassin</code> : 암살자 상세",
+        ]
+    )
 
     if context is not None:
         try:
@@ -2236,31 +2142,27 @@ class TelegramCommandController:
 
         live_p, _ = await self._refresh_live_price_and_metrics()
         summary = summarize_stratum_portfolio(updated_st, live_price=live_p)
+        # MODIFIED [Case 113]: /mode 순환 안내에서 1주 마중물 및 서브그리드 제거
         if _is_barbell_portion_mode(updated_st):
             m_lbl = "⚖️ 바벨모드 (60/30/10 · 수익금고 영구격리)"
         elif _is_simple_portion_mode(updated_st):
-            m_lbl = "💵 스나이퍼 (단리 · SIMPLE_08PCT)"
+            m_lbl = "💵 스나이퍼 (단리 · 시드 10% 고정)"
         else:
-            m_lbl = "📈 스나이퍼 (복리 · COMP_08PCT)"
+            m_lbl = "📈 스나이퍼 (복리 · 코어자산 8% 증액)"
 
         next_bud = safe_float(summary.get("next_portion_budget"), 800.0)
-        sub_bud = safe_float(summary.get("sub_next_portion_budget"), 400.0)
-        primer_b_lbl = escape_html(
-            str(summary.get("primer_policy_badge") or "🧠스마트ON")
+        p_mode_pct_lbl = _format_mode_portion_pct_tag(
+            updated_st.get("portion_mode"), full_barbell_note=True
         )
         await self.send_message(
             chat_id=chat_id,
             text=(
                 "🔄 <b>[3단 운용 정량모드 순환 완료]</b>\n"
                 f"▫️ 현재 모드: <b>{m_lbl}</b>\n"
-                f"▫️ 1주 마중물 연동: <b>{primer_b_lbl}</b>\n"
-                f"▫️ 공석 눌림목 연동: "
-                f"<b>{resolve_smart_pullback_drop_pct(updated_st.get('portion_mode')):.2f}%</b> "
-                f"(스마트 자동연동)\n"
-                f"▫️ 리바운드 [{escape_html(str(summary.get('rebound_spec_id') or 'C-112'))}]: "
+                "▫️ 타점 방어: <b>±1.00% 데드존</b> · 공석 <b>-1.00%</b> 눌림통일 · 15시 0주차단\n"
+                f"▫️ 출구 엔진 [{escape_html(str(summary.get('rebound_spec_id') or 'T4-C08'))}]: "
                 f"<b>{escape_html(str(summary.get('rebound_policy_badge') or ''))}</b>\n"
-                f"▫️ 본그리드 1회(8%): <b>${next_bud:,.2f}</b> ({_format_case67_quota_badge(summary)})\n"
-                f"▫️ 서브그리드 1회(4%): <b>${sub_bud:,.2f}</b> ({_format_sub_quota_badge(summary)})"
+                f"▫️ 1회 정량({p_mode_pct_lbl}): <b>${next_bud:,.2f}</b> ({_format_case67_quota_badge(summary)})"
             ),
             reply_markup=_build_main_reply_keyboard(),
         )
@@ -2276,17 +2178,13 @@ class TelegramCommandController:
             )
             return
 
-        live_p, _ = await self._refresh_live_price_and_metrics()
-        summary = summarize_stratum_portfolio(updated_st, live_price=live_p)
-        p_badge = escape_html(
-            str(summary.get("primer_policy_badge") or "🧠스마트ON")
-        )
+        # MODIFIED [Case 113]: /primer 명령어 호출 시 영구 폐기 및 황금비율 정량 일원화 안내
         await self.send_message(
             chat_id=chat_id,
             text=(
-                "🌱 <b>[1주 마중물 상시 Default-ON 적용 안내]</b>\n"
-                f"▫️ 현재 상태: <b>{p_badge}</b> (스위치 없는 상시 자동연동)\n"
-                "▫️ 운용모드(<code>/mode</code>)에 맞춰 바벨·단리는 만석+1층공석 구제, 복리는 6층이하 무합병 모드로 100% 자동 작동합니다."
+                "🧹 <b>[Case 113 · 1주 마중물/서브그리드/스토커 영구 폐기 안내]</b>\n"
+                "▫️ Case 113 정밀 타점 방어 및 단일 통합 T4 엔진 전환에 따라 1주 마중물·서브그리드·리바운드 스토커는 영구 폐기되었습니다.\n"
+                "▫️ 모든 진입은 운용모드별 황금비율(바벨 코어15% · 단리 10% · 복리 8%) 정량으로 일원화되어 작동합니다."
             ),
             reply_markup=_build_main_reply_keyboard(),
         )
@@ -2392,19 +2290,21 @@ class TelegramCommandController:
         except Exception:
             pass
 
+        # MODIFIED [Case 113]: 시드 설정 완료 안내에서 서브그리드(4%) 삭제 및 모드별 황금비율 표기
         self.context.wakeup_event.set()
         live_p, _ = await self._refresh_live_price_and_metrics()
         summary = summarize_stratum_portfolio(updated_st, live_price=live_p)
         quota_badge_str = _format_case67_quota_badge(summary)
-        sub_quota_badge = _format_sub_quota_badge(summary)
+        p_seed_pct_lbl = _format_mode_portion_pct_tag(
+            updated_st.get("portion_mode"), full_barbell_note=True
+        )
         await self.send_message(
             chat_id=chat_id,
             text=(
                 "✅ <b>[기준 시드머니 설정 완료]</b>\n"
                 f"▫️ 기준 시드: <b>${val:,.2f}</b> (스나이퍼 · 바벨 · 암살자 동시 적용)\n"
                 f"▫️ 가용 현금: <b>${safe_float(summary.get('free_cash_usd'), 0.0):,.2f}</b>\n"
-                f"▫️ 본그리드(8%): <b>${safe_float(summary.get('next_portion_budget'), 0.0):,.0f}</b> ({quota_badge_str})\n"
-                f"▫️ 서브그리드(4%): <b>${safe_float(summary.get('sub_next_portion_budget'), 0.0):,.0f}</b> ({sub_quota_badge})"
+                f"▫️ 1회 정량({p_seed_pct_lbl}): <b>${safe_float(summary.get('next_portion_budget'), 0.0):,.0f}</b> ({quota_badge_str})"
             ),
             reply_markup=_build_settlement_inline_keyboard(
                 bool(updated_st.get("is_active", True)),
@@ -2548,7 +2448,7 @@ class TelegramCommandController:
                 "▫️ 이번사이클 / 누적 실현익 / 별도금고: <b>$0.00</b>\n"
                 f"▫️ 복귀 기준시드: <b>${init_seed:,.2f}</b>\n"
                 f"▫️ 현재 가용현금: <b>${free_cash:,.2f}</b>\n"
-                f"▫️ 차기 1회(8%): <b>${next_bud:,.0f}</b> ({quota_badge_str})\n"
+                f"▫️ 차기 1회({_format_mode_portion_pct_tag(st_reset.get('portion_mode'), full_barbell_note=True)}): <b>${next_bud:,.0f}</b> ({quota_badge_str})\n"
                 f"▫️ 보유지층 보존: 본 <b>{held_sh}주</b>({held_tiers}층·{lot_keep_str}{sub_note})"
             ),
             reply_markup=_build_main_reply_keyboard(),

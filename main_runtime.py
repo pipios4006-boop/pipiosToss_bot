@@ -1858,87 +1858,11 @@ class _AdaptiveTelegramBridge:
     async def _apply_new_seed_value(
         self, chat_id: str, raw_num_str: str
     ) -> bool:
-        cleaned = (
-            str(raw_num_str)
-            .replace(",", "")
-            .replace("$", "")
-            .replace("불", "")
-            .replace("달러", "")
-            .strip()
+        # MODIFIED [Case 113]: 공유 컨트롤러 단일 위임으로 중복 안내 드리프트 원천 차단
+        ctrl = self._get_shared_ctrl()
+        return await ctrl._apply_new_seed_value(
+            chat_id=chat_id, raw_num_str=raw_num_str
         )
-        try:
-            val = float(cleaned)
-        except Exception:
-            return False
-        if val < 100.0 or val > 10000000.0:
-            await self.send_message(
-                chat_id=chat_id,
-                text="⚠️ 시드머니는 <b>$100 ~ $10,000,000</b> 사이의 숫자로 입력해 주세요. (예: <code>10000</code>)",
-            )
-            return True
-
-        mark_reserve_deposit_check_shield(
-            self.context, TARGET_SYMBOL, clear_shield=True
-        )
-        updated_st = await self.context.ledger.update_state(
-            TARGET_SYMBOL,
-            initial_seed_usd=round(val, 4),
-            seed_explicitly_set_100=bool(abs(val - 100.0) < 1e-6),
-            waiting_reserve_deposit=False,
-            waiting_reserve_deposit_alert_sent=False,
-            required_reserve_deposit_usd=0.0,
-            last_reserve_check_ts=0.0,
-        )
-        try:
-            assn_ledger = ensure_assassin_ledger(self.context)
-            await assn_ledger.update_state(initial_seed_usd=round(val, 4))
-        except Exception:
-            pass
-
-        try:
-            if _is_barbell_portion_mode(
-                updated_st
-            ) and not is_live_assassin_standalone_active(self.context):
-                await initialize_or_sync_barbell_on_mode_enter(
-                    self.context, new_seed_usd=round(val, 4)
-                )
-                updated_st = self.context.ledger.get_state(TARGET_SYMBOL)
-            else:
-                b_led = ensure_barbell_ledger(self.context)
-                keep_init = (
-                    False
-                    if is_live_assassin_standalone_active(self.context)
-                    else bool(b_led.get_state().get("is_initialized", False))
-                )
-                await b_led.update_state(
-                    initial_seed_usd=round(val, 4),
-                    is_initialized=keep_init,
-                )
-        except Exception:
-            pass
-
-        self.context.wakeup_event.set()
-        live_p, _ = await self._refresh_live_price_and_metrics()
-        summary = summarize_stratum_portfolio(updated_st, live_price=live_p)
-        quota_badge_str = _format_case67_quota_badge(summary)
-        sub_quota_badge = _format_sub_quota_badge(summary)
-        await self.send_message(
-            chat_id=chat_id,
-            text=(
-                "✅ <b>[기준 시드머니 설정 완료]</b>\n"
-                f"▫️ 기준 시드: <b>${val:,.2f}</b> (스나이퍼 · 바벨 · 암살자 동시 적용)\n"
-                f"▫️ 가용 현금: <b>${safe_float(summary.get('free_cash_usd'), 0.0):,.2f}</b>\n"
-                f"▫️ 본그리드(8%): <b>${safe_float(summary.get('next_portion_budget'), 0.0):,.0f}</b> ({quota_badge_str})\n"
-                f"▫️ 서브그리드(4%): <b>${safe_float(summary.get('sub_next_portion_budget'), 0.0):,.0f}</b> ({sub_quota_badge})"
-            ),
-            reply_markup=_build_settlement_inline_keyboard(
-                bool(updated_st.get("is_active", True)),
-                portion_mode=updated_st.get("portion_mode"),
-                assassin_exec_mode=self._current_assassin_exec_mode(),
-                primer_1sh_mode=updated_st.get("primer_1sh_mode"),
-            ),
-        )
-        return True
 
     async def _reset_assassin_stats_command(self, chat_id: str) -> None:
         st_sp = self.context.ledger.get_state(TARGET_SYMBOL)

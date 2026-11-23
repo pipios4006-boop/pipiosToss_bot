@@ -72,7 +72,8 @@ BARBELL_SOXL_WEIGHT: float = 0.60
 BARBELL_SGOV_WEIGHT: float = 0.30
 BARBELL_CASH_WEIGHT: float = 0.10
 
-BARBELL_SOXL_PORTION_RATIO: float = 0.08
+# MODIFIED [Case 113]: 바벨 SOXL 코어(60%) 1회 황금비율 15% (= 전체 시드의 9.0%) 동기화
+BARBELL_SOXL_PORTION_RATIO: float = 0.15
 BARBELL_SUB_PORTION_RATIO: float = 0.04
 
 # SGOV 정규장 전용 매매 시간창 (시초/마감 동시호가 스프레드 회피를 위해 평일 09:31 ~ 15:55 EST 운용)
@@ -1830,7 +1831,8 @@ async def evaluate_and_execute_barbell_guard30_or_injection(
             body=(
                 f"타점({trigger_desc} @ ${exec_order_p:.2f}) 도달 · "
                 f"SOXL(60%) · 현금(10%) · SGOV(30%) 및 별도 수익금고(가용 ${vault_avail:,.2f})가 모두 소진되었습니다. · "
-                f"토스 달러 계좌에 ${unit_8pct:,.2f} 이상 입금하시면 즉시 1회분(8%) 단위로 자동 수혈합니다."
+                # MODIFIED [Case 113]: 바벨 코어 15%(전체 9%) 수혈 단위 표기 현행화
+                f"토스 달러 계좌에 ${unit_8pct:,.2f} 이상 입금하시면 즉시 1회분(코어15%·전체9%) 단위로 자동 수혈합니다."
             ),
         )
     return (
@@ -2674,7 +2676,8 @@ async def build_barbell_detail_dashboard_html(context: Any) -> str:
         f"💵 설정 기준시드: <b>${info['total_seed_usd']:,.2f}</b>",
         "━━━━━━━━━━━━━━━━━━",
         "📊 <b>[60 / 30 / 10 목표 배분 및 현재 잔고]</b>",
-        f"① 🐂 SOXL 코어(60%): 목표 <b>${info['soxl_seed_60_usd']:,.2f}</b> (1회분 8% = <b>${info['soxl_portion_8pct_usd']:,.2f}</b>)",
+        # MODIFIED [Case 113]: 바벨 관제 보드 1회분 코어15%(전체9%) 정량 표기 일원화
+        f"① 🐂 SOXL 코어(60%): 목표 <b>${info['soxl_seed_60_usd']:,.2f}</b> (1회분 코어15%[전체9%] = <b>${info['soxl_portion_8pct_usd']:,.2f}</b>)",
         f"② 🛡️ SGOV 버킷(30%): 보유 <b>{info['sgov_held_qty']}주</b> (원금 <b>${info['sgov_invested_usd']:,.2f}</b> · 현재가 ${info['sgov_last_price']:.2f})",
         f"   ▫️ SGOV 세션: {reg_badge} | 매수예약 <b>${info['pending_sgov_buy_budget_usd']:,.0f}</b> · 매도예약 <b>{info['pending_sgov_tranche_sells']}건</b>(금번 {info['sgov_tranche_sells_done_cycle']}/3회)",
         f"③ 💵 보호 현금버킷(기본10%·최대40%): 현재 <b>${info['cash_bucket_usd']:,.2f}</b> (기수혈 ${info['cash_injected_to_soxl_usd']:,.0f} · 미졸업 환수현금 보존 ➔ 0주졸업시 SGOV전환)",
@@ -2693,12 +2696,13 @@ def run_barbell_plugin_tdd() -> bool:
     부팅 시 바벨 60/30/10 시드 분할, SOXL 보유 중 모드 전환 3케이스 분류,
     SGOV 10% 내림 매도 수량 및 전 구간 실시간 지층 리밸런싱(Cash 10% 우선 -> 초과분 즉시 SGOV) 무결성을 검증한다.
     """
+    # MODIFIED [Case 113]: $10,000 시드 기준 코어 60%($6,000) × 황금비율 15% = $900.00 검증
     sp = compute_barbell_seed_splits(10000.0)
     assert (
         abs(sp["soxl_seed_60_usd"] - 6000.0) < 1e-6
         and abs(sp["sgov_seed_30_usd"] - 3000.0) < 1e-6
         and abs(sp["cash_seed_10_usd"] - 1000.0) < 1e-6
-        and abs(sp["soxl_portion_8pct_usd"] - 480.0) < 1e-6
+        and abs(sp["soxl_portion_8pct_usd"] - 900.0) < 1e-6
         and abs(sp["soxl_sub_portion_4pct_usd"] - 240.0) < 1e-6
     ), f"바벨 60/30/10 분할 검증 실패: {sp}"
 
