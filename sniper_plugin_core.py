@@ -153,6 +153,7 @@ def mark_auto_fill_grace_shield(
                 updated["last_reentry_eval_mono"] = 0.0
                 updated["last_reentry_eval_ts"] = 0.0
                 updated["pullback_ha_wait_min_key"] = ""
+                updated["pullback_ha_wait_closed_mk"] = ""  # NEW [Audit-113-01]
                 updated["pullback_ha_wait_mono"] = 0.0
             updated["last_reserve_check_mono"] = 0.0
             updated["last_reserve_check_ts"] = 0.0
@@ -255,10 +256,12 @@ def mark_pullback_ha_bear_minute_wait(
     context: Any,
     symbol: str = TARGET_SYMBOL,
     cur_min_key: str = "",
+    closed_bar_min_key: str = "",
 ) -> None:
-    # NEW: -1.00% 눌림목 HA 음봉 대기 시 차기 1분봉 완료 정각(00초) 즉시 재검문용 분 경계 마커
+    # MODIFIED [Audit-113-01]: 정각(00초) 재검문 마커 + 기완결 분봉 키 동시 박제(:00.25s 레이더 수신 즉시 해금)
     sym = str(symbol or TARGET_SYMBOL).upper().strip()
     mk = str(cur_min_key or datetime.now(EST_TZ).strftime("%Y-%m-%d %H:%M")).strip()
+    c_mk = str(closed_bar_min_key or "").strip()
     now_mono = time.monotonic()
     for cache_attr in ("indexing_grace_cache", "exit_snapshot_cache"):
         cmap = getattr(context, cache_attr, None)
@@ -267,6 +270,7 @@ def mark_pullback_ha_bear_minute_wait(
             ent["last_reentry_eval_mono"] = 0.0
             ent["last_reentry_eval_ts"] = 0.0
             ent["pullback_ha_wait_min_key"] = mk
+            ent["pullback_ha_wait_closed_mk"] = c_mk
             ent["pullback_ha_wait_mono"] = now_mono
             cmap[sym] = ent
 
@@ -309,6 +313,7 @@ def mark_reentry_monitor_60s_cycle_shield(
         g_entry["last_reentry_eval_mono"] = now_mono
         g_entry["last_reentry_eval_ts"] = now_epoch
         g_entry["pullback_ha_wait_min_key"] = ""
+        g_entry["pullback_ha_wait_closed_mk"] = ""
         g_entry["pullback_ha_wait_mono"] = 0.0
         if eval_price > 0.0:
             g_entry["last_reentry_eval_price"] = round(
@@ -324,6 +329,7 @@ def mark_reentry_monitor_60s_cycle_shield(
         s_entry["last_reentry_eval_mono"] = now_mono
         s_entry["last_reentry_eval_ts"] = now_epoch
         s_entry["pullback_ha_wait_min_key"] = ""
+        s_entry["pullback_ha_wait_closed_mk"] = ""
         s_entry["pullback_ha_wait_mono"] = 0.0
         if eval_price > 0.0:
             s_entry["last_reentry_eval_price"] = round(
@@ -359,14 +365,30 @@ def is_within_reentry_monitor_time_shield(
         60.0 - (float(dt_chk.second) + float(dt_chk.microsecond) / 1000000.0),
     )
 
+    # NEW [Audit-113-01]: :00.25s 캔들 레이더가 새 완결봉(비무머리HA)을 수신하면 정각 잠금 즉시 해금
+    raw_c_cache = getattr(context, "candle_metrics_cache", None)
+    cur_met = raw_c_cache.get(sym) if isinstance(raw_c_cache, dict) else None
+    latest_closed_mk = (
+        str(cur_met.get("closed_bar_minute_key") or "").strip()
+        if isinstance(cur_met, dict)
+        else ""
+    )
+    latest_ha_ok = bool(
+        isinstance(cur_met, dict)
+        and bool(cur_met.get("closed_ha_ready", False))
+        and (not bool(cur_met.get("closed_ha_shaved_bear", False)))
+    )
+
     guard_map = getattr(context, "indexing_grace_cache", None)
     if isinstance(guard_map, dict):
         g_entry = guard_map.get(sym)
         if isinstance(g_entry, dict):
             w_mk = str(g_entry.get("pullback_ha_wait_min_key") or "").strip()
+            w_cmk = str(g_entry.get("pullback_ha_wait_closed_mk") or "").strip()
             w_mono = safe_float(g_entry.get("pullback_ha_wait_mono"), 0.0)
             if w_mk and w_mk == cur_mk and 0.0 <= (now_mono - w_mono) < 65.0:
-                return True, round(rem_next_min, 1)
+                if not (w_cmk and latest_closed_mk > w_cmk and latest_ha_ok):
+                    return True, round(rem_next_min, 1)
             re_mono = safe_float(g_entry.get("last_reentry_eval_mono"), 0.0)
             if re_mono > 0.0:
                 elapsed_g = now_mono - re_mono
@@ -380,9 +402,11 @@ def is_within_reentry_monitor_time_shield(
         s_entry = snap_map.get(sym)
         if isinstance(s_entry, dict):
             sw_mk = str(s_entry.get("pullback_ha_wait_min_key") or "").strip()
+            sw_cmk = str(s_entry.get("pullback_ha_wait_closed_mk") or "").strip()
             sw_mono = safe_float(s_entry.get("pullback_ha_wait_mono"), 0.0)
             if sw_mk and sw_mk == cur_mk and 0.0 <= (now_mono - sw_mono) < 65.0:
-                return True, round(rem_next_min, 1)
+                if not (sw_cmk and latest_closed_mk > sw_cmk and latest_ha_ok):
+                    return True, round(rem_next_min, 1)
             s_re_mono = safe_float(s_entry.get("last_reentry_eval_mono"), 0.0)
             if s_re_mono > 0.0:
                 elapsed_s = now_mono - s_re_mono
@@ -1778,7 +1802,7 @@ async def _commit_filled_buy_to_stratum_ledger(
                 )
             body_str = (
                 f"실사용 ${actual_spent:,.2f} (4%정량 자투리 +${saved_from_sub_portion:.2f} 시드보존){merge_badge}{cap_badge} · "
-                f"🛡️60초 타임쉴드 후 서브1층목표 ${sub_l1_target:.2f}(+1.5%) 감시{sub_upper_note}{sub_rem_note} · "
+                f"🛡️60초 타임쉴드 후 서브1층목표 ${sub_l1_target:.2f}(+1.0%) 감시{sub_upper_note}{sub_rem_note} · "
                 f"서브기억저가 ${new_sub_cycle_min_p:.2f}(단차 {sub_drop_req_p:.1f}% ➔ ${sub_trig_buy_p:.2f}) · "
                 f"가용현금 ${free_cash_now:,.2f} (서브 총 {new_sub_shares}주)"
             )
@@ -2567,7 +2591,7 @@ async def sync_pending_buy_order_plugin(
                 )
             )
             logger.info(
-                "🛡️ [Case 84/88 장마감 30분전(15:30 EST) 도래 -> 미체결 %s(%s) 즉시 안전 취소] 지정가 $%.2f 취소 ➔ 컷오프 방어 전환",
+                "🛡️ [Case 84/113 장마감 1시간전(15:00 EST) 도래 -> 미체결 %s(%s) 즉시 안전 취소] 지정가 $%.2f 취소 ➔ 컷오프 방어 전환",
                 abort_desc,
                 raw_lot_type,
                 ord_price,

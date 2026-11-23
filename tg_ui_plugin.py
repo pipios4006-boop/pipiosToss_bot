@@ -385,6 +385,7 @@ def _format_multi_grid_stratum_lines(
     main_trail_ui: Optional[Dict[str, Any]] = None,
     closed_ha_ok: bool = True,
     pull_ha_badge: str = "",
+    is_reg_open_7m: bool = False,
 ) -> List[str]:
     held_sh = safe_int(summary.get("held_shares"), 0)
     buckets = summary.get("buckets", [])
@@ -399,10 +400,18 @@ def _format_multi_grid_stratum_lines(
             lines.append(
                 "⚪ <b>[본그리드: 0주]</b> 🔒장외 매수잠금 (04:07 해금)"
             )
-        # MODIFIED [Case 113]: 정규장 마감 1시간 전(15:00 ~ 16:00 EST) 0주 신규차단 시각 일치화
+        # MODIFIED [Case 113 · Audit-113-03]: 0주 15시 차단 · 개장 7분 쉴드 · 무머리 HA음봉 대기 배지 동기화
         elif is_late_cutoff:
             lines.append(
                 "⚪ <b>[본그리드: 0주]</b> 🔒15:00 ~ 16:00 신규진입 차단"
+            )
+        elif is_reg_open_7m:
+            lines.append(
+                "⚪ <b>[본그리드: 0주]</b> 🛡️정규개장7분(09:30~09:36) 안정화 대기"
+            )
+        elif not closed_ha_ok:
+            lines.append(
+                "⚪ <b>[본그리드: 0주]</b> 🌑무머리1분HA음봉 패스 (정각 대기)"
             )
         else:
             lines.append(
@@ -646,6 +655,7 @@ def _format_sub_grid_stratum_lines(
             sl1_label = f"{sb1.qty}/{sub_target_q}주"
         else:
             sl1_label = f"{sb1.qty}주"
+        # MODIFIED [Case 113 · Audit-113-03]: 기보유 서브 잔량 T4 상수(+1.0% 점화·샤프래칫·1.15%락·캡+6%) 및 신규재장전 폐기 동기화
         if SNIPER_L1_TRAIL_ENABLED and not is_ext_sell_only:
             tr_s = sub_trail_ui if isinstance(sub_trail_ui, dict) else {}
             sl1_ign_p = safe_float(
@@ -653,15 +663,15 @@ def _format_sub_grid_stratum_lines(
             )
             scap_pct_u = safe_float(
                 tr_s.get("hard_cap_pct"),
-                safe_float(summary.get("rebound_hard_cap_pct"), 5.0),
+                safe_float(summary.get("rebound_hard_cap_pct"), 6.0),
             )
             if bool(tr_s.get("armed")):
                 sst_p = safe_float(tr_s.get("active_stop_p"), 0.0)
-                slk_pct_u = safe_float(tr_s.get("active_lock_pct"), 1.60)
+                slk_pct_u = safe_float(tr_s.get("active_lock_pct"), 1.15)
                 if bool(tr_s.get("stepped_125")) and sst_p > 0.0:
                     lines.append(
                         f"  ⚡ <b>[서브1층: {sl1_label}·${sb1.actual_cost_usd:,.0f}]</b> "
-                        f"<b>${sb1.book_price:.2f}</b> ➔ <b>다단래칫추적</b>(보존${sst_p:.2f}) ({sg1_s}{sl1_g:.2f}%·👑+{slk_pct_u:.2f}%락·캡+{scap_pct_u:.0f}%)"
+                        f"<b>${sb1.book_price:.2f}</b> ➔ <b>샤프래칫추적</b>(보존${sst_p:.2f}) ({sg1_s}{sl1_g:.2f}%·👑+{slk_pct_u:.2f}%락·캡+{scap_pct_u:.0f}%)"
                     )
                 else:
                     slk_p = safe_float(
@@ -672,14 +682,14 @@ def _format_sub_grid_stratum_lines(
                     )
                     lines.append(
                         f"  ⚡ <b>[서브1층: {sl1_label}·${sb1.actual_cost_usd:,.0f}]</b> "
-                        f"<b>${sb1.book_price:.2f}</b> ➔ <b>다단래칫추적</b>(락${slk_p:.2f}) ({sg1_s}{sl1_g:.2f}%·🔥무스탑·캡+{scap_pct_u:.0f}%)"
+                        f"<b>${sb1.book_price:.2f}</b> ➔ <b>샤프래칫추적</b>(락${slk_p:.2f}) ({sg1_s}{sl1_g:.2f}%·🔥무스탑·캡+{scap_pct_u:.0f}%)"
                     )
             else:
                 sfg_c = safe_int(tr_s.get("forgive_count"), 0)
                 sfg_b = (
                     f"·💡용서{sfg_c}·캡+{scap_pct_u:.0f}%"
                     if sfg_c > 0
-                    else f"·점화1.5%·캡+{scap_pct_u:.0f}%"
+                    else f"·점화1.0%·캡+{scap_pct_u:.0f}%"
                 )
                 lines.append(
                     f"  ⚡ <b>[서브1층: {sl1_label}·${sb1.actual_cost_usd:,.0f}]</b> "
@@ -694,73 +704,9 @@ def _format_sub_grid_stratum_lines(
                 f"<b>${sb1.book_price:.2f}</b> ➔ <b>${sl1_t:.2f}</b> ({sg1_s}{sl1_g:.2f}%{sl1_ov_note})"
             )
     else:
-        sub_l2_cap = safe_float(
-            summary.get("sub_l2_ceiling_price"),
-            safe_float(summary.get("sub_min_indiv_upper_price"), 0.0),
+        lines.append(
+            "  ⚡ <b>[서브1층: 공석]</b> 🧹신규재장전 폐기 · 상단 익절졸업 대기"
         )
-        s_cap_note = f" (상한 ${sub_l2_cap:.2f})" if sub_l2_cap > 0.0 else ""
-        s_ha_tag = pull_ha_badge or (
-            "🕯️1분HA양봉OK" if closed_ha_ok else "🌑무머리HA음봉패스"
-        )
-        sub_re_sig_t = str(summary.get("sub_reentry_signal_type") or "")
-        sub_pull_ha_wait = bool(sub_re_sig_t == "HOLD_PULLBACK_SHAVED_HA_BEAR")
-        sub_lb_ha_wait = bool(sub_re_sig_t == "HOLD_LOW_BREAK_SHAVED_HA_BEAR")
-        sub_7m_wait = bool(sub_re_sig_t == "HOLD_REG_OPEN_7M_VWAP_SHIELD")
-        sub_vwap_wait = bool(
-            sub_re_sig_t == "HOLD_PULLBACK_ABOVE_SESSION_VWAP"
-        )
-        s_pb_u = safe_float(
-            summary.get("sub_reentry_pullback_drop_pct"),
-            resolve_smart_pullback_drop_pct(
-                summary.get("portion_mode")
-            ),
-        )
-        s_pb_s = f"{s_pb_u:.1f}%"
-        sub_vwap_u = safe_float(summary.get("session_vwap"), 0.0)
-        sub_c_min_u = safe_float(summary.get("sub_cycle_min_buy_price"), 0.0)
-        sub_lb_note = (
-            f"·저가&lt;${sub_c_min_u:.2f}" if sub_c_min_u > 0.0 else ""
-        )
-        if sub_lots >= sub_max_lots:
-            lines.append(
-                f"  ⚡ <b>[서브1층: 공석]</b> 🔒{sub_max_lots}회 상한 도달 (익절 대기)"
-            )
-        elif is_ext_sell_only:
-            lines.append(
-                f"  ⚡ <b>[서브1층: 공석]</b> 🔒장외잠금 · 04:07 재장전{s_cap_note}"
-            )
-        elif bool(summary.get("stalk_sub_active", False)) and safe_float(summary.get("stalk_sub_low_price"), 0.0) > 0.0:
-            lines.append(
-                f"  ⚡ <b>[서브1층: 공석]</b> 🕵️스토커 저점추적(최저 <b>${safe_float(summary.get('stalk_sub_low_price'), 0.0):.2f}</b> ➔ 완결양봉 타격){s_cap_note}"
-            )
-        elif sub_lb_ha_wait:
-            lines.append(
-                f"  ⚡ <b>[서브1층: 공석]</b> 🌑저가돌파(&lt;${sub_c_min_u:.2f}) 무머리1분HA음봉 패스(다음1분 대기)"
-            )
-        elif sub_7m_wait:
-            lines.append(
-                f"  ⚡ <b>[서브1층: 공석]</b> 🛡️정규개장7분(09:30~09:36) VWAP안정화 대기{sub_lb_note}"
-            )
-        elif sub_pull_ha_wait:
-            lines.append(
-                f"  ⚡ <b>[서브1층: 공석]</b> 🌑눌림({s_pb_s}) 무머리1분HA음봉 패스(다음1분 대기){s_cap_note}"
-            )
-        elif sub_vwap_wait:
-            lines.append(
-                f"  ⚡ <b>[서브1층: 공석]</b> 🛡️눌림({s_pb_s})&gt;VWAP(${sub_vwap_u:.2f}) 패스{sub_lb_note}{s_cap_note}"
-            )
-        elif is_late_cutoff:
-            lines.append(
-                f"  ⚡ <b>[서브1층: 공석]</b> 🛡️돌파차단 · 눌림({s_pb_s}·&lt;=VWAP·{s_ha_tag}){sub_lb_note}{s_cap_note}"
-            )
-        elif live_rsi_14 > 50.0:
-            lines.append(
-                f"  ⚡ <b>[서브1층: 공석]</b> 눌림({s_pb_s}·&lt;=VWAP){sub_lb_note}/🛡️돌파차단(RSI {live_rsi_14:.1f}&gt;50){s_cap_note}"
-            )
-        else:
-            lines.append(
-                f"  ⚡ <b>[서브1층: 공석]</b> 눌림({s_pb_s}·&lt;=VWAP){sub_lb_note}/돌파(RSI&lt;=50){s_cap_note}"
-            )
 
     if sub_upper_buckets:
         su_cnt = len(sub_upper_buckets)
@@ -1007,6 +953,11 @@ def build_avwap_radar_message(
     ):
         shield_line = "🔥 <b>[1층 스텝트레일링 0.4s 추적중]</b> 하드보존·완결HA·용서 가동"
 
+    is_reg_open_7m = bool(
+        (not is_ext_sell_only)
+        and dt_now.weekday() < 5
+        and (930 <= hm_now <= 936)
+    )
     stratum_lines = _format_multi_grid_stratum_lines(
         summary,
         lp,
@@ -1017,6 +968,7 @@ def build_avwap_radar_message(
         main_trail_ui=main_tr_ui,
         closed_ha_ok=closed_ha_ok,
         pull_ha_badge=pull_ha_badge,
+        is_reg_open_7m=is_reg_open_7m,
     )
     sub_stratum_lines = _format_sub_grid_stratum_lines(
         summary,
@@ -1054,9 +1006,17 @@ def build_avwap_radar_message(
         )
     elif held_sh <= 0:
         gate_header_line = "🎯 <b>[다음 매수 타점 · 0주 첫 진입]</b>"
-        if is_late_cutoff:
+        if is_ext_sell_only:
+            gate_cond_lines.append(
+                "▫️ 🔒장외 매수잠금 · 04:07 EST 프리장 개시 후 첫 1층 진입"
+            )
+        elif is_late_cutoff:
             gate_cond_lines.append(
                 "▫️ 15:00 ~ 16:00 고점방어 (익일 04:07 진입)"
+            )
+        elif is_reg_open_7m:
+            gate_cond_lines.append(
+                f"▫️ 본그리드({p_pct_lbl}): 🛡️09:30~09:36 개장7분 안정화 대기 · {quota_badge_str} (${next_bud:,.0f})"
             )
         else:
             z_trig_p = safe_float(

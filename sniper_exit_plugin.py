@@ -2132,11 +2132,17 @@ async def _commit_filled_sell_and_reanchor_ledger(
     is_late_cutoff_now = is_late_regular_new_cycle_cutoff_window(
         hm_now, now_est=now_est_dt
     )
+    # MODIFIED [Audit-113-02]: HHMM(1500) 직전 분 산수 오차(1499 -> 1459) 교정
+    _prev_cut_hm = (
+        ((NEW_CYCLE_BUY_CUTOFF_HM // 100 - 1) * 100 + 59)
+        if (NEW_CYCLE_BUY_CUTOFF_HM % 100 == 0)
+        else (NEW_CYCLE_BUY_CUTOFF_HM - 1)
+    )
     will_hit_late_cutoff_after_shield = bool(
         is_late_cutoff_now
         or (
             now_est_dt.weekday() < 5
-            and hm_now == (NEW_CYCLE_BUY_CUTOFF_HM - 1)
+            and hm_now == _prev_cut_hm
             and now_est_dt.second >= 1
         )
     )
@@ -3170,7 +3176,7 @@ async def execute_1m_sniper_sell_and_reanchor_plugin(
             if ign_m:
                 just_ignited_any = True
                 logger.info(
-                    "🔥 [Case 112(%s) SOXL 본 1층 다단래칫 트레일링 점화] 단가=$%.2f ➔ 점화가=$%.2f(상단캡=$%.2f[+%.1f%%]) · 점화분=%s(기완결=%s) · 추적 개시",
+                    "🔥 [Case 113(%s) SOXL 본 1층 T4 샤프래칫 트레일링 점화] 단가=$%.2f ➔ 점화가=$%.2f(상단캡=$%.2f[+%.1f%%]) · 점화분=%s(기완결=%s) · 추적 개시",
                     main_slot.spec_id,
                     main_slot.ref_cost,
                     main_slot.arm_100_p,

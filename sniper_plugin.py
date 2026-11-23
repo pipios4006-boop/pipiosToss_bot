@@ -2147,12 +2147,22 @@ async def execute_seed_protected_buy_gate_plugin(
                 "hm": hm,
                 "cutoff_hm": NEW_CYCLE_BUY_CUTOFF_HM,
             }
-        # NEW [Case 113 : 0주 첫 1층 진입 시 정규장 개장 7분(09:30~09:36 EST) 안정화 쉴드 & 직전 완결 1분봉 무머리 HA음봉 패스]
+        # NEW [Audit-113-01]: 0주 첫 진입 분 경계 대기 타임쉴드 결속(1.5초 중복 연산 및 로그 스팸 차단)
+        in_z_re_sh, rem_z_re_sec = is_within_reentry_monitor_time_shield(
+            context, st, TARGET_SYMBOL, now_est=dt_now
+        )
+        if in_z_re_sh:
+            return {
+                "status": "HOLD_ZERO_SHARES_MINUTE_BOUNDARY_SHIELD",
+                "remain_shield_sec": rem_z_re_sec,
+            }
+        # MODIFIED [Case 113]: 0주 첫 1층 진입 시 정규장 개장 7분(09:30~09:36 EST) 안정화 쉴드 & 무머리 HA음봉 패스
         if REG_OPEN_VWAP_SHIELD_START_HM <= hm <= REG_OPEN_VWAP_SHIELD_END_HM:
             mark_pullback_ha_bear_minute_wait(
                 context=context,
                 symbol=TARGET_SYMBOL,
                 cur_min_key=dt_now.strftime("%Y-%m-%d %H:%M"),
+                closed_bar_min_key="",
             )
             return {
                 "status": "HOLD_ZERO_SHARES_REG_OPEN_7M_SHIELD",
@@ -2172,6 +2182,7 @@ async def execute_seed_protected_buy_gate_plugin(
                 context=context,
                 symbol=TARGET_SYMBOL,
                 cur_min_key=dt_now.strftime("%Y-%m-%d %H:%M"),
+                closed_bar_min_key=z_closed_mk,
             )
             logger.info(
                 "🛡️ [Case 113 0주 첫 진입 무머리 HA음봉 패스] 현재가 $%.2f · 완결봉(%s) 무머리 HA음봉 -> 다음 1분 정각 최저가 대기",
@@ -2248,12 +2259,17 @@ async def execute_seed_protected_buy_gate_plugin(
                         cur_min_key=dt_mutex.strftime("%Y-%m-%d %H:%M"),
                     )
                     return {"status": "HOLD_ZERO_SHARES_REG_OPEN_7M_SHIELD"}
+                in_z_m_sh, _ = is_within_reentry_monitor_time_shield(
+                    context, st_now, TARGET_SYMBOL, now_est=dt_mutex
+                )
+                if in_z_m_sh:
+                    return {"status": "HOLD_ZERO_SHARES_MINUTE_SHIELD_IN_MUTEX"}
                 (
                     _,
                     m_z_shaved_bear,
                     _,
                     m_z_ha_ready,
-                    _,
+                    m_z_closed_mk,
                 ) = await _get_live_soxl_reentry_snapshot(
                     context, live_price=fresh_live_p, now_est=dt_mutex
                 )
@@ -2262,6 +2278,7 @@ async def execute_seed_protected_buy_gate_plugin(
                         context=context,
                         symbol=TARGET_SYMBOL,
                         cur_min_key=dt_mutex.strftime("%Y-%m-%d %H:%M"),
+                        closed_bar_min_key=m_z_closed_mk,
                     )
                     return {"status": "HOLD_ZERO_SHARES_SHAVED_HA_BEAR"}
 
@@ -2682,6 +2699,9 @@ async def execute_seed_protected_buy_gate_plugin(
                     context=context,
                     symbol=TARGET_SYMBOL,
                     cur_min_key=dt_now.strftime("%Y-%m-%d %H:%M"),
+                    closed_bar_min_key=(
+                        "" if sig_type == "HOLD_REG_OPEN_7M_VWAP_SHIELD" else closed_mk
+                    ),
                 )
                 re_eval_epoch = 0.0
             else:
@@ -2938,7 +2958,7 @@ async def execute_seed_protected_buy_gate_plugin(
                         m_shaved_bear,
                         m_ha_bull,
                         m_ha_ready,
-                        _,
+                        m_re_closed_mk,
                     ) = await _get_live_soxl_reentry_snapshot(
                         context, live_price=fresh_live_p, now_est=dt_re_mutex
                     )
@@ -3005,6 +3025,7 @@ async def execute_seed_protected_buy_gate_plugin(
                             context=context,
                             symbol=TARGET_SYMBOL,
                             cur_min_key=dt_re_mutex.strftime("%Y-%m-%d %H:%M"),
+                            closed_bar_min_key=m_re_closed_mk,
                         )
                         await context.ledger.update_state(
                             TARGET_SYMBOL,
@@ -3972,6 +3993,16 @@ async def execute_seed_protected_buy_gate_plugin(
             "next_gate": b_info.get("next_gate_hm_str", ""),
         }
 
+    # NEW [Audit-113-01]: 10분 게이트 무머리 HA음봉/개장7분 버킷 미소모 대기 중 bypass_shm_cache API 스레싱 차단
+    in_b2_wait_sh, rem_b2_wait_sec = is_within_reentry_monitor_time_shield(
+        context, st, TARGET_SYMBOL, now_est=dt_now
+    )
+    if in_b2_wait_sh and (not bypass_10m_for_crash_stalk):
+        return {
+            "status": "HOLD_DIP_MINUTE_BOUNDARY_SHIELD",
+            "remain_shield_sec": rem_b2_wait_sec,
+        }
+
     fresh_live_p = (
         live_p
         if (bypass_10m_for_crash_stalk and (not is_gate_open) and live_p > 0.0)
@@ -4226,8 +4257,14 @@ async def execute_seed_protected_buy_gate_plugin(
             "sub_grid_eval": sub_res_gate,
         }
 
-    # NEW [Case 113 : 10분 게이트 추매(B-2) 시에도 직전 완결 1분봉 무머리 HA음봉이면 버킷 미소모 패스하여 진바닥 최저가 매수!]
+    # MODIFIED [Case 113 · Audit-113-01]: 10분 게이트 추매(B-2) 개장7분/무머리HA음봉 버킷 미소모 분 경계 마커 박제 & 뮤텍스 2차 검문
     if REG_OPEN_VWAP_SHIELD_START_HM <= hm <= REG_OPEN_VWAP_SHIELD_END_HM:
+        mark_pullback_ha_bear_minute_wait(
+            context=context,
+            symbol=TARGET_SYMBOL,
+            cur_min_key=dt_now.strftime("%Y-%m-%d %H:%M"),
+            closed_bar_min_key="",
+        )
         return {
             "status": "HOLD_DIP_REG_OPEN_7M_SHIELD",
             "hm": hm,
@@ -4243,6 +4280,12 @@ async def execute_seed_protected_buy_gate_plugin(
         context, live_price=fresh_live_p, now_est=dt_now
     )
     if (not b2_ha_ready) or b2_shaved_bear:
+        mark_pullback_ha_bear_minute_wait(
+            context=context,
+            symbol=TARGET_SYMBOL,
+            cur_min_key=dt_now.strftime("%Y-%m-%d %H:%M"),
+            closed_bar_min_key=b2_closed_mk,
+        )
         logger.info(
             "🛡️ [Case 113 10분게이트 추매 무머리 HA음봉 패스] 현재가 $%.2f (저가 $%.2f 대비 %.2f%% <= %.1f%%) · 완결봉(%s) 무머리 HA음봉 -> 버킷 미소모 다음 분 대기",
             fresh_live_p,
@@ -4269,6 +4312,41 @@ async def execute_seed_protected_buy_gate_plugin(
             now_buckets = buckets_from_dicts(st_now.get("buckets", []))
             if not now_buckets or not has_active_l1_bucket(now_buckets):
                 return {"status": "L1_STATE_CHANGED_IN_MUTEX"}
+
+            dt_b2_m = (
+                now_est.astimezone(EST_TZ) if now_est else datetime.now(EST_TZ)
+            )
+            hm_b2_m = dt_b2_m.hour * 100 + dt_b2_m.minute
+            in_b2_m_sh, _ = is_within_reentry_monitor_time_shield(
+                context, st_now, TARGET_SYMBOL, now_est=dt_b2_m
+            )
+            if in_b2_m_sh and (not fired_by_crash_stalker):
+                return {"status": "HOLD_DIP_MINUTE_SHIELD_IN_MUTEX"}
+            if REG_OPEN_VWAP_SHIELD_START_HM <= hm_b2_m <= REG_OPEN_VWAP_SHIELD_END_HM:
+                mark_pullback_ha_bear_minute_wait(
+                    context=context,
+                    symbol=TARGET_SYMBOL,
+                    cur_min_key=dt_b2_m.strftime("%Y-%m-%d %H:%M"),
+                    closed_bar_min_key="",
+                )
+                return {"status": "HOLD_DIP_REG_OPEN_7M_SHIELD"}
+            (
+                _,
+                m_b2_shaved_bear,
+                _,
+                m_b2_ha_ready,
+                m_b2_closed_mk,
+            ) = await _get_live_soxl_reentry_snapshot(
+                context, live_price=fresh_live_p, now_est=dt_b2_m
+            )
+            if (not m_b2_ha_ready) or m_b2_shaved_bear:
+                mark_pullback_ha_bear_minute_wait(
+                    context=context,
+                    symbol=TARGET_SYMBOL,
+                    cur_min_key=dt_b2_m.strftime("%Y-%m-%d %H:%M"),
+                    closed_bar_min_key=m_b2_closed_mk,
+                )
+                return {"status": "HOLD_DIP_SHAVED_HA_BEAR_WAIT"}
 
             gate_open_m, cur_b10_m, today_m_b2, _ = evaluate_buy_gate_bucket_status(
                 now_est=dt_now,

@@ -883,11 +883,17 @@ async def reconcile_stratum_with_broker_holdings_plugin(
             )
             hm_chk = dt_chk.hour * 100 + dt_chk.minute
             is_ext_now = is_extended_sell_only_window(hm_chk, now_est=dt_chk)
+            # MODIFIED [Audit-113-02]: HHMM(1500) 직전 분 산수 오차(1499 -> 1459) 교정
+            _prev_cut_hm_chk = (
+                ((NEW_CYCLE_BUY_CUTOFF_HM // 100 - 1) * 100 + 59)
+                if (NEW_CYCLE_BUY_CUTOFF_HM % 100 == 0)
+                else (NEW_CYCLE_BUY_CUTOFF_HM - 1)
+            )
             will_hit_late_cutoff = bool(
                 is_late_regular_new_cycle_cutoff_window(hm_chk, now_est=dt_chk)
                 or (
                     dt_chk.weekday() < 5
-                    and hm_chk == (NEW_CYCLE_BUY_CUTOFF_HM - 1)
+                    and hm_chk == _prev_cut_hm_chk
                     and dt_chk.second >= 1
                 )
             )
