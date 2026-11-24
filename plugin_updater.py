@@ -120,7 +120,11 @@ _KERNEL_WATCHDOG_LOCK = threading.Lock()
 def compute_core_modules_sha256_sync(base_dir: Optional[str] = None) -> str:
     target_dir = get_bot_base_dir(base_dir)
     hasher = hashlib.sha256()
-    for fname in REQUIRED_CORE_MODULES:
+    check_files = list(REQUIRED_CORE_MODULES)
+    v6_extra = os.path.join(target_dir, "soxl_v6_barbell_engine.py")
+    if os.path.isfile(v6_extra):
+        check_files.append("soxl_v6_barbell_engine.py")
+    for fname in check_files:
         fpath = os.path.join(target_dir, fname)
         if not os.path.isfile(fpath):
             return ""
@@ -1998,9 +2002,32 @@ def _execute_git_pull_and_preflight_sync(*args, **kwargs):
         }
     return _orig_c113_exec_git_pull_sync(*args, **kwargs)
 
-# [CASE114_EXACT_V4_FINAL]
+# MODIFIED [CASE114_EXACT_V4_FINAL + 로컬 패치 SHA-256 드리프트 감지 재기동 해금]
 def _execute_git_pull_and_preflight_sync(base_dir=None):
     if os.environ.get("ALLOW_CASE114_GIT_PULL", "0").strip() != "1":
-        ok_l, msg_l = verify_all_modules_compile(base_dir)
-        return (ok_l, f"Case 114 로컬 바벨전용 보호모드 유지 · {msg_l}", False)
+        target_dir = get_bot_base_dir(base_dir)
+        reaped_z, need_svc_yield = _scan_and_reap_zombies_for_preflight_sync(
+            target_dir
+        )
+        purged_list = purge_deprecated_legacy_files(target_dir)
+        ok_l, msg_l = verify_all_modules_compile(target_dir)
+        if not ok_l:
+            return (False, f"🚨 로컬 프리플라이트 검증 실패:\n{msg_l}", False)
+        cur_disk_sha = compute_core_modules_sha256_sync(target_dir)
+        code_drift = bool(
+            BOOT_CODE_SHA256
+            and cur_disk_sha
+            and cur_disk_sha != BOOT_CODE_SHA256
+        )
+        should_restart = bool(code_drift or need_svc_yield)
+        if should_restart:
+            _flush_telegram_pending_updates_sync(target_dir)
+            _write_shm_update_beacon_sync(cur_disk_sha[:12], target_dir)
+        z_note = f" · 🧹유령좀비 {len(reaped_z)}개 소각" if reaped_z else ""
+        p_note = f" · 폐기파일 {len(purged_list)}개 소각" if purged_list else ""
+        return (
+            True,
+            f"Case 114 로컬 바벨전용 보호모드 유지 · {msg_l}{z_note}{p_note}",
+            should_restart,
+        )
     return _orig_c113_exec_git_pull_sync(base_dir)

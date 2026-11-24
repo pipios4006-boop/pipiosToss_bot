@@ -2633,7 +2633,12 @@ async def execute_1600_daily_closing_settlement_plugin(
                 f"{sub_day_note}{primer_day_note}{res_note} "
                 f"· 🛡️시드패스 {day_pass:,}회 / 자투리절약 +${day_saved:,.2f} "
                 f"· 오버나이트 이월: 본 {held_sh}주({held_tiers}개층·{lot_carry_str}){sub_carry_note} · 가용현금 ${free_cash:,.2f} "
-                f"(🌇애프터·🌃데이장 ⚡1.5s 본1·2층 개별채굴 & 3~7층 통합졸업 연속가동 · 매수잠금)"
+                + (
+                    "(🌇애프터·🌃데이·🌅프리장[16:00 ~ 09:29] 전층 +4.0% 개별스윕 연속가동 · 차기 매수 T-1h 14:59 EST)"
+                    if str(updated_st.get("portion_mode") or "").upper().strip()
+                    in ("BARBELL_SIMPLE", "BARBELL_COMPOUND")
+                    else "(🌇애프터·🌃데이장 ⚡1.5s 본1·2층 개별채굴 & 3~7층 통합졸업 연속가동 · 매수잠금)"
+                )
             ),
         )
 

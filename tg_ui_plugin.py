@@ -86,6 +86,7 @@ from quant_indicators_plugin import (
     is_extended_sell_only_window,
     is_late_regular_new_cycle_cutoff_window,
     refresh_metrics_with_live_tick,
+    resolve_case114_v6_session_info,
 )
 from sniper_exit_plugin import (
     get_sniper_l1_trail_ui_snapshot,
@@ -394,6 +395,92 @@ def _format_multi_grid_stratum_lines(
     held_sh = safe_int(summary.get("held_shares"), 0)
     buckets = summary.get("buckets", [])
     lines: List[str] = []
+
+    # NEW [Case 114 : Ultimate v6.0 시간외(16:00 ~ 09:29) +4.0% / 정규 T-1h(14:59) +1.0% 전 지층 개별스윕 표출]
+    if bool(summary.get("is_case114_v6_mode", False)):
+        v6_is_ext = bool(summary.get("v6_is_extended_session", True))
+        if held_sh <= 0 or not buckets:
+            if live_assassin_active:
+                lines.append(
+                    "⚪ <b>[본그리드: 0주]</b> 🔥실전 암살자 단독모드 위임중"
+                )
+            elif v6_is_ext:
+                lines.append(
+                    "⚪ <b>[본그리드: 0주]</b> 🔒장외 매수잠금 · T-1h(14:59) 첫 진입 대기"
+                )
+            else:
+                lines.append(
+                    "⚪ <b>[본그리드: 0주]</b> ⏳정규 T-1h(14:59) 첫 1층 진입 대기"
+                )
+            return lines
+
+        v6_tp_pct = safe_float(
+            summary.get("v6_active_tp_pct"), 4.0 if v6_is_ext else 1.0
+        )
+        tp_tag = (
+            f"장외+{v6_tp_pct:.1f}%"
+            if v6_is_ext
+            else f"T-1h+{v6_tp_pct:.1f}%"
+        )
+        v6_targets = list(summary.get("v6_layer_targets") or [])
+        if v6_targets:
+            t1 = v6_targets[0]
+            g1 = safe_float(t1.get("gain_pct"), 0.0)
+            s1 = "+" if g1 >= 0.0 else ""
+            lc1 = safe_int(t1.get("lot_count"), 1)
+            q1_lbl = f"👑{lc1}회" if lc1 > 1 else f"{safe_int(t1.get('qty'), 0)}주"
+            lines.append(
+                f"⚡ <b>[1층: {q1_lbl}·${safe_float(t1.get('actual_cost_usd'), 0.0):,.0f}]</b> "
+                f"<b>${safe_float(t1.get('book_price'), 0.0):.2f}</b> ➔ "
+                f"<b>${safe_float(t1.get('target_price'), 0.0):.2f}</b> "
+                f"({s1}{g1:.2f}%·{tp_tag})"
+            )
+        if len(v6_targets) >= 2:
+            t2 = v6_targets[1]
+            g2 = safe_float(t2.get("gain_pct"), 0.0)
+            s2 = "+" if g2 >= 0.0 else ""
+            lc2 = safe_int(t2.get("lot_count"), 1)
+            q2_lbl = f"👑{lc2}회" if lc2 > 1 else f"{safe_int(t2.get('qty'), 0)}주"
+            lines.append(
+                f"🗡️ <b>[2층: {q2_lbl}·${safe_float(t2.get('actual_cost_usd'), 0.0):,.0f}]</b> "
+                f"<b>${safe_float(t2.get('book_price'), 0.0):.2f}</b> ➔ "
+                f"<b>${safe_float(t2.get('target_price'), 0.0):.2f}</b> "
+                f"({s2}{g2:.2f}%·{tp_tag})"
+            )
+        if len(v6_targets) >= 3:
+            up_37 = v6_targets[2:]
+            iq = sum(safe_int(x.get("qty"), 0) for x in up_37)
+            ia = sum(safe_float(x.get("actual_cost_usd"), 0.0) for x in up_37)
+            iwp = (ia / float(iq)) if iq > 0 else 0.0
+            ig = (
+                ((live_price - iwp) / iwp) * 100.0
+                if (live_price > 0.0 and iwp > 0.0)
+                else 0.0
+            )
+            igs = "+" if ig >= 0.0 else ""
+            rl = "3층" if len(up_37) == 1 else f"3~{len(up_37) + 2}층"
+            lines.append(
+                f"📦 <b>[{rl}: {iq}주·${ia:,.0f}]</b> "
+                f"평단 <b>${iwp:.2f}</b> ({igs}{ig:.2f}%·{tp_tag} 개별스윕)"
+            )
+            for x in up_37:
+                t_no = safe_int(x.get("tier_no"), 3)
+                lc = safe_int(x.get("lot_count"), 1)
+                qx = safe_int(x.get("qty"), 0)
+                cx = safe_float(x.get("actual_cost_usd"), 0.0)
+                bx = safe_float(x.get("book_price"), 0.0)
+                tx = safe_float(x.get("target_price"), 0.0)
+                gx = safe_float(x.get("gain_pct"), 0.0)
+                gs = "+" if gx >= 0.0 else ""
+                tt = (
+                    f"{t_no}층(👑{lc}회·${cx:,.0f})"
+                    if lc > 1
+                    else f"{t_no}층({qx}주·${cx:,.0f})"
+                )
+                lines.append(
+                    f"  ▫️ <b>{tt}</b>: ${bx:.2f} ➔ <b>${tx:.2f}</b> ({gs}{gx:.2f}%·{tp_tag})"
+                )
+        return lines
 
     if held_sh <= 0 or not buckets:
         if live_assassin_active:
@@ -844,16 +931,26 @@ def build_avwap_radar_message(
     else:
         p_mode_short = "📈복리형"
 
+    is_c114_v6 = bool(summary.get("is_case114_v6_mode", False))
+    v6_sess = resolve_case114_v6_session_info(dt_now)
+
     active_badge = (
         "🔥실전암살자단독"
         if live_assn_active
         else ("🟢 가동중" if is_active else "🔴 정지중")
     )
-    mode_badge = (
-        f"🌃장외감시·{p_mode_short}"
-        if is_ext_sell_only
-        else f"⚡실시간·{p_mode_short}"
-    )
+    if is_c114_v6:
+        mode_badge = (
+            f"⚡정규T-1h·{p_mode_short}"
+            if bool(v6_sess.get("is_rth"))
+            else f"{v6_sess['ext_icon']}장외+4%감시·{p_mode_short}"
+        )
+    else:
+        mode_badge = (
+            f"🌃장외감시·{p_mode_short}"
+            if is_ext_sell_only
+            else f"⚡실시간·{p_mode_short}"
+        )
 
     held_sh = safe_int(summary.get("held_shares"), 0)
     sub_sh = safe_int(summary.get("sub_held_shares"), 0)
@@ -915,6 +1012,33 @@ def build_avwap_radar_message(
         shield_line = (
             f"🚨 <b>[시드고갈 대기]</b> 권장입금 <b>${req_dep_usd:,.0f}</b> (잔여 {avail_res_cnt}/{max_res_cnt}회)"
         )
+    elif is_c114_v6:
+        if not bool(v6_sess.get("is_rth")):
+            if held_sh > 0:
+                l1_ext_t = safe_float(summary.get("l1_target_price"), 0.0)
+                shield_line = (
+                    f"{v6_sess['ext_icon']} <b>[{v6_sess['ext_name']} +4.0% 전층 개별스윕]</b> "
+                    f"1층목표 <b>${l1_ext_t:.2f}</b> (매수잠금)"
+                )
+            else:
+                shield_line = (
+                    f"{v6_sess['ext_icon']} <b>[{v6_sess['ext_name']} 매수잠금]</b> "
+                    f"차기 <b>{escape_html(str(v6_sess.get('next_t1h_short') or '14:59 T-1h'))}</b> 진입 대기"
+                )
+        elif bool(v6_sess.get("is_pre_t1h")):
+            shield_line = (
+                f"⏳ <b>[정규장 장중 무매매 관망]</b> "
+                f"<b>{v6_sess['t1h_hm_str']} EST</b> T-1h +1.0% 단발 대기"
+            )
+        elif bool(v6_sess.get("is_t1h_bar")):
+            shield_line = (
+                f"⚡ <b>[T-1h({v6_sess['t1h_hm_str']}) 단발 판정중]</b> "
+                "+1.0% 스윕익절 &amp; 다단 추매 검문"
+            )
+        else:
+            shield_line = (
+                "🌇 <b>[금일 T-1h 판정완료]</b> 16:00 애프터장 +4.0% 스윕 전환 대기"
+            )
     elif is_ext_sell_only:
         c37 = safe_int(summary.get("inv_3_7_tier_count"), 0)
         t37 = safe_float(summary.get("inv_3_7_wma_target_price"), 0.0)
@@ -1014,6 +1138,29 @@ def build_avwap_radar_message(
         gate_cond_lines.append(
             "▫️ 04:07 ~ 08:14 EST 순수 10대 급락 게이트 포착 시 단발 타격"
         )
+    elif is_c114_v6:
+        if held_sh <= 0:
+            gate_header_line = (
+                f"🎯 <b>[다음 매수 타점 · 0주 첫 진입]</b> "
+                f"({escape_html(str(v6_sess.get('next_t1h_str') or '14:59 EST'))})"
+            )
+            gate_cond_lines.append(
+                f"▫️ 본그리드({p_pct_lbl}): T-1h 종가(무머리HA음봉 패스) · {quota_badge_str} (${next_bud:,.0f})"
+            )
+        else:
+            drop_req = safe_float(summary.get("drop_buy_pct"), -1.0)
+            trig_p = safe_float(summary.get("trigger_buy_price"), 0.0)
+            merge_note = "·8층시 L2+L7병합" if len(buckets_list) >= 7 else ""
+            gate_header_line = (
+                f"🎯 <b>[다음 매수 타점]</b> "
+                f"(차기 검문: {escape_html(str(v6_sess.get('next_t1h_str') or '14:59 EST'))})"
+            )
+            gate_cond_lines.append(
+                f"▫️ 추매타점({p_pct_lbl}): <b>${trig_p:.2f}</b> 이하 시 {quota_badge_str} 매수 (${next_bud:,.0f})"
+            )
+            gate_cond_lines.append(
+                f"▫️ 현재위치: 기준 ${ref_anchor:.2f} 대비 {c_sign}{chg_anchor:.2f}% (목표 {drop_req:.1f}%{merge_note})"
+            )
     elif held_sh <= 0:
         gate_header_line = "🎯 <b>[다음 매수 타점 · 0주 첫 진입]</b>"
         if is_ext_sell_only:
@@ -1173,12 +1320,29 @@ def build_avwap_radar_message(
         lines.append(
             f"💉 자동수혈: <b>{used_res_cnt}회분</b> 사용 (${inj_res_usd:,.2f} · {repay_timing_lbl})"
         )
+    if is_c114_v6 and total_held_sh > 0 and bool(summary.get("v6_is_extended_session", False)):
+        ext_grad_eq = safe_float(
+            summary.get("v6_ext_projected_graduation_equity_usd"), proj_grad_eq
+        )
+        ext_grad_roi = safe_float(
+            summary.get("v6_ext_projected_graduation_roi_pct"), proj_grad_roi
+        )
+        eg_sign = "+" if ext_grad_roi >= 0.0 else ""
+        grad_proj_line = (
+            f"🎓 전량졸업예정: <b>${ext_grad_eq:,.2f}</b> "
+            f"({eg_sign}{ext_grad_roi:.2f}%·장외+4% / T-1h+1% ${proj_grad_eq:,.0f})"
+        )
+    else:
+        grad_proj_line = (
+            f"🎓 전량졸업예정: <b>${proj_grad_eq:,.2f}</b> "
+            f"({pg_sign}{proj_grad_roi:.2f}% 확정예정)"
+        )
     lines.extend(
         [
             cycle_profit_line,
             f"💰 전체누적 실현익: <b>{n_sign}${abs(cum_net):,.2f}</b> (졸업 {comp_cycles}회 · {n_sign}{abs(real_roi):.1f}%)",
             f"💵 {cash_title}: <b>${free_cash:,.2f}</b> · 현재평가: <b>${mark_eq:,.0f}</b> ({m_sign}{mark_roi:.1f}%)",
-            f"🎓 전량졸업예정: <b>${proj_grad_eq:,.2f}</b> ({pg_sign}{proj_grad_roi:.2f}% 확정예정)",
+            grad_proj_line,
         ]
     )
 
@@ -1319,19 +1483,36 @@ def build_sync_instruction_message(
     m_sign = "+" if mark_roi >= 0.0 else ""
     pg_sign = "+" if proj_grad_roi >= 0.0 else ""
 
+    is_c114_sync = bool(summary.get("is_case114_v6_mode", False))
+    ext_grad_sync_eq = safe_float(
+        summary.get("v6_ext_projected_graduation_equity_usd"), proj_grad_eq
+    )
+    ext_grad_sync_roi = safe_float(
+        summary.get("v6_ext_projected_graduation_roi_pct"), proj_grad_roi
+    )
+    egs_sign = "+" if ext_grad_sync_roi >= 0.0 else ""
+    use_ext_grad_sync = bool(
+        is_c114_sync
+        and (held_sh + sub_sh) > 0
+        and bool(summary.get("v6_is_extended_session", False))
+    )
     if mark_roi < 0.0:
         anatomy_header = (
             f"💰 <b>[왜 평가자산이 {m_sign}{mark_roi:.1f}%인가? (재고해부)]</b>"
         )
         anatomy_tip_1 = "💡 현재 마이너스는 보유주식의 일시 평가감이며"
         anatomy_tip_2 = (
-            f"   반등 졸업시 <b>${proj_grad_eq:,.0f}({pg_sign}{proj_grad_roi:.2f}%)</b>로 수익 확정!"
+            f"   장외+4% 졸업시 <b>${ext_grad_sync_eq:,.0f}({egs_sign}{ext_grad_sync_roi:.2f}%)</b> / T-1h+1%시 <b>${proj_grad_eq:,.0f}</b> 확정!"
+            if use_ext_grad_sync
+            else f"   반등 졸업시 <b>${proj_grad_eq:,.0f}({pg_sign}{proj_grad_roi:.2f}%)</b>로 수익 확정!"
         )
     else:
         anatomy_header = "💰 <b>[현재 자산 및 재고 평가 3단 해부]</b>"
         anatomy_tip_1 = "💡 확정 원리금에 보유주식 수익이 더해진 상태이며"
         anatomy_tip_2 = (
-            f"   전량 졸업시 <b>${proj_grad_eq:,.0f}({pg_sign}{proj_grad_roi:.2f}%)</b>로 수익 확정!"
+            f"   장외+4% 졸업시 <b>${ext_grad_sync_eq:,.0f}({egs_sign}{ext_grad_sync_roi:.2f}%)</b> / T-1h+1%시 <b>${proj_grad_eq:,.0f}</b> 확정!"
+            if use_ext_grad_sync
+            else f"   전량 졸업시 <b>${proj_grad_eq:,.0f}({pg_sign}{proj_grad_roi:.2f}%)</b>로 수익 확정!"
         )
 
     cash_row_label = "SOXL가용현금" if is_barbell else "가용현금"
@@ -1389,7 +1570,11 @@ def build_sync_instruction_message(
             f"▫️ 확정 원리금계: <b>${real_eq:,.2f}</b> (시드 + 전체누적익)",
             f"▫️ 일시 재고평가: <b>{u_sign}${abs(unreal_pnl):,.2f}</b> (보유주식 일시평가)",
             f"▫️ 현재 평가자산: <b>${mark_eq:,.2f}</b> ({m_sign}{mark_roi:.2f}% · 재고반영)",
-            f"🎓 전량졸업 예정: <b>${proj_grad_eq:,.2f}</b> ({pg_sign}{proj_grad_roi:.2f}% 확정예정!)",
+            (
+                f"🎓 전량졸업 예정: <b>${ext_grad_sync_eq:,.2f}</b> ({egs_sign}{ext_grad_sync_roi:.2f}%·장외+4% / T-1h+1% ${proj_grad_eq:,.0f})"
+                if use_ext_grad_sync
+                else f"🎓 전량졸업 예정: <b>${proj_grad_eq:,.2f}</b> ({pg_sign}{proj_grad_roi:.2f}% 확정예정!)"
+            ),
             anatomy_tip_1,
             anatomy_tip_2,
             "──────────────",

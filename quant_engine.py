@@ -892,6 +892,43 @@ def compute_upper_2_to_12_moving_avg(
 compute_upper_2_to_7_moving_avg = compute_upper_2_to_12_moving_avg
 
 
+# NEW [Case 114 : Ultimate v6.0 전 지층(1 ~ 7층) 개별 스윕 익절 목표가 산출기]
+def compute_case114_v6_layer_targets(
+    buckets: Sequence[StratumBucket],
+    tp_pct: float = 4.0,
+    live_price: float = 0.0,
+) -> List[Dict[str, Any]]:
+    valid = [
+        b for b in (buckets or [])
+        if isinstance(b, StratumBucket) and b.qty > 0
+    ]
+    lp = safe_float(live_price, 0.0)
+    mult = 1.0 + max(0.01, safe_float(tp_pct, 4.0)) / 100.0
+    out: List[Dict[str, Any]] = []
+    for idx, bu in enumerate(valid):
+        target_p = round(
+            math.ceil((bu.book_price * mult - 1e-9) * 100.0) / 100.0, 2
+        )
+        gain_pct = (
+            round(((lp - bu.book_price) / bu.book_price) * 100.0, 2)
+            if (lp > 0.0 and bu.book_price > 0.0)
+            else 0.0
+        )
+        out.append(
+            {
+                "tier_no": idx + 1,
+                "qty": bu.qty,
+                "lot_count": safe_bucket_lot_count(bu),
+                "book_price": round(bu.book_price, 4),
+                "actual_cost_usd": round(bu.actual_cost_usd, 4),
+                "target_price": target_p,
+                "gain_pct": gain_pct,
+                "tp_pct": round(safe_float(tp_pct, 4.0), 2),
+            }
+        )
+    return out
+
+
 def evaluate_multi_grid_sell_targets(
     buckets: Sequence[StratumBucket],
     live_price: float,
@@ -1882,7 +1919,73 @@ def summarize_stratum_portfolio(
     else:
         ref_for_quota = active_buy_anchor
 
-    # MODIFIED [Case 114]: BARBELL_SIMPLE/COMPOUND 19%(시드 11.4%) 정량 주수 산출 동기화
+    # MODIFIED [Case 114]: Ultimate v6.0 시간외(+4.0%)/T-1h(+1.0%) 전층 스윕 · 7층 다단[-1% ~ -8%] · 고정수량 동기화
+    is_c114_v6 = portion_mode in ("BARBELL_SIMPLE", "BARBELL_COMPOUND")
+    v6_ext_tp_pct = 4.0
+    v6_rth_tp_pct = 1.0
+    wd_sum = dt_now.weekday()
+    wknd_sum = bool(
+        (wd_sum == 4 and hm_now >= 2000)
+        or wd_sum == 5
+        or (wd_sum == 6 and hm_now < 1800)
+    )
+    is_rth_sum = bool((not wknd_sum) and wd_sum < 5 and (930 <= hm_now <= 1559))
+    v6_is_extended_session = bool(not is_rth_sum)
+    v6_active_tp_pct = (
+        v6_ext_tp_pct if v6_is_extended_session else v6_rth_tp_pct
+    )
+    v6_layer_targets = (
+        compute_case114_v6_layer_targets(
+            buckets, tp_pct=v6_active_tp_pct, live_price=lp
+        )
+        if is_c114_v6
+        else []
+    )
+    if is_c114_v6:
+        rise_l1_pct = v6_active_tp_pct
+        rise_l2_pct = v6_active_tp_pct
+        v6_prog_steps = (0.0, -1.0, -2.0, -3.0, -4.0, -5.0, -6.0, -8.0)
+        if buckets:
+            drop_buy_pct = v6_prog_steps[min(len(buckets), 7)]
+            l1_p_v6 = buckets[0].book_price
+            l1_target_price = v6_layer_targets[0]["target_price"]
+            l1_ignite_100_price = round(
+                math.ceil((l1_p_v6 * 1.01 - 1e-9) * 100.0) / 100.0, 2
+            )
+            if act_l2 and len(v6_layer_targets) >= 2:
+                l2_raw_t = v6_layer_targets[1]["target_price"]
+                l2_eff_t = l2_raw_t
+                l2_inv = False
+            v6_part_sell_p = safe_float(st.get("v6_last_partial_sell_p"), 0.0)
+            v6_std_ref = (
+                min(l1_p_v6, v6_part_sell_p)
+                if v6_part_sell_p > 0.0
+                else l1_p_v6
+            )
+            active_buy_anchor = v6_std_ref
+            ref_buy_anchor = v6_std_ref
+            chg_from_buy_anchor_pct = (
+                round(((lp - v6_std_ref) / v6_std_ref) * 100.0, 2)
+                if (lp > 0.0 and v6_std_ref > 0.0)
+                else 0.0
+            )
+            trigger_buy_price = round(
+                math.floor(
+                    (v6_std_ref * (1.0 + drop_buy_pct / 100.0) + 1e-9) * 100.0
+                )
+                / 100.0,
+                2,
+            )
+            ref_for_quota = v6_std_ref
+            step_up_eligible = False
+            stepped_min_price = 0.0
+            stepped_trigger_price = 0.0
+        else:
+            drop_buy_pct = 0.0
+            ref_for_quota = (
+                lp if lp > 0.0 else (anchor_p if anchor_p > 0.0 else 1.0)
+            )
+
     anchor_quota_qty, next_portion_budget = compute_golden8_quota_qty(
         anchor_price=max(0.01, ref_for_quota),
         current_total_equity=core_equity_for_quota,
@@ -1890,7 +1993,14 @@ def summarize_stratum_portfolio(
         portion_mode=portion_mode,
         exec_price=None,
     )
-    eff_exec_for_cap = lp if lp > 0.0 else max(0.01, ref_for_quota)
+    if is_c114_v6 and buckets:
+        eff_exec_for_cap = (
+            lp
+            if (0.0 < lp <= trigger_buy_price)
+            else max(0.01, trigger_buy_price)
+        )
+    else:
+        eff_exec_for_cap = lp if lp > 0.0 else max(0.01, ref_for_quota)
     budget_cap_qty = max(
         1, int(math.floor((next_portion_budget + 1e-9) / eff_exec_for_cap))
     )
@@ -2263,17 +2373,53 @@ def summarize_stratum_portfolio(
     )
 
     proj_main_l1_net = 0.0
-    if active_l1 and buckets and l1_target_price > 0.0:
-        p_l1 = min(l1_target_price, i37_wt) if (i37_q > 0 and i37_wt > 0.0) else l1_target_price
-        proj_main_l1_net = calc_sell_realized_pnl(buckets[0].qty, p_l1, buckets[0].actual_cost_usd, eff_rt_fee_pct)["net_pnl_usd"]
-    p_l2_net = 0.0
-    if act_l2 and l2_q > 0 and l2_eff_t > 0.0:
-        p_l2 = min(l2_eff_t, i37_wt) if (i37_q > 0 and i37_wt > 0.0) else l2_eff_t
-        p_l2_net = calc_sell_realized_pnl(l2_q, p_l2, l2_cost, eff_rt_fee_pct)["net_pnl_usd"]
-    p_37_net = 0.0
-    if i37_q > 0 and i37_wt > 0.0:
-        p_37_net = calc_sell_realized_pnl(i37_q, i37_wt, i37_c, eff_rt_fee_pct)["net_pnl_usd"]
-    proj_main_upper_net = round(p_l2_net + p_37_net, 4)
+    v6_ext_proj_pending_net = 0.0
+    if is_c114_v6:
+        # NEW [Case 114]: 전 지층 개별 스윕 기준 T-1h(+1.0%) 최소 확정치 및 장외(+4.0%) 졸업 예정치 산출
+        if buckets:
+            b0 = buckets[0]
+            p0_rth = math.ceil((b0.book_price * 1.01 - 1e-9) * 100.0) / 100.0
+            proj_main_l1_net = calc_sell_realized_pnl(
+                b0.qty, p0_rth, b0.actual_cost_usd, eff_rt_fee_pct
+            )["net_pnl_usd"]
+            proj_main_upper_net = round(
+                sum(
+                    calc_sell_realized_pnl(
+                        bu.qty,
+                        math.ceil((bu.book_price * 1.01 - 1e-9) * 100.0) / 100.0,
+                        bu.actual_cost_usd,
+                        eff_rt_fee_pct,
+                    )["net_pnl_usd"]
+                    for bu in buckets[1:]
+                ),
+                4,
+            )
+            v6_ext_proj_pending_net = round(
+                sum(
+                    calc_sell_realized_pnl(
+                        bu.qty,
+                        math.ceil((bu.book_price * 1.04 - 1e-9) * 100.0) / 100.0,
+                        bu.actual_cost_usd,
+                        eff_rt_fee_pct,
+                    )["net_pnl_usd"]
+                    for bu in buckets
+                ),
+                4,
+            )
+        else:
+            proj_main_upper_net = 0.0
+    else:
+        if active_l1 and buckets and l1_target_price > 0.0:
+            p_l1 = min(l1_target_price, i37_wt) if (i37_q > 0 and i37_wt > 0.0) else l1_target_price
+            proj_main_l1_net = calc_sell_realized_pnl(buckets[0].qty, p_l1, buckets[0].actual_cost_usd, eff_rt_fee_pct)["net_pnl_usd"]
+        p_l2_net = 0.0
+        if act_l2 and l2_q > 0 and l2_eff_t > 0.0:
+            p_l2 = min(l2_eff_t, i37_wt) if (i37_q > 0 and i37_wt > 0.0) else l2_eff_t
+            p_l2_net = calc_sell_realized_pnl(l2_q, p_l2, l2_cost, eff_rt_fee_pct)["net_pnl_usd"]
+        p_37_net = 0.0
+        if i37_q > 0 and i37_wt > 0.0:
+            p_37_net = calc_sell_realized_pnl(i37_q, i37_wt, i37_c, eff_rt_fee_pct)["net_pnl_usd"]
+        proj_main_upper_net = round(p_l2_net + p_37_net, 4)
 
     proj_sub_l1_net = 0.0
     if sub_active_l1 and sub_buckets and sub_l1_target_price > 0.0:
@@ -2410,6 +2556,22 @@ def summarize_stratum_portfolio(
         "buckets": buckets,
         "grid_merge_mode": grid_merge_mode,
         "portion_mode": portion_mode,
+        "is_case114_v6_mode": is_c114_v6,
+        "v6_is_extended_session": v6_is_extended_session,
+        "v6_ext_tp_pct": v6_ext_tp_pct,
+        "v6_rth_tp_pct": v6_rth_tp_pct,
+        "v6_active_tp_pct": v6_active_tp_pct,
+        "v6_layer_targets": v6_layer_targets,
+        "v6_ext_projected_graduation_equity_usd": (
+            round(realized_equity_usd + v6_ext_proj_pending_net, 4)
+            if is_c114_v6
+            else projected_graduation_equity_usd
+        ),
+        "v6_ext_projected_graduation_roi_pct": (
+            round(((cum_realized + v6_ext_proj_pending_net) / init_seed) * 100.0, 2)
+            if is_c114_v6
+            else projected_graduation_roi_pct
+        ),
         "is_simple_mode": is_simple_mode,
         "is_barbell_mode": is_barbell,
         "portion_mode_label": portion_mode_label,
@@ -2835,15 +2997,38 @@ def run_quant_engine_tdd_case113() -> bool:
                     }
                 ],
             }
-            c114_sum = summarize_stratum_portfolio(c114_st, live_price=36.64)
+            dt_ext_after = datetime(2026, 11, 24, 17, 18, 37, tzinfo=EST_TZ)
+            dt_ext_pre = datetime(2026, 11, 24, 8, 30, 0, tzinfo=EST_TZ)
+            dt_rth_mid = datetime(2026, 11, 24, 11, 0, 0, tzinfo=EST_TZ)
+            c114_7t_st = dict(c114_st)
+            c114_7t_st["buckets"] = [
+                {"qty": 5, "book_price": 41.54, "book_invested_usd": 207.70, "actual_cost_usd": 207.70, "lot_count": 1, "lot_type": "REENTRY_1FL"},
+                {"qty": 14, "book_price": 47.19, "book_invested_usd": 660.66, "actual_cost_usd": 660.66, "lot_count": 1, "lot_type": "GRID_L2"},
+                {"qty": 52, "book_price": 77.47, "book_invested_usd": 4028.44, "actual_cost_usd": 4028.44, "lot_count": 3, "lot_type": "GRID_L3"},
+                {"qty": 41, "book_price": 78.59, "book_invested_usd": 3222.19, "actual_cost_usd": 3222.19, "lot_count": 2, "lot_type": "GRID_L4"},
+                {"qty": 47, "book_price": 83.71, "book_invested_usd": 3934.37, "actual_cost_usd": 3934.37, "lot_count": 3, "lot_type": "GRID_L5"},
+                {"qty": 38, "book_price": 83.93, "book_invested_usd": 3189.34, "actual_cost_usd": 3189.34, "lot_count": 2, "lot_type": "GRID_L6"},
+                {"qty": 188, "book_price": 87.974, "book_invested_usd": 16539.12, "actual_cost_usd": 16539.12, "lot_count": 4, "lot_type": "GRID_L7"},
+            ]
+            s_after = summarize_stratum_portfolio(c114_7t_st, live_price=33.30, now_est=dt_ext_after)
+            s_pre = summarize_stratum_portfolio(c114_7t_st, live_price=33.30, now_est=dt_ext_pre)
+            s_rth = summarize_stratum_portfolio(c114_7t_st, live_price=33.30, now_est=dt_rth_mid)
             assert (
-                c114_sum["is_barbell_mode"] is True
-                and abs(c114_sum["free_cash_usd"] - 0.0) < 1e-4
-                and abs(c114_sum["stock_alloc_pct"] - 100.0) < 1e-4
-                and abs(c114_sum["cash_alloc_pct"] - 0.0) < 1e-4
-                and abs(c114_sum["next_portion_budget"] - 2280.0) < 1e-4
-                and c114_sum["next_target_qty"] == 62
-            ), f"Case 114 올인 비중/유령현금 회귀 검증 실패({m_c114}): {c114_sum}"
+                s_after["is_barbell_mode"] is True
+                and s_after["is_case114_v6_mode"] is True
+                and abs(s_after["free_cash_usd"] - 0.0) < 1e-4
+                and abs(s_after["stock_alloc_pct"] - 100.0) < 1e-4
+                and abs(s_after["next_portion_budget"] - 2280.0) < 1e-4
+                and abs(s_after["drop_buy_pct"] - (-8.0)) < 1e-6
+                and abs(s_after["trigger_buy_price"] - 38.21) < 1e-6
+                and s_after["next_target_qty"] == 54
+                and abs(s_after["l1_target_price"] - 43.21) < 1e-6
+                and abs(s_after["l2_eff_target_price"] - 49.08) < 1e-6
+                and abs(s_after["v6_layer_targets"][6]["target_price"] - 91.50) < 1e-6
+                and abs(s_pre["l1_target_price"] - 43.21) < 1e-6
+                and abs(s_rth["l1_target_price"] - 41.96) < 1e-6
+                and s_after["v6_ext_projected_graduation_equity_usd"] > 22100.0
+            ), f"Case 114 v6 장외+4%/T-1h+1%/다단-8%(54주) 회귀 검증 실패({m_c114}): {s_after}"
     finally:
         set_runtime_round_trip_fee_rate_pct(prev_rt, us_commission_rate=prev_one)
 

@@ -826,6 +826,80 @@ def get_market_session_label(now_est: Optional[datetime] = None) -> str:
     return "🌃 데이장 익절감시(20:00~03:59·매수잠금)"
 
 
+# NEW [Case 114 : Ultimate v6.0 시간외(16:00 ~ 09:29 EST 프리·애프터·데이장) +4.0% 및 정규 T-1h(14:59) 세션 해석기]
+def is_case114_v6_extended_window(
+    hm: Optional[int] = None,
+    now_est: Optional[datetime] = None,
+    is_early_close: bool = False,
+) -> bool:
+    dt = now_est.astimezone(EST_TZ) if now_est else datetime.now(EST_TZ)
+    if is_weekend_nyse_closed(dt):
+        return False
+    hm_val = (
+        safe_int(hm, dt.hour * 100 + dt.minute)
+        if hm is not None
+        else (dt.hour * 100 + dt.minute)
+    )
+    rth_end_hm = 1259 if is_early_close else 1559
+    if dt.weekday() < 5 and (930 <= hm_val <= rth_end_hm):
+        return False
+    return True
+
+
+def resolve_case114_v6_session_info(
+    now_est: Optional[datetime] = None,
+    is_early_close: bool = False,
+) -> Dict[str, Any]:
+    dt = now_est.astimezone(EST_TZ) if now_est else datetime.now(EST_TZ)
+    wd = dt.weekday()
+    hm = dt.hour * 100 + dt.minute
+    t1h_hm = 1159 if is_early_close else 1459
+    t1h_str = "11:59" if is_early_close else "14:59"
+    rth_end_hm = 1259 if is_early_close else 1559
+    wknd_closed = is_weekend_nyse_closed(dt)
+    is_rth = bool((not wknd_closed) and wd < 5 and (930 <= hm <= rth_end_hm))
+    is_ext = bool((not wknd_closed) and (not is_rth))
+
+    if 400 <= hm <= 929 and wd < 5:
+        ext_icon, ext_name = "🌅", "프리장"
+    elif (rth_end_hm < hm <= 1959) and wd < 5:
+        ext_icon, ext_name = "🌇", "애프터장"
+    else:
+        ext_icon, ext_name = "🌃", "데이장"
+
+    if wd >= 5:
+        next_t1h_str = "월요일 14:59 EST · T-1h 단발"
+        next_t1h_short = "월 14:59 T-1h"
+    elif hm < 930:
+        next_t1h_str = f"금일 {t1h_str} EST · T-1h 단발"
+        next_t1h_short = f"금일 {t1h_str} T-1h"
+    elif hm < t1h_hm:
+        next_t1h_str = f"금일 {t1h_str} EST · 장중 관망중"
+        next_t1h_short = f"금일 {t1h_str} T-1h"
+    elif hm == t1h_hm:
+        next_t1h_str = f"⚡금일 {t1h_str} EST · T-1h 판정중"
+        next_t1h_short = f"⚡{t1h_str} 판정중"
+    else:
+        nxt_day = "월요일" if wd == 4 else "익일"
+        next_t1h_str = f"{nxt_day} 14:59 EST · T-1h 단발"
+        next_t1h_short = f"{nxt_day} 14:59 T-1h"
+
+    return {
+        "is_weekend_closed": wknd_closed,
+        "is_rth": is_rth,
+        "is_v6_extended": is_ext,
+        "is_pre_t1h": bool(is_rth and hm < t1h_hm),
+        "is_t1h_bar": bool(is_rth and hm == t1h_hm),
+        "is_post_t1h": bool(is_rth and hm > t1h_hm),
+        "t1h_hm": t1h_hm,
+        "t1h_hm_str": t1h_str,
+        "ext_icon": ext_icon,
+        "ext_name": ext_name,
+        "next_t1h_str": next_t1h_str,
+        "next_t1h_short": next_t1h_short,
+    }
+
+
 # ---------------------------------------------------------------------------
 # [핵심 2] 04:07 ~ 16:00 EST 10분 고정 매수 게이트 버킷 산출기 (Case 01, 36, 64, 79, 84, 88)
 # ---------------------------------------------------------------------------
