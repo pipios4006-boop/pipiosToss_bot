@@ -2448,3 +2448,37 @@ class SoxlStratumLedger:
 # 하위 호환 별칭 (타 모듈 임포트 호환 100% 보장)
 StratumLedger = SoxlStratumLedger
 AssassinLedger = SoxlStratumLedger
+# [CASE114_BARBELL_DUAL_MODE_LOCK]
+PORTION_MODE_BARBELL_SIMPLE: str = "BARBELL_SIMPLE"
+PORTION_MODE_BARBELL_COMPOUND: str = "BARBELL_COMPOUND"
+CASE114_ACTIVE_BARBELL_MODES = ("BARBELL_SIMPLE", "BARBELL_COMPOUND")
+CASE114_V6_CORE_PORTION_RATIO: float = 0.19
+CASE114_V6_TOTAL_SEED_RATIO: float = 0.114
+
+_orig_c113_resolve_ratio = globals().get("resolve_mode_portion_ratio")
+
+
+def normalize_case114_barbell_mode(portion_mode) -> str:
+    m = str(portion_mode or "").upper().strip()
+    if m in ("BARBELL_COMPOUND", "COMPOUND", "BARBELL_COMP", "V6_BARBELL_COMP"):
+        return "BARBELL_COMPOUND"
+    return "BARBELL_SIMPLE"
+
+
+def next_case114_barbell_mode(portion_mode) -> str:
+    cur = normalize_case114_barbell_mode(portion_mode)
+    return "BARBELL_COMPOUND" if cur == "BARBELL_SIMPLE" else "BARBELL_SIMPLE"
+
+
+def is_case114_v6_barbell_mode(portion_mode) -> bool:
+    m = str(portion_mode or "").upper().strip()
+    return m in ("BARBELL_SIMPLE", "BARBELL_COMPOUND")
+
+
+def resolve_mode_portion_ratio(portion_mode) -> float:
+    m = str(portion_mode or "").upper().strip()
+    if m in ("BARBELL_SIMPLE", "BARBELL_COMPOUND"):
+        return CASE114_V6_CORE_PORTION_RATIO
+    if callable(_orig_c113_resolve_ratio):
+        return float(_orig_c113_resolve_ratio(portion_mode))
+    return 0.15

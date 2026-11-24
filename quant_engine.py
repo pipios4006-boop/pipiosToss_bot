@@ -3352,3 +3352,15 @@ def _legacy_run_quant_engine_tdd_disabled() -> bool:
 
 
 run_quant_engine_tdd = run_quant_engine_tdd_case113
+# [CASE114_BARBELL_DUAL_MODE_LOCK]
+from toss_api_core import (
+    PORTION_MODE_BARBELL_SIMPLE,
+    PORTION_MODE_BARBELL_COMPOUND,
+    CASE114_ACTIVE_BARBELL_MODES,
+    CASE114_V6_CORE_PORTION_RATIO,
+    CASE114_V6_TOTAL_SEED_RATIO,
+    normalize_case114_barbell_mode,
+    next_case114_barbell_mode,
+    is_case114_v6_barbell_mode,
+    resolve_mode_portion_ratio,
+)

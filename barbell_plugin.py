@@ -2923,3 +2923,16 @@ def run_barbell_plugin_tdd() -> bool:
         asyncio.run(_tdd_case100_async())
 
     return True
+# [CASE114_BARBELL_DUAL_MODE_LOCK]
+PORTION_MODE_BARBELL_SIMPLE: str = "BARBELL_SIMPLE"
+PORTION_MODE_BARBELL_COMPOUND: str = "BARBELL_COMPOUND"
+_orig_c113_is_barbell_mode = globals().get("is_barbell_mode")
+
+
+def is_barbell_mode(portion_mode) -> bool:
+    m = str(portion_mode or "").upper().strip()
+    if m in ("BARBELL_SIMPLE", "BARBELL_COMPOUND", "BARBELL_60_30_10", "BARBELL"):
+        return True
+    if callable(_orig_c113_is_barbell_mode):
+        return bool(_orig_c113_is_barbell_mode(portion_mode))
+    return False

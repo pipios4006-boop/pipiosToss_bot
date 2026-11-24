@@ -57,6 +57,7 @@ EXCLUDED_FILES: Set[str] = {
     "whipsaw_plugin.py",
     "candle_recorder.py",
     "tg_router.py",
+    "soxl_v6_barbell_engine.py",  # NEW [Case 114]
 }
 
 # NEW [Case 85]: f-string 내 닫는 중괄호 '}' 가 '>' 로 오기된 패턴 탐지 정규식

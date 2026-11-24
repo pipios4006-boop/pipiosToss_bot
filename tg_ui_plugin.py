@@ -2070,28 +2070,48 @@ class TelegramCommandController:
             reply_markup=kb,
         )
 
+    # [CASE114_TG_DUAL_BARBELL_UI]
     async def _toggle_portion_mode_command(
         self, chat_id: str, edit_msg_id: Optional[int] = None
     ) -> None:
-        """
-        3단 운용 모드 순환 실행기:
-        스나이퍼(복리 · COMP_08PCT) ➔ 스나이퍼(단리 · SIMPLE_08PCT) ➔ 바벨모드(BARBELL_60_30_10) ➔ 스나이퍼(복리)
-        """
-        st_cur = self.context.ledger.get_state(TARGET_SYMBOL)
-        next_m = next_cycled_portion_mode(st_cur.get("portion_mode"))
-        updated_st = await self.context.ledger.update_state(
-            TARGET_SYMBOL, portion_mode=next_m
+        # MODIFIED [Case 114]: 순수현금 영구 폐기 — 바벨(단리·금고분리)[기본] ⇄ 바벨(복리·재투자) 토글
+        from soxl_v6_barbell_engine import (
+            BARBELL_MODE_COMPOUND,
+            DEFAULT_V6_LEDGER_PATH,
+            format_barbell_mode_ko,
+            load_or_migrate_pipios_v6_engine,
+            sync_v6_to_legacy_state_dicts,
         )
 
-        # 바벨 모드 진입 시 동기화 (단, 실전 암살자 단독 가동 중에는 복귀 첫 틱까지 유예)
-        if is_barbell_mode(next_m):
-            if is_live_assassin_standalone_active(self.context):
-                await ensure_barbell_ledger(self.context).update_state(
-                    is_initialized=False
-                )
-            else:
-                await initialize_or_sync_barbell_on_mode_enter(self.context)
-                updated_st = self.context.ledger.get_state(TARGET_SYMBOL)
+        st_cur = self.context.ledger.get_state(TARGET_SYMBOL)
+        bb_ledger = ensure_barbell_ledger(self.context)
+        bb_cur = bb_ledger.get_state() if hasattr(bb_ledger, 'get_state') else {}
+
+        v6_eng = load_or_migrate_pipios_v6_engine(
+            legacy_st=st_cur,
+            legacy_bb=bb_cur,
+            ledger_path=DEFAULT_V6_LEDGER_PATH,
+        )
+        next_m = v6_eng.toggle_barbell_mode(can_trade_sgov_now=False)
+        v6_eng.save_json_atomic(DEFAULT_V6_LEDGER_PATH)
+
+        st_synced, bb_synced = sync_v6_to_legacy_state_dicts(v6_eng, st_cur, bb_cur)
+        await self.context.ledger.update_state(
+            TARGET_SYMBOL,
+            portion_mode=next_m,
+            barbell_mode=next_m,
+            initial_seed_usd=st_synced['initial_seed_usd'],
+            active_seed_usd=st_synced['active_seed_usd'],
+            vault_realized_profit_usd=st_synced['vault_realized_profit_usd'],
+            v6_consecutive_no_trade_days=st_synced['v6_consecutive_no_trade_days'],
+            v6_prev_t1h_px=st_synced['v6_prev_t1h_px'],
+            v6_sma120_px=st_synced['v6_sma120_px'],
+        )
+        if hasattr(bb_ledger, 'update_state'):
+            await bb_ledger.update_state(
+                portion_mode=next_m,
+                vault_realized_profit_usd=bb_synced['vault_realized_profit_usd'],
+            )
 
         self.context.wakeup_event.set()
         if edit_msg_id is not None and edit_msg_id > 0:
@@ -2100,29 +2120,30 @@ class TelegramCommandController:
             )
             return
 
-        live_p, _ = await self._refresh_live_price_and_metrics()
-        summary = summarize_stratum_portfolio(updated_st, live_price=live_p)
-        # MODIFIED [Case 113]: /mode 순환 안내에서 1주 마중물 및 서브그리드 제거
-        if _is_barbell_portion_mode(updated_st):
-            m_lbl = "⚖️ 바벨모드 (60/30/10 · 수익금고 영구격리)"
-        elif _is_simple_portion_mode(updated_st):
-            m_lbl = "💵 스나이퍼 (단리 · 시드 10% 고정)"
+        mode_ko = format_barbell_mode_ko(next_m)
+        if next_m == BARBELL_MODE_COMPOUND:
+            mode_badge = f'⚖️📈 {mode_ko} (0주 졸업 시 60:30:10 복리 증액 · 기격리 금고 보존)'
         else:
-            m_lbl = "📈 스나이퍼 (복리 · 코어자산 8% 증액)"
+            mode_badge = f'⚖️💵 {mode_ko} [기본값] (0주 졸업 시 원금 초과수익 금고 영구 분리)'
 
-        next_bud = safe_float(summary.get("next_portion_budget"), 800.0)
-        p_mode_pct_lbl = _format_mode_portion_pct_tag(
-            updated_st.get("portion_mode"), full_barbell_note=True
+        sma_v = v6_eng.get_current_sma120()
+        sma_txt = f'${sma_v:,.2f}' if sma_v is not None else '부트스트랩 대기'
+        hold_note = (
+            f'보유 중({len(v6_eng.stack)}/7층) — 현 사이클 타격액 고정 유지 후 0주 졸업 시 발효'
+            if len(v6_eng.stack) > 0
+            else '0주 대기 중 — 즉시 발효 완료'
         )
+
         await self.send_message(
             chat_id=chat_id,
             text=(
-                "🔄 <b>[3단 운용 정량모드 순환 완료]</b>\n"
-                f"▫️ 현재 모드: <b>{m_lbl}</b>\n"
-                "▫️ 타점 방어: <b>±1.00% 데드존</b> · 공석 <b>-1.00%</b> 눌림통일 · 15시 0주차단\n"
-                f"▫️ 출구 엔진 [{escape_html(str(summary.get('rebound_spec_id') or 'T4-C08'))}]: "
-                f"<b>{escape_html(str(summary.get('rebound_policy_badge') or ''))}</b>\n"
-                f"▫️ 1회 정량({p_mode_pct_lbl}): <b>${next_bud:,.2f}</b> ({_format_case67_quota_badge(summary)})"
+                '🔄 <b>[Case 114 바벨 전용 2모드 토글 완료]</b>\n'
+                f'▫️ 현재 모드: <b>{escape_html(mode_badge)}</b>\n'
+                f'▫️ 기준 원금: <b>${v6_eng.user_seed:,.2f}</b> | 운용 시드: <b>${v6_eng.active_seed:,.2f}</b>\n'
+                f'▫️ 1회 타격액(코어 19% = 시드 11.4%): <b>${v6_eng.tranche_stock:,.2f}</b>\n'
+                f'▫️ 분리 수익금고(침범불가): <b>${v6_eng.separated_profit_cash:,.2f}</b>\n'
+                f'▫️ 전략 엔진: <b>T-1h(14:59) +1.0% · 장외 +4.0% 스윕 · SMA120({sma_txt}) 진공스위치(무매매 {v6_eng.consecutive_no_trade_days}일)</b>\n'
+                f'▫️ 적용 상태: <b>{escape_html(hold_note)}</b>'
             ),
             reply_markup=_build_main_reply_keyboard(),
         )
@@ -2908,3 +2929,13 @@ async def telegram_polling_loop(
 TelegramBotController = TelegramCommandController
 TelegramUiController = TelegramCommandController
 SniperTelegramController = TelegramCommandController
+
+# [CASE114_TG_PCT_TAG_HELPER]
+_orig_c113_fmt_pct_tag = _format_mode_portion_pct_tag
+def _format_mode_portion_pct_tag(portion_mode: Any, full_barbell_note: bool = False) -> str:
+    m_u = str(portion_mode or '').upper().strip()
+    if m_u == 'BARBELL_COMPOUND':
+        return '바벨복리 코어 19%(=시드 11.4%)' if full_barbell_note else '11.4%(바벨복리)'
+    if m_u in ('BARBELL_SIMPLE', 'BARBELL_60_30_10', 'BARBELL'):
+        return '바벨단리 코어 19%(=시드 11.4%)' if full_barbell_note else '11.4%(바벨단리)'
+    return _orig_c113_fmt_pct_tag(portion_mode, full_barbell_note=full_barbell_note)

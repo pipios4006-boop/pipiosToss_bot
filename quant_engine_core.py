@@ -2224,3 +2224,15 @@ def evaluate_stalker_reversal_fire(
         "rebound_from_low_pct": round(reb_pct, 3),
         "fire_reason": "STALKING_FALLING_KNIFE",
     }
+# [CASE114_BARBELL_DUAL_MODE_LOCK]
+from toss_api_core import (
+    PORTION_MODE_BARBELL_SIMPLE,
+    PORTION_MODE_BARBELL_COMPOUND,
+    CASE114_ACTIVE_BARBELL_MODES,
+    CASE114_V6_CORE_PORTION_RATIO,
+    CASE114_V6_TOTAL_SEED_RATIO,
+    normalize_case114_barbell_mode,
+    next_case114_barbell_mode,
+    is_case114_v6_barbell_mode,
+    resolve_mode_portion_ratio,
+)

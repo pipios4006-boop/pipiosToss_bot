@@ -1985,3 +1985,15 @@ def _cli_main() -> int:
 
 if __name__ == "__main__":
     sys.exit(_cli_main())
+# [CASE114_LOCAL_GIT_PULL_SHIELD]
+_orig_c113_exec_git_pull_sync = _execute_git_pull_and_preflight_sync
+
+
+def _execute_git_pull_and_preflight_sync(*args, **kwargs):
+    if os.environ.get("ALLOW_CASE114_GIT_PULL", "0").strip() != "1":
+        return {
+            "updated": False,
+            "status": "SKIPPED_CASE114_LOCAL_LOCK",
+            "reason": "Case 114 로컬 바벨 전용 패치 보호 모드(원격 구버전 덮어쓰기 차단)",
+        }
+    return _orig_c113_exec_git_pull_sync(*args, **kwargs)

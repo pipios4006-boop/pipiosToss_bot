@@ -593,102 +593,26 @@ async def main_sniper_loop(context: SniperAppContext) -> None:
                 continue
 
             # ---------------------------------------------------------------
-            # STEP 4: 실전 스나이퍼 미결 매수/매도 주문 선행 정산 (Case 66)
-            # ---------------------------------------------------------------
+            # [CASE114_MAIN_LOOP_HOOK]
+            # STEP 4 ~ STEP 9 통합: Ultimate v6.0 바벨 전용(단리 기본 ⇄ 복리 토글) 실행 파이프라인
             st = context.ledger.get_state(TARGET_SYMBOL)
-            pending_buy_oid = str(st.get("buy_order_id") or "").strip()
-            pending_sell_oid = str(st.get("sell_order_id") or "").strip()
 
-            if pending_sell_oid:
-                await _call_plugin_adaptive(
-                    sync_pending_sell_order_plugin,
-                    context=context,
-                    holdings=context.latest_holdings,
-                    prices={TARGET_SYMBOL: live_p},
-                    symbol=TARGET_SYMBOL,
-                    live_price=live_p,
-                    now_est=now_est,
-                )
-                if is_live_assassin_standalone_active(context):
-                    continue
-                st = context.ledger.get_state(TARGET_SYMBOL)
-
-            if pending_buy_oid:
-                await _call_plugin_adaptive(
-                    sync_pending_buy_order_plugin,
-                    context=context,
-                    holdings=context.latest_holdings,
-                    prices={TARGET_SYMBOL: live_p},
-                    symbol=TARGET_SYMBOL,
-                    live_price=live_p,
-                    now_est=now_est,
-                )
-                st = context.ledger.get_state(TARGET_SYMBOL)
-
-            # ---------------------------------------------------------------
-            # STEP 5: 주기적 브로커 실잔고 조회 및 무결성 화해 (SOXL + 바벨 SGOV)
-            # ---------------------------------------------------------------
             now_mono = time.monotonic()
-            reconcile_interval = (
-                4.5 if is_active_buy_window(hm, now_est=now_est) else 15.0
-            )
-            if (
-                not str(st.get("buy_order_id") or "").strip()
-                and not str(st.get("sell_order_id") or "").strip()
-                and (now_mono - last_reconcile_mono) >= reconcile_interval
-            ):
+            reconcile_interval = 4.5 if (1455 <= hm <= 1600 or 1155 <= hm <= 1300) else 15.0
+            if (now_mono - last_reconcile_mono) >= reconcile_interval:
                 last_reconcile_mono = now_mono
-                holdings_map, fetch_ok = (
-                    await context.api.get_holdings_map_with_status()
-                )
+                holdings_map, fetch_ok = await context.api.get_holdings_map_with_status()
                 if fetch_ok and isinstance(holdings_map, dict):
                     context.latest_holdings = holdings_map
                     context.holdings_fetch_ok = True
-                    h_lp = safe_float(
-                        holdings_map.get(TARGET_SYMBOL, {}).get("last_price"),
-                        0.0,
-                    )
+                    h_lp = safe_float(holdings_map.get(TARGET_SYMBOL, {}).get("last_price"), 0.0)
                     if live_p <= 0.0 and h_lp > 0.0:
                         live_p = h_lp
                         context.latest_prices[TARGET_SYMBOL] = live_p
                         context.last_soxl_live_price = live_p
                         context.last_soxl_live_price_mono = now_mono
-                    await _call_plugin_adaptive(
-                        reconcile_stratum_with_broker_holdings_plugin,
-                        context=context,
-                        holdings=holdings_map,
-                        prices={TARGET_SYMBOL: live_p},
-                        now_est=now_est,
-                        force_sync=False,
-                    )
-                    if is_live_assassin_standalone_active(context):
-                        continue
-                    st = context.ledger.get_state(TARGET_SYMBOL)
 
-            # ---------------------------------------------------------------
-            # STEP 5-B: ⚖️ 바벨 모드(BARBELL_60_30_10) 정규장 전용 SGOV 매매/체결 동기화
-            # ---------------------------------------------------------------
-            if is_barbell_mode(st.get("portion_mode")):
-                try:
-                    await execute_barbell_sgov_tick_plugin(
-                        context=context,
-                        now_est=now_est,
-                    )
-                    st = context.ledger.get_state(TARGET_SYMBOL)
-                except asyncio.CancelledError:
-                    raise
-                except Exception as bb_exc:
-                    logger.warning(
-                        "⚠️ [Barbell SGOV 플러그인 예외 격리]: %s", bb_exc
-                    )
-
-            # ---------------------------------------------------------------
-            # STEP 6: 평일 16:00 EST 정규장 마감 일일 결산 보고 (일 1회)
-            # ---------------------------------------------------------------
-            if (
-                1600 <= hm <= 1659
-                and str(st.get("last_closing_report_date") or "") != today_str
-            ):
+            if 1600 <= hm <= 1659 and str(st.get("last_closing_report_date") or "") != today_str:
                 await _call_plugin_adaptive(
                     execute_1600_daily_closing_settlement_plugin,
                     context=context,
@@ -698,93 +622,24 @@ async def main_sniper_loop(context: SniperAppContext) -> None:
                 )
                 st = context.ledger.get_state(TARGET_SYMBOL)
 
-            # ---------------------------------------------------------------
-            # STEP 7: 실전 스나이퍼 작동 ON/OFF 확인 (OFF 시 실전 매매 보류)
-            # ---------------------------------------------------------------
             if not bool(st.get("is_active", True)):
-                context.fast_shield_mode = _evaluate_fast_shield_mode(
-                    context, st
-                )
-                wait_off = (
-                    FAST_SHIELD_LOOP_INTERVAL_SEC
-                    if context.fast_shield_mode
-                    else NORMAL_LOOP_INTERVAL_SEC
-                )
                 try:
                     await asyncio.wait_for(
-                        context.wakeup_event.wait(), timeout=_wall_wait(wait_off)
+                        context.wakeup_event.wait(),
+                        timeout=_wall_wait(NORMAL_LOOP_INTERVAL_SEC),
                     )
                     context.wakeup_event.clear()
                 except asyncio.TimeoutError:
                     pass
                 continue
 
-            # ---------------------------------------------------------------
-            # STEP 8: 실시간 스나이퍼 다중 익절 매도 모니터 (오팔 최우선)
-            # ---------------------------------------------------------------
-            did_sell_action = False
-            has_any_holdings = bool(
-                st.get("buckets") or st.get("sub_buckets")
-            )
-            if (
-                has_any_holdings
-                and is_active_sell_window(hm, now_est=now_est)
-                and not str(st.get("buy_order_id") or "").strip()
-            ):
-                sell_res = await _call_plugin_adaptive(
-                    execute_1m_sniper_sell_and_reanchor_plugin,
+            if not is_live_assassin_standalone_active(context):
+                from soxl_v6_barbell_engine import execute_case114_v6_barbell_tick
+                await execute_case114_v6_barbell_tick(
                     context=context,
-                    holdings=context.latest_holdings,
-                    symbol=TARGET_SYMBOL,
-                    live_price=live_p,
-                    prices={TARGET_SYMBOL: live_p},
+                    live_p=live_p,
                     now_est=now_est,
-                )
-                if is_live_assassin_standalone_active(context):
-                    continue
-                st = context.ledger.get_state(TARGET_SYMBOL)
-                if (
-                    str(st.get("sell_order_id") or "").strip()
-                    or (
-                        isinstance(sell_res, dict)
-                        and bool(sell_res.get("did_sell_or_ratchet"))
-                    )
-                    or (
-                        isinstance(sell_res, str)
-                        and any(
-                            tag in sell_res
-                            for tag in (
-                                "FILLED",
-                                "SUBMITTED",
-                                "SETTLED",
-                                "SOLD",
-                            )
-                        )
-                    )
-                ):
-                    did_sell_action = True
-
-            # ---------------------------------------------------------------
-            # STEP 9: 실시간 스나이퍼 시드보호 매수 게이트 (떨사 · 평일 04:07 ~ 16:00 EST)
-            # ---------------------------------------------------------------
-            if (
-                not did_sell_action
-                and not is_live_assassin_standalone_active(context)
-                and is_active_buy_window(hm, now_est=now_est)
-                and not str(st.get("sell_order_id") or "").strip()
-                and not str(st.get("buy_order_id") or "").strip()
-            ):
-                await _call_plugin_adaptive(
-                    execute_seed_protected_buy_gate_plugin,
-                    context=context,
-                    holdings=context.latest_holdings,
-                    symbol=TARGET_SYMBOL,
-                    live_price=live_p,
-                    prices={TARGET_SYMBOL: live_p},
-                    metrics=context.candle_metrics_cache.get(
-                        TARGET_SYMBOL, {}
-                    ),
-                    now_est=now_est,
+                    logger=logger,
                 )
                 st = context.ledger.get_state(TARGET_SYMBOL)
 
