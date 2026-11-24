@@ -1997,3 +1997,10 @@ def _execute_git_pull_and_preflight_sync(*args, **kwargs):
             "reason": "Case 114 로컬 바벨 전용 패치 보호 모드(원격 구버전 덮어쓰기 차단)",
         }
     return _orig_c113_exec_git_pull_sync(*args, **kwargs)
+
+# [CASE114_EXACT_V4_FINAL]
+def _execute_git_pull_and_preflight_sync(base_dir=None):
+    if os.environ.get("ALLOW_CASE114_GIT_PULL", "0").strip() != "1":
+        ok_l, msg_l = verify_all_modules_compile(base_dir)
+        return (ok_l, f"Case 114 로컬 바벨전용 보호모드 유지 · {msg_l}", False)
+    return _orig_c113_exec_git_pull_sync(base_dir)

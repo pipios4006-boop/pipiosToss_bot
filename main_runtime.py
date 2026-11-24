@@ -2048,3 +2048,63 @@ async def _run_auto_update_loop_dynamic(context: Any) -> None:
         await _call_plugin_adaptive(
             fn, context=context, interval_sec=iv_sec
         )
+
+# [C114_VAL_V2]
+for _fn_k in ("normalize_portion_mode", "_normalize_portion_mode", "sanitize_portion_mode"):
+    _ofn = globals().get(_fn_k)
+    if callable(_ofn) and not getattr(_ofn, "_c114_n", False):
+        def _mk_n(_f):
+            def _wn(m, *a, **kw):
+                u = str(m or "").upper().strip()
+                return u if u in ("BARBELL_SIMPLE", "BARBELL_COMPOUND") else _f(m, *a, **kw)
+            _wn._c114_n = True
+            return _wn
+        globals()[_fn_k] = _mk_n(_ofn)
+
+_onx = globals().get("next_cycled_portion_mode")
+if callable(_onx) and not getattr(_onx, "_c114_x", False):
+    def next_cycled_portion_mode(m, *a, **kw):
+        u = str(m or "").upper().strip()
+        if u in ("BARBELL_SIMPLE", "BARBELL_60_30_10", "BARBELL"):
+            return "BARBELL_COMPOUND"
+        if u == "BARBELL_COMPOUND":
+            return "BARBELL_SIMPLE"
+        return _onx(m, *a, **kw)
+    next_cycled_portion_mode._c114_x = True
+
+if "StratumLedger" in globals() and hasattr(globals()["StratumLedger"], "update_state"):
+    _sl = globals()["StratumLedger"]
+    _oupd = _sl.update_state
+    if not getattr(_oupd, "_c114_lk", False):
+        async def _c114_upd(self, symbol: str, **kw):
+            rm = kw.get("portion_mode")
+            res = await _oupd(self, symbol, **kw)
+            if rm in ("BARBELL_SIMPLE", "BARBELL_COMPOUND"):
+                if isinstance(res, dict):
+                    res["portion_mode"] = rm
+                    res["barbell_mode"] = rm
+                sr = self.get_state(symbol)
+                if isinstance(sr, dict):
+                    sr["portion_mode"] = rm
+                    sr["barbell_mode"] = rm
+                if hasattr(self, "_save_sync"):
+                    try:
+                        await asyncio.to_thread(self._save_sync)
+                    except Exception:
+                        pass
+            return res
+        _c114_upd._c114_lk = True
+        _sl.update_state = _c114_upd
+
+# [CASE114_EXACT_V4_FINAL]
+from tg_ui_plugin import _build_settlement_inline_keyboard, build_settlement_control_message
+if "_AdaptiveTelegramBridge" in globals():
+    _ab_cls = _AdaptiveTelegramBridge
+    if hasattr(_ab_cls, "edit_or_send_message") and not getattr(_ab_cls.edit_or_send_message, "_c114_v4", False):
+        _orig_ab_eos = _ab_cls.edit_or_send_message
+        async def _ab_eos_v4(self, chat_id: str, message_id, text: str, reply_markup=None):
+            fn_p = getattr(tg_ui_plugin, "_c114_patch_ui", None)
+            t_n, rm_n = fn_p(self, text, reply_markup) if callable(fn_p) else (text, reply_markup)
+            return await _orig_ab_eos(self, chat_id=chat_id, message_id=message_id, text=t_n, reply_markup=rm_n)
+        _ab_eos_v4._c114_v4 = True
+        _ab_cls.edit_or_send_message = _ab_eos_v4

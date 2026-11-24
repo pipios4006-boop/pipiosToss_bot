@@ -2939,3 +2939,167 @@ def _format_mode_portion_pct_tag(portion_mode: Any, full_barbell_note: bool = Fa
     if m_u in ('BARBELL_SIMPLE', 'BARBELL_60_30_10', 'BARBELL'):
         return '바벨단리 코어 19%(=시드 11.4%)' if full_barbell_note else '11.4%(바벨단리)'
     return _orig_c113_fmt_pct_tag(portion_mode, full_barbell_note=full_barbell_note)
+
+# [C114_TGU_V2]
+import copy as _c114_cp
+
+def _c114_patch_ui(ui_self, text, rm):
+    is_c = False
+    try:
+        from soxl_v6_barbell_engine import get_shared_pipios_v6_engine
+        st_c = ui_self.context.ledger.get_state(TARGET_SYMBOL)
+        is_c = (get_shared_pipios_v6_engine(ui_self.context, legacy_st=st_c).barbell_mode == "BARBELL_COMPOUND")
+    except Exception:
+        pass
+    bdg = "⚖️📈 바벨(복리·재투자 | 11.4%)" if is_c else "⚖️💵 바벨(단리·금고분리 | 11.4%)"
+    blb = "⚖️📈 현재:바벨(복리) ➔ 단리전환" if is_c else "⚖️💵 현재:바벨(단리) ➔ 복리전환"
+    if isinstance(text, str) and text:
+        for ot in ("⚖️ 바벨모드 (60/30/10 · 수익금고 영구격리)", "⚖️ 바벨모드 (60/30/10)", "⚖️ 바벨모드", "⚖️ 바벨 모드", "📈 스나이퍼 (복리 · 코어자산 8% 증액)", "💵 스나이퍼 (단리 · 시드 10% 고정)", "BARBELL_60_30_10"):
+            if ot in text:
+                text = text.replace(ot, bdg)
+    if isinstance(rm, dict) and "inline_keyboard" in rm:
+        rm = _c114_cp.deepcopy(rm)
+        for row in rm.get("inline_keyboard", []):
+            for b in (row if isinstance(row, list) else []):
+                if isinstance(b, dict) and "callback_data" in b:
+                    cb, bt = str(b.get("callback_data") or "").lower(), str(b.get("text") or "")
+                    if ("mode" in cb or "모드" in bt or "바벨" in bt) and not any(x in cb for x in ("primer", "assassin", "assn")) and "암살" not in bt:
+                        b["text"] = blb
+    return text, rm
+
+def _c114_install_ui():
+    cls_t = next((v for v in list(globals().values()) if isinstance(v, type) and hasattr(v, "_toggle_portion_mode_command")), None)
+    if cls_t is None:
+        return
+    for mn in ("send_message", "edit_message_text", "_edit_message_text", "send_or_edit_message"):
+        if hasattr(cls_t, mn) and not getattr(getattr(cls_t, mn), "_c114_w", False):
+            def _mk_w(fn):
+                async def _w(self, *a, **kw):
+                    if "text" in kw:
+                        kw["text"], rm_n = _c114_patch_ui(self, kw.get("text"), kw.get("reply_markup"))
+                        if "reply_markup" in kw:
+                            kw["reply_markup"] = rm_n
+                    elif len(a) >= 2 and isinstance(a[1], str):
+                        al = list(a)
+                        al[1], rm_n = _c114_patch_ui(self, al[1], kw.get("reply_markup"))
+                        if "reply_markup" in kw:
+                            kw["reply_markup"] = rm_n
+                        a = tuple(al)
+                    return await fn(self, *a, **kw)
+                _w._c114_w = True
+                return _w
+            setattr(cls_t, mn, _mk_w(getattr(cls_t, mn)))
+
+    async def _c114_toggle_v2(self, chat_id: str, edit_msg_id=None) -> None:
+        from soxl_v6_barbell_engine import BARBELL_MODE_COMPOUND, DEFAULT_V6_LEDGER_PATH, format_barbell_mode_ko, get_shared_pipios_v6_engine, sync_v6_to_legacy_state_dicts
+        st_c = self.context.ledger.get_state(TARGET_SYMBOL)
+        bb_l = ensure_barbell_ledger(self.context)
+        bb_c = bb_l.get_state() if hasattr(bb_l, "get_state") else {}
+        eng = get_shared_pipios_v6_engine(self.context, legacy_st=st_c, legacy_bb=bb_c)
+        nxt = eng.toggle_barbell_mode(can_trade_sgov_now=False)
+        eng.save_json_atomic(DEFAULT_V6_LEDGER_PATH)
+        st_s, bb_s = sync_v6_to_legacy_state_dicts(eng, st_c, bb_c)
+        await self.context.ledger.update_state(TARGET_SYMBOL, portion_mode=nxt, barbell_mode=nxt, initial_seed_usd=st_s["initial_seed_usd"], active_seed_usd=st_s["active_seed_usd"], vault_realized_profit_usd=st_s["vault_realized_profit_usd"])
+        if hasattr(bb_l, "update_state"):
+            await bb_l.update_state(portion_mode=nxt, vault_realized_profit_usd=bb_s["vault_realized_profit_usd"])
+        self.context.wakeup_event.set()
+        if edit_msg_id is not None and int(edit_msg_id) > 0:
+            try:
+                await self._render_and_send_settlement(chat_id=chat_id, edit_msg_id=edit_msg_id)
+            except Exception:
+                pass
+        m_ko = format_barbell_mode_ko(nxt)
+        desc = f"⚖️📈 {m_ko} (0주 졸업 시 60:30:10 복리 증액 · 기격리 금고 보존)" if nxt == BARBELL_MODE_COMPOUND else f"⚖️💵 {m_ko} [기본값] (0주 졸업 시 초과수익 금고 분리)"
+        sma_v = eng.get_current_sma120()
+        sma_t = f"${sma_v:,.2f}" if sma_v else "대기"
+        await self.send_message(
+            chat_id=chat_id,
+            text=(
+                "🔄 <b>[Case 114 바벨 전용 2모드 전환 완료]</b>\n"
+                f"▫️ 현재 모드: <b>{escape_html(desc)}</b>\n"
+                f"▫️ 원금: <b>${eng.user_seed:,.2f}</b> | 운용시드: <b>${eng.active_seed:,.2f}</b> | 1회타격(11.4%): <b>${eng.tranche_stock:,.2f}</b>\n"
+                f"▫️ 분리금고: <b>${eng.separated_profit_cash:,.2f}</b> | SMA120: <b>{sma_t}</b> (무매매 {eng.consecutive_no_trade_days}일)"
+            ),
+            reply_markup=_build_main_reply_keyboard(),
+        )
+    setattr(cls_t, "_toggle_portion_mode_command", _c114_toggle_v2)
+
+_c114_install_ui()
+
+# [C114_BIDIR_SYNC_V3]
+def next_cycled_portion_mode(m, *a, **kw):
+    u = str(m or "").upper().strip()
+    return "BARBELL_SIMPLE" if u == "BARBELL_COMPOUND" else "BARBELL_COMPOUND"
+
+_c114_old_patch_ui = globals().get("_c114_patch_ui")
+if callable(_c114_old_patch_ui):
+    def _c114_patch_ui(ui_self, text, rm):
+        try:
+            from soxl_v6_barbell_engine import DEFAULT_V6_LEDGER_PATH, get_shared_pipios_v6_engine
+            st_c = ui_self.context.ledger.get_state(TARGET_SYMBOL)
+            eng = get_shared_pipios_v6_engine(ui_self.context, legacy_st=st_c)
+            sm = str(st_c.get("portion_mode") or "").upper().strip()
+            if sm in ("BARBELL_SIMPLE", "BARBELL_COMPOUND") and sm != eng.barbell_mode:
+                eng.set_barbell_mode(sm, can_trade_sgov_now=False)
+                eng.save_json_atomic(DEFAULT_V6_LEDGER_PATH)
+        except Exception:
+            pass
+        return _c114_old_patch_ui(ui_self, text, rm)
+
+# [CASE114_EXACT_V4_FINAL]
+import copy as _v4_copy
+
+_c114_orig_kb = _build_settlement_inline_keyboard
+def _build_settlement_inline_keyboard(is_active: bool, *args, **kwargs):
+    kb = _c114_orig_kb(is_active, *args, **kwargs)
+    pm = kwargs.get("portion_mode") if "portion_mode" in kwargs else (args[0] if args else "")
+    is_c = (str(pm or "").upper().strip() == "BARBELL_COMPOUND")
+    lbl = "🔄 모드: ⚖️📈바벨(복리·재투자) ➔ 💵바벨(단리)" if is_c else "🔄 모드: ⚖️💵바벨(단리·금고분리) ➔ 📈바벨(복리)"
+    if isinstance(kb, dict) and "inline_keyboard" in kb:
+        kb = _v4_copy.deepcopy(kb)
+        for row in kb.get("inline_keyboard", []):
+            for b in (row if isinstance(row, list) else []):
+                if isinstance(b, dict) and b.get("callback_data") == "toggle_portion_mode":
+                    b["text"] = lbl
+    return kb
+
+_c114_orig_settle_msg = build_settlement_control_message
+def build_settlement_control_message(st, live_price: float = 0.0, now_est=None, context=None) -> str:
+    msg = _c114_orig_settle_msg(st, live_price=live_price, now_est=now_est, context=context)
+    try:
+        from soxl_v6_barbell_engine import get_shared_pipios_v6_engine
+        eng = get_shared_pipios_v6_engine(context, legacy_st=st)
+        is_c = (eng.barbell_mode == "BARBELL_COMPOUND")
+        m_str = "⚖️📈 바벨(복리 · 0주 졸업 시 60:30:10 재투자)" if is_c else "⚖️💵 바벨(단리 · 수익금고 영구분리) [기본]"
+        sma_v = eng.get_current_sma120()
+        sma_s = f"${sma_v:,.2f}" if sma_v else "대기"
+        v6_spec = (
+            f"2️⃣ 운용 정량모드: <b>{m_str}</b> (<code>/mode</code>)\n"
+            f"   ▫️ 타점/출구 [v6.0]: <b>T-1h(14:59) +1.0% · 장외 +4.0% 스윕 · L2+L7 병합</b>\n"
+            f"   ▫️ 진공탈출 스위치: <b>COND_SMA120({sma_s}) · 무매매 {eng.consecutive_no_trade_days}/5일</b>\n"
+            f"   ▫️ 1회 타격(11.4%): <b>${eng.tranche_stock:,.0f}</b> | 분리금고: <b>${eng.separated_profit_cash:,.2f}</b>"
+        )
+        out_lines = []
+        skip_sub = False
+        for ln in msg.splitlines():
+            if ln.startswith("2️⃣ 운용 정량모드:"):
+                out_lines.append(v6_spec)
+                skip_sub = True
+                continue
+            if skip_sub and (ln.strip().startswith("▫️ 타점 방어:") or ln.strip().startswith("▫️ 출구 엔진")):
+                continue
+            skip_sub = False
+            out_lines.append(ln)
+        return "\n".join(out_lines)
+    except Exception:
+        return msg
+
+if "TelegramCommandController" in globals():
+    _cls_v4 = TelegramCommandController
+    if hasattr(_cls_v4, "edit_or_send_message") and not getattr(_cls_v4.edit_or_send_message, "_c114_v4", False):
+        _orig_eos = _cls_v4.edit_or_send_message
+        async def _wrapped_eos(self, chat_id: str, message_id, text: str, reply_markup=None):
+            t_n, rm_n = _c114_patch_ui(self, text, reply_markup) if "_c114_patch_ui" in globals() else (text, reply_markup)
+            return await _orig_eos(self, chat_id=chat_id, message_id=message_id, text=t_n, reply_markup=rm_n)
+        _wrapped_eos._c114_v4 = True
+        _cls_v4.edit_or_send_message = _wrapped_eos

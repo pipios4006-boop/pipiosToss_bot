@@ -2758,3 +2758,50 @@ execute_1600_market_close_settlement_plugin = (
 execute_macro_defense_plugin = reconcile_stratum_with_broker_holdings_plugin
 enforce_0930_regular_cutoff_plugin = reconcile_stratum_with_broker_holdings_plugin
 execute_moc_zero_overnight_plugin = execute_1600_daily_closing_settlement_plugin
+
+# [C114_VAL_V2]
+for _fn_k in ("normalize_portion_mode", "_normalize_portion_mode", "sanitize_portion_mode"):
+    _ofn = globals().get(_fn_k)
+    if callable(_ofn) and not getattr(_ofn, "_c114_n", False):
+        def _mk_n(_f):
+            def _wn(m, *a, **kw):
+                u = str(m or "").upper().strip()
+                return u if u in ("BARBELL_SIMPLE", "BARBELL_COMPOUND") else _f(m, *a, **kw)
+            _wn._c114_n = True
+            return _wn
+        globals()[_fn_k] = _mk_n(_ofn)
+
+_onx = globals().get("next_cycled_portion_mode")
+if callable(_onx) and not getattr(_onx, "_c114_x", False):
+    def next_cycled_portion_mode(m, *a, **kw):
+        u = str(m or "").upper().strip()
+        if u in ("BARBELL_SIMPLE", "BARBELL_60_30_10", "BARBELL"):
+            return "BARBELL_COMPOUND"
+        if u == "BARBELL_COMPOUND":
+            return "BARBELL_SIMPLE"
+        return _onx(m, *a, **kw)
+    next_cycled_portion_mode._c114_x = True
+
+if "StratumLedger" in globals() and hasattr(globals()["StratumLedger"], "update_state"):
+    _sl = globals()["StratumLedger"]
+    _oupd = _sl.update_state
+    if not getattr(_oupd, "_c114_lk", False):
+        async def _c114_upd(self, symbol: str, **kw):
+            rm = kw.get("portion_mode")
+            res = await _oupd(self, symbol, **kw)
+            if rm in ("BARBELL_SIMPLE", "BARBELL_COMPOUND"):
+                if isinstance(res, dict):
+                    res["portion_mode"] = rm
+                    res["barbell_mode"] = rm
+                sr = self.get_state(symbol)
+                if isinstance(sr, dict):
+                    sr["portion_mode"] = rm
+                    sr["barbell_mode"] = rm
+                if hasattr(self, "_save_sync"):
+                    try:
+                        await asyncio.to_thread(self._save_sync)
+                    except Exception:
+                        pass
+            return res
+        _c114_upd._c114_lk = True
+        _sl.update_state = _c114_upd
