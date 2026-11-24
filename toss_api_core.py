@@ -59,7 +59,10 @@ BARBELL_SOXL_WEIGHT: float = 0.60
 BARBELL_SGOV_WEIGHT: float = 0.30
 BARBELL_CASH_WEIGHT: float = 0.10
 
+# MODIFIED [Case 114]: BARBELL_SIMPLE · BARBELL_COMPOUND 유효 모드 등록
 VALID_PORTION_MODES: Tuple[str, ...] = (
+    "BARBELL_SIMPLE",
+    "BARBELL_COMPOUND",
     "COMP_08PCT",
     "SIMPLE_08PCT",
     "BARBELL_60_30_10",
@@ -197,12 +200,15 @@ def safe_int(val: Any, default: int = 0) -> int:
 
 def is_barbell_mode(portion_mode: Any) -> bool:
     """
-    # NEW:
-    현재 운용 모드가 ⚖️ 바벨 모드(BARBELL_60_30_10 · SOXL 60% / SGOV 30% / 현금 10% · 실현수익 별도 장부 격리)인지 판별한다.
+    # MODIFIED [Case 114]:
+    현재 운용 모드가 ⚖️ 바벨 모드(BARBELL_SIMPLE · BARBELL_COMPOUND · BARBELL_60_30_10)인지 판별한다.
     """
     return str(portion_mode or "").upper().strip() in (
+        "BARBELL_SIMPLE",
+        "BARBELL_COMPOUND",
         "BARBELL_60_30_10",
         "BARBELL",
+        "BARBELL_04PCT",
     )
 
 
@@ -321,7 +327,15 @@ def resolve_smart_rebound_policy(
     - 전 모드 공통: 스토커 폐기 · ±1.0% 데드존 · 무꼬리HA 양방향 패스 · 24h +1.0% 점화 · 샤프래칫(1.35➔1.15 ~ 5.00➔4.50%) · 캡 +6.0%
     """
     p_ratio = resolve_mode_portion_ratio(portion_mode)
-    if is_barbell_mode(portion_mode):
+    m_norm = str(portion_mode or "").upper().strip()
+    # MODIFIED [Case 114]: 바벨 2모드(코어19%=전체11.4%) 배지 분리 및 Case 113 T4-B15 호환 유지
+    if m_norm in ("BARBELL_SIMPLE", "BARBELL_COMPOUND"):
+        spec_id = "V6-BC19" if m_norm == "BARBELL_COMPOUND" else "V6-BS19"
+        badge = (
+            f"🔥v6바벨·코어{p_ratio * 100.0:.0f}%(전체{p_ratio * 60.0:.1f}%)"
+            "·T-1h(+1%)/장외(+4%)·SMA120진공탈출"
+        )
+    elif is_barbell_mode(portion_mode):
         spec_id = "T4-B15"
         badge = f"🔥T4통합·황금비율{p_ratio * 100.0:.0f}%(전체9%)·±1%데드존·샤프래칫·캡6%"
     elif is_simple_income_mode(portion_mode):
@@ -1215,13 +1229,20 @@ class SoxlStratumLedger:
         st["sell_interval_min"] = LOCKED_SELL_INTERVAL_MIN
         st["max_grid_tiers"] = MAX_GRID_TIERS_7
 
-        # MODIFIED [Case 91 + 바벨 모드 3단 보존]
+        # MODIFIED [Case 114]: BARBELL_SIMPLE · BARBELL_COMPOUND 원본 보존 및 3단 호환
         raw_p_mode = (
             str(st.get("portion_mode") or PORTION_MODE_COMPOUND)
             .upper()
             .strip()
         )
-        if is_barbell_mode(raw_p_mode):
+        raw_b_mode = str(st.get("barbell_mode") or "").upper().strip()
+        if raw_p_mode in ("BARBELL_SIMPLE", "BARBELL_COMPOUND"):
+            st["portion_mode"] = raw_p_mode
+        elif raw_b_mode in ("BARBELL_SIMPLE", "BARBELL_COMPOUND") and (
+            isinstance(raw_st, dict) and "portion_mode" not in raw_st
+        ):
+            st["portion_mode"] = raw_b_mode
+        elif is_barbell_mode(raw_p_mode):
             st["portion_mode"] = PORTION_MODE_BARBELL
         elif is_simple_income_mode(raw_p_mode):
             st["portion_mode"] = PORTION_MODE_SIMPLE
@@ -1781,7 +1802,13 @@ class SoxlStratumLedger:
         vault_locked = st["vaulted_profit_locked_usd"]
 
         if is_barbell_mode(st["portion_mode"]):
-            soxl_core_60 = round(init_seed * BARBELL_SOXL_WEIGHT, 4)
+            # MODIFIED [Case 114]: BARBELL_COMPOUND 시 active_seed_usd 반영 및 60% 코어 항등식 강제
+            eff_b_seed = (
+                max(init_seed, safe_float(st.get("active_seed_usd"), init_seed))
+                if str(st["portion_mode"]).upper().strip() == "BARBELL_COMPOUND"
+                else init_seed
+            )
+            soxl_core_60 = round(eff_b_seed * BARBELL_SOXL_WEIGHT, 4)
             # MODIFIED [Case 94]: 선행 익절 격리분 차감 결손 보전으로 유령현금 0% 항등식 유지
             cyc_loss_adj = min(
                 0.0,
@@ -2375,9 +2402,13 @@ class SoxlStratumLedger:
             .strip()
         )
         if target_mode is not None and str(target_mode).strip():
-            if is_barbell_mode(target_mode):
+            # MODIFIED [Case 114]: BARBELL_SIMPLE · BARBELL_COMPOUND 명시적 지정 보존
+            t_clean = str(target_mode).upper().strip()
+            if t_clean in ("BARBELL_SIMPLE", "BARBELL_COMPOUND"):
+                next_mode = t_clean
+            elif is_barbell_mode(t_clean):
                 next_mode = PORTION_MODE_BARBELL
-            elif is_simple_income_mode(target_mode):
+            elif is_simple_income_mode(t_clean):
                 next_mode = PORTION_MODE_SIMPLE
             else:
                 next_mode = PORTION_MODE_COMPOUND

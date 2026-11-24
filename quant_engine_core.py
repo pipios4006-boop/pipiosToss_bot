@@ -96,7 +96,10 @@ BARBELL_CASH_WEIGHT: float = float(
     getattr(toss_api, "BARBELL_CASH_WEIGHT", 0.10)
 )
 
+# MODIFIED [Case 114]: BARBELL_SIMPLE · BARBELL_COMPOUND 유효 모드 동기화
 VALID_PORTION_MODES: Tuple[str, ...] = (
+    "BARBELL_SIMPLE",
+    "BARBELL_COMPOUND",
     "COMP_08PCT",
     "SIMPLE_08PCT",
     "BARBELL_60_30_10",
@@ -209,10 +212,12 @@ RESERVE_DEPOSIT_TOLERANCE_RATIO: float = float(
 # ---------------------------------------------------------------------------
 def is_barbell_mode(portion_mode: Any) -> bool:
     """
-    # NEW:
-    현재 운용 모드가 ⚖️ 바벨 모드(BARBELL_60_30_10 · SOXL 60% / SGOV 30% / 현금 10%)인지 판별한다.
+    # MODIFIED [Case 114]:
+    현재 운용 모드가 ⚖️ 바벨 모드(BARBELL_SIMPLE · BARBELL_COMPOUND · BARBELL_60_30_10)인지 판별한다.
     """
     return str(portion_mode or "").upper().strip() in (
+        "BARBELL_SIMPLE",
+        "BARBELL_COMPOUND",
         "BARBELL_60_30_10",
         "BARBELL",
         "BARBELL_04PCT",

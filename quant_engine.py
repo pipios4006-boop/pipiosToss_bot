@@ -1376,7 +1376,18 @@ def summarize_stratum_portfolio(
     is_simple_mode = (not is_barbell) and is_simple_income_mode(
         raw_portion_mode
     )
-    if is_barbell:
+    # MODIFIED [Case 114]: BARBELL_SIMPLE · BARBELL_COMPOUND 보존 및 active_seed_usd 연동
+    eff_barbell_seed = init_seed
+    if raw_portion_mode == "BARBELL_COMPOUND":
+        portion_mode = "BARBELL_COMPOUND"
+        portion_mode_label = "⚖️바벨복리(60/30/10)"
+        eff_barbell_seed = max(
+            init_seed, safe_float(st.get("active_seed_usd"), init_seed)
+        )
+    elif raw_portion_mode == "BARBELL_SIMPLE":
+        portion_mode = "BARBELL_SIMPLE"
+        portion_mode_label = "⚖️바벨단리(60/30/10)"
+    elif is_barbell:
         portion_mode = PORTION_MODE_BARBELL
         portion_mode_label = "⚖️바벨모드(60/30/10)"
     elif is_simple_mode:
@@ -1403,10 +1414,12 @@ def summarize_stratum_portfolio(
     )
 
     soxl_pool_seed_usd = (
-        round(init_seed * BARBELL_SOXL_WEIGHT, 4) if is_barbell else init_seed
+        round(eff_barbell_seed * BARBELL_SOXL_WEIGHT, 4)
+        if is_barbell
+        else init_seed
     )
     barbell_non_soxl_seed_usd = (
-        round(max(0.0, init_seed - soxl_pool_seed_usd), 4)
+        round(max(0.0, eff_barbell_seed - soxl_pool_seed_usd), 4)
         if is_barbell
         else 0.0
     )
@@ -1660,8 +1673,9 @@ def summarize_stratum_portfolio(
             init_seed, (free_cash + actual_invested) - injected_reserve_usd
         )
     )
+    # MODIFIED [Case 114]: BARBELL_COMPOUND 증액 운용시드(eff_barbell_seed) 기준자산 결속
     budget_base_equity_usd = resolve_portion_budget_base_equity(
-        initial_seed_usd=init_seed,
+        initial_seed_usd=(eff_barbell_seed if is_barbell else init_seed),
         core_equity_usd=core_equity_for_quota,
         portion_mode=portion_mode,
     )
@@ -1868,10 +1882,11 @@ def summarize_stratum_portfolio(
     else:
         ref_for_quota = active_buy_anchor
 
+    # MODIFIED [Case 114]: BARBELL_SIMPLE/COMPOUND 19%(시드 11.4%) 정량 주수 산출 동기화
     anchor_quota_qty, next_portion_budget = compute_golden8_quota_qty(
         anchor_price=max(0.01, ref_for_quota),
         current_total_equity=core_equity_for_quota,
-        initial_seed_usd=init_seed,
+        initial_seed_usd=(eff_barbell_seed if is_barbell else init_seed),
         portion_mode=portion_mode,
         exec_price=None,
     )
@@ -2797,6 +2812,38 @@ def run_quant_engine_tdd_case113() -> bool:
         ]
         r_ov = evaluate_multi_grid_sell_targets(test_g, 81.31, is_overnight_session=True)
         assert r_ov["should_sell"] and r_ov["sold_indices"] == [0, 1]
+
+        # NEW [Case 114 회귀 검증]: BARBELL_SIMPLE / BARBELL_COMPOUND 올인 시 유령 현금($8,695.40) 0% 및 100%:0% 검증
+        for m_c114 in ("BARBELL_SIMPLE", "BARBELL_COMPOUND"):
+            c114_st = {
+                "portion_mode": m_c114,
+                "initial_seed_usd": 20000.0,
+                "active_seed_usd": 20000.0,
+                "cumulative_realized_net_usd": 891.57,
+                "vaulted_profit_locked_usd": 196.17,
+                "injected_reserve_usd": 19781.82,
+                "cycle_min_buy_price": 31.61,
+                "anchor_price": 41.54,
+                "buckets": [
+                    {
+                        "qty": 385,
+                        "book_price": 82.5502,
+                        "book_invested_usd": 31781.82,
+                        "actual_cost_usd": 31781.82,
+                        "lot_count": 14,
+                        "lot_type": "REENTRY_1FL",
+                    }
+                ],
+            }
+            c114_sum = summarize_stratum_portfolio(c114_st, live_price=36.64)
+            assert (
+                c114_sum["is_barbell_mode"] is True
+                and abs(c114_sum["free_cash_usd"] - 0.0) < 1e-4
+                and abs(c114_sum["stock_alloc_pct"] - 100.0) < 1e-4
+                and abs(c114_sum["cash_alloc_pct"] - 0.0) < 1e-4
+                and abs(c114_sum["next_portion_budget"] - 2280.0) < 1e-4
+                and c114_sum["next_target_qty"] == 62
+            ), f"Case 114 올인 비중/유령현금 회귀 검증 실패({m_c114}): {c114_sum}"
     finally:
         set_runtime_round_trip_fee_rate_pct(prev_rt, us_commission_rate=prev_one)
 

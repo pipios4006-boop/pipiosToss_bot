@@ -115,10 +115,12 @@ def is_sgov_regular_trading_window(
 
 def compute_barbell_seed_splits(
     initial_seed_usd: float = DEFAULT_INITIAL_SEED_USD,
+    portion_mode: Optional[Any] = None,
 ) -> Dict[str, float]:
     """
-    설정 기준 시드(initial_seed_usd)에 대한 60 / 30 / 10 목표 배분액과
-    SOXL 코어(60%) 기준 본 그리드 1회분(8%) / 서브 그리드 1회분(4%) 정액 예산을 반환한다.
+    # MODIFIED [Case 114]:
+    BARBELL_SIMPLE / BARBELL_COMPOUND 지정 시 코어 19%(= 전체 시드 11.4%) 정액 예산을 반환하고,
+    미지정(Case 113 기본 호환) 시 코어 15%(= 전체 시드 9.0%)를 유지한다.
     """
     tot_seed = round(
         max(100.0, safe_float(initial_seed_usd, DEFAULT_INITIAL_SEED_USD)), 4
@@ -126,7 +128,13 @@ def compute_barbell_seed_splits(
     soxl_60 = round(tot_seed * BARBELL_SOXL_WEIGHT, 4)
     sgov_30 = round(tot_seed * BARBELL_SGOV_WEIGHT, 4)
     cash_10 = round(max(0.0, tot_seed - soxl_60 - sgov_30), 4)
-    portion_8 = round(soxl_60 * BARBELL_SOXL_PORTION_RATIO, 4)
+    pm_norm = str(portion_mode or "").upper().strip()
+    eff_p_ratio = (
+        0.19
+        if pm_norm in ("BARBELL_SIMPLE", "BARBELL_COMPOUND")
+        else BARBELL_SOXL_PORTION_RATIO
+    )
+    portion_8 = round(soxl_60 * eff_p_ratio, 4)
     sub_portion_4 = round(soxl_60 * BARBELL_SUB_PORTION_RATIO, 4)
     return {
         "total_seed_usd": tot_seed,
@@ -782,10 +790,17 @@ async def initialize_or_sync_barbell_on_mode_enter(
         **reset_zero_kw,
     )
 
+    # MODIFIED [Case 114]: BARBELL_SIMPLE · BARBELL_COMPOUND 모드명 덮어쓰기 원천 차단
+    cur_pm_keep = str(st_soxl.get("portion_mode") or "").upper().strip()
+    eff_pm_keep = (
+        cur_pm_keep
+        if cur_pm_keep in ("BARBELL_SIMPLE", "BARBELL_COMPOUND")
+        else PORTION_MODE_BARBELL
+    )
     await context.ledger.update_state(
         TARGET_SYMBOL,
         initial_seed_usd=eff_seed,
-        portion_mode=PORTION_MODE_BARBELL,
+        portion_mode=eff_pm_keep,
         injected_reserve_usd=alloc["soxl_injected_reserve_usd"],
         used_reserve_portions_cnt=alloc["soxl_used_portions_cnt"],
         waiting_reserve_deposit=False,
@@ -2560,12 +2575,21 @@ def summarize_barbell_status(
         soxl_state.get("initial_seed_usd"),
         safe_float(bst.get("initial_seed_usd"), DEFAULT_INITIAL_SEED_USD),
     )
-    splits = compute_barbell_seed_splits(init_seed)
+    # MODIFIED [Case 114]: BARBELL_SIMPLE / BARBELL_COMPOUND 운용시드 및 코어 19% 반영
+    cur_pm_s = str(soxl_state.get("portion_mode") or "").upper().strip()
+    eff_seed_s = (
+        max(init_seed, safe_float(soxl_state.get("active_seed_usd"), init_seed))
+        if cur_pm_s == "BARBELL_COMPOUND"
+        else init_seed
+    )
+    splits = compute_barbell_seed_splits(eff_seed_s, portion_mode=cur_pm_s)
     sgov_q = safe_int(bst.get("sgov_held_qty"), 0)
     sgov_lp = safe_float(bst.get("sgov_last_price"), SGOV_DEFAULT_REF_PRICE)
     sgov_eval = round(float(sgov_q) * sgov_lp, 4) if sgov_q > 0 else 0.0
     return {
-        "is_barbell_active": is_barbell_mode(soxl_state.get("portion_mode")),
+        "is_barbell_active": is_barbell_mode(cur_pm_s),
+        "portion_mode": cur_pm_s,
+        "user_seed_usd": round(init_seed, 4),
         **splits,
         "cash_bucket_usd": safe_float(bst.get("cash_bucket_usd"), 0.0),
         "cash_injected_to_soxl_usd": safe_float(
@@ -2662,10 +2686,21 @@ async def build_barbell_detail_dashboard_html(context: Any) -> str:
         else {}
     )
     info = summarize_barbell_status(context, st_soxl=st_soxl)
-    active_str = (
-        "🟢 가동중 (BARBELL_60_30_10)"
-        if info["is_barbell_active"]
-        else "⚪ 대기중 (타 모드 운용중 · 금고 보존)"
+    # MODIFIED [Case 114]: 바벨단리(BARBELL_SIMPLE) · 바벨복리(BARBELL_COMPOUND) 상태 및 코어19%[전체11.4%] 표기
+    pm_bd = str(info.get("portion_mode") or "").upper().strip()
+    if info["is_barbell_active"]:
+        if pm_bd == "BARBELL_COMPOUND":
+            active_str = "🟢 가동중 (BARBELL_COMPOUND · 바벨복리)"
+        elif pm_bd == "BARBELL_SIMPLE":
+            active_str = "🟢 가동중 (BARBELL_SIMPLE · 바벨단리)"
+        else:
+            active_str = "🟢 가동중 (BARBELL_60_30_10)"
+    else:
+        active_str = "⚪ 대기중 (타 모드 운용중 · 금고 보존)"
+    pct_tag_bd = (
+        "코어19%[전체11.4%]"
+        if pm_bd in ("BARBELL_SIMPLE", "BARBELL_COMPOUND")
+        else "코어15%[전체9%]"
     )
     in_reg = is_sgov_regular_trading_window(now_est=now_est)
     reg_badge = "🟢정규장 개방" if in_reg else "🔒정규장 외 대기(09:31~15:55)"
@@ -2676,8 +2711,7 @@ async def build_barbell_detail_dashboard_html(context: Any) -> str:
         f"💵 설정 기준시드: <b>${info['total_seed_usd']:,.2f}</b>",
         "━━━━━━━━━━━━━━━━━━",
         "📊 <b>[60 / 30 / 10 목표 배분 및 현재 잔고]</b>",
-        # MODIFIED [Case 113]: 바벨 관제 보드 1회분 코어15%(전체9%) 정량 표기 일원화
-        f"① 🐂 SOXL 코어(60%): 목표 <b>${info['soxl_seed_60_usd']:,.2f}</b> (1회분 코어15%[전체9%] = <b>${info['soxl_portion_8pct_usd']:,.2f}</b>)",
+        f"① 🐂 SOXL 코어(60%): 목표 <b>${info['soxl_seed_60_usd']:,.2f}</b> (1회분 {pct_tag_bd} = <b>${info['soxl_portion_8pct_usd']:,.2f}</b>)",
         f"② 🛡️ SGOV 버킷(30%): 보유 <b>{info['sgov_held_qty']}주</b> (원금 <b>${info['sgov_invested_usd']:,.2f}</b> · 현재가 ${info['sgov_last_price']:.2f})",
         f"   ▫️ SGOV 세션: {reg_badge} | 매수예약 <b>${info['pending_sgov_buy_budget_usd']:,.0f}</b> · 매도예약 <b>{info['pending_sgov_tranche_sells']}건</b>(금번 {info['sgov_tranche_sells_done_cycle']}/3회)",
         f"③ 💵 보호 현금버킷(기본10%·최대40%): 현재 <b>${info['cash_bucket_usd']:,.2f}</b> (기수혈 ${info['cash_injected_to_soxl_usd']:,.0f} · 미졸업 환수현금 보존 ➔ 0주졸업시 SGOV전환)",

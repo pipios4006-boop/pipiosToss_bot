@@ -302,8 +302,12 @@ def _build_settlement_inline_keyboard(
         else "🟢 스나이퍼 작동 ON 전환"
     )
 
-    if is_barbell:
-        mode_label = "🔄 모드: ⚖️바벨(60/30/10) ➔ 📈복리"
+    # MODIFIED [Case 114]: 바벨단리(금고분리) ⇄ 바벨복리(재투자) 2모드 토글 라벨 동기화
+    raw_pm_kb = str(portion_mode or "").upper().strip()
+    if raw_pm_kb == "BARBELL_COMPOUND":
+        mode_label = "🔄 모드: ⚖️📈바벨복리 ➔ ⚖️💵바벨단리(금고분리)"
+    elif raw_pm_kb == "BARBELL_SIMPLE" or is_barbell:
+        mode_label = "🔄 모드: ⚖️💵바벨단리 ➔ ⚖️📈바벨복리(재투자)"
     elif is_simple:
         mode_label = "🔄 모드: 💵단리 ➔ ⚖️바벨(60/30/10)"
     else:
@@ -827,7 +831,13 @@ def build_avwap_radar_message(
         else False
     )
 
-    if is_barbell:
+    # MODIFIED [Case 114]: 레이더 헤더 바벨단리 / 바벨복리 명시
+    raw_pm_av = str(st.get("portion_mode") or "").upper().strip()
+    if raw_pm_av == "BARBELL_COMPOUND":
+        p_mode_short = "⚖️바벨복리(60/30/10)"
+    elif raw_pm_av == "BARBELL_SIMPLE":
+        p_mode_short = "⚖️바벨단리(60/30/10)"
+    elif is_barbell:
         p_mode_short = "⚖️바벨(60/30/10)"
     elif is_simple:
         p_mode_short = "💵인출형"
@@ -1215,7 +1225,13 @@ def build_sync_instruction_message(
     summary = summarize_stratum_portfolio(st, live_price=lp, now_est=dt_now)
     is_barbell = _is_barbell_portion_mode(st)
     is_simple = _is_simple_portion_mode(st)
-    if is_barbell:
+    # MODIFIED [Case 114]: /sync 헤더 바벨단리 / 바벨복리 명시
+    raw_pm_sy = str(st.get("portion_mode") or "").upper().strip()
+    if raw_pm_sy == "BARBELL_COMPOUND":
+        mode_title = "⚖️바벨복리(60/30/10)"
+    elif raw_pm_sy == "BARBELL_SIMPLE":
+        mode_title = "⚖️바벨단리(60/30/10)"
+    elif is_barbell:
         mode_title = "⚖️바벨모드(60/30/10)"
     elif is_simple:
         mode_title = "💵인출형(단리)"
@@ -1435,7 +1451,13 @@ def build_settlement_control_message(
 
     # MODIFIED [Case 113]: 전술 제어반 구 눌림목·1주마중물·서브그리드 잔재 전수 소각 및 T4 정량 일원화
     power_str = "🟢 가동 중 (ON)" if is_active else "🔴 일시정지 (OFF)"
-    if is_barbell:
+    # MODIFIED [Case 114]: 전술 제어반 바벨단리 / 바벨복리 표시 동기화
+    raw_pm_st = str(st.get("portion_mode") or "").upper().strip()
+    if raw_pm_st == "BARBELL_COMPOUND":
+        p_mode_str = "⚖️📈 바벨복리 (60/30/10 · 0주졸업 재투자)"
+    elif raw_pm_st == "BARBELL_SIMPLE":
+        p_mode_str = "⚖️💵 바벨단리 (60/30/10 · 수익금고 영구분리)"
+    elif is_barbell:
         p_mode_str = "⚖️ 바벨모드 (60/30/10 · 수익금고 격리)"
     elif is_simple:
         p_mode_str = "💵 스나이퍼 (단리 · 시드 10% 고정)"
@@ -2234,9 +2256,18 @@ class TelegramCommandController:
         mark_reserve_deposit_check_shield(
             self.context, TARGET_SYMBOL, clear_shield=True
         )
+        # MODIFIED [Case 114]: 기준시드 변경 시 active_seed_usd 및 v6 원장 동기화
+        st_pre_seed = self.context.ledger.get_state(TARGET_SYMBOL)
+        pm_seed = str(st_pre_seed.get("portion_mode") or "").upper().strip()
+        next_active_seed = (
+            max(round(val, 4), safe_float(st_pre_seed.get("active_seed_usd"), val))
+            if pm_seed == "BARBELL_COMPOUND"
+            else round(val, 4)
+        )
         updated_st = await self.context.ledger.update_state(
             TARGET_SYMBOL,
             initial_seed_usd=round(val, 4),
+            active_seed_usd=next_active_seed,
             seed_explicitly_set_100=bool(abs(val - 100.0) < 1e-6),
             waiting_reserve_deposit=False,
             waiting_reserve_deposit_alert_sent=False,
