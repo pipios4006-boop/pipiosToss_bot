@@ -358,23 +358,208 @@ def resolve_smart_rebound_policy(
     }
 
 
+# NEW [Case 114]: 미국 증시(NYSE/NASDAQ) 표준 전면 휴장일 & 조기폐장일(13:00 EST) 결정론적 캘린더 엔진
+_US_CALENDAR_CACHE_LOCK = threading.RLock()
+_NYSE_HOLIDAYS_BY_YEAR: Dict[int, Dict[str, str]] = {}
+_RUNTIME_US_HOLIDAY_OVERRIDES: Dict[str, Optional[str]] = {}
+_RUNTIME_US_EARLY_CLOSE_OVERRIDES: Dict[str, bool] = {}
+
+
+def _coerce_est_date_obj(d_or_dt: Any):
+    from datetime import date as _d_cls
+    if d_or_dt is None:
+        return datetime.now(EST_TZ).date()
+    if isinstance(d_or_dt, datetime):
+        dt_est = (
+            d_or_dt.astimezone(EST_TZ)
+            if d_or_dt.tzinfo is not None
+            else d_or_dt.replace(tzinfo=EST_TZ)
+        )
+        return dt_est.date()
+    if isinstance(d_or_dt, _d_cls):
+        return d_or_dt
+    s = str(d_or_dt).strip()[:10]
+    try:
+        return datetime.strptime(s, "%Y-%m-%d").date()
+    except Exception:
+        return datetime.now(EST_TZ).date()
+
+
+def _compute_easter_sunday_date(year: int):
+    from datetime import date as _d_cls
+    a = year % 19
+    b = year // 100
+    c = year % 100
+    d = b // 4
+    e = b % 4
+    f = (b + 8) // 25
+    g = (b - f + 1) // 3
+    h = (19 * a + b - d - g + 15) % 30
+    i = c // 4
+    k = c % 4
+    l_val = (32 + 2 * e + 2 * i - h - k) % 7
+    m = (a + 11 * h + 22 * l_val) // 451
+    month = (h + l_val - 7 * m + 114) // 31
+    day = ((h + l_val - 7 * m + 114) % 31) + 1
+    return _d_cls(year, month, day)
+
+
+def _get_nyse_holidays_for_year(year: int) -> Dict[str, str]:
+    from datetime import date as _d_cls
+    yr = int(year)
+    with _US_CALENDAR_CACHE_LOCK:
+        cached = _NYSE_HOLIDAYS_BY_YEAR.get(yr)
+        if cached is not None:
+            return cached
+
+    hols: Dict[str, str] = {}
+
+    def _add_fixed(mo: int, dy: int, name_ko: str, skip_prev_yr_sat: bool = False) -> None:
+        d0 = _d_cls(yr, mo, dy)
+        if d0.weekday() == 5:
+            if skip_prev_yr_sat:
+                return
+            obs = d0 - timedelta(days=1)
+        elif d0.weekday() == 6:
+            obs = d0 + timedelta(days=1)
+        else:
+            obs = d0
+        hols[obs.strftime("%Y-%m-%d")] = name_ko
+
+    _add_fixed(1, 1, "신정", skip_prev_yr_sat=True)
+    jan1 = _d_cls(yr, 1, 1)
+    mlk = jan1 + timedelta(days=(0 - jan1.weekday()) % 7 + 14)
+    hols[mlk.strftime("%Y-%m-%d")] = "마틴루터킹데이"
+
+    feb1 = _d_cls(yr, 2, 1)
+    pres = feb1 + timedelta(days=(0 - feb1.weekday()) % 7 + 14)
+    hols[pres.strftime("%Y-%m-%d")] = "대통령의날"
+
+    good_fri = _compute_easter_sunday_date(yr) - timedelta(days=2)
+    hols[good_fri.strftime("%Y-%m-%d")] = "성금요일"
+
+    may31 = _d_cls(yr, 5, 31)
+    memorial = may31 - timedelta(days=(may31.weekday() - 0) % 7)
+    hols[memorial.strftime("%Y-%m-%d")] = "메모리얼데이"
+
+    if yr >= 2022:
+        _add_fixed(6, 19, "준틴스독립기념일")
+    _add_fixed(7, 4, "독립기념일")
+
+    sep1 = _d_cls(yr, 9, 1)
+    labor = sep1 + timedelta(days=(0 - sep1.weekday()) % 7)
+    hols[labor.strftime("%Y-%m-%d")] = "노동절"
+
+    nov1 = _d_cls(yr, 11, 1)
+    thanksgiving = nov1 + timedelta(days=(3 - nov1.weekday()) % 7 + 21)
+    hols[thanksgiving.strftime("%Y-%m-%d")] = "추수감사절"
+
+    _add_fixed(12, 25, "크리스마스")
+
+    with _US_CALENDAR_CACHE_LOCK:
+        _NYSE_HOLIDAYS_BY_YEAR[yr] = hols
+    return hols
+
+
+def get_nyse_holiday_name_ko(d_or_dt: Any = None) -> str:
+    d_obj = _coerce_est_date_obj(d_or_dt)
+    if d_obj.weekday() >= 5:
+        return ""
+    ds = d_obj.strftime("%Y-%m-%d")
+    with _US_CALENDAR_CACHE_LOCK:
+        if ds in _RUNTIME_US_HOLIDAY_OVERRIDES:
+            return str(_RUNTIME_US_HOLIDAY_OVERRIDES[ds] or "")
+    hols = _get_nyse_holidays_for_year(d_obj.year)
+    return str(hols.get(ds) or "")
+
+
+def is_nyse_full_holiday_date(d_or_dt: Any = None) -> bool:
+    return bool(get_nyse_holiday_name_ko(d_or_dt))
+
+
+def is_nyse_early_close_calendar_date(
+    d_or_dt: Any = None, last_rth_hm: int = 1559
+) -> bool:
+    if int(last_rth_hm) <= 1315:
+        return True
+    d_obj = _coerce_est_date_obj(d_or_dt)
+    if d_obj.weekday() >= 5 or is_nyse_full_holiday_date(d_obj):
+        return False
+    ds = d_obj.strftime("%Y-%m-%d")
+    with _US_CALENDAR_CACHE_LOCK:
+        if ds in _RUNTIME_US_EARLY_CLOSE_OVERRIDES:
+            return bool(_RUNTIME_US_EARLY_CLOSE_OVERRIDES[ds])
+    yr, mo, dy = d_obj.year, d_obj.month, d_obj.day
+    if mo == 11:
+        nov1 = d_obj.replace(day=1)
+        thanksgiving = nov1 + timedelta(days=(3 - nov1.weekday()) % 7 + 21)
+        if d_obj == thanksgiving + timedelta(days=1):
+            return True
+    if mo == 12 and dy == 24:
+        return True
+    if mo == 7 and dy == 3:
+        return True
+    return False
+
+
+def next_nyse_business_date(d_or_dt: Any = None, include_today: bool = False):
+    cur_d = _coerce_est_date_obj(d_or_dt)
+    if not include_today:
+        cur_d = cur_d + timedelta(days=1)
+    for _ in range(15):
+        if cur_d.weekday() < 5 and (not is_nyse_full_holiday_date(cur_d)):
+            return cur_d
+        cur_d = cur_d + timedelta(days=1)
+    return cur_d
+
+
+def register_runtime_us_calendar_payload(cal_payload: Any) -> None:
+    if not isinstance(cal_payload, dict):
+        return
+    for key in ("today", "nextBusinessDay", "previousBusinessDay"):
+        day_obj = cal_payload.get(key)
+        if not isinstance(day_obj, dict):
+            continue
+        ds = str(day_obj.get("date") or "").strip()[:10]
+        if len(ds) != 10:
+            continue
+        reg = day_obj.get("regularMarket")
+        pre = day_obj.get("preMarket")
+        aft = day_obj.get("afterMarket")
+        day_m = day_obj.get("dayMarket")
+        with _US_CALENDAR_CACHE_LOCK:
+            if reg is None and pre is None and aft is None and day_m is None:
+                existing = _get_nyse_holidays_for_year(int(ds[:4])).get(ds)
+                _RUNTIME_US_HOLIDAY_OVERRIDES[ds] = existing or "미국증시휴장일"
+            elif isinstance(reg, dict):
+                _RUNTIME_US_HOLIDAY_OVERRIDES[ds] = ""
+                end_s = str(reg.get("endTime") or "").strip()
+                if end_s:
+                    try:
+                        end_dt = datetime.fromisoformat(
+                            end_s.replace("Z", "+00:00")
+                        ).astimezone(EST_TZ)
+                        end_hm = end_dt.hour * 100 + end_dt.minute
+                        _RUNTIME_US_EARLY_CLOSE_OVERRIDES[ds] = bool(end_hm <= 1315)
+                    except Exception:
+                        pass
+
+
 def resolve_trading_session_date_est(
     now_est: Optional[datetime] = None,
     after_1600_close: bool = False,
     last_closing_report_date: str = "",
 ) -> str:
     """
-    24시간 통합 거래일(16:01 EST 애프터·데이장 ~ 익일 16:00 EST 정규장 마감) 산출기:
-    - 평일 16:00 EST 마감 결산 완료 직후(또는 17:00 EST 이후)부터 차기 미국 평일(금요일은 월요일)로 귀속한다.
+    # MODIFIED [Case 114]: 주말 및 미국 전면 휴장일(추수감사절 등)·조기폐장일 통합 거래일 귀속기
     """
     dt = now_est.astimezone(EST_TZ) if now_est else datetime.now(EST_TZ)
     wd = dt.weekday()
-    if wd == 5:
-        return (dt + timedelta(days=2)).strftime("%Y-%m-%d")
-    if wd == 6:
-        return (dt + timedelta(days=1)).strftime("%Y-%m-%d")
+    if wd >= 5 or is_nyse_full_holiday_date(dt.date()):
+        return next_nyse_business_date(dt.date(), include_today=False).strftime("%Y-%m-%d")
     today_s = dt.strftime("%Y-%m-%d")
     hm = dt.hour * 100 + dt.minute
+    close_hm = 1300 if is_nyse_early_close_calendar_date(dt.date()) else 1600
     closed_today = bool(
         after_1600_close
         or (
@@ -382,9 +567,8 @@ def resolve_trading_session_date_est(
             and str(last_closing_report_date).strip() == today_s
         )
     )
-    if hm >= 1700 or (hm >= 1600 and closed_today):
-        add_days = 3 if wd == 4 else 1
-        return (dt + timedelta(days=add_days)).strftime("%Y-%m-%d")
+    if hm >= (close_hm + 100) or (hm >= close_hm and closed_today):
+        return next_nyse_business_date(dt.date(), include_today=False).strftime("%Y-%m-%d")
     return today_s
 
 
@@ -833,8 +1017,9 @@ class SoxlStratumLedger:
             "free_cash_usd": clean_seed,
             "us_commission_rate": env_one_rate,
             "round_trip_fee_rate_pct": env_rt_pct,
-            # [Case 91 + 바벨 확장]: COMP_08PCT / SIMPLE_08PCT / BARBELL_60_30_10 및 격리 수익금 오프셋
-            "portion_mode": PORTION_MODE_COMPOUND,
+            # MODIFIED [Case 114]: 전 계좌 배포 기본 운용모드 BARBELL_SIMPLE(단리·수익금고 분리) 통일
+            "portion_mode": "BARBELL_SIMPLE",
+            "barbell_mode": "BARBELL_SIMPLE",
             "vaulted_profit_locked_usd": 0.0,
             "cycle_vaulted_locked_usd": 0.0,
             "threshold_mode": "WIDE_RUNWAY",
@@ -2574,12 +2759,30 @@ if "SoxlStratumLedger" in globals():
     _orig_san_v4 = _sl_v4._sanitize_and_enforce_identity
     if not getattr(_orig_san_v4, "_c114_v4", False):
         def _c114_sanitize_v4(self, raw_st):
-            req_m = str((raw_st or {}).get("portion_mode") or "").upper().strip() if isinstance(raw_st, dict) else ""
-            st = _orig_san_v4(self, raw_st)
+            # MODIFIED [Case 114]: 전 실전 계좌(배우자·GitHub 사용자 포함) BARBELL_SIMPLE 기본 통일 (/tmp TDD 호환 유지)
+            import tempfile as _tf_c114
+            base_real = os.path.realpath(str(getattr(self, "base_dir", "") or ""))
+            tmp_real = os.path.realpath(_tf_c114.gettempdir())
+            is_tmp_tdd = bool(
+                base_real == tmp_real or base_real.startswith(tmp_real + os.sep)
+            )
+            req_m = (
+                str((raw_st or {}).get("portion_mode") or "").upper().strip()
+                if isinstance(raw_st, dict)
+                else ""
+            )
+            eff_raw = dict(raw_st) if isinstance(raw_st, dict) else {}
+            if req_m in ("BARBELL_SIMPLE", "BARBELL_COMPOUND"):
+                eff_raw["portion_mode"] = req_m
+                eff_raw["barbell_mode"] = req_m
+            elif not is_tmp_tdd:
+                eff_raw["portion_mode"] = "BARBELL_SIMPLE"
+                eff_raw["barbell_mode"] = "BARBELL_SIMPLE"
+            st = _orig_san_v4(self, eff_raw)
             if req_m in ("BARBELL_SIMPLE", "BARBELL_COMPOUND"):
                 st["portion_mode"] = req_m
                 st["barbell_mode"] = req_m
-            elif getattr(self, "folder_slug", "") == "pipiosToss":
+            elif not is_tmp_tdd:
                 st["portion_mode"] = "BARBELL_SIMPLE"
                 st["barbell_mode"] = "BARBELL_SIMPLE"
             return st

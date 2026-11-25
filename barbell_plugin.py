@@ -55,6 +55,9 @@ from toss_api import (
     generate_client_order_id,
     get_bot_base_dir,
     get_folder_slug,
+    get_nyse_holiday_name_ko,
+    is_nyse_early_close_calendar_date,
+    is_nyse_full_holiday_date,
     resolve_trading_session_date_est,
     safe_float,
     safe_int,
@@ -99,18 +102,22 @@ def is_sgov_regular_trading_window(
     now_est: Optional[datetime] = None,
 ) -> bool:
     """
-    SGOV 매매 허용 시간창 판별기:
-    오직 평일 미국 정규장(09:31 ~ 15:55 EST) 구간에서만 True 를 반환한다.
+    # MODIFIED [Case 114]: 미국 전면 휴장일 차단 및 조기폐장일(09:31 ~ 12:55 EST) 연동
     """
     dt = now_est.astimezone(EST_TZ) if now_est else datetime.now(EST_TZ)
-    if is_weekend_nyse_closed(dt) or dt.weekday() >= 5:
+    if (
+        is_weekend_nyse_closed(dt)
+        or dt.weekday() >= 5
+        or is_nyse_full_holiday_date(dt.date())
+    ):
         return False
     hm_val = (
         safe_int(hm, dt.hour * 100 + dt.minute)
         if hm is not None
         else (dt.hour * 100 + dt.minute)
     )
-    return SGOV_REG_START_HM <= hm_val <= SGOV_REG_END_HM
+    end_hm = 1255 if is_nyse_early_close_calendar_date(dt.date()) else SGOV_REG_END_HM
+    return SGOV_REG_START_HM <= hm_val <= end_hm
 
 
 def compute_barbell_seed_splits(
@@ -2633,13 +2640,21 @@ def summarize_barbell_status(
 
 def format_barbell_slim_radar_block(context: Any) -> str:
     """
-    /avwap, /sync, /settlement 하단에 결합되는 36자 칼맞춤 바벨 모드 & 격리 수익금고 요약 블록.
+    # MODIFIED [Case 114]: 바벨단리 / 바벨복리 구분 및 0주졸업 영구분리·복리운용시드 요약 블록
     """
     try:
         info = summarize_barbell_status(context)
         v_tot = safe_float(info.get("vault_realized_profit_usd"), 0.0)
         if not info.get("is_barbell_active") and v_tot <= 0.0:
             return ""
+
+        pm_s = str(info.get("portion_mode") or "").upper().strip()
+        if pm_s == "BARBELL_COMPOUND":
+            hdr_lbl = "바벨복리 60/30/10"
+        elif pm_s == "BARBELL_SIMPLE":
+            hdr_lbl = "바벨단리 60/30/10"
+        else:
+            hdr_lbl = "바벨 60/30/10"
 
         sgov_q = safe_int(info.get("sgov_held_qty"), 0)
         sgov_inv = safe_float(info.get("sgov_invested_usd"), 0.0)
@@ -2650,15 +2665,31 @@ def format_barbell_slim_radar_block(context: Any) -> str:
 
         sgov_note = f"{sgov_q}주(${sgov_inv:,.0f})"
         if pend_s > 0:
-            sgov_note += f"·매도예약{pend_s}"
+            sgov_note += f"·매도대기{pend_s}"
         elif pend_b > 0.0:
             sgov_note += f"·매수대기${pend_b:,.0f}"
+
+        if pm_s == "BARBELL_COMPOUND":
+            vault_line = (
+                f"🏦 복리운용시드: <b>${info['total_seed_usd']:,.2f}</b> "
+                f"(기격리금고 <b>+${v_tot:,.2f}</b> · <code>/barbell</code>)"
+            )
+        elif pm_s == "BARBELL_SIMPLE":
+            vault_line = (
+                f"🏦 별도수익금고: 누적 <b>+${v_tot:,.2f}</b> "
+                "(0주졸업 영구분리 · <code>/barbell</code>)"
+            )
+        else:
+            vault_line = (
+                f"🏦 별도수익금고: 누적 <b>+${v_tot:,.2f}</b> "
+                f"(가용 <b>${v_avail:,.2f}</b> · <code>/barbell</code>)"
+            )
 
         return "\n".join(
             [
                 "──────────────",
-                f"⚖️ <b>[바벨 60/30/10]</b> SGOV <b>{sgov_note}</b> · 대기현금 <b>${cash_b:,.0f}</b>",
-                f"🏦 별도수익금고: 누적 <b>+${v_tot:,.2f}</b> (가용 <b>${v_avail:,.2f}</b> · <code>/barbell</code>)",
+                f"⚖️ <b>[{hdr_lbl}]</b> SGOV <b>{sgov_note}</b> · 대기현금 <b>${cash_b:,.0f}</b>",
+                vault_line,
             ]
         )
     except Exception:
@@ -2667,61 +2698,176 @@ def format_barbell_slim_radar_block(context: Any) -> str:
 
 async def build_barbell_detail_dashboard_html(context: Any) -> str:
     """
-    /barbell 명령어 호출 시 표출되는 바벨 모드 60/30/10 및 별도 수익금고 상세 관제 보드.
+    # MODIFIED [Case 114]: 스나이퍼 전원 OFF 동기화 · 휴장/조기폐장 배지 · v6 원장 정밀 일치화
     """
     now_est = datetime.now(EST_TZ)
+    sg_p = 0.0
     if context is not None and hasattr(context, "api"):
         try:
-            sg_p = await context.api.get_current_price(BARBELL_SAFE_SYMBOL)
+            sg_p = safe_float(
+                await context.api.get_current_price(BARBELL_SAFE_SYMBOL), 0.0
+            )
             if sg_p > 1.0:
                 await ensure_barbell_ledger(context).update_state(
                     sgov_last_price=round(sg_p, 4)
                 )
         except Exception:
-            pass
+            sg_p = 0.0
+
+    live_assn_on = False
+    if context is not None:
+        try:
+            from assassin_plugin import is_live_assassin_standalone_active
+
+            live_assn_on = bool(is_live_assassin_standalone_active(context))
+        except Exception:
+            live_assn_on = False
 
     st_soxl = (
         context.ledger.get_state(TARGET_SYMBOL)
         if (context is not None and hasattr(context, "ledger"))
         else {}
     )
+    pm_pre = str(st_soxl.get("portion_mode") or "").upper().strip()
+    if (
+        context is not None
+        and hasattr(context, "ledger")
+        and (not live_assn_on)
+        and pm_pre in ("BARBELL_SIMPLE", "BARBELL_COMPOUND")
+    ):
+        v6_pend = st_soxl.get("v6_pending_order")
+        if not (isinstance(v6_pend, dict) and str(v6_pend.get("order_id") or "").strip()):
+            try:
+                from soxl_v6_barbell_engine import (
+                    apply_v6_mirror_to_legacy_ledgers,
+                    get_shared_pipios_v6_engine,
+                )
+
+                v6_eng = get_shared_pipios_v6_engine(context, legacy_st=st_soxl)
+                if sg_p > 1.0:
+                    v6_eng.sgov_share_px = round(sg_p, 4)
+                    v6_eng.sgov_val = float(v6_eng.sgov_shares) * v6_eng.sgov_share_px
+                st_soxl, _ = await apply_v6_mirror_to_legacy_ledgers(
+                    context, v6_eng, save_v6_disk=False
+                )
+            except Exception:
+                pass
+
     info = summarize_barbell_status(context, st_soxl=st_soxl)
-    # MODIFIED [Case 114]: 바벨단리(BARBELL_SIMPLE) · 바벨복리(BARBELL_COMPOUND) 상태 및 코어19%[전체11.4%] 표기
     pm_bd = str(info.get("portion_mode") or "").upper().strip()
-    if info["is_barbell_active"]:
+    is_v6_bd = pm_bd in ("BARBELL_SIMPLE", "BARBELL_COMPOUND")
+    bot_is_active = bool(st_soxl.get("is_active", True))
+
+    if live_assn_on:
+        active_str = "🔥 실전암살자 단독위임중 (바벨 신규매매 잠금)"
+    elif info["is_barbell_active"]:
+        pwr_tag = "🟢 가동중" if bot_is_active else "🔴 일시정지 (OFF)"
         if pm_bd == "BARBELL_COMPOUND":
-            active_str = "🟢 가동중 (BARBELL_COMPOUND · 바벨복리)"
+            active_str = f"{pwr_tag} · BARBELL_COMPOUND (바벨복리)"
         elif pm_bd == "BARBELL_SIMPLE":
-            active_str = "🟢 가동중 (BARBELL_SIMPLE · 바벨단리)"
+            active_str = f"{pwr_tag} · BARBELL_SIMPLE (바벨단리)"
         else:
-            active_str = "🟢 가동중 (BARBELL_60_30_10)"
+            active_str = f"{pwr_tag} · BARBELL_60_30_10"
     else:
         active_str = "⚪ 대기중 (타 모드 운용중 · 금고 보존)"
+
     pct_tag_bd = (
-        "코어19%[전체11.4%]"
-        if pm_bd in ("BARBELL_SIMPLE", "BARBELL_COMPOUND")
-        else "코어15%[전체9%]"
+        "코어19%·시드11.4%" if is_v6_bd else "코어15%·시드9%"
     )
+    hol_ko = get_nyse_holiday_name_ko(now_est.date())
+    is_early_sg = is_nyse_early_close_calendar_date(now_est.date())
+    sg_end_lbl = "12:55" if is_early_sg else "15:55"
     in_reg = is_sgov_regular_trading_window(now_est=now_est)
-    reg_badge = "🟢정규장 개방" if in_reg else "🔒정규장 외 대기(09:31~15:55)"
+    if hol_ko:
+        reg_badge = f"🛑미국휴장({_esc(hol_ko)})"
+    elif is_weekend_nyse_closed(now_est) or now_est.weekday() >= 5:
+        reg_badge = "🛑주말휴장(월 09:31 개방)"
+    elif in_reg:
+        reg_badge = f"🟢정규장 개방(09:31 ~ {sg_end_lbl})"
+    else:
+        reg_badge = f"🔒정규장 외 대기(09:31 ~ {sg_end_lbl})"
+
+    raw_bks = st_soxl.get("buckets") if isinstance(st_soxl.get("buckets"), list) else []
+    soxl_inv_now = round(
+        sum(
+            safe_float(b.get("actual_cost_usd"), 0.0)
+            for b in raw_bks
+            if isinstance(b, dict)
+        ),
+        2,
+    )
+    soxl_free_now = round(max(0.0, safe_float(st_soxl.get("free_cash_usd"), 0.0)), 2)
+    cyc_net_now = safe_float(st_soxl.get("cycle_realized_net_usd"), 0.0)
+    cyc_sign_b = "+" if cyc_net_now >= 0.0 else "-"
+    comp_cyc_cnt = max(
+        safe_int(info.get("completed_barbell_cycles"), 0),
+        safe_int(st_soxl.get("completed_main_cycles"), 0),
+    )
+
+    if pm_bd == "BARBELL_COMPOUND":
+        seed_hdr_line = (
+            f"💵 기준원금: <b>${info['user_seed_usd']:,.2f}</b> | "
+            f"복리운용시드: <b>${info['total_seed_usd']:,.2f}</b>"
+        )
+    else:
+        seed_hdr_line = (
+            f"💵 설정 기준시드: <b>${info['user_seed_usd']:,.2f}</b> "
+            "(0주 졸업 시 원금 초과익 금고분리)"
+        )
 
     lines = [
         "⚖️ <b>[인피니트 스노우볼 · 바벨(60/30/10) 관제 보드]</b>",
         f"⚙️ 상태: <b>{active_str}</b>",
-        f"💵 설정 기준시드: <b>${info['total_seed_usd']:,.2f}</b>",
+        seed_hdr_line,
         "━━━━━━━━━━━━━━━━━━",
         "📊 <b>[60 / 30 / 10 목표 배분 및 현재 잔고]</b>",
-        f"① 🐂 SOXL 코어(60%): 목표 <b>${info['soxl_seed_60_usd']:,.2f}</b> (1회분 {pct_tag_bd} = <b>${info['soxl_portion_8pct_usd']:,.2f}</b>)",
-        f"② 🛡️ SGOV 버킷(30%): 보유 <b>{info['sgov_held_qty']}주</b> (원금 <b>${info['sgov_invested_usd']:,.2f}</b> · 현재가 ${info['sgov_last_price']:.2f})",
-        f"   ▫️ SGOV 세션: {reg_badge} | 매수예약 <b>${info['pending_sgov_buy_budget_usd']:,.0f}</b> · 매도예약 <b>{info['pending_sgov_tranche_sells']}건</b>(금번 {info['sgov_tranche_sells_done_cycle']}/3회)",
-        f"③ 💵 보호 현금버킷(기본10%·최대40%): 현재 <b>${info['cash_bucket_usd']:,.2f}</b> (기수혈 ${info['cash_injected_to_soxl_usd']:,.0f} · 미졸업 환수현금 보존 ➔ 0주졸업시 SGOV전환)",
+        (
+            f"① 🐂 SOXL 코어(60%): 목표 <b>${info['soxl_seed_60_usd']:,.2f}</b> · "
+            f"투입원금 <b>${soxl_inv_now:,.2f}</b> (코어현금 <b>${soxl_free_now:,.2f}</b>)"
+        ),
+        (
+            f"   ▫️ 1회 타격정량({pct_tag_bd}): <b>${info['soxl_portion_8pct_usd']:,.2f}</b>"
+        ),
+        (
+            f"② 🛡️ SGOV 버킷(30%): 보유 <b>{info['sgov_held_qty']}주</b> "
+            f"(원금 <b>${info['sgov_invested_usd']:,.2f}</b> · 현재가 ${info['sgov_last_price']:.2f})"
+        ),
+        (
+            f"   ▫️ SGOV 세션: {reg_badge} | 매수대기 <b>${info['pending_sgov_buy_budget_usd']:,.0f}</b> · "
+            f"매도대기 <b>{info['pending_sgov_tranche_sells']}건</b> (0주졸업시 30%원복)"
+        ),
+        (
+            f"③ 💵 예비 현금버킷(기본10%): 현재 <b>${info['cash_bucket_usd']:,.2f}</b> "
+            f"(SOXL 수혈사용 <b>${info['cash_injected_to_soxl_usd']:,.2f}</b>)"
+        ),
         "━━━━━━━━━━━━━━━━━━",
         "🏦 <b>[별도 실현수익금고 (일반 매매/리밸런싱 100% 사용 금지)]</b>",
-        f"• 누적 격리수익: <b>+${info['vault_realized_profit_usd']:,.2f}</b> (0주졸업 {info['completed_barbell_cycles']}회 · 환수금 현금보존·0주 SGOV원복)",
-        f"• 금고 가용잔액: <b>${info['vault_available_usd']:,.2f}</b> | 40%소진 긴급대여: <b>${info['vault_injected_to_soxl_usd']:,.2f}</b>",
-        f"• 금일 격리수익: <b>+${info['daily_vaulted_profit_usd']:,.2f}</b> | 이번구간 격리: <b>+${info['cycle_vaulted_profit_usd']:,.2f}</b>",
-        f"🕒 {now_est.strftime('%m-%d %H:%M:%S EST')}",
     ]
+    if pm_bd == "BARBELL_COMPOUND":
+        lines.extend(
+            [
+                "• 운용규칙: <b>0주 졸업 시 실현수익 60:30:10 자동 복리 재투자</b> (기격리 금고 보존)",
+                f"• 기격리 수익금고: <b>+${info['vault_realized_profit_usd']:,.2f}</b> (누적 졸업 {comp_cyc_cnt}회)",
+                f"• 진행중 사이클익: <b>{cyc_sign_b}${abs(cyc_net_now):,.2f}</b> (0주 졸업 시 운용시드 산입)",
+            ]
+        )
+    elif is_v6_bd:
+        lines.extend(
+            [
+                f"• 누적 격리금고: <b>+${info['vault_realized_profit_usd']:,.2f}</b> (0주졸업 {comp_cyc_cnt}회 · 영구분리·매매침범 금지)",
+                f"• 금일 격리확정: <b>+${info['daily_vaulted_profit_usd']:,.2f}</b>",
+                f"• 진행중 사이클익: <b>{cyc_sign_b}${abs(cyc_net_now):,.2f}</b> (0주 전량졸업 확정 시 원금초과분 격리)",
+            ]
+        )
+    else:
+        lines.extend(
+            [
+                f"• 누적 격리수익: <b>+${info['vault_realized_profit_usd']:,.2f}</b> (0주졸업 {comp_cyc_cnt}회)",
+                f"• 금고 가용잔액: <b>${info['vault_available_usd']:,.2f}</b> | 긴급대여: <b>${info['vault_injected_to_soxl_usd']:,.2f}</b>",
+                f"• 금일 격리수익: <b>+${info['daily_vaulted_profit_usd']:,.2f}</b> | 이번구간 격리: <b>+${info['cycle_vaulted_profit_usd']:,.2f}</b>",
+            ]
+        )
+    lines.append(f"🕒 {now_est.strftime('%m-%d %H:%M:%S EST')}")
     return "\n".join(lines)
 
 

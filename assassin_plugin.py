@@ -50,6 +50,8 @@ from toss_api import (
     DEFAULT_INITIAL_SEED_USD,
     DEFAULT_US_COMMISSION_RATE,
     EST_TZ,
+    get_nyse_holiday_name_ko,
+    is_nyse_full_holiday_date,
     GlobalThrottle,
     KRW_PER_USD_DEFAULT,
     LOCKED_BUY_INTERVAL_MIN,
@@ -5713,6 +5715,11 @@ async def execute_simulated_assassin_tick_plugin(
         if context is not None:
             context.assassin_high_freq_active = False
         return "WEEKEND_CLOSED"
+    # NEW [Case 114]: 평일 미국 증시 전면 휴장일(추수감사절 등) 정찰/무매매 카운트 오염 차단
+    if is_nyse_full_holiday_date(dt_now.date()):
+        if context is not None:
+            context.assassin_high_freq_active = False
+        return "HOLIDAY_CLOSED"
 
     hm = dt_now.hour * 100 + dt_now.minute
     today_str = dt_now.strftime("%Y-%m-%d")
@@ -6526,7 +6533,14 @@ def format_assassin_slim_radar_block(
                 f"🕵️정찰중(현 {scouts_cnt}명·누적 {day_seq}명·10G×T03_A)"
             )
         else:
-            status_line = "⏳04:07 정찰대기 (10G×T03_A 상시ON)"
+            dt_sl = datetime.now(EST_TZ)
+            hol_sl = get_nyse_holiday_name_ko(dt_sl.date())
+            if hol_sl:
+                status_line = f"🛑미국휴장({_esc(hol_sl)}) · 차기영업일 04:07 대기"
+            elif is_weekend_nyse_closed(dt_sl) or dt_sl.weekday() >= 5:
+                status_line = "🛑주말휴장 · 월요일 04:07 정찰대기"
+            else:
+                status_line = "⏳04:07 정찰대기 (10G×T03_A 상시ON)"
 
         return "\n".join(
             [
@@ -6735,6 +6749,13 @@ async def build_assassin_detail_dashboard_html(
         gt_state_str = (
             f"🔥 <b>#{gs_r}회차({_esc(gs_gid)}) 출동중</b> : <b>${gs_ep:.2f}</b> ➔ 목표 <b>${gs_tp:.2f}</b> (현 {gs_g:+.2f}%)"
         )
+    elif get_nyse_holiday_name_ko(now_est.date()):
+        gt_state_str = (
+            f"🛑 <b>미국증시 전면휴장 ({_esc(get_nyse_holiday_name_ko(now_est.date()))})</b> · "
+            "차기 영업일 04:07 EST 개시"
+        )
+    elif is_weekend_nyse_closed(now_est) or now_est.weekday() >= 5:
+        gt_state_str = "🛑 <b>주말 휴장</b> · 월요일 04:07 EST 골든타임 개시"
     elif (
         bool(st.get("gt_gate_scout_done", False))
         or hm_now >= ASSASSIN_MACRO_CUTOFF_HM
@@ -6821,6 +6842,7 @@ async def build_assassin_detail_dashboard_html(
             f"• 🔥 실전 누적순익: <b>{l_cum:+,.2f}$</b> (실전출격 {safe_int(st.get('live_trade_days'), 0)}일)",
             f"• 💵 모의단리 순익: <b>{s_cum:+,.2f}$</b> (<b>{s_roi:+.2f}%</b>)",
             f"• 📈 모의복리 순익: <b>{c_cum:+,.2f}$</b> (<b>{c_roi:+.2f}%</b> · MDD <b>{safe_float(st.get('comp_max_dd_pct'), 0.0):.2f}%</b>)",
+            f"🕒 {now_est.strftime('%m-%d %H:%M:%S EST')}",
         ]
     )
     return "\n".join(lines)

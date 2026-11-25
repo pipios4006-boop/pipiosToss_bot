@@ -89,6 +89,8 @@ from toss_api import (
     EST_TZ,
     TARGET_SYMBOL,
     get_folder_slug,
+    is_nyse_early_close_calendar_date,
+    is_nyse_full_holiday_date,
     resolve_trading_session_date_est,
     safe_float,
     safe_int,
@@ -354,6 +356,8 @@ async def reconcile_stratum_with_broker_holdings_plugin(
         str(st.get("portion_mode") or PORTION_MODE_COMPOUND).upper().strip()
     )
     is_barbell = is_barbell_mode(portion_mode)
+    # NEW [Case 114]: BARBELL_COMPOUND 수동 매도 시 수익을 분리금고가 아닌 복리 시드로 귀속
+    is_barbell_vault_lock = bool(is_barbell and portion_mode != "BARBELL_COMPOUND")
     is_simple_mode = (not is_barbell) and is_simple_income_mode(portion_mode)
 
     if is_barbell:
@@ -660,11 +664,11 @@ async def reconcile_stratum_with_broker_holdings_plugin(
         )
         next_vault_locked = (
             round(prev_vault_locked + vault_delta_z, 4)
-            if is_barbell
+            if is_barbell_vault_lock
             else prev_vault_locked
         )
         final_cyc_v_locked = (
-            round(prev_cyc_vz + vault_delta_z, 4) if is_barbell else 0.0
+            round(prev_cyc_vz + vault_delta_z, 4) if is_barbell_vault_lock else 0.0
         )
 
         final_cyc_net = round(prev_cyc_z + net_pnl, 4)
@@ -827,7 +831,7 @@ async def reconcile_stratum_with_broker_holdings_plugin(
         if is_barbell:
             b_rec = await record_barbell_realized_profit(
                 context=context,
-                net_pnl_usd=vault_delta_z,  # MODIFIED: 유령현금 이중계상 차단
+                net_pnl_usd=(vault_delta_z if is_barbell_vault_lock else 0.0),  # MODIFIED [Case 114]
                 is_graduated_zero=True,
                 prev_soxl_injected_usd=cur_inj_res_usd,
                 prev_soxl_used_portions_cnt=cur_used_res_cnt,
@@ -1821,11 +1825,11 @@ async def reconcile_stratum_with_broker_holdings_plugin(
     )
     next_vault_locked_p = (
         round(prev_vault_locked_p + vault_delta_p, 4)
-        if is_barbell
+        if is_barbell_vault_lock
         else prev_vault_locked_p
     )
     cur_cyc_vp = (
-        round(prev_cyc_vp + vault_delta_p, 4) if is_barbell else 0.0
+        round(prev_cyc_vp + vault_delta_p, 4) if is_barbell_vault_lock else 0.0
     )
 
     cur_cyc_gross = round(
@@ -1996,7 +2000,7 @@ async def reconcile_stratum_with_broker_holdings_plugin(
     if is_barbell:
         b_rec_p = await record_barbell_realized_profit(
             context=context,
-            net_pnl_usd=vault_delta_p,  # MODIFIED: 유령현금 이중계상 차단
+            net_pnl_usd=(vault_delta_p if is_barbell_vault_lock else 0.0),  # MODIFIED [Case 114]
             is_graduated_zero=False,
             prev_soxl_injected_usd=safe_float(
                 st.get("injected_reserve_usd"), 0.0
@@ -2137,6 +2141,9 @@ async def execute_0400_premarket_stabilization_plugin(
 ) -> Dict[str, Any]:
     dt_now = now_est.astimezone(EST_TZ) if now_est else datetime.now(EST_TZ)
     today_str = dt_now.strftime("%Y-%m-%d")
+    # NEW [Case 114]: 미국 증시 전면 휴장일 04:00 오프닝 스킵
+    if is_nyse_full_holiday_date(dt_now.date()):
+        return {"status": "SKIP_US_HOLIDAY", "date": today_str}
 
     st_pre = context.ledger.get_state(TARGET_SYMBOL)
     has_pending_pre = bool(
@@ -2330,8 +2337,12 @@ async def execute_1600_daily_closing_settlement_plugin(
     now_est: Optional[datetime] = None,
 ) -> Dict[str, Any]:
     dt_now = now_est.astimezone(EST_TZ) if now_est else datetime.now(EST_TZ)
+    # MODIFIED [Case 114]: 전면 휴장일 마감 결산 스킵 & 조기폐장일(13:00 EST) 결산 창 연동
+    if is_nyse_full_holiday_date(dt_now.date()):
+        return {"status": "SKIP_US_HOLIDAY", "date": dt_now.strftime("%Y-%m-%d")}
     hm = dt_now.hour * 100 + dt_now.minute
-    if not (1600 <= hm <= 1659):
+    close_start_hm = 1300 if is_nyse_early_close_calendar_date(dt_now.date()) else 1600
+    if not (close_start_hm <= hm <= 1659):
         return {"status": "NOT_CLOSING_WINDOW"}
 
     today_str = dt_now.strftime("%Y-%m-%d")

@@ -146,7 +146,13 @@ from quant_engine_core import (
     safe_bucket_lot_count,
     set_runtime_round_trip_fee_rate_pct,
 )
-from toss_api import EST_TZ, safe_float, safe_int
+from toss_api import (
+    EST_TZ,
+    is_nyse_early_close_calendar_date,
+    is_nyse_full_holiday_date,
+    safe_float,
+    safe_int,
+)
 
 logger = logging.getLogger("toss_sniper.quant_engine")
 
@@ -1929,7 +1935,16 @@ def summarize_stratum_portfolio(
         or wd_sum == 5
         or (wd_sum == 6 and hm_now < 1800)
     )
-    is_rth_sum = bool((not wknd_sum) and wd_sum < 5 and (930 <= hm_now <= 1559))
+    # MODIFIED [Case 114]: 미국 공휴일 및 조기폐장일(13:00 EST 마감) 시간외 +4.0% 전환 동기화
+    hol_sum = is_nyse_full_holiday_date(dt_now.date())
+    early_sum = is_nyse_early_close_calendar_date(dt_now.date())
+    rth_end_sum = 1259 if early_sum else 1559
+    is_rth_sum = bool(
+        (not wknd_sum)
+        and (not hol_sum)
+        and wd_sum < 5
+        and (930 <= hm_now <= rth_end_sum)
+    )
     v6_is_extended_session = bool(not is_rth_sum)
     v6_active_tp_pct = (
         v6_ext_tp_pct if v6_is_extended_session else v6_rth_tp_pct
@@ -3013,6 +3028,14 @@ def run_quant_engine_tdd_case113() -> bool:
             s_after = summarize_stratum_portfolio(c114_7t_st, live_price=33.30, now_est=dt_ext_after)
             s_pre = summarize_stratum_portfolio(c114_7t_st, live_price=33.30, now_est=dt_ext_pre)
             s_rth = summarize_stratum_portfolio(c114_7t_st, live_price=33.30, now_est=dt_rth_mid)
+            dt_thanksgiving = datetime(2026, 11, 26, 11, 0, 0, tzinfo=EST_TZ)
+            dt_bf_after_early = datetime(2026, 11, 27, 13, 15, 0, tzinfo=EST_TZ)
+            s_hol = summarize_stratum_portfolio(c114_7t_st, live_price=33.30, now_est=dt_thanksgiving)
+            s_bf_ext = summarize_stratum_portfolio(c114_7t_st, live_price=33.30, now_est=dt_bf_after_early)
+            assert (
+                s_hol["v6_is_extended_session"] is True
+                and abs(s_bf_ext["l1_target_price"] - 43.21) < 1e-6
+            ), f"Case 114 추수감사절/조기폐장 검증 실패: {s_hol['v6_is_extended_session']}, {s_bf_ext['l1_target_price']}"
             assert (
                 s_after["is_barbell_mode"] is True
                 and s_after["is_case114_v6_mode"] is True

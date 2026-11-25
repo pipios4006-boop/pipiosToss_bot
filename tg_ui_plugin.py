@@ -406,11 +406,11 @@ def _format_multi_grid_stratum_lines(
                 )
             elif v6_is_ext:
                 lines.append(
-                    "⚪ <b>[본그리드: 0주]</b> 🔒장외 매수잠금 · T-1h(14:59) 첫 진입 대기"
+                    "⚪ <b>[본그리드: 0주]</b> 🔒장외 매수잠금 · 차기 정규 T-1h 첫 진입 대기"
                 )
             else:
                 lines.append(
-                    "⚪ <b>[본그리드: 0주]</b> ⏳정규 T-1h(14:59) 첫 1층 진입 대기"
+                    "⚪ <b>[본그리드: 0주]</b> ⏳정규 T-1h 단발 첫 1층 진입 대기"
                 )
             return lines
 
@@ -1064,11 +1064,17 @@ def build_avwap_radar_message(
         else ("🟢 가동중" if is_active else "🔴 정지중")
     )
     if is_c114_v6:
-        mode_badge = (
-            f"⚡정규T-1h·{p_mode_short}"
-            if bool(v6_sess.get("is_rth"))
-            else f"{v6_sess['ext_icon']}장외+4%감시·{p_mode_short}"
-        )
+        if bool(v6_sess.get("is_holiday_closed")):
+            mode_badge = (
+                f"🛑휴장({escape_html(str(v6_sess.get('holiday_name_ko') or '공휴일'))})·{p_mode_short}"
+            )
+        elif bool(v6_sess.get("is_weekend_closed")):
+            mode_badge = f"🛑주말휴장·{p_mode_short}"
+        elif bool(v6_sess.get("is_rth")):
+            early_hdr = "(조기)" if bool(v6_sess.get("is_early_close")) else ""
+            mode_badge = f"⚡정규T-1h{early_hdr}·{p_mode_short}"
+        else:
+            mode_badge = f"{v6_sess['ext_icon']}장외+4%감시·{p_mode_short}"
     else:
         mode_badge = (
             f"🌃장외감시·{p_mode_short}"
@@ -1137,31 +1143,44 @@ def build_avwap_radar_message(
             f"🚨 <b>[시드고갈 대기]</b> 권장입금 <b>${req_dep_usd:,.0f}</b> (잔여 {avail_res_cnt}/{max_res_cnt}회)"
         )
     elif is_c114_v6:
-        if not bool(v6_sess.get("is_rth")):
+        pwr_off_note = " · 🔴전원OFF" if not is_active else ""
+        if bool(v6_sess.get("is_holiday_closed")):
+            hol_lbl = escape_html(str(v6_sess.get("holiday_name_ko") or "미국공휴일"))
+            shield_line = (
+                f"🛑 <b>[미국증시 전면휴장 ({hol_lbl})]</b> "
+                f"차기 <b>{escape_html(str(v6_sess.get('next_t1h_short') or '14:59 T-1h'))}</b> 대기{pwr_off_note}"
+            )
+        elif bool(v6_sess.get("is_weekend_closed")):
+            shield_line = (
+                "🛑 <b>[주말 휴장 · 일요일 18:00 데이장 개방]</b> "
+                f"차기 <b>{escape_html(str(v6_sess.get('next_t1h_short') or '월 14:59 T-1h'))}</b> 대기{pwr_off_note}"
+            )
+        elif not bool(v6_sess.get("is_rth")):
             if held_sh > 0:
                 l1_ext_t = safe_float(summary.get("l1_target_price"), 0.0)
                 shield_line = (
                     f"{v6_sess['ext_icon']} <b>[{v6_sess['ext_name']} +4.0% 전층 개별스윕]</b> "
-                    f"1층목표 <b>${l1_ext_t:.2f}</b> (매수잠금)"
+                    f"1층목표 <b>${l1_ext_t:.2f}</b> (매수잠금{pwr_off_note})"
                 )
             else:
                 shield_line = (
                     f"{v6_sess['ext_icon']} <b>[{v6_sess['ext_name']} 매수잠금]</b> "
-                    f"차기 <b>{escape_html(str(v6_sess.get('next_t1h_short') or '14:59 T-1h'))}</b> 진입 대기"
+                    f"차기 <b>{escape_html(str(v6_sess.get('next_t1h_short') or '14:59 T-1h'))}</b> 진입 대기{pwr_off_note}"
                 )
         elif bool(v6_sess.get("is_pre_t1h")):
             shield_line = (
                 f"⏳ <b>[정규장 장중 무매매 관망]</b> "
-                f"<b>{v6_sess['t1h_hm_str']} EST</b> T-1h +1.0% 단발 대기"
+                f"<b>{v6_sess['t1h_hm_str']} EST</b> T-1h +1.0% 단발 대기{pwr_off_note}"
             )
         elif bool(v6_sess.get("is_t1h_bar")):
             shield_line = (
                 f"⚡ <b>[T-1h({v6_sess['t1h_hm_str']}) 단발 판정중]</b> "
-                "+1.0% 스윕익절 &amp; 다단 추매 검문"
+                f"+1.0% 스윕익절 &amp; 다단 추매 검문{pwr_off_note}"
             )
         else:
+            aft_hm_lbl = "13:00" if bool(v6_sess.get("is_early_close")) else "16:00"
             shield_line = (
-                "🌇 <b>[금일 T-1h 판정완료]</b> 16:00 애프터장 +4.0% 스윕 전환 대기"
+                f"🌇 <b>[금일 T-1h 판정완료]</b> {aft_hm_lbl} 애프터장 +4.0% 스윕 전환 대기{pwr_off_note}"
             )
     elif is_ext_sell_only:
         c37 = safe_int(summary.get("inv_3_7_tier_count"), 0)
@@ -2315,6 +2334,30 @@ class TelegramCommandController:
         self.context.candle_metrics_cache[TARGET_SYMBOL] = met
         if live_p <= 0.0:
             live_p = safe_float(met.get("live_price"), 0.0)
+        try:
+            if not is_live_assassin_standalone_active(self.context):
+                st_chk = self.context.ledger.get_state(TARGET_SYMBOL)
+                pm_chk = str(st_chk.get("portion_mode") or "").upper().strip()
+                v6_pend = st_chk.get("v6_pending_order")
+                if pm_chk in ("BARBELL_SIMPLE", "BARBELL_COMPOUND") and not (
+                    isinstance(v6_pend, dict)
+                    and str(v6_pend.get("order_id") or "").strip()
+                ):
+                    from soxl_v6_barbell_engine import (
+                        apply_v6_mirror_to_legacy_ledgers,
+                        ensure_v6_sma120_from_broker_1d,
+                        get_shared_pipios_v6_engine,
+                    )
+
+                    v6_e = get_shared_pipios_v6_engine(
+                        self.context, legacy_st=st_chk
+                    )
+                    await ensure_v6_sma120_from_broker_1d(self.context, v6_e)
+                    await apply_v6_mirror_to_legacy_ledgers(
+                        self.context, v6_e, save_v6_disk=False
+                    )
+        except Exception:
+            pass
         return live_p, met
 
     async def _render_and_send_avwap(
@@ -3354,9 +3397,9 @@ _orig_c113_fmt_pct_tag = _format_mode_portion_pct_tag
 def _format_mode_portion_pct_tag(portion_mode: Any, full_barbell_note: bool = False) -> str:
     m_u = str(portion_mode or '').upper().strip()
     if m_u == 'BARBELL_COMPOUND':
-        return '바벨복리 코어 19%(=시드 11.4%)' if full_barbell_note else '11.4%(바벨복리)'
+        return '바벨복리 코어19%·시드11.4%' if full_barbell_note else '코어19%·11.4%'
     if m_u in ('BARBELL_SIMPLE', 'BARBELL_60_30_10', 'BARBELL'):
-        return '바벨단리 코어 19%(=시드 11.4%)' if full_barbell_note else '11.4%(바벨단리)'
+        return '바벨단리 코어19%·시드11.4%' if full_barbell_note else '코어19%·11.4%'
     return _orig_c113_fmt_pct_tag(portion_mode, full_barbell_note=full_barbell_note)
 
 # [C114_TGU_V2]
@@ -3381,8 +3424,8 @@ def _c114_patch_ui(ui_self, text, rm):
         for row in rm.get("inline_keyboard", []):
             for b in (row if isinstance(row, list) else []):
                 if isinstance(b, dict) and "callback_data" in b:
-                    cb, bt = str(b.get("callback_data") or "").lower(), str(b.get("text") or "")
-                    if ("mode" in cb or "모드" in bt or "바벨" in bt) and not any(x in cb for x in ("primer", "assassin", "assn")) and "암살" not in bt:
+                    cb = str(b.get("callback_data") or "").lower().strip()
+                    if cb == "toggle_portion_mode":
                         b["text"] = blb
     return text, rm
 
@@ -3499,11 +3542,14 @@ def build_settlement_control_message(st, live_price: float = 0.0, now_est=None, 
         m_str = "⚖️📈 바벨(복리 · 0주 졸업 시 60:30:10 재투자)" if is_c else "⚖️💵 바벨(단리 · 수익금고 영구분리) [기본]"
         sma_v = eng.get_current_sma120()
         sma_s = f"${sma_v:,.2f}" if sma_v else "대기"
+        dt_st_v6 = now_est.astimezone(EST_TZ) if now_est else datetime.now(EST_TZ)
+        v6_s_st = resolve_case114_v6_session_info(dt_st_v6)
+        t1h_lbl_st = "11:59·조기폐장" if bool(v6_s_st.get("is_early_close")) else "14:59"
         v6_spec = (
             f"2️⃣ 운용 정량모드: <b>{m_str}</b> (<code>/mode</code>)\n"
-            f"   ▫️ 타점/출구 [v6.0]: <b>T-1h(14:59) +1.0% · 장외 +4.0% 스윕 · L2+L7 병합</b>\n"
+            f"   ▫️ 타점/출구 [v6.0]: <b>T-1h({t1h_lbl_st}) +1.0% · 장외 +4.0% 스윕 · L2+L7 병합</b>\n"
             f"   ▫️ 진공탈출 스위치: <b>COND_SMA120({sma_s}) · 무매매 {eng.consecutive_no_trade_days}/5일</b>\n"
-            f"   ▫️ 1회 타격(11.4%): <b>${eng.tranche_stock:,.0f}</b> | 분리금고: <b>${eng.separated_profit_cash:,.2f}</b>"
+            f"   ▫️ 차기 T-1h 검문: <b>{escape_html(str(v6_s_st.get('next_t1h_str') or '14:59 EST'))}</b>"
         )
         out_lines = []
         skip_sub = False

@@ -1,9 +1,8 @@
 # -*- coding: utf-8 -*-
 """
-# NEW: Case 114 — SOXL Sniper Ultimate v6.0 바벨 전용 상태머신 (BARBELL_SIMPLE 기본 ⇄ BARBELL_COMPOUND 토글)
-배치 경로: /home/pipiosToss/soxl_v6_barbell_engine.py
+# MODIFIED: Case 114 — SOXL Sniper Ultimate v6.0 바벨 전용 상태머신 (전 계좌 통일 배포 정본)
 절대 규율:
-  1) /home/pipiosToss 전용 운용 (/home/wonToss 접근 영구 차단 · /home/pipios4006 쓰기 영구 차단)
+  1) 각 실행 폴더(pipiosToss · wonToss · 외부 GitHub 서버) 동적 격리 운용 (/home/pipios4006 마스터 데이터 쓰기만 영구 차단)
   2) 순수현금 모드 영구 폐기 — 오직 60/30/10 바벨(코어 19.0% = 전체 시드 11.4%)만 운용
   3) 기본값 BARBELL_SIMPLE(단리·수익금고 영구 격리) ⇄ 토글 BARBELL_COMPOUND(0주 졸업 시 60:30:10 복리 재투자)
   4) T-1h(14:59 / 조기폐장 11:59 EST) 일 1회 단발 판정 · 시간외 +4.0% 스윕 · L2+L7 병합 · COND_SMA120 5중 게이트
@@ -49,10 +48,12 @@ V6_PROG_STEPS: Tuple[float, ...] = (
 DEFAULT_SGOV_NOMINAL_PX: float = 100.30
 
 
-# MODIFIED: 각 사용자 서버의 현재 봇 설치 폴더 기준 격리 허용 (마스터 백테스트 폴더 /home/pipios4006 쓰기만 영구 차단)
+# MODIFIED [Case 114]: 전 배포 계좌(배우자·외부 서버·TDD 임시폴더) 허용 및 /home/pipios4006 마스터 경로 쓰기 영구 차단
 def assert_pipios_only_path(
     file_path: str, allowed_root: Optional[str] = None
 ) -> str:
+    import tempfile as _v6_tf
+
     raw = str(file_path or "").strip()
     if not raw:
         raise PermissionError("[V6_PATH_GUARD] 빈 파일 경로는 허용되지 않습니다.")
@@ -68,9 +69,12 @@ def assert_pipios_only_path(
             else (os.path.dirname(os.path.abspath(__file__)) or ".")
         )
     )
+    tmp_root = os.path.realpath(os.path.abspath(_v6_tf.gettempdir()))
     if not (
         real_p == bot_root
         or real_p.startswith(bot_root + os.sep)
+        or real_p == tmp_root
+        or real_p.startswith(tmp_root + os.sep)
         or real_p.startswith("/tmp/")
     ):
         raise PermissionError(
@@ -93,9 +97,26 @@ def format_barbell_mode_ko(mode_str: str) -> str:
     return "바벨(단리·금고분리)"
 
 
+def _is_v6_full_holiday(d_obj: dt.date) -> bool:
+    try:
+        from toss_api import is_nyse_full_holiday_date
+
+        return bool(is_nyse_full_holiday_date(d_obj))
+    except Exception:
+        return False
+
+
 def is_nyse_early_close_date(d_obj: dt.date, last_rth_hm: int = 1559) -> bool:
     if last_rth_hm <= 1315:
         return True
+    if _is_v6_full_holiday(d_obj):
+        return False
+    try:
+        from toss_api import is_nyse_early_close_calendar_date
+
+        return bool(is_nyse_early_close_calendar_date(d_obj, last_rth_hm=last_rth_hm))
+    except Exception:
+        pass
     yr, mo, dy = d_obj.year, d_obj.month, d_obj.day
     if mo == 11:
         nov1 = dt.date(yr, 11, 1)
@@ -116,10 +137,15 @@ def get_session_windows_est(
     d_obj = now_est.date()
     wd = d_obj.weekday()
     hm = now_est.hour * 100 + now_est.minute
+    is_hol = _is_v6_full_holiday(d_obj)
     is_early = (
-        bool(early_close_override)
-        if early_close_override is not None
-        else is_nyse_early_close_date(d_obj)
+        False
+        if is_hol
+        else (
+            bool(early_close_override)
+            if early_close_override is not None
+            else is_nyse_early_close_date(d_obj)
+        )
     )
     t1h_start_hm = 1159 if is_early else 1459
     rth_end_hm = 1259 if is_early else 1559
@@ -131,17 +157,21 @@ def get_session_windows_est(
         or (wd == 6 and hm < 1800)
     )
     is_toss_open_blackout = 400 <= hm <= 406
-    is_ext_tradable = (not is_weekend_closed) and (not is_toss_open_blackout) and (
-        hm < 930 or hm > rth_end_hm
+    is_ext_tradable = (
+        (not is_weekend_closed)
+        and (not is_hol)
+        and (not is_toss_open_blackout)
+        and (hm < 930 or hm > rth_end_hm)
     )
-    is_rth_watch = (wd < 5) and (930 <= hm < t1h_start_hm)
-    is_t1h_window = (wd < 5) and (t1h_start_hm <= hm <= rth_end_hm)
-    is_sgov_window = (wd < 5) and (931 <= hm <= sgov_end_hm)
+    is_rth_watch = (not is_hol) and (wd < 5) and (930 <= hm < t1h_start_hm)
+    is_t1h_window = (not is_hol) and (wd < 5) and (t1h_start_hm <= hm <= rth_end_hm)
+    is_sgov_window = (not is_hol) and (wd < 5) and (931 <= hm <= sgov_end_hm)
 
     return {
         "date_ymd": d_obj.year * 10000 + d_obj.month * 100 + d_obj.day,
         "weekday": wd,
         "hm": hm,
+        "is_holiday_closed": is_hol,
         "is_early_close": is_early,
         "t1h_start_hm": t1h_start_hm,
         "rth_end_hm": rth_end_hm,
@@ -309,7 +339,7 @@ class SOXLSniperBarbellV6Engine:
                         if px_v <= 0.0:
                             continue
                         d_est = dt.datetime.fromtimestamp(int(ts_v), tz=EST_TZ)
-                        if d_est.weekday() >= 5:
+                        if d_est.weekday() >= 5 or _is_v6_full_holiday(d_est.date()):
                             continue
                         ymd = d_est.year * 10000 + d_est.month * 100 + d_est.day
                         if ymd >= today_ymd:
@@ -422,7 +452,9 @@ class SOXLSniperBarbellV6Engine:
             self.vault_shortfall_warning_usd = 0.0
             oper_cash = raw_cash - self.separated_profit_cash
 
-        # MODIFIED: 미할당 여유 예수금 혼입 차단 및 0주 SGOV 재매수 예정 수수료(sgov_fee_resv) 보호
+        # MODIFIED [Case 114]: SOXL 보유 중 유령 SGOV 매수예약 소거 & 0주 SGOV 재매수 수수료 보호
+        if len(self.stack) > 0:
+            self.pending_sgov_target_usd = None
         invested_c = sum(s.c for s in self.stack)
         sgov_fee_resv = 0.0
         if len(self.stack) == 0 and self.pending_sgov_target_usd is not None:
@@ -561,6 +593,7 @@ class SOXLSniperBarbellV6Engine:
             self.soxl_cash += imm_pull
 
         self.last_partial_sell_p = None
+        self.pending_sgov_target_usd = None
         new_slot = LayerSlot(
             p=float(exec_px),
             q=int(q_filled),
@@ -1099,6 +1132,8 @@ class SOXLSniperBarbellV6Engine:
             )
             parsed_slots = [old_l1] + sorted(old_mid + [merged], key=lambda s: s.p)
         eng.stack = parsed_slots
+        if len(eng.stack) > 0:
+            eng.pending_sgov_target_usd = None
 
         lp = data.get("last_partial_sell_p", None)
         eng.last_partial_sell_p = float(lp) if lp is not None else None
@@ -1394,18 +1429,40 @@ def sync_v6_to_legacy_state_dicts(
         st["cycle_ratchet_max_lots"] = 0
         st["l1_target_quota_qty"] = 0
 
+    # MODIFIED [Case 114]:
+    # 1) SOXL 보유 중(tot_q > 0) SGOV 매수대기 $0 강제 (Case 102 / v6 0주 졸업 시에만 SGOV 매수)
+    # 2) 0주 상태에서도 cash_bucket_usd + pending_sgov_buy_budget_usd == eng.reserve_cash 항등식으로 이중계상 원천 차단
+    # 3) 기수혈(cash_injected_to_soxl_usd) 및 격리금고(daily/cycle_vaulted_profit_usd) 잔재 수치 정밀 일치화
     sgov_inv_u = round(float(eng.sgov_shares) * eng.sgov_share_px, 4)
-    pend_sgov_u = (
-        round(max(0.0, float(eng.pending_sgov_target_usd) - sgov_inv_u), 4)
-        if eng.pending_sgov_target_usd is not None
-        else 0.0
+    reserve_pool_u = round(max(0.0, float(eng.reserve_cash)), 4)
+    if tot_q <= 0 and eng.pending_sgov_target_usd is not None:
+        want_sgov_u = max(0.0, float(eng.pending_sgov_target_usd) - sgov_inv_u)
+        if want_sgov_u >= (eng.sgov_share_px * (1.0 + eng.side_fee)):
+            pend_sgov_u = round(min(reserve_pool_u, want_sgov_u), 2)
+        else:
+            pend_sgov_u = 0.0
+    else:
+        pend_sgov_u = 0.0
+    cash_bucket_u = round(max(0.0, reserve_pool_u - pend_sgov_u), 2)
+    need_sgov_sell_flag = (
+        1
+        if (
+            tot_q > 0
+            and eng.sgov_shares > 0
+            and (eng.soxl_cash + eng.reserve_cash + 1e-6 < eng.tranche_req_cash)
+        )
+        else 0
     )
+    sep_vault_u = round(max(0.0, float(eng.separated_profit_cash)), 4)
+
     bb["is_initialized"] = True
     bb["portion_mode"] = eng.barbell_mode
     bb["initial_seed_usd"] = round(eng.user_seed, 2)
     bb["active_seed_usd"] = round(eng.active_seed, 2)
     bb["soxl_core_cash_usd"] = round(eng.soxl_cash, 2)
-    bb["cash_bucket_usd"] = round(eng.reserve_cash, 2)
+    bb["cash_bucket_usd"] = cash_bucket_u
+    bb["cash_injected_to_soxl_usd"] = req_inj_u
+    bb["external_injected_to_soxl_usd"] = 0.0
     bb["sgov_held_qty"] = int(eng.sgov_shares)
     bb["sgov_shares"] = int(eng.sgov_shares)
     bb["sgov_invested_usd"] = sgov_inv_u
@@ -1415,11 +1472,30 @@ def sync_v6_to_legacy_state_dicts(
     bb["sgov_last_price"] = round(eng.sgov_share_px, 4)
     bb["sgov_eval_usd"] = round(sgov_inv_u, 2)
     bb["pending_sgov_buy_budget_usd"] = pend_sgov_u
-    bb["pending_sgov_rebuy"] = bool(eng.pending_sgov_target_usd is not None)
+    bb["pending_sgov_rebuy"] = bool(pend_sgov_u > 0.0)
+    bb["pending_sgov_tranche_sells"] = need_sgov_sell_flag
+    bb["barbell_seed_exhausted"] = bool(
+        tot_q > 0
+        and (eng.soxl_cash + eng.reserve_cash + 1e-6 < eng.tranche_req_cash)
+        and eng.sgov_shares <= 0
+    )
     bb["vault_injected_to_soxl_usd"] = 0.0
-    bb["vault_realized_profit_usd"] = round(eng.separated_profit_cash, 4)
-    bb["vault_available_usd"] = round(eng.separated_profit_cash, 4)
-    bb["separated_profit_cash"] = round(eng.separated_profit_cash, 2)
+    bb["vault_realized_profit_usd"] = sep_vault_u
+    bb["vault_available_usd"] = sep_vault_u
+    bb["separated_profit_cash"] = round(sep_vault_u, 2)
+    if sep_vault_u <= 1e-4:
+        bb["daily_vaulted_profit_usd"] = 0.0
+        bb["cycle_vaulted_profit_usd"] = 0.0
+        bb["last_cycle_vaulted_profit_usd"] = 0.0
+    else:
+        bb["daily_vaulted_profit_usd"] = round(
+            min(sep_vault_u, max(0.0, float(bb.get("daily_vaulted_profit_usd") or 0.0))),
+            4,
+        )
+        bb["cycle_vaulted_profit_usd"] = round(
+            min(sep_vault_u, max(0.0, float(bb.get("cycle_vaulted_profit_usd") or 0.0))),
+            4,
+        )
     return st, bb
 
 
@@ -1465,6 +1541,98 @@ def get_shared_pipios_v6_engine(context=None, legacy_st=None, legacy_bb=None):
         except Exception:
             pass
     return eng
+
+
+# NEW [Case 114]: 브로커 공식 수정주가 일봉(1d) 기반 전 계좌 실측 SMA120 일일 동기화기 ($139.08 왜곡 교정 & 외부 서버 즉시 해금)
+async def ensure_v6_sma120_from_broker_1d(
+    context: Any,
+    eng: Optional[SOXLSniperBarbellV6Engine] = None,
+    force: bool = False,
+) -> Optional[float]:
+    target_eng = eng or get_shared_pipios_v6_engine(context)
+    if context is None or not hasattr(context, "api"):
+        return target_eng.get_current_sma120()
+    today_s = dt.datetime.now(tz=EST_TZ).strftime("%Y-%m-%d")
+    if (
+        (not force)
+        and getattr(context, "_v6_1d_synced_date", "") == today_s
+        and len(target_eng.past_rth_closes) >= 120
+    ):
+        return target_eng.get_current_sma120()
+
+    by_date: Dict[str, float] = {}
+    try:
+        if hasattr(context.api, "get_candles_1d"):
+            c_1d = await context.api.get_candles_1d(
+                symbol="SOXL", count=180, adjusted=True
+            )
+            for row in c_1d or []:
+                if not isinstance(row, dict):
+                    continue
+                ds = str(
+                    row.get("timestamp") or row.get("date") or row.get("dt") or ""
+                ).strip()[:10]
+                cp = float(row.get("closePrice") or row.get("close") or 0.0)
+                if len(ds) == 10 and ds < today_s and cp > 0.0:
+                    by_date[ds] = cp
+
+        if len(by_date) < 120 and hasattr(context.api, "get_candles"):
+            before_cur: Optional[str] = None
+            for _ in range(3):
+                batch, next_b = await context.api.get_candles(
+                    symbol="SOXL",
+                    interval="1d",
+                    count=100,
+                    before=before_cur,
+                    adjusted=True,
+                )
+                if not batch:
+                    break
+                for row in batch:
+                    if not isinstance(row, dict):
+                        continue
+                    ds = str(
+                        row.get("timestamp")
+                        or row.get("date")
+                        or row.get("dt")
+                        or ""
+                    ).strip()[:10]
+                    cp = float(row.get("closePrice") or row.get("close") or 0.0)
+                    if len(ds) == 10 and ds < today_s and cp > 0.0:
+                        by_date[ds] = cp
+                if len(by_date) >= 135 or (not next_b) or next_b == before_cur:
+                    break
+                before_cur = next_b
+    except Exception:
+        return target_eng.get_current_sma120()
+
+    if len(by_date) >= 120:
+        sorted_ds = sorted(by_date.keys())
+        clean_closes = [round(by_date[d], 4) for d in sorted_ds[-260:]]
+        prev_sma = target_eng.get_current_sma120()
+        target_eng.past_rth_closes = clean_closes
+        last_c = clean_closes[-1]
+        if target_eng.prev_t1h_px is None or (
+            last_c > 0.0
+            and (
+                target_eng.prev_t1h_px > last_c * 2.2
+                or target_eng.prev_t1h_px < last_c * 0.3
+            )
+        ):
+            target_eng.prev_t1h_px = last_c
+        setattr(context, "_v6_1d_synced_date", today_s)
+        new_sma = target_eng.get_current_sma120()
+        if prev_sma is None or (new_sma is not None and abs(prev_sma - new_sma) > 0.05):
+            ctx_dir = getattr(context, "base_dir", None)
+            try:
+                await asyncio.to_thread(
+                    target_eng.save_json_atomic,
+                    resolve_v6_ledger_path(context),
+                    ctx_dir,
+                )
+            except Exception:
+                pass
+    return target_eng.get_current_sma120()
 
 
 # NEW: v6 원장 저장 + SoxlStratumLedger + BarbellLedger 3중 원자적 일괄 미러링 헬퍼
@@ -1635,6 +1803,7 @@ async def sync_v6_engine_from_reconciled_ledgers(
                 float(st_soxl.get("active_seed_usd") or eng.active_seed),
             )
     else:
+        eng.pending_sgov_target_usd = None
         if eng.is_simple_mode:
             eng.active_seed = eng.user_seed
         else:
@@ -1658,6 +1827,7 @@ async def sync_v6_engine_from_reconciled_ledgers(
                 0.0, eng.active_seed - eng.soxl_cash - eng.sgov_val
             )
 
+    await ensure_v6_sma120_from_broker_1d(context, eng)
     await apply_v6_mirror_to_legacy_ledgers(context, eng, save_v6_disk=True)
     return eng
 
@@ -1755,22 +1925,77 @@ async def _fetch_live_px_bypass_shm(
     return float(fallback_px)
 
 
+# MODIFIED [Case 114]: 토스 1분봉(openPrice~closePrice) 및 진행봉 자동 배제 $0.01 센트격자 하이킨아시 직결 연산기
 def _extract_closed_1m_ha_flags(
-    metrics: Dict[str, Any], candles_raw: Any = None
+    metrics: Dict[str, Any],
+    candles_raw: Any = None,
+    now_est: Optional[dt.datetime] = None,
 ) -> Tuple[bool, bool, int]:
     if isinstance(candles_raw, (list, tuple)) and len(candles_raw) >= 5:
-        bars: List[Tuple[float, float, float, float]] = []
-        last_ts = 0
-        seq = candles_raw[:-1] if len(candles_raw) > 2 else candles_raw
-        for row in seq[-240:]:
+        cur_dt = now_est.astimezone(EST_TZ) if now_est else dt.datetime.now(tz=EST_TZ)
+        cur_mk = cur_dt.strftime("%Y-%m-%d %H:%M")
+        parsed_rows: List[Tuple[str, int, float, float, float, float]] = []
+        for row in candles_raw[-300:]:
             if isinstance(row, dict):
-                o_v = float(row.get("open", row.get("o", 0.0)) or 0.0)
-                h_v = float(row.get("high", row.get("h", 0.0)) or 0.0)
-                l_v = float(row.get("low", row.get("l", 0.0)) or 0.0)
-                c_v = float(row.get("close", row.get("c", 0.0)) or 0.0)
-                last_ts = int(float(row.get("ts", row.get("epoch_sec", 0)) or 0))
+                o_v = float(
+                    row.get("openPrice")
+                    or row.get("open")
+                    or row.get("o")
+                    or 0.0
+                )
+                h_v = float(
+                    row.get("highPrice")
+                    or row.get("high")
+                    or row.get("h")
+                    or 0.0
+                )
+                l_v = float(
+                    row.get("lowPrice")
+                    or row.get("low")
+                    or row.get("l")
+                    or 0.0
+                )
+                c_v = float(
+                    row.get("closePrice")
+                    or row.get("close")
+                    or row.get("c")
+                    or 0.0
+                )
+                ts_raw = (
+                    row.get("timestamp")
+                    or row.get("dt")
+                    or row.get("dateTime")
+                    or row.get("time")
+                    or row.get("ts")
+                    or row.get("epoch_sec")
+                )
+                mk_s = ""
+                ep_s = 0
+                if isinstance(ts_raw, (int, float)):
+                    ep_s = int(ts_raw // 1000) if ts_raw > 1e12 else int(ts_raw)
+                    if ep_s > 0:
+                        mk_s = dt.datetime.fromtimestamp(ep_s, tz=EST_TZ).strftime(
+                            "%Y-%m-%d %H:%M"
+                        )
+                elif isinstance(ts_raw, str) and ts_raw.strip():
+                    s_c = ts_raw.strip()
+                    try:
+                        d_p = dt.datetime.fromisoformat(
+                            s_c.replace("Z", "+00:00")
+                        ).astimezone(EST_TZ)
+                        mk_s = d_p.strftime("%Y-%m-%d %H:%M")
+                        ep_s = int(d_p.timestamp())
+                    except Exception:
+                        mk_s = s_c[:16]
             elif isinstance(row, (list, tuple)) and len(row) >= 5:
-                last_ts = int(float(row[0]))
+                ep_s = int(float(row[0]))
+                mk_s = (
+                    dt.datetime.fromtimestamp(ep_s, tz=EST_TZ).strftime(
+                        "%Y-%m-%d %H:%M"
+                    )
+                    if ep_s > 0
+                    else ""
+                )
                 o_v, h_v, l_v, c_v = (
                     float(row[1]),
                     float(row[2]),
@@ -1780,10 +2005,23 @@ def _extract_closed_1m_ha_flags(
             else:
                 continue
             if o_v > 0.0 and h_v > 0.0 and l_v > 0.0 and c_v > 0.0:
-                bars.append((o_v, h_v, l_v, c_v))
-        if bars:
-            sbear, sbull, _, _ = compute_cent_grid_heikin_ashi_flags(bars)
-            return sbear, sbull, last_ts
+                parsed_rows.append((mk_s, ep_s, o_v, h_v, l_v, c_v))
+
+        if len(parsed_rows) >= 2:
+            if all(r[0] for r in parsed_rows):
+                parsed_rows.sort(key=lambda r: r[0])
+                last_mk = parsed_rows[-1][0]
+                bound_mk = last_mk if last_mk > cur_mk else cur_mk
+                closed_rows = [r for r in parsed_rows if r[0] < bound_mk]
+                if not closed_rows:
+                    closed_rows = parsed_rows[:-1]
+            else:
+                closed_rows = parsed_rows[:-1]
+            if closed_rows:
+                bars = [(r[2], r[3], r[4], r[5]) for r in closed_rows[-240:]]
+                last_ts = closed_rows[-1][1]
+                sbear, sbull, _, _ = compute_cent_grid_heikin_ashi_flags(bars)
+                return sbear, sbull, last_ts
 
     m = metrics if isinstance(metrics, dict) else {}
     sbear = bool(m.get("closed_ha_shaved_bear", False))
@@ -1820,6 +2058,7 @@ async def execute_case114_v6_barbell_tick(
 
     eng = get_shared_pipios_v6_engine(context, legacy_st=st_cur, legacy_bb=bb_cur)
     ctx_dir = getattr(context, "base_dir", None)
+    await ensure_v6_sma120_from_broker_1d(context, eng)
 
     sm = str(st_cur.get("portion_mode") or "").upper().strip()
     if sm in VALID_BARBELL_MODES and sm != eng.barbell_mode:
@@ -1899,6 +2138,68 @@ async def execute_case114_v6_barbell_tick(
                     if oid not in sg_oids:
                         sg_oids.append(oid)
                     extra_bb["last_settled_sgov_order_ids"] = sg_oids[-50:]
+
+                    # NEW [Case 114]: 온디맨드 SGOV 매도 체결 완료 직후 후속 SOXL 매수 체인 즉시 발주
+                    chained_b = pend.get("chained_soxl_buy")
+                    if p_side == "SELL" and isinstance(chained_b, dict):
+                        px_cb = await _fetch_live_px_bypass_shm(
+                            context.api, "SOXL", live_p
+                        )
+                        c_ref = float(chained_b.get("ref_px") or px_cb)
+                        c_vac = bool(chained_b.get("is_vac", False))
+                        cb_q, _ = eng.plan_buy_order_qty(
+                            c_ref, px_cb, can_trade_sgov_now=False
+                        )
+                        if cb_q < 1 and px_cb > 0.0:
+                            avail_cb = eng.soxl_cash + eng.reserve_cash
+                            unit_cb = px_cb * (1.0 + eng.roundtrip_fee)
+                            if avail_cb >= unit_cb:
+                                cb_q = min(
+                                    max(1, int(eng.tranche_stock // max(0.01, c_ref))),
+                                    int(avail_cb // unit_cb),
+                                )
+                        if cb_q >= 1 and px_cb > 0.0:
+                            lim_cb = round(px_cb * 1.0030, 2)
+                            max_lim_cb = round(
+                                math.floor((eng.tranche_stock / float(cb_q)) * 100.0)
+                                / 100.0,
+                                2,
+                            )
+                            if max_lim_cb > 0.0:
+                                lim_cb = min(lim_cb, max_lim_cb)
+                            cid_cb = _gen_c114_cid("V6CHNB")
+                            try:
+                                ord_cb = await context.api.create_order(
+                                    symbol="SOXL",
+                                    side="BUY",
+                                    quantity=cb_q,
+                                    price=lim_cb,
+                                    order_type="LIMIT",
+                                    time_in_force="DAY",
+                                    client_order_id=cid_cb,
+                                    enforce_daymarket_block=False,
+                                )
+                                oid_cb = str(ord_cb.get("orderId") or "").strip()
+                                if oid_cb:
+                                    extra_soxl["buy_order_id"] = oid_cb
+                                    extra_soxl["v6_pending_order"] = {
+                                        "order_id": oid_cb,
+                                        "symbol": "SOXL",
+                                        "side": "BUY",
+                                        "qty": cb_q,
+                                        "limit_price": lim_cb,
+                                        "is_vac": c_vac,
+                                        "from_t1h": True,
+                                        "submitted_mono": time.monotonic(),
+                                    }
+                            except Exception as cb_e:
+                                if logger:
+                                    logger.warning(
+                                        "⚠️ [Case 114 SGOV 체결 후 SOXL 체인매수 재시도 예약]: %s",
+                                        cb_e,
+                                    )
+                                if win["is_t1h_window"]:
+                                    eng.t1h_wait_state = "NONE"
                 elif p_sym == "SOXL":
                     settled_oids = list(st_cur.get("last_settled_order_ids") or [])
                     if oid not in settled_oids:
@@ -2002,6 +2303,19 @@ async def execute_case114_v6_barbell_tick(
                             f"분리금고 ${eng.separated_profit_cash:,.2f} · 운용시드 ${eng.active_seed:,.2f}"
                         )
 
+            if (
+                filled_q <= 0
+                and p_sym == "SGOV"
+                and p_side == "SELL"
+                and isinstance(pend.get("chained_soxl_buy"), dict)
+                and win["is_t1h_window"]
+            ):
+                retry_key = f"_v6_t1h_retry_{ymd}"
+                r_cnt = int(getattr(context, retry_key, 0) or 0)
+                if r_cnt < 2:
+                    setattr(context, retry_key, r_cnt + 1)
+                    eng.t1h_wait_state = "NONE"
+
             await apply_v6_mirror_to_legacy_ledgers(
                 context,
                 eng,
@@ -2095,8 +2409,13 @@ async def execute_case114_v6_barbell_tick(
             except Exception:
                 pass
 
-    # 3) EOD(16:00 / 조기폐장 13:00 EST) 일일 마감 기록
-    if win["weekday"] < 5 and hm >= (int(win["rth_end_hm"]) + 1) and eng.last_eod_ymd != ymd:
+    # 3) EOD(16:00 / 조기폐장 13:00 EST) 일일 마감 기록 (전면 휴장일 무매매일·SMA120 오염 차단)
+    if (
+        (not win.get("is_holiday_closed", False))
+        and win["weekday"] < 5
+        and hm >= (int(win["rth_end_hm"]) + 1)
+        and eng.last_eod_ymd != ymd
+    ):
         if live_p > 0.0:
             eng.finalize_rth_end_of_day(ymd, live_p)
             await asyncio.to_thread(
@@ -2211,13 +2530,31 @@ async def execute_case114_v6_barbell_tick(
                     if logger:
                         logger.debug("장외 +4%% 스윕 묵음 쿨다운(60s): %s", ext_e)
 
-    # 6) 정규장 T-1h (14:59 ~ 15:59 / 조기폐장 11:59 ~ 12:59 EST) 단방향 1회 평가 & HA 패스
+    # 6) 정규장 T-1h (14:59 ~ 15:59 / 조기폐장 11:59 ~ 12:59 EST) 단방향 1회 평가 & $0.01 센트격자 HA 패스
     if live_p > 0.0 and win["is_t1h_window"]:
         last_eval_min = int(getattr(context, "v6_last_t1h_min_epoch", 0) or 0)
-        if cur_min_epoch > last_eval_min or eng.t1h_eval_date_ymd != ymd:
+        need_t1h_check = bool(
+            eng.t1h_eval_date_ymd != ymd
+            or (
+                cur_min_epoch > last_eval_min
+                and eng.t1h_wait_state not in ("IDLE", "DONE")
+            )
+        )
+        if need_t1h_check:
+            candles_t1h = None
+            if hasattr(context.api, "get_candles_1m"):
+                try:
+                    candles_t1h = await context.api.get_candles_1m(
+                        symbol="SOXL", total_count=240
+                    )
+                except Exception:
+                    candles_t1h = None
             metrics_m = getattr(context, "candle_metrics_cache", {}).get("SOXL", {})
-            sbear, sbull, _ = _extract_closed_1m_ha_flags(metrics_m)
+            sbear, sbull, _ = _extract_closed_1m_ha_flags(
+                metrics_m, candles_raw=candles_t1h, now_est=now_est
+            )
             px_t1h = await _fetch_live_px_bypass_shm(context.api, "SOXL", live_p)
+            prev_wait_state = eng.t1h_wait_state
             sig = eng.evaluate_t1h_bar(
                 date_ymd=ymd,
                 px=px_t1h,
@@ -2229,7 +2566,10 @@ async def execute_case114_v6_barbell_tick(
                 eng.save_json_atomic, resolve_v6_ledger_path(context), ctx_dir
             )
 
+            retry_key = f"_v6_t1h_retry_{ymd}"
+            cur_retries = int(getattr(context, retry_key, 0) or 0)
             act = str(sig.get("action") or "")
+
             if act == "SELL":
                 sell_q, floor_p = eng.get_sweep_sellable_plan(
                     px_t1h, V6_RTH_T1H_TP_RATIO, cur_min_epoch
@@ -2237,33 +2577,45 @@ async def execute_case114_v6_barbell_tick(
                 if sell_q >= 1 and floor_p > 0.0:
                     lim_p = round(max(floor_p, px_t1h * 0.9975), 2)
                     cid_ts = _gen_c114_cid("V6T1HS")
-                    ord_ts = await context.api.create_order(
-                        symbol="SOXL",
-                        side="SELL",
-                        quantity=sell_q,
-                        price=lim_p,
-                        order_type="LIMIT",
-                        time_in_force="DAY",
-                        client_order_id=cid_ts,
-                        enforce_daymarket_block=False,
-                    )
-                    oid_ts = str(ord_ts.get("orderId") or "").strip()
-                    if oid_ts:
-                        await context.ledger.update_state(
-                            "SOXL",
-                            sell_order_id=oid_ts,
-                            v6_pending_order={
-                                "order_id": oid_ts,
-                                "symbol": "SOXL",
-                                "side": "SELL",
-                                "qty": sell_q,
-                                "limit_price": lim_p,
-                                "min_gain_ratio": V6_RTH_T1H_TP_RATIO,
-                                "from_t1h": True,
-                                "submitted_mono": time.monotonic(),
-                            },
+                    try:
+                        ord_ts = await context.api.create_order(
+                            symbol="SOXL",
+                            side="SELL",
+                            quantity=sell_q,
+                            price=lim_p,
+                            order_type="LIMIT",
+                            time_in_force="DAY",
+                            client_order_id=cid_ts,
+                            enforce_daymarket_block=False,
                         )
-                        return
+                        oid_ts = str(ord_ts.get("orderId") or "").strip()
+                        if oid_ts:
+                            await context.ledger.update_state(
+                                "SOXL",
+                                sell_order_id=oid_ts,
+                                v6_pending_order={
+                                    "order_id": oid_ts,
+                                    "symbol": "SOXL",
+                                    "side": "SELL",
+                                    "qty": sell_q,
+                                    "limit_price": lim_p,
+                                    "min_gain_ratio": V6_RTH_T1H_TP_RATIO,
+                                    "from_t1h": True,
+                                    "submitted_mono": time.monotonic(),
+                                },
+                            )
+                            return
+                    except Exception as ts_e:
+                        if logger:
+                            logger.warning("⚠️ [Case 114 T-1h 매도 발주 예외]: %s", ts_e)
+                        if cur_retries < 2:
+                            setattr(context, retry_key, cur_retries + 1)
+                            eng.t1h_wait_state = prev_wait_state
+                            await asyncio.to_thread(
+                                eng.save_json_atomic,
+                                resolve_v6_ledger_path(context),
+                                ctx_dir,
+                            )
 
             elif act == "BUY":
                 ref_px = float(sig.get("ref_px") or px_t1h)
@@ -2276,24 +2628,67 @@ async def execute_case114_v6_barbell_tick(
                         sg_px = await _fetch_live_px_bypass_shm(
                             context.api, "SGOV", eng.sgov_share_px
                         )
-                        sg_lim = round(max(1.0, sg_px - 0.03), 2)
+                        sg_lim = round(max(1.0, sg_px - 0.05), 2)
                         cid_sg = _gen_c114_cid("V6ONSG")
-                        ord_sg = await context.api.create_order(
-                            symbol="SGOV",
-                            side="SELL",
-                            quantity=need_sgov_sell,
-                            price=sg_lim,
-                            order_type="LIMIT",
-                            time_in_force="DAY",
-                            client_order_id=cid_sg,
-                            enforce_daymarket_block=False,
-                            allow_barbell_sgov=True,
-                        )
-                        oid_sg = str(ord_sg.get("orderId") or "").strip()
+                        try:
+                            ord_sg = await context.api.create_order(
+                                symbol="SGOV",
+                                side="SELL",
+                                quantity=need_sgov_sell,
+                                price=sg_lim,
+                                order_type="LIMIT",
+                                time_in_force="DAY",
+                                client_order_id=cid_sg,
+                                enforce_daymarket_block=False,
+                                allow_barbell_sgov=True,
+                            )
+                            oid_sg = str(ord_sg.get("orderId") or "").strip()
+                        except Exception as sg_ord_e:
+                            if logger:
+                                logger.warning(
+                                    "⚠️ [Case 114 온디맨드 SGOV 매도 발주 예외]: %s",
+                                    sg_ord_e,
+                                )
+                            if cur_retries < 2:
+                                setattr(context, retry_key, cur_retries + 1)
+                                eng.t1h_wait_state = prev_wait_state
+                                await asyncio.to_thread(
+                                    eng.save_json_atomic,
+                                    resolve_v6_ledger_path(context),
+                                    ctx_dir,
+                                )
+                            return
+
                         if oid_sg:
-                            await asyncio.sleep(1.5)
-                            det_sg = await context.api.get_order_detail(oid_sg)
-                            _, f_sg_q, f_sg_p = _extract_order_fill_info(det_sg)
+                            sg_term = False
+                            f_sg_q = 0
+                            f_sg_p = 0.0
+                            for _ in range(4):
+                                await asyncio.sleep(0.45)
+                                det_sg = await context.api.get_order_detail(oid_sg)
+                                st_sg, f_sg_q, f_sg_p = _extract_order_fill_info(det_sg)
+                                if st_sg in _TERMINAL_ORDER_STATUSES:
+                                    sg_term = True
+                                    break
+                            if not sg_term:
+                                # SGOV 미체결 대기 중 -> 0.4s 루프에서 체결 즉시 후속 SOXL 매수를 발주하도록 체인 위임
+                                await context.ledger.update_state(
+                                    "SOXL",
+                                    v6_pending_order={
+                                        "order_id": oid_sg,
+                                        "symbol": "SGOV",
+                                        "side": "SELL",
+                                        "qty": need_sgov_sell,
+                                        "limit_price": sg_lim,
+                                        "submitted_mono": time.monotonic(),
+                                        "chained_soxl_buy": {
+                                            "ref_px": ref_px,
+                                            "is_vac": is_vac,
+                                            "date_ymd": ymd,
+                                        },
+                                    },
+                                )
+                                return
                             if f_sg_q > 0:
                                 eng.apply_sgov_fill(
                                     -f_sg_q, f_sg_p if f_sg_p > 0.0 else sg_lim
@@ -2303,44 +2698,73 @@ async def execute_case114_v6_barbell_tick(
                                     resolve_v6_ledger_path(context),
                                     ctx_dir,
                                 )
+                                buy_q, _ = eng.plan_buy_order_qty(
+                                    ref_px, px_t1h, can_trade_sgov_now=False
+                                )
+                            else:
+                                if cur_retries < 2:
+                                    setattr(context, retry_key, cur_retries + 1)
+                                    eng.t1h_wait_state = prev_wait_state
+                                    await asyncio.to_thread(
+                                        eng.save_json_atomic,
+                                        resolve_v6_ledger_path(context),
+                                        ctx_dir,
+                                    )
+                                return
 
-                    lim_buy = round(px_t1h * 1.0030, 2)
-                    max_lim = round(
-                        math.floor((eng.tranche_stock / float(buy_q)) * 100.0) / 100.0,
-                        2,
-                    )
-                    if max_lim > 0.0:
-                        lim_buy = min(lim_buy, max_lim)
-                    cid_tb = _gen_c114_cid("V6T1HB")
-                    ord_tb = await context.api.create_order(
-                        symbol="SOXL",
-                        side="BUY",
-                        quantity=buy_q,
-                        price=lim_buy,
-                        order_type="LIMIT",
-                        time_in_force="DAY",
-                        client_order_id=cid_tb,
-                        enforce_daymarket_block=False,
-                    )
-                    oid_tb = str(ord_tb.get("orderId") or "").strip()
-                    if oid_tb:
-                        await context.ledger.update_state(
-                            "SOXL",
-                            buy_order_id=oid_tb,
-                            v6_pending_order={
-                                "order_id": oid_tb,
-                                "symbol": "SOXL",
-                                "side": "BUY",
-                                "qty": buy_q,
-                                "limit_price": lim_buy,
-                                "is_vac": is_vac,
-                                "from_t1h": True,
-                                "submitted_mono": time.monotonic(),
-                            },
+                    if buy_q >= 1:
+                        lim_buy = round(px_t1h * 1.0030, 2)
+                        max_lim = round(
+                            math.floor((eng.tranche_stock / float(buy_q)) * 100.0)
+                            / 100.0,
+                            2,
                         )
-                        return
+                        if max_lim > 0.0:
+                            lim_buy = min(lim_buy, max_lim)
+                        cid_tb = _gen_c114_cid("V6T1HB")
+                        try:
+                            ord_tb = await context.api.create_order(
+                                symbol="SOXL",
+                                side="BUY",
+                                quantity=buy_q,
+                                price=lim_buy,
+                                order_type="LIMIT",
+                                time_in_force="DAY",
+                                client_order_id=cid_tb,
+                                enforce_daymarket_block=False,
+                            )
+                            oid_tb = str(ord_tb.get("orderId") or "").strip()
+                            if oid_tb:
+                                await context.ledger.update_state(
+                                    "SOXL",
+                                    buy_order_id=oid_tb,
+                                    v6_pending_order={
+                                        "order_id": oid_tb,
+                                        "symbol": "SOXL",
+                                        "side": "BUY",
+                                        "qty": buy_q,
+                                        "limit_price": lim_buy,
+                                        "is_vac": is_vac,
+                                        "from_t1h": True,
+                                        "submitted_mono": time.monotonic(),
+                                    },
+                                )
+                                return
+                        except Exception as tb_e:
+                            if logger:
+                                logger.warning(
+                                    "⚠️ [Case 114 T-1h 매수 발주 예외]: %s", tb_e
+                                )
+                            if cur_retries < 2:
+                                setattr(context, retry_key, cur_retries + 1)
+                                eng.t1h_wait_state = prev_wait_state
+                                await asyncio.to_thread(
+                                    eng.save_json_atomic,
+                                    resolve_v6_ledger_path(context),
+                                    ctx_dir,
+                                )
 
-    # 7) UI 및 암살자 0주 판정용 미러링 상시 정합성 동기화 (live_p == 0.0 시에도 동작)
+    # 7) UI 및 암살자 0주 판정용 미러링 상시 정합성 동기화 (유령 매수대기·기수혈·금고 잔재 즉시 치유)
     st_sync, bb_sync = sync_v6_to_legacy_state_dicts(eng, st_cur, bb_cur)
     need_mirror = bool(
         st_cur.get("portion_mode") != eng.barbell_mode
@@ -2351,6 +2775,9 @@ async def execute_case114_v6_barbell_tick(
         or int(st_cur.get("v6_consecutive_no_trade_days") or 0) != st_sync["v6_consecutive_no_trade_days"]
         or int(bb_cur.get("sgov_held_qty") or -1) != bb_sync["sgov_held_qty"]
         or abs(float(bb_cur.get("cash_bucket_usd") or -1.0) - bb_sync["cash_bucket_usd"]) > 0.05
+        or abs(float(bb_cur.get("pending_sgov_buy_budget_usd") or 0.0) - bb_sync["pending_sgov_buy_budget_usd"]) > 0.05
+        or abs(float(bb_cur.get("cash_injected_to_soxl_usd") or 0.0) - bb_sync["cash_injected_to_soxl_usd"]) > 0.05
+        or abs(float(bb_cur.get("cycle_vaulted_profit_usd") or 0.0) - bb_sync["cycle_vaulted_profit_usd"]) > 0.05
     )
     if need_mirror:
         await apply_v6_mirror_to_legacy_ledgers(

@@ -100,6 +100,9 @@ from toss_api import (
     TARGET_SYMBOL,
     TossApiClient,
     get_bot_base_dir,
+    is_nyse_early_close_calendar_date,
+    is_nyse_full_holiday_date,
+    register_runtime_us_calendar_payload,
     resolve_folder_isolated_ledger_paths,
     safe_float,
     safe_int,
@@ -253,7 +256,10 @@ async def candle_radar_loop(context: SniperAppContext) -> None:
     cached_1d_date: str = ""
     while not context.shutdown_event.is_set():
         now_est = datetime.now(EST_TZ)
-        if _check_weekend_nyse_closed_dynamic(now_est):
+        if _check_weekend_nyse_closed_dynamic(now_est) or (
+            is_nyse_full_holiday_date(now_est.date())
+            and bool(context.candle_metrics_cache.get(TARGET_SYMBOL))
+        ):
             try:
                 await asyncio.wait_for(
                     context.shutdown_event.wait(), timeout=30.0
@@ -443,11 +449,25 @@ async def main_sniper_loop(context: SniperAppContext) -> None:
     8) 실시간 스나이퍼 다중 익절 매도 모니터 (오팔 최우선) 및 시드보호 매수 게이트 (떨사 · 바벨 4단계 자동수혈 포함)
     """
     last_reconcile_mono: float = 0.0
+    last_us_cal_sync_date: str = ""
 
     while not context.shutdown_event.is_set():
         touch_bot_heartbeat()
         now_est = datetime.now(EST_TZ)
-        if _check_weekend_nyse_closed_dynamic(now_est):
+        cur_date_str = now_est.strftime("%Y-%m-%d")
+        if last_us_cal_sync_date != cur_date_str and hasattr(
+            context.api, "get_us_market_calendar"
+        ):
+            last_us_cal_sync_date = cur_date_str
+            try:
+                cal_obj = await context.api.get_us_market_calendar(cur_date_str)
+                register_runtime_us_calendar_payload(cal_obj)
+            except Exception:
+                pass
+
+        if _check_weekend_nyse_closed_dynamic(now_est) or is_nyse_full_holiday_date(
+            now_est.date()
+        ):
             context.fast_shield_mode = False
             context.assassin_high_freq_active = False
             try:
@@ -631,7 +651,13 @@ async def main_sniper_loop(context: SniperAppContext) -> None:
                         context.last_soxl_live_price = live_p
                         context.last_soxl_live_price_mono = now_mono
 
-            if 1600 <= hm <= 1659 and str(st.get("last_closing_report_date") or "") != today_str:
+            close_rep_hm = (
+                1300 if is_nyse_early_close_calendar_date(now_est.date()) else 1600
+            )
+            if (
+                close_rep_hm <= hm <= 1659
+                and str(st.get("last_closing_report_date") or "") != today_str
+            ):
                 await _call_plugin_adaptive(
                     execute_1600_daily_closing_settlement_plugin,
                     context=context,
@@ -865,6 +891,33 @@ async def async_main() -> int:
                     logger.debug("부팅 v6 역동기화 스킵: %s", v6_boot_exc)
     except Exception as init_exc:
         logger.debug("부팅 초기 잔고 동기화 스킵: %s", init_exc)
+
+    # NEW [Case 114]: 부팅 시 전원 OFF 상태에서도 유령 매수대기 소거 및 3중 원장 미러링 즉시 보장
+    try:
+        if hasattr(context.api, "get_us_market_calendar"):
+            boot_cal = await context.api.get_us_market_calendar(
+                datetime.now(EST_TZ).strftime("%Y-%m-%d")
+            )
+            register_runtime_us_calendar_payload(boot_cal)
+    except Exception:
+        pass
+    try:
+        if not is_live_assassin_standalone_active(context):
+            from soxl_v6_barbell_engine import (
+                apply_v6_mirror_to_legacy_ledgers,
+                get_shared_pipios_v6_engine,
+            )
+
+            boot_eng = get_shared_pipios_v6_engine(
+                context,
+                legacy_st=context.ledger.get_state(TARGET_SYMBOL),
+                legacy_bb=context.barbell_ledger.get_state(),
+            )
+            await apply_v6_mirror_to_legacy_ledgers(
+                context, boot_eng, save_v6_disk=True
+            )
+    except Exception as boot_m_exc:
+        logger.debug("부팅 3중 원장 보강 미러링 스킵: %s", boot_m_exc)
 
     # 기동 완료 생존 신호 타전 (Case 16)
     try:

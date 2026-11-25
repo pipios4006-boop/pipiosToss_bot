@@ -35,6 +35,10 @@ from toss_api import (
     LOCKED_BUY_INTERVAL_MIN,
     NEW_CYCLE_BUY_CUTOFF_HM as _API_NEW_CYCLE_BUY_CUTOFF_HM,
     TARGET_SYMBOL,
+    get_nyse_holiday_name_ko,
+    is_nyse_early_close_calendar_date,
+    is_nyse_full_holiday_date,
+    next_nyse_business_date,
     safe_float,
     safe_int,
 )
@@ -739,11 +743,15 @@ def is_active_buy_window(
     hm: int, now_est: Optional[datetime] = None
 ) -> bool:
     """
-    # [🎯 2 & Case 01, Case 79, Case 88 : 매수 전용 시간창 (평일 04:07 ~ 16:00 EST 엄격 제한)]:
+    # MODIFIED [Case 114]: 평일 미국 전면 휴장일 매수 차단 가드 결합
     """
     if now_est is not None:
         dt = now_est.astimezone(EST_TZ)
-        if is_weekend_nyse_closed(dt) or dt.weekday() >= 5:
+        if (
+            is_weekend_nyse_closed(dt)
+            or dt.weekday() >= 5
+            or is_nyse_full_holiday_date(dt.date())
+        ):
             return False
     hm_int = safe_int(hm, 0)
     return 407 <= hm_int <= 1600
@@ -826,21 +834,26 @@ def get_market_session_label(now_est: Optional[datetime] = None) -> str:
     return "🌃 데이장 익절감시(20:00~03:59·매수잠금)"
 
 
-# NEW [Case 114 : Ultimate v6.0 시간외(16:00 ~ 09:29 EST 프리·애프터·데이장) +4.0% 및 정규 T-1h(14:59) 세션 해석기]
+# MODIFIED [Case 114]: 미국 공휴일(추수감사절 등) 및 조기폐장(블랙프라이데이 11:59 T-1h / 13:00 마감) 정밀 반영
 def is_case114_v6_extended_window(
     hm: Optional[int] = None,
     now_est: Optional[datetime] = None,
-    is_early_close: bool = False,
+    is_early_close: Optional[bool] = None,
 ) -> bool:
     dt = now_est.astimezone(EST_TZ) if now_est else datetime.now(EST_TZ)
-    if is_weekend_nyse_closed(dt):
+    if is_weekend_nyse_closed(dt) or is_nyse_full_holiday_date(dt.date()):
         return False
+    eff_early = (
+        bool(is_early_close)
+        if is_early_close is not None
+        else is_nyse_early_close_calendar_date(dt.date())
+    )
     hm_val = (
         safe_int(hm, dt.hour * 100 + dt.minute)
         if hm is not None
         else (dt.hour * 100 + dt.minute)
     )
-    rth_end_hm = 1259 if is_early_close else 1559
+    rth_end_hm = 1259 if eff_early else 1559
     if dt.weekday() < 5 and (930 <= hm_val <= rth_end_hm):
         return False
     return True
@@ -848,44 +861,80 @@ def is_case114_v6_extended_window(
 
 def resolve_case114_v6_session_info(
     now_est: Optional[datetime] = None,
-    is_early_close: bool = False,
+    is_early_close: Optional[bool] = None,
 ) -> Dict[str, Any]:
     dt = now_est.astimezone(EST_TZ) if now_est else datetime.now(EST_TZ)
+    cur_d = dt.date()
     wd = dt.weekday()
     hm = dt.hour * 100 + dt.minute
-    t1h_hm = 1159 if is_early_close else 1459
-    t1h_str = "11:59" if is_early_close else "14:59"
-    rth_end_hm = 1259 if is_early_close else 1559
+    hol_name_ko = get_nyse_holiday_name_ko(cur_d)
+    is_hol = bool(hol_name_ko)
+    eff_early = (
+        bool(is_early_close)
+        if is_early_close is not None
+        else is_nyse_early_close_calendar_date(cur_d)
+    )
+    t1h_hm = 1159 if eff_early else 1459
+    t1h_str = "11:59" if eff_early else "14:59"
+    rth_end_hm = 1259 if eff_early else 1559
     wknd_closed = is_weekend_nyse_closed(dt)
-    is_rth = bool((not wknd_closed) and wd < 5 and (930 <= hm <= rth_end_hm))
-    is_ext = bool((not wknd_closed) and (not is_rth))
 
-    if 400 <= hm <= 929 and wd < 5:
+    is_rth = bool(
+        (not wknd_closed)
+        and (not is_hol)
+        and wd < 5
+        and (930 <= hm <= rth_end_hm)
+    )
+    if is_hol:
+        is_ext = False
+    else:
+        is_ext = bool((not wknd_closed) and (not is_rth))
+
+    if is_hol:
+        ext_icon, ext_name = "🛑", f"미국휴장({hol_name_ko})"
+    elif 400 <= hm <= 929 and wd < 5:
         ext_icon, ext_name = "🌅", "프리장"
     elif (rth_end_hm < hm <= 1959) and wd < 5:
         ext_icon, ext_name = "🌇", "애프터장"
     else:
         ext_icon, ext_name = "🌃", "데이장"
 
-    if wd >= 5:
-        next_t1h_str = "월요일 14:59 EST · T-1h 단발"
-        next_t1h_short = "월 14:59 T-1h"
-    elif hm < 930:
-        next_t1h_str = f"금일 {t1h_str} EST · T-1h 단발"
-        next_t1h_short = f"금일 {t1h_str} T-1h"
-    elif hm < t1h_hm:
-        next_t1h_str = f"금일 {t1h_str} EST · 장중 관망중"
-        next_t1h_short = f"금일 {t1h_str} T-1h"
-    elif hm == t1h_hm:
-        next_t1h_str = f"⚡금일 {t1h_str} EST · T-1h 판정중"
-        next_t1h_short = f"⚡{t1h_str} 판정중"
+    ko_wds = ("월", "화", "수", "목", "금", "토", "일")
+    today_early_tag = "(조기폐장)" if eff_early else ""
+
+    if (not wknd_closed) and (not is_hol) and wd < 5 and hm <= t1h_hm:
+        if hm < 930:
+            next_t1h_str = f"금일 {t1h_str} EST{today_early_tag} · T-1h 단발"
+            next_t1h_short = f"금일 {t1h_str} T-1h"
+        elif hm < t1h_hm:
+            next_t1h_str = f"금일 {t1h_str} EST{today_early_tag} · 장중 관망중"
+            next_t1h_short = f"금일 {t1h_str} T-1h"
+        else:
+            next_t1h_str = f"⚡금일 {t1h_str} EST{today_early_tag} · T-1h 판정중"
+            next_t1h_short = f"⚡{t1h_str} 판정중"
     else:
-        nxt_day = "월요일" if wd == 4 else "익일"
-        next_t1h_str = f"{nxt_day} 14:59 EST · T-1h 단발"
-        next_t1h_short = f"{nxt_day} 14:59 T-1h"
+        nxt_d = next_nyse_business_date(cur_d, include_today=False)
+        nxt_early = is_nyse_early_close_calendar_date(nxt_d)
+        nxt_t1h_str = "11:59" if nxt_early else "14:59"
+        nxt_early_note = " · 조기폐장" if nxt_early else ""
+        day_diff = (nxt_d - cur_d).days
+        if day_diff == 1:
+            day_lbl = "익일"
+            short_lbl = "익일"
+        elif nxt_d.weekday() == 0 and day_diff <= 3 and (not is_hol):
+            day_lbl = "월요일"
+            short_lbl = "월"
+        else:
+            day_lbl = f"{nxt_d.strftime('%m-%d')}({ko_wds[nxt_d.weekday()]})"
+            short_lbl = day_lbl
+        next_t1h_str = f"{day_lbl} {nxt_t1h_str} EST{nxt_early_note} · T-1h 단발"
+        next_t1h_short = f"{short_lbl} {nxt_t1h_str} T-1h"
 
     return {
         "is_weekend_closed": wknd_closed,
+        "is_holiday_closed": is_hol,
+        "holiday_name_ko": hol_name_ko,
+        "is_early_close": eff_early,
         "is_rth": is_rth,
         "is_v6_extended": is_ext,
         "is_pre_t1h": bool(is_rth and hm < t1h_hm),
