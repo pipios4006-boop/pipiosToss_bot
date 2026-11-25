@@ -1414,6 +1414,41 @@ def _execute_git_pull_and_preflight_sync(
     base_dir: Optional[str] = None,
 ) -> Tuple[bool, str, bool]:
     target_dir = get_bot_base_dir(base_dir)
+    # NEW [Case 114-Fix]: 로컬 보호 모드를 pipiosToss(또는 LOCK_LOCAL_GIT_PULL=1)로만 격리 및 3-튜플 반환 강제
+    folder_slug_now = get_folder_slug(target_dir)
+    is_local_git_shield = bool(
+        os.environ.get("LOCK_LOCAL_GIT_PULL", "0").strip() == "1"
+        or (
+            folder_slug_now == "pipiosToss"
+            and os.path.isdir("/home/pipios4006")
+            and os.environ.get("ALLOW_CASE114_GIT_PULL", "0").strip() != "1"
+        )
+    )
+    if is_local_git_shield:
+        reaped_z, need_svc_yield = _scan_and_reap_zombies_for_preflight_sync(
+            target_dir
+        )
+        purged_list = purge_deprecated_legacy_files(target_dir)
+        ok_l, msg_l = verify_all_modules_compile(target_dir)
+        if not ok_l:
+            return (False, f"🚨 로컬 프리플라이트 검증 실패:\n{msg_l}", False)
+        cur_disk_sha = compute_core_modules_sha256_sync(target_dir)
+        code_drift = bool(
+            BOOT_CODE_SHA256
+            and cur_disk_sha
+            and cur_disk_sha != BOOT_CODE_SHA256
+        )
+        should_restart = bool(code_drift or need_svc_yield)
+        if should_restart:
+            _flush_telegram_pending_updates_sync(target_dir)
+            _write_shm_update_beacon_sync(cur_disk_sha[:12], target_dir)
+        z_note = f" · 🧹유령좀비 {len(reaped_z)}개 소각" if reaped_z else ""
+        p_note = f" · 폐기파일 {len(purged_list)}개 소각" if purged_list else ""
+        return (
+            True,
+            f"Case 114 로컬 보호모드 유지({folder_slug_now}) · {msg_l}{z_note}{p_note}",
+            should_restart,
+        )
     protected_snapshots: Dict[str, bytes] = {}
     did_git_reset = False
 
@@ -1880,9 +1915,22 @@ async def run_auto_update_loop(
                     continue
                 ok, msg, changed = True, pending_restart_msg, True
             else:
-                ok, msg, changed = await execute_git_pull_and_preflight(
-                    base_dir
-                )
+                # MODIFIED [Case 114-Fix]: 비정규 dict 반환 시 키 언패킹("updated","status","reason") 무한 재기동 원천 차단
+                upd_raw = await execute_git_pull_and_preflight(base_dir)
+                if isinstance(upd_raw, tuple) and len(upd_raw) == 3:
+                    ok = bool(upd_raw[0])
+                    msg = str(upd_raw[1] or "")
+                    changed = bool(upd_raw[2] is True)
+                elif isinstance(upd_raw, dict):
+                    ok = bool(upd_raw.get("ok", True))
+                    msg = str(
+                        upd_raw.get("reason")
+                        or upd_raw.get("status")
+                        or "SKIPPED"
+                    )
+                    changed = bool(upd_raw.get("updated") is True)
+                else:
+                    ok, msg, changed = False, "잘못된 업데이트 응답 형식", False
                 if ok and changed:
                     pending_restart_msg = msg
 
@@ -1989,45 +2037,3 @@ def _cli_main() -> int:
 
 if __name__ == "__main__":
     sys.exit(_cli_main())
-# [CASE114_LOCAL_GIT_PULL_SHIELD]
-_orig_c113_exec_git_pull_sync = _execute_git_pull_and_preflight_sync
-
-
-def _execute_git_pull_and_preflight_sync(*args, **kwargs):
-    if os.environ.get("ALLOW_CASE114_GIT_PULL", "0").strip() != "1":
-        return {
-            "updated": False,
-            "status": "SKIPPED_CASE114_LOCAL_LOCK",
-            "reason": "Case 114 로컬 바벨 전용 패치 보호 모드(원격 구버전 덮어쓰기 차단)",
-        }
-    return _orig_c113_exec_git_pull_sync(*args, **kwargs)
-
-# MODIFIED [CASE114_EXACT_V4_FINAL + 로컬 패치 SHA-256 드리프트 감지 재기동 해금]
-def _execute_git_pull_and_preflight_sync(base_dir=None):
-    if os.environ.get("ALLOW_CASE114_GIT_PULL", "0").strip() != "1":
-        target_dir = get_bot_base_dir(base_dir)
-        reaped_z, need_svc_yield = _scan_and_reap_zombies_for_preflight_sync(
-            target_dir
-        )
-        purged_list = purge_deprecated_legacy_files(target_dir)
-        ok_l, msg_l = verify_all_modules_compile(target_dir)
-        if not ok_l:
-            return (False, f"🚨 로컬 프리플라이트 검증 실패:\n{msg_l}", False)
-        cur_disk_sha = compute_core_modules_sha256_sync(target_dir)
-        code_drift = bool(
-            BOOT_CODE_SHA256
-            and cur_disk_sha
-            and cur_disk_sha != BOOT_CODE_SHA256
-        )
-        should_restart = bool(code_drift or need_svc_yield)
-        if should_restart:
-            _flush_telegram_pending_updates_sync(target_dir)
-            _write_shm_update_beacon_sync(cur_disk_sha[:12], target_dir)
-        z_note = f" · 🧹유령좀비 {len(reaped_z)}개 소각" if reaped_z else ""
-        p_note = f" · 폐기파일 {len(purged_list)}개 소각" if purged_list else ""
-        return (
-            True,
-            f"Case 114 로컬 바벨전용 보호모드 유지 · {msg_l}{z_note}{p_note}",
-            should_restart,
-        )
-    return _orig_c113_exec_git_pull_sync(base_dir)
