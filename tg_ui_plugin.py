@@ -2386,6 +2386,18 @@ class TelegramCommandController:
             safety_buffer_pct=0.0
         )
         fx_rate = await self.context.api.get_usd_krw_rate()
+        # NEW [Case 114]: /sync 실행 시 레거시 화해 결과를 v6 엔진(eng.stack) 및 v6 원장에 즉시 역동기화
+        if not is_live_assassin_standalone_active(self.context):
+            try:
+                from soxl_v6_barbell_engine import sync_v6_engine_from_reconciled_ledgers
+
+                await sync_v6_engine_from_reconciled_ledgers(
+                    self.context,
+                    holdings_map=(holdings_map if fetch_ok else None),
+                    broker_bp_usd=bp_usd,
+                )
+            except Exception as v6_sync_exc:
+                logger.debug("v6 /sync 역동기화 스킵: %s", v6_sync_exc)
         st = self.context.ledger.get_state(TARGET_SYMBOL)
 
         if bool(st.get("waiting_reserve_deposit", False)):
@@ -2481,43 +2493,25 @@ class TelegramCommandController:
         self, chat_id: str, edit_msg_id: Optional[int] = None
     ) -> None:
         # MODIFIED [Case 114]: 순수현금 영구 폐기 — 바벨(단리·금고분리)[기본] ⇄ 바벨(복리·재투자) 토글
+        # MODIFIED [Case 114]: 동적 폴더 격리 및 3중 원장 22개 미러링 키 일괄 동기화
         from soxl_v6_barbell_engine import (
             BARBELL_MODE_COMPOUND,
-            DEFAULT_V6_LEDGER_PATH,
+            apply_v6_mirror_to_legacy_ledgers,
             format_barbell_mode_ko,
-            load_or_migrate_pipios_v6_engine,
-            sync_v6_to_legacy_state_dicts,
+            get_shared_pipios_v6_engine,
         )
 
         st_cur = self.context.ledger.get_state(TARGET_SYMBOL)
         bb_ledger = ensure_barbell_ledger(self.context)
         bb_cur = bb_ledger.get_state() if hasattr(bb_ledger, 'get_state') else {}
 
-        v6_eng = load_or_migrate_pipios_v6_engine(
-            legacy_st=st_cur,
-            legacy_bb=bb_cur,
-            ledger_path=DEFAULT_V6_LEDGER_PATH,
+        v6_eng = get_shared_pipios_v6_engine(
+            self.context, legacy_st=st_cur, legacy_bb=bb_cur
         )
         next_m = v6_eng.toggle_barbell_mode(can_trade_sgov_now=False)
-        v6_eng.save_json_atomic(DEFAULT_V6_LEDGER_PATH)
-
-        st_synced, bb_synced = sync_v6_to_legacy_state_dicts(v6_eng, st_cur, bb_cur)
-        await self.context.ledger.update_state(
-            TARGET_SYMBOL,
-            portion_mode=next_m,
-            barbell_mode=next_m,
-            initial_seed_usd=st_synced['initial_seed_usd'],
-            active_seed_usd=st_synced['active_seed_usd'],
-            vault_realized_profit_usd=st_synced['vault_realized_profit_usd'],
-            v6_consecutive_no_trade_days=st_synced['v6_consecutive_no_trade_days'],
-            v6_prev_t1h_px=st_synced['v6_prev_t1h_px'],
-            v6_sma120_px=st_synced['v6_sma120_px'],
+        await apply_v6_mirror_to_legacy_ledgers(
+            self.context, v6_eng, save_v6_disk=True
         )
-        if hasattr(bb_ledger, 'update_state'):
-            await bb_ledger.update_state(
-                portion_mode=next_m,
-                vault_realized_profit_usd=bb_synced['vault_realized_profit_usd'],
-            )
 
         self.context.wakeup_event.set()
         if edit_msg_id is not None and edit_msg_id > 0:
@@ -2665,23 +2659,16 @@ class TelegramCommandController:
             pass
 
         try:
-            if _is_barbell_portion_mode(
-                updated_st
-            ) and not is_live_assassin_standalone_active(self.context):
-                await initialize_or_sync_barbell_on_mode_enter(
-                    self.context, new_seed_usd=round(val, 4)
-                )
+            if not is_live_assassin_standalone_active(self.context):
+                from soxl_v6_barbell_engine import sync_v6_on_seed_change
+
+                await sync_v6_on_seed_change(self.context, round(val, 4))
                 updated_st = self.context.ledger.get_state(TARGET_SYMBOL)
             else:
                 b_led = ensure_barbell_ledger(self.context)
-                keep_init = (
-                    False
-                    if is_live_assassin_standalone_active(self.context)
-                    else bool(b_led.get_state().get("is_initialized", False))
-                )
                 await b_led.update_state(
                     initial_seed_usd=round(val, 4),
-                    is_initialized=keep_init,
+                    is_initialized=False,
                 )
         except Exception:
             pass
@@ -2802,6 +2789,14 @@ class TelegramCommandController:
         )
         try:
             await ensure_barbell_ledger(self.context).reset_vault_profit_only()
+        except Exception:
+            pass
+        # NEW [Case 114]: /reset_profit 실행 시 v6 분리 수익금고(separated_profit_cash) 동시 0점 초기화
+        try:
+            from soxl_v6_barbell_engine import reset_v6_profit_vault
+
+            await reset_v6_profit_vault(self.context)
+            st_reset = self.context.ledger.get_state(TARGET_SYMBOL)
         except Exception:
             pass
 
@@ -3134,6 +3129,15 @@ class TelegramCommandController:
                 await relock_stratum_on_bot_resume(
                     context=self.context, now_est=datetime.now(EST_TZ)
                 )
+                try:
+                    from soxl_v6_barbell_engine import sync_v6_engine_from_reconciled_ledgers
+
+                    await sync_v6_engine_from_reconciled_ledgers(
+                        self.context,
+                        holdings_map=getattr(self.context, "latest_holdings", None),
+                    )
+                except Exception:
+                    pass
             self.context.wakeup_event.set()
             await self._render_and_send_settlement(
                 chat_id=chat_id, edit_msg_id=msg_id
@@ -3405,18 +3409,22 @@ def _c114_install_ui():
                 return _w
             setattr(cls_t, mn, _mk_w(getattr(cls_t, mn)))
 
+    # MODIFIED [Case 114]: 동적 폴더 격리 및 apply_v6_mirror_to_legacy_ledgers 원자적 3중 동기화
     async def _c114_toggle_v2(self, chat_id: str, edit_msg_id=None) -> None:
-        from soxl_v6_barbell_engine import BARBELL_MODE_COMPOUND, DEFAULT_V6_LEDGER_PATH, format_barbell_mode_ko, get_shared_pipios_v6_engine, sync_v6_to_legacy_state_dicts
+        from soxl_v6_barbell_engine import (
+            BARBELL_MODE_COMPOUND,
+            apply_v6_mirror_to_legacy_ledgers,
+            format_barbell_mode_ko,
+            get_shared_pipios_v6_engine,
+        )
         st_c = self.context.ledger.get_state(TARGET_SYMBOL)
         bb_l = ensure_barbell_ledger(self.context)
         bb_c = bb_l.get_state() if hasattr(bb_l, "get_state") else {}
         eng = get_shared_pipios_v6_engine(self.context, legacy_st=st_c, legacy_bb=bb_c)
         nxt = eng.toggle_barbell_mode(can_trade_sgov_now=False)
-        eng.save_json_atomic(DEFAULT_V6_LEDGER_PATH)
-        st_s, bb_s = sync_v6_to_legacy_state_dicts(eng, st_c, bb_c)
-        await self.context.ledger.update_state(TARGET_SYMBOL, portion_mode=nxt, barbell_mode=nxt, initial_seed_usd=st_s["initial_seed_usd"], active_seed_usd=st_s["active_seed_usd"], vault_realized_profit_usd=st_s["vault_realized_profit_usd"])
-        if hasattr(bb_l, "update_state"):
-            await bb_l.update_state(portion_mode=nxt, vault_realized_profit_usd=bb_s["vault_realized_profit_usd"])
+        await apply_v6_mirror_to_legacy_ledgers(
+            self.context, eng, save_v6_disk=True
+        )
         self.context.wakeup_event.set()
         if edit_msg_id is not None and int(edit_msg_id) > 0:
             try:
@@ -3450,13 +3458,16 @@ _c114_old_patch_ui = globals().get("_c114_patch_ui")
 if callable(_c114_old_patch_ui):
     def _c114_patch_ui(ui_self, text, rm):
         try:
-            from soxl_v6_barbell_engine import DEFAULT_V6_LEDGER_PATH, get_shared_pipios_v6_engine
+            from soxl_v6_barbell_engine import get_shared_pipios_v6_engine, resolve_v6_ledger_path
             st_c = ui_self.context.ledger.get_state(TARGET_SYMBOL)
             eng = get_shared_pipios_v6_engine(ui_self.context, legacy_st=st_c)
             sm = str(st_c.get("portion_mode") or "").upper().strip()
             if sm in ("BARBELL_SIMPLE", "BARBELL_COMPOUND") and sm != eng.barbell_mode:
                 eng.set_barbell_mode(sm, can_trade_sgov_now=False)
-                eng.save_json_atomic(DEFAULT_V6_LEDGER_PATH)
+                eng.save_json_atomic(
+                    resolve_v6_ledger_path(ui_self.context),
+                    allowed_root=getattr(ui_self.context, "base_dir", None),
+                )
         except Exception:
             pass
         return _c114_old_patch_ui(ui_self, text, rm)

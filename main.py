@@ -399,6 +399,9 @@ def _evaluate_fast_shield_mode(
         return True
     if is_sniper_l1_trail_active(context, TARGET_SYMBOL):
         return True
+    v6_pend = st.get("v6_pending_order")
+    if isinstance(v6_pend, dict) and str(v6_pend.get("order_id") or "").strip():
+        return True
     if str(st.get("buy_order_id") or "").strip() or str(
         st.get("sell_order_id") or ""
     ).strip():
@@ -502,6 +505,22 @@ async def main_sniper_loop(context: SniperAppContext) -> None:
                         prices=context.latest_prices,
                         now_est=now_est,
                     )
+                    try:
+                        from soxl_v6_barbell_engine import sync_v6_engine_from_reconciled_ledgers
+
+                        await context.ledger.update_state(
+                            TARGET_SYMBOL, v6_pending_order=None
+                        )
+                        await sync_v6_engine_from_reconciled_ledgers(
+                            context,
+                            holdings_map=(
+                                context.latest_holdings
+                                if context.holdings_fetch_ok
+                                else None
+                            ),
+                        )
+                    except Exception as v6_0400_exc:
+                        logger.debug("04:00 EST v6 역동기화 스킵: %s", v6_0400_exc)
                     context.last_0400_sync_date = today_str
 
             # ---------------------------------------------------------------
@@ -830,6 +849,20 @@ async def async_main() -> int:
                     await initialize_or_sync_barbell_on_mode_enter(
                         context=context, holdings_map=holdings_map
                     )
+                # NEW [Case 114]: 부팅 화해 직후 실잔고·예수금 기준 v6 엔진(eng.stack) 3중 원장 동기화
+                try:
+                    from soxl_v6_barbell_engine import sync_v6_engine_from_reconciled_ledgers
+
+                    bp_boot = await context.api.get_buying_power_usd(
+                        safety_buffer_pct=0.0
+                    )
+                    await sync_v6_engine_from_reconciled_ledgers(
+                        context,
+                        holdings_map=holdings_map,
+                        broker_bp_usd=(bp_boot if bp_boot > 0.0 else None),
+                    )
+                except Exception as v6_boot_exc:
+                    logger.debug("부팅 v6 역동기화 스킵: %s", v6_boot_exc)
     except Exception as init_exc:
         logger.debug("부팅 초기 잔고 동기화 스킵: %s", init_exc)
 

@@ -1748,6 +1748,18 @@ class _AdaptiveTelegramBridge:
             safety_buffer_pct=0.0
         )
         fx_rate = await self.context.api.get_usd_krw_rate()
+        # NEW [Case 114]: 브릿지 /sync 경로에서도 레거시 화해 직후 v6 엔진 역동기화 보장
+        if not is_live_assassin_standalone_active(self.context):
+            try:
+                from soxl_v6_barbell_engine import sync_v6_engine_from_reconciled_ledgers
+
+                await sync_v6_engine_from_reconciled_ledgers(
+                    self.context,
+                    holdings_map=(holdings_map if fetch_ok else None),
+                    broker_bp_usd=bp_usd,
+                )
+            except Exception as v6_sync_exc:
+                logger.debug("브릿지 v6 /sync 역동기화 스킵: %s", v6_sync_exc)
         st = self.context.ledger.get_state(TARGET_SYMBOL)
 
         if bool(st.get("waiting_reserve_deposit", False)):
