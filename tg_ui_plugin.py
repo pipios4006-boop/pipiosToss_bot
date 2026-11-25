@@ -850,6 +850,130 @@ def _format_sub_grid_stratum_lines(
     return lines
 
 
+# NEW: 수혈 원금 차감 착시를 제거한 실물 주식 평가액·실수익률·실운용 총평가 산출기
+def _compute_unmasked_eval_anatomy(
+    summary: Dict[str, Any],
+    st: Dict[str, Any],
+    context: Optional[Any] = None,
+    unalloc_dep_usd: float = 0.0,
+) -> Dict[str, float]:
+    init_seed = max(
+        100.0,
+        safe_float(summary.get("initial_seed_usd"), DEFAULT_INITIAL_SEED_USD),
+    )
+    is_barbell = bool(summary.get("is_barbell_mode", False))
+    actual_inv = max(0.0, safe_float(summary.get("actual_invested_usd"), 0.0))
+    actual_avg_p = max(0.0, safe_float(summary.get("actual_avg_price"), 0.0))
+    stock_eval_usd = max(0.0, safe_float(summary.get("market_eval_usd"), 0.0))
+    unreal_pnl = safe_float(summary.get("unrealized_pnl_usd"), 0.0)
+    unreal_rate_pct = safe_float(summary.get("unrealized_rate_pct"), 0.0)
+    free_cash = max(0.0, safe_float(summary.get("free_cash_usd"), 0.0))
+    cum_net = safe_float(summary.get("cumulative_realized_net_usd"), 0.0)
+    vault_locked = max(
+        0.0, safe_float(summary.get("vaulted_profit_locked_usd"), 0.0)
+    )
+    inj_res_usd = max(0.0, safe_float(summary.get("injected_reserve_usd"), 0.0))
+
+    raw_pm = str((st or {}).get("portion_mode") or "").upper().strip()
+    eff_b_seed = (
+        max(init_seed, safe_float((st or {}).get("active_seed_usd"), init_seed))
+        if raw_pm == "BARBELL_COMPOUND"
+        else init_seed
+    )
+
+    if is_barbell:
+        if context is not None:
+            b_initialized = False
+            try:
+                b_raw = ensure_barbell_ledger(context).get_state()
+                b_initialized = bool(b_raw.get("is_initialized", False))
+            except Exception:
+                b_initialized = False
+            b_info = summarize_barbell_status(context, st_soxl=st)
+            sgov_inv = max(
+                0.0, safe_float(b_info.get("sgov_invested_usd"), 0.0)
+            )
+            sgov_eval = max(
+                0.0, safe_float(b_info.get("sgov_eval_usd"), sgov_inv)
+            )
+            cash_b = max(0.0, safe_float(b_info.get("cash_bucket_usd"), 0.0))
+            pend_sg = max(
+                0.0,
+                safe_float(b_info.get("pending_sgov_buy_budget_usd"), 0.0),
+            )
+            vault_av = max(
+                0.0, safe_float(b_info.get("vault_available_usd"), 0.0)
+            )
+            if not b_initialized:
+                cap_liq_40 = max(
+                    0.0, round(eff_b_seed * 0.40, 4) - inj_res_usd - sgov_inv
+                )
+                liq_40 = min(cash_b + pend_sg, cap_liq_40)
+                eff_vault = max(vault_av, vault_locked)
+                non_soxl_cost = sgov_inv + liq_40 + eff_vault
+                non_soxl_eval = sgov_eval + liq_40 + eff_vault
+            else:
+                non_soxl_cost = sgov_inv + cash_b + pend_sg + vault_av
+                non_soxl_eval = sgov_eval + cash_b + pend_sg + vault_av
+        else:
+            rem_40 = max(0.0, round(eff_b_seed * 0.40, 4) - inj_res_usd)
+            non_soxl_cost = rem_40 + vault_locked
+            non_soxl_eval = rem_40 + vault_locked
+    else:
+        non_soxl_cost = vault_locked
+        non_soxl_eval = vault_locked
+
+    bot_cost_basis = round(actual_inv + free_cash + non_soxl_cost, 4)
+    actual_mark_eq = round(stock_eval_usd + free_cash + non_soxl_eval, 4)
+    eff_principal = round(max(init_seed, bot_cost_basis - cum_net), 4)
+    ext_principal = round(max(0.0, eff_principal - init_seed), 4)
+    eff_total_pnl = round(actual_mark_eq - eff_principal, 4)
+    eff_mark_roi = (
+        round((eff_total_pnl / eff_principal) * 100.0, 2)
+        if eff_principal > 0.0
+        else 0.0
+    )
+
+    proj_rth_base_eq = safe_float(
+        summary.get("projected_graduation_equity_usd"), init_seed + cum_net
+    )
+    proj_ext_base_eq = safe_float(
+        summary.get("v6_ext_projected_graduation_equity_usd"), proj_rth_base_eq
+    )
+    gross_rth_grad_eq = round(proj_rth_base_eq + ext_principal, 4)
+    gross_ext_grad_eq = round(proj_ext_base_eq + ext_principal, 4)
+    gross_rth_grad_roi = (
+        round(((gross_rth_grad_eq - eff_principal) / eff_principal) * 100.0, 2)
+        if eff_principal > 0.0
+        else 0.0
+    )
+    gross_ext_grad_roi = (
+        round(((gross_ext_grad_eq - eff_principal) / eff_principal) * 100.0, 2)
+        if eff_principal > 0.0
+        else 0.0
+    )
+    acct_total_eval = round(actual_mark_eq + max(0.0, unalloc_dep_usd), 4)
+
+    return {
+        "actual_inv_usd": round(actual_inv, 4),
+        "actual_avg_price": round(actual_avg_p, 4),
+        "stock_eval_usd": round(stock_eval_usd, 4),
+        "unreal_pnl_usd": round(unreal_pnl, 4),
+        "unreal_rate_pct": round(unreal_rate_pct, 2),
+        "bot_cost_basis_usd": bot_cost_basis,
+        "eff_principal_usd": eff_principal,
+        "ext_principal_usd": ext_principal,
+        "actual_mark_eq_usd": actual_mark_eq,
+        "acct_total_eval_usd": acct_total_eval,
+        "eff_total_pnl_usd": eff_total_pnl,
+        "eff_mark_roi_pct": eff_mark_roi,
+        "gross_rth_grad_eq_usd": gross_rth_grad_eq,
+        "gross_rth_grad_roi_pct": gross_rth_grad_roi,
+        "gross_ext_grad_eq_usd": gross_ext_grad_eq,
+        "gross_ext_grad_roi_pct": gross_ext_grad_roi,
+    }
+
+
 def build_avwap_radar_message(
     context: Any,
     st: Dict[str, Any],
@@ -1320,28 +1444,32 @@ def build_avwap_radar_message(
         lines.append(
             f"💉 자동수혈: <b>{used_res_cnt}회분</b> 사용 (${inj_res_usd:,.2f} · {repay_timing_lbl})"
         )
+    # MODIFIED: 레이더 하단 평가자산 및 전량졸업예정액도 수혈 원금 무차감 실평가 기준으로 일치화
+    av_anat = _compute_unmasked_eval_anatomy(summary, st, context=context)
+    av_mark_eq = av_anat["actual_mark_eq_usd"]
+    av_mark_roi = av_anat["eff_mark_roi_pct"]
+    av_m_sign = "+" if av_mark_roi >= 0.0 else ""
+    av_g_ext_eq = av_anat["gross_ext_grad_eq_usd"]
+    av_g_ext_roi = av_anat["gross_ext_grad_roi_pct"]
+    av_g_rth_eq = av_anat["gross_rth_grad_eq_usd"]
+    av_g_rth_roi = av_anat["gross_rth_grad_roi_pct"]
     if is_c114_v6 and total_held_sh > 0 and bool(summary.get("v6_is_extended_session", False)):
-        ext_grad_eq = safe_float(
-            summary.get("v6_ext_projected_graduation_equity_usd"), proj_grad_eq
-        )
-        ext_grad_roi = safe_float(
-            summary.get("v6_ext_projected_graduation_roi_pct"), proj_grad_roi
-        )
-        eg_sign = "+" if ext_grad_roi >= 0.0 else ""
+        eg_sign = "+" if av_g_ext_roi >= 0.0 else ""
         grad_proj_line = (
-            f"🎓 전량졸업예정: <b>${ext_grad_eq:,.2f}</b> "
-            f"({eg_sign}{ext_grad_roi:.2f}%·장외+4% / T-1h+1% ${proj_grad_eq:,.0f})"
+            f"🎓 전량졸업예정: <b>${av_g_ext_eq:,.2f}</b> "
+            f"({eg_sign}{av_g_ext_roi:.2f}%·장외+4% / T-1h+1% ${av_g_rth_eq:,.0f})"
         )
     else:
+        rg_sign = "+" if av_g_rth_roi >= 0.0 else ""
         grad_proj_line = (
-            f"🎓 전량졸업예정: <b>${proj_grad_eq:,.2f}</b> "
-            f"({pg_sign}{proj_grad_roi:.2f}% 확정예정)"
+            f"🎓 전량졸업예정: <b>${av_g_rth_eq:,.2f}</b> "
+            f"({rg_sign}{av_g_rth_roi:.2f}% 확정예정)"
         )
     lines.extend(
         [
             cycle_profit_line,
             f"💰 전체누적 실현익: <b>{n_sign}${abs(cum_net):,.2f}</b> (졸업 {comp_cycles}회 · {n_sign}{abs(real_roi):.1f}%)",
-            f"💵 {cash_title}: <b>${free_cash:,.2f}</b> · 현재평가: <b>${mark_eq:,.0f}</b> ({m_sign}{mark_roi:.1f}%)",
+            f"💵 {cash_title}: <b>${free_cash:,.2f}</b> · 실평가: <b>${av_mark_eq:,.0f}</b> ({av_m_sign}{av_mark_roi:.1f}%)",
             grad_proj_line,
         ]
     )
@@ -1458,9 +1586,13 @@ def build_sync_instruction_message(
         )
     elif is_barbell:
         v_lk_s = max(0.0, safe_float(st.get("vaulted_profit_locked_usd"), 0.0))
-        eff_soxl_bp_sync = max(
-            0.0, raw_bp_sync - v_lk_s - round(init_seed * 0.40, 4)
+        eff_b_s = (
+            max(init_seed, safe_float(st.get("active_seed_usd"), init_seed))
+            if raw_pm_sy == "BARBELL_COMPOUND"
+            else init_seed
         )
+        rem_40_s = max(0.0, round(eff_b_s * 0.40, 4) - inj_res_usd)
+        eff_soxl_bp_sync = max(0.0, raw_bp_sync - v_lk_s - rem_40_s)
     else:
         v_lk_s = max(0.0, safe_float(st.get("vaulted_profit_locked_usd"), 0.0))
         eff_soxl_bp_sync = max(0.0, raw_bp_sync - v_lk_s)
@@ -1483,6 +1615,30 @@ def build_sync_instruction_message(
     m_sign = "+" if mark_roi >= 0.0 else ""
     pg_sign = "+" if proj_grad_roi >= 0.0 else ""
 
+    # MODIFIED: 수혈 원금 차감 착시($0.00 / -100%+) 제거 및 실제 주식 평가액·실수익률 정밀 표출
+    real_anat = _compute_unmasked_eval_anatomy(
+        summary, st, context=context, unalloc_dep_usd=unalloc_dep_usd
+    )
+    total_sh_sync = held_sh + sub_sh
+    actual_inv_u = real_anat["actual_inv_usd"]
+    avg_p_u = real_anat["actual_avg_price"]
+    stock_eval_u = real_anat["stock_eval_usd"]
+    ur_pct = real_anat["unreal_rate_pct"]
+    ur_sign = "+" if ur_pct >= 0.0 else ""
+    bot_basis_u = real_anat["bot_cost_basis_usd"]
+    eff_prin_u = real_anat["eff_principal_usd"]
+    ext_prin_u = real_anat["ext_principal_usd"]
+    actual_mark_u = real_anat["actual_mark_eq_usd"]
+    acct_tot_u = real_anat["acct_total_eval_usd"]
+    em_roi = real_anat["eff_mark_roi_pct"]
+    em_sign = "+" if em_roi >= 0.0 else ""
+    g_ext_eq = real_anat["gross_ext_grad_eq_usd"]
+    g_ext_roi = real_anat["gross_ext_grad_roi_pct"]
+    ge_sign = "+" if g_ext_roi >= 0.0 else ""
+    g_rth_eq = real_anat["gross_rth_grad_eq_usd"]
+    g_rth_roi = real_anat["gross_rth_grad_roi_pct"]
+    gr_sign = "+" if g_rth_roi >= 0.0 else ""
+
     is_c114_sync = bool(summary.get("is_case114_v6_mode", False))
     ext_grad_sync_eq = safe_float(
         summary.get("v6_ext_projected_graduation_equity_usd"), proj_grad_eq
@@ -1493,27 +1649,73 @@ def build_sync_instruction_message(
     egs_sign = "+" if ext_grad_sync_roi >= 0.0 else ""
     use_ext_grad_sync = bool(
         is_c114_sync
-        and (held_sh + sub_sh) > 0
+        and total_sh_sync > 0
         and bool(summary.get("v6_is_extended_session", False))
     )
-    if mark_roi < 0.0:
+    if total_sh_sync > 0 and ur_pct < 0.0:
         anatomy_header = (
-            f"💰 <b>[왜 평가자산이 {m_sign}{mark_roi:.1f}%인가? (재고해부)]</b>"
+            f"💰 <b>[실제 주식 평가 및 자산 해부 (주식 {ur_sign}{ur_pct:.2f}%)]</b>"
         )
-        anatomy_tip_1 = "💡 현재 마이너스는 보유주식의 일시 평가감이며"
+        anatomy_tip_1 = "💡 현물 ETF라 강제청산이 없으며(일시 평가감),"
+    else:
+        anatomy_header = "💰 <b>[현재 자산 및 재고 평가 해부]</b>"
+        anatomy_tip_1 = "💡 확정 원리금에 보유주식 평가가 반영된 실자산이며"
+
+    if use_ext_grad_sync:
+        grad_sync_line = (
+            f"🎓 전량졸업 예정: <b>${g_ext_eq:,.2f}</b> "
+            f"({ge_sign}{g_ext_roi:.2f}%·장외+4% / T-1h+1% ${g_rth_eq:,.0f})"
+        )
         anatomy_tip_2 = (
-            f"   장외+4% 졸업시 <b>${ext_grad_sync_eq:,.0f}({egs_sign}{ext_grad_sync_roi:.2f}%)</b> / T-1h+1%시 <b>${proj_grad_eq:,.0f}</b> 확정!"
-            if use_ext_grad_sync
-            else f"   반등 졸업시 <b>${proj_grad_eq:,.0f}({pg_sign}{proj_grad_roi:.2f}%)</b>로 수익 확정!"
+            f"   장외+4% 졸업시 총 <b>${g_ext_eq:,.0f}</b>(시드기준 <b>${ext_grad_sync_eq:,.0f}</b>·{egs_sign}{ext_grad_sync_roi:.2f}%) 확정!"
+            if ext_prin_u >= 1.0
+            else f"   장외+4% 졸업시 <b>${ext_grad_sync_eq:,.0f}({egs_sign}{ext_grad_sync_roi:.2f}%)</b> / T-1h+1%시 <b>${proj_grad_eq:,.0f}</b> 확정!"
         )
     else:
-        anatomy_header = "💰 <b>[현재 자산 및 재고 평가 3단 해부]</b>"
-        anatomy_tip_1 = "💡 확정 원리금에 보유주식 수익이 더해진 상태이며"
-        anatomy_tip_2 = (
-            f"   장외+4% 졸업시 <b>${ext_grad_sync_eq:,.0f}({egs_sign}{ext_grad_sync_roi:.2f}%)</b> / T-1h+1%시 <b>${proj_grad_eq:,.0f}</b> 확정!"
-            if use_ext_grad_sync
-            else f"   전량 졸업시 <b>${proj_grad_eq:,.0f}({pg_sign}{proj_grad_roi:.2f}%)</b>로 수익 확정!"
+        grad_sync_line = (
+            f"🎓 전량졸업 예정: <b>${g_rth_eq:,.2f}</b> "
+            f"({gr_sign}{g_rth_roi:.2f}% 확정예정!)"
         )
+        anatomy_tip_2 = (
+            f"   전량 졸업시 총 <b>${g_rth_eq:,.0f}</b>(시드기준 <b>${proj_grad_eq:,.0f}</b>·{pg_sign}{proj_grad_roi:.2f}%) 확정!"
+            if ext_prin_u >= 1.0
+            else f"   {'반등' if em_roi < 0.0 else '전량'} 졸업시 <b>${proj_grad_eq:,.0f}({pg_sign}{proj_grad_roi:.2f}%)</b>로 수익 확정!"
+        )
+
+    if total_sh_sync > 0:
+        stock_cost_line = (
+            f"▫️ 주식 매수원금: <b>${actual_inv_u:,.2f}</b> "
+            f"(평단 ${avg_p_u:.2f} · {total_sh_sync}주)"
+        )
+        stock_eval_line = (
+            f"▫️ 실제 주식평가: <b>${stock_eval_u:,.2f}</b> "
+            f"(<b>{ur_sign}{ur_pct:.2f}%</b> · {u_sign}${abs(unreal_pnl):,.2f})"
+        )
+    else:
+        stock_cost_line = "▫️ 주식 매수원금: <b>$0.00</b> (현재 0주 관망)"
+        stock_eval_line = "▫️ 실제 주식평가: <b>$0.00</b> (0.00% · 평가손익 $0.00)"
+
+    principal_line = (
+        f"▫️ 총투입 원리금: <b>${bot_basis_u:,.2f}</b> "
+        f"(시드+수혈 ${eff_prin_u:,.0f} + 확정익)"
+        if ext_prin_u >= 1.0
+        else f"▫️ 확정 원리금계: <b>${real_eq:,.2f}</b> (시드 + 전체누적익)"
+    )
+    mark_eval_line = (
+        f"▫️ 현재 실평가액: <b>${actual_mark_u:,.2f}</b> "
+        f"(<b>{em_sign}{em_roi:.2f}%</b> · 계좌총액 ${acct_tot_u:,.2f})"
+        if unalloc_dep_usd >= 0.01
+        else f"▫️ 현재 실평가액: <b>${actual_mark_u:,.2f}</b> "
+        f"(<b>{em_sign}{em_roi:.2f}%</b> · 수혈포함 실자산)"
+    )
+
+    main_eval_u = round(float(held_sh) * lp, 4) if (held_sh > 0 and lp > 0.0) else 0.0
+    sub_eval_u = round(float(sub_sh) * lp, 4) if (sub_sh > 0 and lp > 0.0) else 0.0
+    main_grid_row = (
+        f"▫️ 🟦본그리드: 원금 <b>${inv_main:,.0f}</b> ➔ 평가 <b>${main_eval_u:,.0f}</b> ({held_tiers}개층 {held_sh}주)"
+        if held_sh > 0
+        else f"▫️ 🟦본그리드: <b>${inv_main:,.0f}</b> ({main_alloc_pct:.0f}% · {held_tiers}개층 {held_sh}주)"
+    )
 
     cash_row_label = "SOXL가용현금" if is_barbell else "가용현금"
 
@@ -1528,11 +1730,11 @@ def build_sync_instruction_message(
         "──────────────",
         "📊 <b>[시드 배분 및 층별 자산 시각화]</b>",
         f"{gauge_bar} (주식 {stock_alloc_pct:.0f}% : 현금 {cash_alloc_pct:.0f}%)",
-        f"▫️ 🟦본그리드: <b>${inv_main:,.0f}</b> ({main_alloc_pct:.0f}% · {held_tiers}개층 {held_sh}주)",
+        main_grid_row,
     ]
     if sub_sh > 0:
         lines.append(
-            f"▫️ 🟨기보유서브: <b>${inv_sub:,.0f}</b> ({sub_alloc_pct:.0f}% · {sub_tiers}개층 {sub_sh}주)"
+            f"▫️ 🟨기보유서브: 원금 <b>${inv_sub:,.0f}</b> ➔ 평가 <b>${sub_eval_u:,.0f}</b> ({sub_tiers}개층 {sub_sh}주)"
         )
     lines.extend(
         [
@@ -1567,14 +1769,11 @@ def build_sync_instruction_message(
         [
             "──────────────",
             anatomy_header,
-            f"▫️ 확정 원리금계: <b>${real_eq:,.2f}</b> (시드 + 전체누적익)",
-            f"▫️ 일시 재고평가: <b>{u_sign}${abs(unreal_pnl):,.2f}</b> (보유주식 일시평가)",
-            f"▫️ 현재 평가자산: <b>${mark_eq:,.2f}</b> ({m_sign}{mark_roi:.2f}% · 재고반영)",
-            (
-                f"🎓 전량졸업 예정: <b>${ext_grad_sync_eq:,.2f}</b> ({egs_sign}{ext_grad_sync_roi:.2f}%·장외+4% / T-1h+1% ${proj_grad_eq:,.0f})"
-                if use_ext_grad_sync
-                else f"🎓 전량졸업 예정: <b>${proj_grad_eq:,.2f}</b> ({pg_sign}{proj_grad_roi:.2f}% 확정예정!)"
-            ),
+            stock_cost_line,
+            stock_eval_line,
+            principal_line,
+            mark_eval_line,
+            grad_sync_line,
             anatomy_tip_1,
             anatomy_tip_2,
             "──────────────",
