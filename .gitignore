@@ -13,3 +13,4 @@ patch_backups/
 *.tmp*
 apply_v3_audit_patches.py
 *.npz
+*.bak*
