@@ -1418,11 +1418,6 @@ def _execute_git_pull_and_preflight_sync(
     folder_slug_now = get_folder_slug(target_dir)
     is_local_git_shield = bool(
         os.environ.get("LOCK_LOCAL_GIT_PULL", "0").strip() == "1"
-        or (
-            folder_slug_now == "pipiosToss"
-            and os.path.isdir("/home/pipios4006")
-            and os.environ.get("ALLOW_CASE114_GIT_PULL", "0").strip() != "1"
-        )
     )
     if is_local_git_shield:
         reaped_z, need_svc_yield = _scan_and_reap_zombies_for_preflight_sync(
