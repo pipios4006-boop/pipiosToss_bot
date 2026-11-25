@@ -49,25 +49,32 @@ V6_PROG_STEPS: Tuple[float, ...] = (
 DEFAULT_SGOV_NOMINAL_PX: float = 100.30
 
 
-def assert_pipios_only_path(file_path: str) -> str:
+# MODIFIED: 각 사용자 서버의 현재 봇 설치 폴더 기준 격리 허용 (마스터 백테스트 폴더 /home/pipios4006 쓰기만 영구 차단)
+def assert_pipios_only_path(
+    file_path: str, allowed_root: Optional[str] = None
+) -> str:
     raw = str(file_path or "").strip()
-    if "wontoss" in raw.lower():
-        raise PermissionError(
-            f"[PIPIOS_GUARD] /home/wonToss 경로 접근이 영구 차단되었습니다: {raw}"
-        )
+    if not raw:
+        raise PermissionError("[V6_PATH_GUARD] 빈 파일 경로는 허용되지 않습니다.")
     real_p = os.path.realpath(os.path.abspath(raw))
-    if "wontoss" in real_p.lower() or real_p.startswith("/home/pipios4006"):
+    if real_p == "/home/pipios4006" or real_p.startswith("/home/pipios4006/"):
         raise PermissionError(
-            f"[PIPIOS_GUARD] 보호 경로 쓰기가 영구 차단되었습니다: {real_p}"
+            f"[V6_PATH_GUARD] 마스터 데이터 보호 경로 쓰기 차단: {real_p}"
         )
-    real_root = os.path.realpath(os.path.abspath(PIPIOS_ONLY_ROOT))
+    bot_root = os.path.realpath(
+        os.path.abspath(
+            allowed_root
+            if (isinstance(allowed_root, str) and allowed_root.strip())
+            else (os.path.dirname(os.path.abspath(__file__)) or ".")
+        )
+    )
     if not (
-        real_p == real_root
-        or real_p.startswith(real_root + os.sep)
+        real_p == bot_root
+        or real_p.startswith(bot_root + os.sep)
         or real_p.startswith("/tmp/")
     ):
         raise PermissionError(
-            f"[PIPIOS_GUARD] /home/pipiosToss 외부 경로 쓰기 차단: {real_p}"
+            f"[V6_PATH_GUARD] 현재 봇 폴더({bot_root}) 외부 경로 쓰기 차단: {real_p}"
         )
     return real_p
 
@@ -962,38 +969,59 @@ class SOXLSniperBarbellV6Engine:
         legacy_state: Dict[str, Any],
         legacy_barbell_state: Optional[Dict[str, Any]] = None,
     ) -> "SOXLSniperBarbellV6Engine":
+        # MODIFIED: 타 사용자 기존 원장의 book_price · sub_buckets · sgov_held_qty · vaulted_profit_locked_usd 무손실 이관
         bb = legacy_barbell_state or {}
         seed = float(
-            bb.get(
+            legacy_state.get(
                 "initial_seed_usd",
-                legacy_state.get(
+                bb.get(
                     "initial_seed_usd", legacy_state.get("user_seed", 20000.0)
                 ),
             )
+            or 20000.0
         )
-        vault_p = float(
-            bb.get(
-                "vault_realized_profit_usd",
-                legacy_state.get("vault_realized_profit_usd", 0.0),
-            )
+        vault_p = max(
+            0.0,
+            float(bb.get("vault_realized_profit_usd") or 0.0),
+            float(legacy_state.get("vaulted_profit_locked_usd") or 0.0),
+            float(legacy_state.get("vault_realized_profit_usd") or 0.0),
         )
-        sgov_sh = int(bb.get("sgov_shares", legacy_state.get("sgov_shares", 0)))
+        sgov_sh = max(
+            0,
+            int(
+                float(
+                    bb.get("sgov_held_qty")
+                    or bb.get("sgov_shares")
+                    or legacy_state.get("sgov_held_qty")
+                    or legacy_state.get("sgov_shares")
+                    or 0
+                )
+            ),
+        )
 
-        raw_buckets = legacy_state.get("buckets", legacy_state.get("layers", []))
+        raw_buckets = list(
+            legacy_state.get("buckets", legacy_state.get("layers", [])) or []
+        ) + list(legacy_state.get("sub_buckets", []) or [])
         slot_dicts: List[Dict[str, Any]] = []
         for b in raw_buckets:
             if not isinstance(b, dict):
                 continue
-            q_v = int(b.get("qty", b.get("q", 0)))
-            p_v = float(b.get("avg_price", b.get("buy_price", b.get("p", 0.0))))
+            q_v = int(float(b.get("qty") or b.get("q") or 0))
+            p_v = float(
+                b.get("book_price")
+                or b.get("avg_price")
+                or b.get("buy_price")
+                or b.get("p")
+                or 0.0
+            )
             if q_v >= 1 and p_v > 0.0:
-                lots = max(1, int(b.get("lot_count", 1)))
+                lots = max(1, int(float(b.get("lot_count") or 1)))
                 slot_dicts.append(
                     {
                         "p": p_v,
                         "q": q_v,
                         "merges": max(0, lots - 1),
-                        "buy_ts": int(b.get("buy_ts", 0)),
+                        "buy_ts": int(float(b.get("buy_ts") or 0)),
                     }
                 )
 
@@ -1019,7 +1047,26 @@ class SOXLSniperBarbellV6Engine:
         os.replace(tmp_path, safe_target)
         return safe_target
 # [CASE114_LEGACY_MIRROR_BRIDGE]
-DEFAULT_V6_LEDGER_PATH: str = "/home/pipiosToss/v6_barbell_ledger_pipiosToss.json"
+import re as _v6_re
+
+
+def resolve_v6_ledger_path(base_dir_or_ctx: Any = None) -> str:
+    raw_d = (
+        getattr(base_dir_or_ctx, "base_dir", None)
+        if (base_dir_or_ctx is not None and not isinstance(base_dir_or_ctx, str))
+        else base_dir_or_ctx
+    )
+    t_dir = (
+        os.path.abspath(str(raw_d).strip())
+        if (isinstance(raw_d, str) and str(raw_d).strip())
+        else os.path.abspath(os.path.dirname(os.path.abspath(__file__)) or ".")
+    )
+    raw_name = os.path.basename(os.path.normpath(t_dir)).strip()
+    slug = _v6_re.sub(r"[^A-Za-z0-9._-]+", "_", raw_name).strip("._-") or "default_bot"
+    return os.path.join(t_dir, f"v6_barbell_ledger_{slug}.json")
+
+
+DEFAULT_V6_LEDGER_PATH: str = resolve_v6_ledger_path()
 
 
 def sync_v6_to_legacy_state_dicts(
@@ -1047,9 +1094,11 @@ def sync_v6_to_legacy_state_dicts(
             {
                 "stratum_id": idx + 1,
                 "tier_role": role,
+                "lot_type": ("REENTRY_1FL" if idx == 0 else f"GRID_L{idx + 1}"),
                 "label": label_ko,
                 "qty": int(slot.q),
                 "book_price": round(float(slot.p), 4),
+                "book_invested_usd": pure_cost,
                 "avg_price": round(float(slot.p), 4),
                 "actual_cost_usd": pure_cost,
                 "lot_count": int(slot.merges) + 1,
@@ -1070,7 +1119,17 @@ def sync_v6_to_legacy_state_dicts(
     st["buckets"] = mirrored_buckets
     st["total_qty"] = int(tot_q)
     st["avg_price"] = round(w_avg, 4)
+    core_60_u = round(eng.active_seed * V6_BARBELL_CORE_WEIGHT, 4)
+    req_inj_u = round(max(0.0, (tot_pure_cost + eng.soxl_cash) - core_60_u), 4)
+    used_cnt_u = (
+        max(1, int(math.ceil((req_inj_u - 1e-9) / max(1.0, eng.tranche_stock))))
+        if req_inj_u > 0.01
+        else 0
+    )
     st["free_cash_usd"] = round(eng.soxl_cash, 2)
+    st["injected_reserve_usd"] = req_inj_u
+    st["used_reserve_portions_cnt"] = used_cnt_u
+    st["vaulted_profit_locked_usd"] = round(eng.separated_profit_cash, 4)
     st["vault_realized_profit_usd"] = round(eng.separated_profit_cash, 2)
     st["v6_consecutive_no_trade_days"] = int(eng.consecutive_no_trade_days)
     st["v6_prev_t1h_px"] = eng.prev_t1h_px
@@ -1088,14 +1147,20 @@ def sync_v6_to_legacy_state_dicts(
     else:
         st["anchor_price"] = 0.0
 
+    sgov_inv_u = round(float(eng.sgov_shares) * eng.sgov_share_px, 4)
+    bb["is_initialized"] = True
     bb["portion_mode"] = eng.barbell_mode
     bb["initial_seed_usd"] = round(eng.user_seed, 2)
     bb["active_seed_usd"] = round(eng.active_seed, 2)
     bb["soxl_core_cash_usd"] = round(eng.soxl_cash, 2)
     bb["cash_bucket_usd"] = round(eng.reserve_cash, 2)
+    bb["sgov_held_qty"] = int(eng.sgov_shares)
     bb["sgov_shares"] = int(eng.sgov_shares)
-    bb["sgov_eval_usd"] = round(float(eng.sgov_shares) * eng.sgov_share_px, 2)
-    bb["vault_realized_profit_usd"] = round(eng.separated_profit_cash, 2)
+    bb["sgov_invested_usd"] = sgov_inv_u
+    bb["sgov_last_price"] = round(eng.sgov_share_px, 4)
+    bb["sgov_eval_usd"] = round(sgov_inv_u, 2)
+    bb["vault_realized_profit_usd"] = round(eng.separated_profit_cash, 4)
+    bb["vault_available_usd"] = round(eng.separated_profit_cash, 4)
     bb["separated_profit_cash"] = round(eng.separated_profit_cash, 2)
     bb["pending_sgov_rebuy"] = bool(eng.pending_sgov_target_usd is not None)
     return st, bb
@@ -1104,9 +1169,11 @@ def sync_v6_to_legacy_state_dicts(
 def load_or_migrate_pipios_v6_engine(
     legacy_st: Optional[Dict[str, Any]] = None,
     legacy_bb: Optional[Dict[str, Any]] = None,
-    ledger_path: str = DEFAULT_V6_LEDGER_PATH,
+    ledger_path: Optional[str] = None,
+    allowed_root: Optional[str] = None,
 ) -> SOXLSniperBarbellV6Engine:
-    safe_lp = assert_pipios_only_path(ledger_path)
+    eff_lp = ledger_path or resolve_v6_ledger_path(allowed_root)
+    safe_lp = assert_pipios_only_path(eff_lp, allowed_root=allowed_root)
     if os.path.isfile(safe_lp):
         with open(safe_lp, "r", encoding="utf-8") as rf:
             d = json.load(rf)
@@ -1279,7 +1346,7 @@ async def execute_case114_v6_barbell_tick(
                                 can_trade_sgov_now=False,
                             )
 
-                eng.save_json_atomic(DEFAULT_V6_LEDGER_PATH)
+                eng.save_json_atomic(resolve_v6_ledger_path(context))
                 st_sync, bb_sync = sync_v6_to_legacy_state_dicts(eng, st_cur, bb_cur)
                 await context.ledger.update_state(
                     "SOXL",
@@ -1330,7 +1397,7 @@ async def execute_case114_v6_barbell_tick(
                             buy_ts=0,
                         )
                     ]
-                    eng.save_json_atomic(DEFAULT_V6_LEDGER_PATH)
+                    eng.save_json_atomic(resolve_v6_ledger_path(context))
             else:
                 if logger:
                     logger.error(
@@ -1352,7 +1419,7 @@ async def execute_case114_v6_barbell_tick(
     if win["weekday"] < 5 and hm >= (int(win["rth_end_hm"]) + 1) and eng.last_eod_ymd != ymd:
         if live_p > 0.0:
             eng.finalize_rth_end_of_day(ymd, live_p)
-            eng.save_json_atomic(DEFAULT_V6_LEDGER_PATH)
+            eng.save_json_atomic(resolve_v6_ledger_path(context))
 
     # 4) 정규장(09:31 ~ 15:55 EST) 0주 상태 SGOV 목표 비중(30%) 자동 매수/리밸런싱
     if can_sgov and len(eng.stack) == 0:
@@ -1367,7 +1434,7 @@ async def execute_case114_v6_barbell_tick(
             delta_sgov = eng.compute_pending_sgov_rebalance_delta_shares()
             if delta_sgov == 0:
                 eng.pending_sgov_target_usd = None
-                eng.save_json_atomic(DEFAULT_V6_LEDGER_PATH)
+                eng.save_json_atomic(resolve_v6_ledger_path(context))
             else:
                 sgov_px_now = await _fetch_live_px_bypass_shm(
                     context.api, "SGOV", eng.sgov_share_px
@@ -1475,7 +1542,7 @@ async def execute_case114_v6_barbell_tick(
                 shaved_bull=sbull,
             )
             context.v6_last_t1h_min_epoch = cur_min_epoch
-            eng.save_json_atomic(DEFAULT_V6_LEDGER_PATH)
+            eng.save_json_atomic(resolve_v6_ledger_path(context))
 
             act = str(sig.get("action") or "")
             if act == "SELL":
@@ -1553,7 +1620,7 @@ async def execute_case114_v6_barbell_tick(
                                 eng.apply_sgov_fill(
                                     -f_sg_q, f_sg_p if f_sg_p > 0.0 else sg_lim
                                 )
-                                eng.save_json_atomic(DEFAULT_V6_LEDGER_PATH)
+                                eng.save_json_atomic(resolve_v6_ledger_path(context))
 
                     lim_buy = round(px_t1h * 1.0030, 2)
                     max_lim = round(
@@ -1619,7 +1686,14 @@ def get_shared_pipios_v6_engine(context=None, legacy_st=None, legacy_bb=None):
     eng = getattr(context, "_case114_v6_engine", None) if context is not None else None
     if isinstance(eng, SOXLSniperBarbellV6Engine):
         return eng
-    eng = load_or_migrate_pipios_v6_engine(legacy_st=legacy_st, legacy_bb=legacy_bb, ledger_path=DEFAULT_V6_LEDGER_PATH)
+    ctx_dir = getattr(context, "base_dir", None) if context is not None else None
+    dyn_lp = resolve_v6_ledger_path(context)
+    eng = load_or_migrate_pipios_v6_engine(
+        legacy_st=legacy_st,
+        legacy_bb=legacy_bb,
+        ledger_path=dyn_lp,
+        allowed_root=ctx_dir,
+    )
     if context is not None:
         try:
             setattr(context, "_case114_v6_engine", eng)
@@ -1636,7 +1710,7 @@ async def execute_case114_v6_barbell_tick(context, live_p, now_est, logger=None)
         sm = str(st_c.get("portion_mode") or "").upper().strip()
         if sm in ("BARBELL_SIMPLE", "BARBELL_COMPOUND") and sm != eng.barbell_mode:
             eng.set_barbell_mode(sm, can_trade_sgov_now=False)
-            eng.save_json_atomic(DEFAULT_V6_LEDGER_PATH)
+            eng.save_json_atomic(resolve_v6_ledger_path(context))
     except Exception:
         pass
     return await _c114_orig_tick(context, live_p, now_est, logger=logger)

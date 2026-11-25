@@ -66,6 +66,7 @@ REQUIRED_CORE_MODULES: Tuple[str, ...] = (
     "plugin_updater.py",
     "main_runtime.py",
     "main.py",
+    "soxl_v6_barbell_engine.py",
 )
 
 DEPRECATED_LEGACY_FILES: Tuple[str, ...] = (
@@ -122,7 +123,7 @@ def compute_core_modules_sha256_sync(base_dir: Optional[str] = None) -> str:
     hasher = hashlib.sha256()
     check_files = list(REQUIRED_CORE_MODULES)
     v6_extra = os.path.join(target_dir, "soxl_v6_barbell_engine.py")
-    if os.path.isfile(v6_extra):
+    if os.path.isfile(v6_extra) and "soxl_v6_barbell_engine.py" not in check_files:
         check_files.append("soxl_v6_barbell_engine.py")
     for fname in check_files:
         fpath = os.path.join(target_dir, fname)
