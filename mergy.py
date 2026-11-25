@@ -30,9 +30,10 @@ OUTPUT_DIR: str = "/home/pipios4006"
 OUTPUT_FILE: str = os.path.join(OUTPUT_DIR, "code.txt")
 SELF_FILENAME: str = "mergy.py"
 
-# MODIFIED: plugin_updater.py 의 REQUIRED_CORE_MODULES 와 100% 동일한 15대 코어 모듈 아키텍처 순서 락온
-# - [FILE 10 / 15] barbell_plugin.py (바벨 60/30/10 · 별도 실현수익금고 · 정규장 SGOV 집행)
-# - [FILE 11 / 15] assassin_plugin.py ([모의 ⇄ 0주전환예약 ⇄ 실전] 암살자 14대 진성 게이트)
+# MODIFIED: Case 114 바벨 v6.0 전담 엔진(soxl_v6_barbell_engine.py) 포함 16대 코어 모듈 아키텍처 순서 락온
+# - [FILE 10 / 16] barbell_plugin.py (바벨 60/30/10 · 별도 실현수익금고 · 정규장 SGOV 집행)
+# - [FILE 11 / 16] assassin_plugin.py ([모의 ⇄ 0주전환예약 ⇄ 실전] 암살자 10대 진성 게이트)
+# - [FILE 16 / 16] soxl_v6_barbell_engine.py (Case 114 바벨 단리/복리 v6.0 실행 엔진)
 CORE_MODULE_ORDER: Tuple[str, ...] = (
     "toss_api_core.py",
     "toss_api.py",
@@ -49,15 +50,16 @@ CORE_MODULE_ORDER: Tuple[str, ...] = (
     "plugin_updater.py",
     "main_runtime.py",
     "main.py",
+    "soxl_v6_barbell_engine.py",  # NEW [Case 114 정식 코어 편입]
 )
 
 EXCLUDED_FILES: Set[str] = {
     SELF_FILENAME,
+    "apply_v3_audit_patches.py",  # NEW: 일회성 패치 유틸 스크립트 병합 제외
     "daymarket_sim_plugin.py",
     "whipsaw_plugin.py",
     "candle_recorder.py",
     "tg_router.py",
-    "soxl_v6_barbell_engine.py",  # NEW [Case 114]
 }
 
 # NEW [Case 85]: f-string 내 닫는 중괄호 '}' 가 '>' 로 오기된 패턴 탐지 정규식
@@ -66,10 +68,11 @@ _FSTRING_BROKEN_BRACE_RE = re.compile(
 )
 
 
-def _extract_module_exported_symbols(tree: ast.AST) -> Set[str]:
-    """AST 트리에서 모듈이 외부로 노출하는 함수·클래스·변수·재익스포트 심볼 집합을 추출한다."""
-    exported: Set[str] = set()
-    for node in ast.walk(tree):
+# MODIFIED: 함수 내부 지역변수 오탐 방지를 위해 plugin_updater.py 와 동일한 최상위 스코프 심볼 추출기 적용
+def _collect_top_level_module_stmts(
+    stmts: List[ast.stmt], exported: Set[str]
+) -> None:
+    for node in stmts:
         if isinstance(
             node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
         ):
@@ -92,6 +95,27 @@ def _extract_module_exported_symbols(tree: ast.AST) -> Set[str]:
             for alias in node.names:
                 if alias.name != "*":
                     exported.add(alias.asname or alias.name)
+        elif isinstance(node, ast.If):
+            _collect_top_level_module_stmts(node.body, exported)
+            _collect_top_level_module_stmts(node.orelse, exported)
+        elif isinstance(node, ast.Try):
+            _collect_top_level_module_stmts(node.body, exported)
+            _collect_top_level_module_stmts(node.orelse, exported)
+            _collect_top_level_module_stmts(node.finalbody, exported)
+            for h in node.handlers:
+                if isinstance(h.name, str) and h.name:
+                    exported.add(h.name)
+                _collect_top_level_module_stmts(h.body, exported)
+        elif isinstance(node, (ast.With, ast.AsyncWith)):
+            _collect_top_level_module_stmts(node.body, exported)
+
+
+def _extract_module_exported_symbols(tree: ast.AST) -> Set[str]:
+    """AST 최상위 스코프에서 모듈이 외부로 노출하는 함수·클래스·변수·재익스포트 심볼 집합을 추출한다."""
+    exported: Set[str] = set()
+    body_list = getattr(tree, "body", None)
+    if isinstance(body_list, list):
+        _collect_top_level_module_stmts(body_list, exported)
     return exported
 
 
@@ -120,6 +144,8 @@ def collect_target_py_files(
             and f not in ordered_targets
             and f not in EXCLUDED_FILES
             and ".tmp" not in f
+            and ".bak" not in f  # NEW: 백업 파일 혼입 차단
+            and not f.startswith("patch_")  # NEW: 패치 스크립트 혼입 차단
             and not f.endswith(".heal.tmp")
             and os.path.isfile(os.path.join(src_dir, f))
         )
@@ -144,7 +170,7 @@ def merge_python_files(
 
     if missing_core and not allow_partial:
         print(
-            f"🚨 [병합 중단] 필수 15대 코어 모듈 중 {len(missing_core)}개 파일이 누락되었습니다:",
+            f"🚨 [병합 중단] 필수 16대 코어 모듈 중 {len(missing_core)}개 파일이 누락되었습니다:",
             file=sys.stderr,
         )
         for m_name in missing_core:
